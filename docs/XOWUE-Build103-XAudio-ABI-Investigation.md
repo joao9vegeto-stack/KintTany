@@ -19,24 +19,26 @@ The on-device diagnostic for build 102.1 records:
 - The main guest continues to execute its copyright/movie path. Graphics
   submits and swap readback are present; that does not establish gameplay.
 
-## Verified ABI discrepancy
+## Verified callback-context behavior
 
-Xenia's `AudioSystem::RegisterClient` allocates a four-byte guest dword,
-stores the original callback argument in it, and saves that address as
-`wrapped_callback_arg`. `AudioSystem::WorkerThreadMain` passes the wrapper
-address as the callback's first argument.
+The XAudio registration pair contains the guest callback address in its first
+dword and the callback context value in its second dword. The MW2 Recompiled
+kernel export reads both values from that pair; its audio worker invokes the
+registered callback with the original context value directly in PPC r3. The
+UnleashedRecomp audio implementation independently follows the same contract:
+its registration helper calls XAudioRegisterClient with callback[1] as the
+context, without allocating a pointer-to-context wrapper.
 
-Xenon-Recomp's `AudioSystem::register_render_client` likewise allocates a
-four-byte guest wrapper, writes the original argument in big-endian form, and
-the callback pump invokes the guest callback with the wrapper address.
-Its export reads the callback and callback argument from the two-dword
-registration pair.
-
-XOWUE Build 102 instead passed the original callback argument directly in
-PPC `r3`. That is an ABI mismatch. Build 103 changes the callback to receive
-a persistent guest pointer to a four-byte wrapper, preserving the original
-argument inside it. Wrapper slots are reused per render-client slot and reset
-with the audio runtime; no callback receives a host pointer.
+XOWUE had followed the Xenia/XenonRecomp wrapper approach instead. Build 103.1
+provides title-specific evidence that this path is not progressing: the
+callback enters once on thread 7, remains in guest code, never logs a callback
+return, and never reaches XAudioSubmitRenderDriverFrame. The diagnostic does
+not by itself prove the wrapper caused the loop, but the direct-context behavior
+in MW2 and UnleashedRecomp is the better match for this title's registration
+pair. XOWUE now passes the original context value directly in r3 and removes
+the extra guest wrapper allocation. The next device run must show repeated
+callback returns and frame submissions; if it still does not, the PPC call
+chain at 0x82B63CA8 -> 0x82B57E58 -> 0x82C2A1F0 remains the next target.
 
 ## Source references
 
@@ -84,3 +86,88 @@ while its target is waiting on that same handle from an unrelated timer, and
 can show whether the waiter actually resumes. The existing Swift compact
 summary already retains B98_ records, so no additional summary plumbing is
 needed.
+
+
+## Build 103.2 — restore Xbox guest processor affinity
+
+A source comparison against the working MW2 Recompiled runtime found a concrete
+kernel ABI gap in XOWUE. MW2 derives the guest processor number from the top
+byte of ExCreateThread's creation flags and writes it to
+KPCR.CurrentProcessorNumber at r13 + 268. Its KeSetAffinityThread handler
+resolves the KTHREAD object, derives the processor with ctz(affinity), and
+updates that same KPCR byte. The MW2 runtime documentation explains that the
+game reads this byte for worker dispatch and that XAudio workers synchronize by
+processor number.
+
+Before this change, XOWUE zeroed KPCR + 268 for every created thread and its
+KeSetAffinityThread handler only returned success; it did not update the guest
+thread's processor field. It also treated r5 as a previous-affinity pointer,
+although the MW2 implementation does not write through that register. The
+result could make guest worker barriers/dispatch disagree with the CPU mask
+chosen by the title, even while host threads were alive and timers fired.
+
+The correction records the processor selected by ExCreateThread's top-byte
+mask, initializes the KPCR byte, and makes KeSetAffinityThread update the
+resolved guest thread's KPCR byte. It emits B103_THREAD_AFFINITY records and
+returns the affinity mask in r3, matching the MW2 implementation. No timer is
+forced, no guest wait is bypassed, and no host CPU pinning is claimed.
+
+Reference implementation:
+- https://github.com/PaulCombal/mw2-recompiled/blob/master/runtime/kernel/threads.cpp
+- https://github.com/PaulCombal/mw2-recompiled/blob/master/docs/runtime.md#r13-the-kpcr-and-thread-ids
+- iPadOS host port notes: https://github.com/vrcnx/mw2-recompiled-ios/blob/ios-port/ios/README.md
+
+This is a verified kernel contract correction, not yet proof that it alone
+unblocks Wolverine. The next run must show nonzero processor values where the
+guest requests them, then correlate thread 12's PPC progress and first actual
+Xenos draw/swap after the copyright sequence.
+
+
+## iOS host-thread stack — MW2 port parity
+
+The iPadOS reference fork also documents a host-side requirement that is
+separate from the guest PPC stack: Apple's default secondary-thread stack is
+512 KB, while the recompiled PPC C++ call chains can overflow it during the
+first frames. MW2's Apple platform layer therefore creates every guest-code
+host thread with a 16 MB pthread stack and raises it to interactive QoS.
+Reference: https://github.com/vrcnx/mw2-recompiled-ios/blob/ios-port/runtime/platform.cpp
+and https://github.com/vrcnx/mw2-recompiled-ios/blob/ios-port/runtime/platform.h
+
+XOWUE used std::thread directly for both ExCreateThread workers and its
+XAudio guest callback worker, inheriting the small Apple secondary-thread
+stack. This change routes those guest-code workers through GuestHostThread:
+on Apple it uses pthread attributes for a 16 MB stack and interactive QoS;
+on other platforms it remains std::thread. Timer and watchdog helper threads
+remain ordinary std::thread because they do not execute recompiled PPC code.
+
+This addresses a second concrete difference in the proven MW2 iOS port. It is
+not evidence by itself that the copyright screen will advance; the next device
+run must show the worker survives deep AOT execution, correct KPCR processor
+numbers, and subsequent guest graphics progress.
+
+
+## Build 103.3 — pass the XAudio context directly
+
+The complete 103.1 diagnostic shows XAudio callback registration and entry,
+but no callback return and no XAudioSubmitRenderDriverFrame. Thread 7 enters
+callback 0x82B63CA8, then remains in guest code around 0x82B57E58 and
+0x82C2A1F0. This is a more actionable lead than the periodic timer: timer
+waits return STATUS_SUCCESS and are not the blocking edge.
+
+A direct source comparison found that MW2 Recompiled's kernel export reads the
+callback and context from the registration pair, and its audio worker passes
+the context value directly as PPC r3. UnleashedRecomp independently calls its
+XAudio client registration helper with callback[1] directly as context. XOWUE
+had used a pointer-to-context wrapper based on Xenia/XenonRecomp. That wrapper
+is not universal across titles and is now removed for Wolverine. The callback
+pump passes client->context directly in r3 and logs the context value on entry
+and return.
+
+References:
+- https://github.com/PaulCombal/mw2-recompiled/blob/master/runtime/kernel/audio.cpp
+- https://github.com/PaulCombal/mw2-recompiled/blob/master/runtime/apu/audio.cpp
+- https://github.com/hedge-dev/UnleashedRecomp/blob/main/UnleashedRecomp/apu/audio.cpp
+
+The next device log must show XOWUE_XAUDIO_CALLBACK_RETURN and
+XOWUE_XAUDIO_SUBMIT. This patch does not fabricate a return or submit; it
+executes the guest callback with the reference ABI and records the result.

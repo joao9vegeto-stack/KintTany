@@ -14,16 +14,24 @@ required = (
     "GuestThreadBinding binding(thread.get())",
     "callbackContext.r2.u32 = imageBase",
     "callbackContext.r13.u32 = thread->pcrAddress",
-    "callbackContext.r3.u32 = callbackArgumentWrapper",
-    "callbackArgumentWrapper = client->callbackArgumentWrapper",
-    "client->callbackArgumentWrapper = wrapper",
-    "allocateSmallGuestPoolBlock(base, sizeof(uint32_t)",
-    "PPC_STORE_U32(wrapper, callbackContextValue)",
+    "callbackContext.r3.u32 = callbackContextValue",
+    "XOWUE_XAUDIO_CALLBACK_ENTER",
     "XOWUE_XAUDIO_CALLBACK_ENTER",
     "XOWUE_XAUDIO_CALLBACK_RETURN",
     "B102_TIMER_WAIT_BEGIN",
     "B102_TIMER_WAIT_RESULT",
     "target_wait=0x%08X",
+    "KPCR.CurrentProcessorNumber",
+    "class GuestHostThread",
+    "pthread_attr_setstacksize(&attributes, kAppleGuestHostStackBytes)",
+    "constexpr size_t kAppleGuestHostStackBytes = 16u << 20",
+    "QOS_CLASS_USER_INTERACTIVE",
+    "thread->hostThread.start(",
+    "creationProcessorMask = (creationFlags >> 24u) & 0xFFu",
+    "static_cast<uint8_t>(thread->processor.load(std::memory_order_relaxed))",
+    "base[pcrAddress + 0x10Cu] = processorNumber",
+    "B103_THREAD_AFFINITY",
+    "thread->processor.store(processor, std::memory_order_release)",
     "callbackContext.fpscr.loadFromHost()",
     "XOWUE_XAUDIO_FPSCR_INITIALIZED",
     "routine(callbackContext, base)",
@@ -44,8 +52,9 @@ required = (
 for token in required:
     assert token in engine, token
 
-assert "callbackContext.r3.u32 = callbackContextValue" not in engine
-assert "callbackContext.r3.u32 = callbackArgumentWrapper" in engine
+assert "callbackContext.r3.u32 = callbackContextValue" in engine
+assert "callbackArgumentWrapper" not in engine
+assert "g_xaudioCallbackArgumentWrappers" not in engine
 assert 'if (api == "XAudioRegisterRenderDriverClient" ||' not in engine
 assert 'if (api == "XAudioSubmitRenderDriverFrame" ||' not in engine
 assert "test_xowue_build102_audio_driver.py" in workflow
@@ -58,7 +67,12 @@ assert "targetThread->lastGuestPc.load" in engine
 assert "targetThread->waitTarget.load" in engine
 assert "targetThread->waitingInKernel.load" in engine
 assert "B102_TIMER_WAIT_RESULT" in engine
-print("PASS: XAudio callback ABI plus timer wait/fire correlation for the actual timer object, including target PPC PC and wait state")
+assert "single-host-CPU affinity policy applied" not in engine
+assert "PPC_STORE_U32(previousPointer, 1u)" not in engine
+assert "context.r3.u32 = affinity" in engine
+assert "std::thread hostThread" not in engine
+assert "thread->hostThread = std::thread(" not in engine
+print("PASS: XAudio callback ABI, timer correlation, and Xbox KPCR processor-affinity semantics")
 
 swift = Path("iOS/App/XOWUEDiagnostics.swift").read_text(encoding="utf-8")
 assert '"XOWUE_XAUDIO_"' in swift

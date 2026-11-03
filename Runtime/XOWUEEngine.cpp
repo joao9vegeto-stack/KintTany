@@ -22,6 +22,12 @@
 #include <cstring>
 #include <deque>
 #include <fstream>
+#include <functional>
+#include <system_error>
+#include <exception>
+#if defined(__APPLE__)
+#include <pthread.h>
+#endif
 #include <filesystem>
 #include <iterator>
 #include <limits>
@@ -250,6 +256,92 @@ struct GuestApc {
     uint32_t argument1 = 0u;
     uint32_t argument2 = 0u;
 };
+// std::thread's default secondary-thread stack on iOS is only 512 KB.
+// Recompiled PPC code nests deeply; the working MW2 iPad port gives every
+// guest-code host thread the same 16 MB stack used by its Windows build.
+class GuestHostThread {
+public:
+    GuestHostThread() = default;
+    GuestHostThread(const GuestHostThread &) = delete;
+    GuestHostThread &operator=(const GuestHostThread &) = delete;
+    ~GuestHostThread() {
+#if defined(__APPLE__)
+        if (joinable_) std::terminate();
+#endif
+    }
+
+    void start(std::function<void()> body) {
+#if defined(__APPLE__)
+        constexpr size_t kAppleGuestHostStackBytes = 16u << 20;
+        pthread_attr_t attributes;
+        int error = pthread_attr_init(&attributes);
+        if (error != 0) throw std::system_error(error, std::generic_category(),
+                                                "pthread_attr_init guest thread");
+        error = pthread_attr_setstacksize(&attributes, kAppleGuestHostStackBytes);
+        if (error != 0) {
+            pthread_attr_destroy(&attributes);
+            throw std::system_error(error, std::generic_category(),
+                                    "pthread_attr_setstacksize guest thread");
+        }
+        auto owned = std::make_unique<std::function<void()>>(std::move(body));
+        pthread_t created{};
+        error = pthread_create(&created, &attributes, [](void *opaque) -> void * {
+            std::unique_ptr<std::function<void()>> task(
+                static_cast<std::function<void()> *>(opaque));
+            (void)pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+            try { (*task)(); } catch (...) { std::terminate(); }
+            return nullptr;
+        }, owned.get());
+        pthread_attr_destroy(&attributes);
+        if (error != 0)
+            throw std::system_error(error, std::generic_category(), "pthread_create guest thread");
+        owned.release();
+        handle_ = created;
+        joinable_ = true;
+#else
+        thread_ = std::thread(std::move(body));
+#endif
+    }
+
+    bool joinable() const {
+#if defined(__APPLE__)
+        return joinable_;
+#else
+        return thread_.joinable();
+#endif
+    }
+    void join() {
+#if defined(__APPLE__)
+        if (!joinable_) throw std::system_error(std::make_error_code(std::errc::invalid_argument));
+        const int error = pthread_join(handle_, nullptr);
+        if (error != 0) throw std::system_error(error, std::generic_category(), "pthread_join guest thread");
+        joinable_ = false;
+        handle_ = pthread_t{};
+#else
+        thread_.join();
+#endif
+    }
+    void detach() {
+#if defined(__APPLE__)
+        if (!joinable_) throw std::system_error(std::make_error_code(std::errc::invalid_argument));
+        const int error = pthread_detach(handle_);
+        if (error != 0) throw std::system_error(error, std::generic_category(), "pthread_detach guest thread");
+        joinable_ = false;
+        handle_ = pthread_t{};
+#else
+        thread_.detach();
+#endif
+    }
+
+private:
+#if defined(__APPLE__)
+    pthread_t handle_{};
+    bool joinable_ = false;
+#else
+    std::thread thread_;
+#endif
+};
+
 struct GuestThread {
     uint32_t id = 0;
     uint32_t handle = 0;
@@ -262,6 +354,8 @@ struct GuestThread {
     uint32_t startAddress = 0;
     uint32_t startContext = 0;
     uint32_t creationFlags = 0;
+    // Xbox KPCR.CurrentProcessorNumber (r13 + 268), used by guest job/audio dispatch.
+    std::atomic<uint32_t> processor{0u};
     std::atomic<uint32_t> suspendCount{0};
     std::atomic<uint32_t> exitStatus{kNtStatusSuccess};
     std::atomic<bool> exited{false};
@@ -286,15 +380,13 @@ struct GuestThread {
     std::condition_variable stateChanged;
     std::condition_variable exitChanged;
     std::shared_ptr<GuestWaitable> completion;
-    std::thread hostThread;
+    GuestHostThread hostThread;
 };
 
 struct GuestAudioClient {
     uint32_t handle = 0u;
     uint32_t callback = 0u;
     uint32_t context = 0u;
-    // Xbox/Xenia ABI: callback r3 points to a guest dword containing context.
-    uint32_t callbackArgumentWrapper = 0u;
     uint32_t volumeChangeMask = 0xFFFFFFFFu;
     uint32_t inFlight = 0u;
     bool inUse = false;
@@ -462,7 +554,6 @@ std::vector<std::shared_ptr<GuestThread>> g_guestThreads;
 std::mutex g_xaudioMutex;
 std::condition_variable g_xaudioChanged;
 std::array<std::shared_ptr<GuestAudioClient>, 8> g_xaudioClients{};
-std::array<uint32_t, 8> g_xaudioCallbackArgumentWrappers{};
 std::shared_ptr<GuestThread> g_xowueAudioThread;
 std::atomic<uint64_t> g_xaudioCallbackAttempts{0u};
 std::atomic<uint64_t> g_xaudioCallbackCount{0u};
@@ -1783,7 +1874,8 @@ void initializeGuestThreadEnvironment(uint8_t *base, uint32_t objectAddress,
                                       uint32_t pcrAddress, uint32_t tlsAddress,
                                       uint32_t stackBase, uint32_t stackSize,
                                       uint32_t threadId, uint32_t startAddress,
-                                      uint32_t creationFlags, uint32_t suspendCount) {
+                                      uint32_t creationFlags, uint8_t processorNumber,
+                                      uint32_t suspendCount) {
     if (!base || objectAddress > kGuestAddressSpaceSize - kGuestThreadObjectSize ||
         pcrAddress > kGuestAddressSpaceSize - 0x200u ||
         tlsAddress > kGuestAddressSpaceSize - g_tlsBlockSize ||
@@ -1832,7 +1924,9 @@ void initializeGuestThreadEnvironment(uint8_t *base, uint32_t objectAddress,
     PPC_STORE_U32(pcrAddress + 0x70u, stackBase + stackSize);
     PPC_STORE_U32(pcrAddress + 0x74u, stackBase);
     PPC_STORE_U32(pcrAddress + 0x100u, objectAddress);
-    base[pcrAddress + 0x10Cu] = 0u;
+    // Xenia/MW2 ABI: KPCR.CurrentProcessorNumber is a byte at r13 + 268.
+    // Guest dispatch/barriers consume this value; it is not host CPU pinning.
+    base[pcrAddress + 0x10Cu] = processorNumber;
     PPC_STORE_U32(pcrAddress + 0x150u, 0u);
 }
 
@@ -2098,7 +2192,6 @@ void runXowueAudioCallbackPump(const std::shared_ptr<GuestThread> &thread,
         uint32_t slot = 0u;
         uint32_t callback = 0u;
         uint32_t callbackContextValue = 0u;
-        uint32_t callbackArgumentWrapper = 0u;
         uint32_t handle = 0u;
         {
             std::unique_lock<std::mutex> lock(g_xaudioMutex);
@@ -2129,7 +2222,6 @@ void runXowueAudioCallbackPump(const std::shared_ptr<GuestThread> &thread,
                 ++client->inFlight;
                 callback = client->callback;
                 callbackContextValue = client->context;
-                callbackArgumentWrapper = client->callbackArgumentWrapper;
                 handle = client->handle;
                 break;
             }
@@ -2160,22 +2252,18 @@ void runXowueAudioCallbackPump(const std::shared_ptr<GuestThread> &thread,
         callbackContext.r2.u32 = imageBase;
         callbackContext.r13.u32 = thread->pcrAddress;
         callbackContext.lr = 0u;
-        // Xenia and Xenon both pass the address of a guest dword wrapper,
-        // not the callback's original context value directly.
-        if (!callbackArgumentWrapper || !validGuestRange(callbackArgumentWrapper, 4u) ||
-            PPC_LOAD_U32(callbackArgumentWrapper) != callbackContextValue) {
-            recordRuntimeTrace("XOWUE_XAUDIO_CALLBACK_ARGUMENT_INVALID");
-            throw std::runtime_error("XAudio callback argument wrapper is invalid");
-        }
-        callbackContext.r3.u32 = callbackArgumentWrapper;
+        // Match MW2 Recompiled and UnleashedRecomp: the second dword of the
+        // registration pair is the callback's context value, passed directly
+        // as the first PPC argument (r3), not as a pointer-to-context wrapper.
+        callbackContext.r3.u32 = callbackContextValue;
         const uint64_t attempt = g_xaudioCallbackAttempts.fetch_add(
             1u, std::memory_order_relaxed) + 1u;
         if (attempt <= 8u || attempt % 1000u == 0u) {
             char event[224];
             std::snprintf(event, sizeof(event),
-                "XOWUE_XAUDIO_CALLBACK_ENTER attempt=%llu handle=0x%08X callback=0x%08X wrapper=0x%08X value=0x%08X thread=%u",
+                "XOWUE_XAUDIO_CALLBACK_ENTER attempt=%llu handle=0x%08X callback=0x%08X context=0x%08X thread=%u",
                 static_cast<unsigned long long>(attempt), handle, callback,
-                callbackArgumentWrapper, callbackContextValue, thread->id);
+                callbackContextValue, thread->id);
             recordRuntimeTrace(event);
         }
         // Match XenonRecomp's native guest-callback contract: seed the PPC
@@ -2222,9 +2310,9 @@ void runXowueAudioCallbackPump(const std::shared_ptr<GuestThread> &thread,
         if (count <= 8u || count % 1000u == 0u) {
             char event[224];
             std::snprintf(event, sizeof(event),
-                          "XOWUE_XAUDIO_CALLBACK_RETURN count=%llu handle=0x%08X callback=0x%08X wrapper=0x%08X value=0x%08X thread=%u",
+                          "XOWUE_XAUDIO_CALLBACK_RETURN count=%llu handle=0x%08X callback=0x%08X context=0x%08X thread=%u",
                           static_cast<unsigned long long>(count), handle, callback,
-                          callbackArgumentWrapper, callbackContextValue, thread->id);
+                          callbackContextValue, thread->id);
             recordRuntimeTrace(event);
         }
     }
@@ -2271,7 +2359,7 @@ bool startXowueAudioWorker(uint8_t *base, uint32_t callback) {
     thread->completion->objectAddress = thread->objectAddress;
     initializeGuestThreadEnvironment(base, thread->objectAddress, thread->pcrAddress,
                                      thread->tlsAddress, thread->stackBase,
-                                     thread->stackSize, thread->id, callback, 0u, 0u);
+                                     thread->stackSize, thread->id, callback, 0u, 0u, 0u);
 
     std::unique_lock<std::mutex> threadsLock(g_guestThreadMutex);
     if (g_schedulerStopRequested.load()) return false;
@@ -2286,7 +2374,7 @@ bool startXowueAudioWorker(uint8_t *base, uint32_t callback) {
 
     const uint32_t imageBase = g_activeImageBase;
     try {
-        thread->hostThread = std::thread([thread, memory, imageBase, base] {
+        thread->hostThread.start([thread, memory, imageBase, base] {
             GuestThreadBinding binding(thread.get());
             uint32_t exitCode = kNtStatusSuccess;
             try {
@@ -2348,7 +2436,6 @@ void resetXowueAudioRuntime() {
     std::lock_guard<std::mutex> lock(g_xaudioMutex);
     for (auto &client : g_xaudioClients) client.reset();
     g_xowueAudioThread.reset();
-    g_xaudioCallbackArgumentWrappers.fill(0u);
     g_xaudioCallbackAttempts.store(0u, std::memory_order_relaxed);
     g_xaudioCallbackCount.store(0u, std::memory_order_relaxed);
     g_xaudioFrameCount.store(0u, std::memory_order_relaxed);
@@ -2389,7 +2476,7 @@ GuestThread *acquireGraphicsInterruptThread(uint8_t *base, uint32_t callback) {
     thread->startAddress = callback;
     initializeGuestThreadEnvironment(base, thread->objectAddress, thread->pcrAddress,
                                      thread->tlsAddress, thread->stackBase,
-                                     thread->stackSize, thread->id, callback, 0u, 0u);
+                                     thread->stackSize, thread->id, callback, 0u, 0u, 0u);
     char event[192];
     std::snprintf(event, sizeof(event),
                   "XENOS_GRAPHICS_INTERRUPT_THREAD id=%u object=0x%08X KPCR=0x%08X stack=0x%08X+0x%08X",
@@ -4053,7 +4140,7 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         initializeGuestThreadEnvironment(memory->base, mainThread->objectAddress,
                                          mainThread->pcrAddress, mainThread->tlsAddress,
                                          mainThread->stackBase, mainThread->stackSize,
-                                         mainThread->id, mainThread->startAddress, 0u, 0u);
+                                         mainThread->id, mainThread->startAddress, 0u, 0u, 0u);
         g_mainGuestThread = mainThread;
         {
             std::lock_guard<std::mutex> objectLock(g_guestObjectMutex);
@@ -5112,21 +5199,10 @@ void xowue_compat_import(const char *name, PPCContext &context, uint8_t *base) {
             std::lock_guard<std::mutex> lock(g_xaudioMutex);
             for (uint32_t i = 0u; i < g_xaudioClients.size(); ++i) {
                 if (g_xaudioClients[i]) continue;
-                uint32_t wrapper = g_xaudioCallbackArgumentWrappers[i];
-                if (!wrapper) {
-                    wrapper = allocateSmallGuestPoolBlock(base, sizeof(uint32_t),
-                                                          alignof(uint32_t));
-                    if (!wrapper || !validGuestRange(wrapper, sizeof(uint32_t))) continue;
-                    g_xaudioCallbackArgumentWrappers[i] = wrapper;
-                }
-                // Xenia's AudioSystem::RegisterClient allocates this exact
-                // four-byte wrapper and the worker passes its address in r3.
-                PPC_STORE_U32(wrapper, callbackContextValue);
                 client = std::make_shared<GuestAudioClient>();
                 client->handle = kXowueAudioDriverTag | i;
                 client->callback = callback;
                 client->context = callbackContextValue;
-                client->callbackArgumentWrapper = wrapper;
                 client->volumeChangeMask = 0xFFFFFFFFu;
                 client->next = std::chrono::steady_clock::now() + kXowueAudioInitialDelay;
                 client->inUse = true;
@@ -5144,9 +5220,8 @@ void xowue_compat_import(const char *name, PPCContext &context, uint8_t *base) {
         context.r3.u32 = kNtStatusSuccess;
         char event[192];
         std::snprintf(event, sizeof(event),
-                      "XOWUE_XAUDIO_REGISTER handle=0x%08X callback=0x%08X context=0x%08X wrapper=0x%08X thread=%u",
-                      handle, callback, callbackContextValue,
-                      client->callbackArgumentWrapper, workerId);
+                      "XOWUE_XAUDIO_REGISTER handle=0x%08X callback=0x%08X context=0x%08X thread=%u",
+                      handle, callback, callbackContextValue, workerId);
         recordRuntimeTrace(event);
         g_xaudioChanged.notify_all();
         return;
@@ -5453,6 +5528,10 @@ void xowue_ExCreateThread(PPCContext &context, uint8_t *base) {
     thread->startAddress = startAddress;
     thread->startContext = startContext;
     thread->creationFlags = creationFlags;
+    const uint32_t creationProcessorMask = (creationFlags >> 24u) & 0xFFu;
+    thread->processor.store(creationProcessorMask != 0u
+        ? static_cast<uint32_t>(__builtin_ctz(creationProcessorMask)) : 0u,
+        std::memory_order_relaxed);
     thread->completion = std::make_shared<GuestWaitable>();
     thread->completion->kind = GuestWaitable::Kind::Thread;
     thread->completion->manualReset = true;
@@ -5481,7 +5560,9 @@ void xowue_ExCreateThread(PPCContext &context, uint8_t *base) {
     initializeGuestThreadEnvironment(base, thread->objectAddress, thread->pcrAddress,
                                      thread->tlsAddress, thread->stackBase,
                                      thread->stackSize, thread->id, startAddress,
-                                     creationFlags, thread->suspendCount.load());
+                                     creationFlags,
+                                     static_cast<uint8_t>(thread->processor.load(std::memory_order_relaxed)),
+                                     thread->suspendCount.load());
     thread->handle = allocateGuestHandle();
     if (thread->handle == 0u) {
         context.r3.u32 = kNtStatusNoMemory;
@@ -5501,7 +5582,7 @@ void xowue_ExCreateThread(PPCContext &context, uint8_t *base) {
 
     try {
                 const uint32_t imageBase = g_activeImageBase;
-        thread->hostThread = std::thread([thread, memory, imageBase, base] {
+        thread->hostThread.start([thread, memory, imageBase, base] {
             g_currentGuestThreadId = thread->id;
             g_currentGuestThread = thread.get();
             uint32_t exitCode = kNtStatusSuccess;
@@ -8391,16 +8472,35 @@ void xowue_KeResumeThread(PPCContext &context) {
 }
 
 void xowue_KeSetAffinityThread(PPCContext &context, uint8_t *base) {
+    // Match the Xbox 360 KPCR contract used by Xenia and MW2 Recompiled:
+    // r3 is the KTHREAD object and r4 is a one-bit hardware-processor mask.
+    // The guest reads CurrentProcessorNumber itself; host CPU pinning is not
+    // a substitute for updating the guest KPCR byte.
     const uint32_t affinity = context.r4.u32;
-    const uint32_t previousPointer = context.r5.u32;
-    if (affinity == 0u || (previousPointer != 0u &&
-        (!base || previousPointer > kGuestAddressSpaceSize - 4u))) {
+    if (affinity == 0u) {
         context.r3.u32 = kNtStatusInvalidParameter;
         return;
     }
-    if (previousPointer != 0u) PPC_STORE_U32(previousPointer, 1u);
-    context.r3.u32 = kNtStatusSuccess;
-    recordRuntimeTrace("KeSetAffinityThread accepted; single-host-CPU affinity policy applied");
+    const auto thread = lookupGuestThread(context.r3.u32);
+    if (!thread || !base || !validGuestRange(thread->pcrAddress + 0x10Cu, 1u)) {
+        char event[192];
+        std::snprintf(event, sizeof(event),
+            "B103_THREAD_AFFINITY_REJECTED object=0x%08X mask=0x%08X found=%u",
+            context.r3.u32, affinity, thread ? 1u : 0u);
+        recordRuntimeTrace(event);
+        context.r3.u32 = kNtStatusInvalidParameter;
+        return;
+    }
+    const uint32_t processor = static_cast<uint32_t>(__builtin_ctz(affinity));
+    thread->processor.store(processor, std::memory_order_release);
+    base[thread->pcrAddress + 0x10Cu] = static_cast<uint8_t>(processor);
+    char event[224];
+    std::snprintf(event, sizeof(event),
+        "B103_THREAD_AFFINITY object=0x%08X tid=%u mask=0x%08X processor=%u pcr=0x%08X",
+        context.r3.u32, thread->id, affinity, processor, thread->pcrAddress);
+    recordRuntimeTrace(event);
+    // Preserve the upstream MW2 runtime's return convention.
+    context.r3.u32 = affinity;
 }
 
 void xowue_KeSetBasePriorityThread(PPCContext &context) {
