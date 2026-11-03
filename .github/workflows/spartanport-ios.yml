@@ -75,17 +75,20 @@ jobs:
         run: |
           set -euo pipefail
           go test -count=1 ./...
-          go build -o "$RUNNER_TEMP/ps4-recomp" ./cmd/ps4-recomp
-          "$RUNNER_TEMP/ps4-recomp" version | tee "$RUNNER_TEMP/ps4-aot-audit/version.txt"
+          # The CLI locates pkg/runtime relative to its own executable.
+          # Keep the binary beside that directory, not in RUNNER_TEMP's parent.
+          go build -o "$RUNNER_TEMP/PS4Recomp/ps4-recomp" ./cmd/ps4-recomp
+          "$RUNNER_TEMP/PS4Recomp/ps4-recomp" version | tee "$RUNNER_TEMP/ps4-aot-audit/version.txt"
       - name: Analyze the uploaded God of War III PS4 executable
         run: |
           set -euo pipefail
           test -s "$GITHUB_WORKSPACE/eboot.bin"
-          "$RUNNER_TEMP/ps4-recomp" analyze "$GITHUB_WORKSPACE/eboot.bin" 2>&1 | tee "$RUNNER_TEMP/ps4-aot-audit/analysis.txt"
+          "$RUNNER_TEMP/PS4Recomp/ps4-recomp" analyze "$GITHUB_WORKSPACE/eboot.bin" 2>&1 | tee "$RUNNER_TEMP/ps4-aot-audit/analysis.txt"
       - name: Generate AOT assembly and the real HLE import report
+        working-directory: ${{ runner.temp }}/PS4Recomp
         run: |
           set -euo pipefail
-          "$RUNNER_TEMP/ps4-recomp" -compile=false -out "$RUNNER_TEMP/ps4-aot-generated" \
+          "$RUNNER_TEMP/PS4Recomp/ps4-recomp" -compile=false -out "$RUNNER_TEMP/ps4-aot-generated" \
             "$GITHUB_WORKSPACE/eboot.bin" 2>&1 | tee "$RUNNER_TEMP/ps4-aot-audit/recompile.txt"
           test -s "$RUNNER_TEMP/ps4-aot-generated/hle_report.txt"
           cp "$RUNNER_TEMP/ps4-aot-generated/hle_report.txt" "$RUNNER_TEMP/ps4-aot-audit/hle_report.txt"
@@ -104,7 +107,6 @@ jobs:
 
   build:
     name: Build KosmicKrisp ICD and SpartanPort iOS arm64
-    # Required runner: macos-26 ARM64 with Xcode 26 / iOS SDK 26 and Metal 4.
     runs-on: macos-26
     timeout-minutes: 240
     env:

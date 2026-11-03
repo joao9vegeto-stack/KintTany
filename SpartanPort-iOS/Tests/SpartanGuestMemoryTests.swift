@@ -6,10 +6,14 @@ final class SpartanGuestMemoryTests: XCTestCase {
         let memory = try XCTUnwrap(spartan_guest_memory_create(8192))
         defer { spartan_guest_memory_destroy(memory) }
 
-        XCTAssertGreaterThanOrEqual(spartan_guest_memory_size(memory), 8192)
+        // The public VM allocator rounds to the device's page size (4 KiB on
+        // some targets, 16 KiB on current iOS simulators). Assert against the
+        // actual arena boundary rather than the requested byte count.
+        let arenaSize = spartan_guest_memory_size(memory)
+        XCTAssertGreaterThanOrEqual(arenaSize, 8192)
         XCTAssertNotNil(spartan_guest_memory_host_pointer(memory, 0, 16))
-        XCTAssertNotNil(spartan_guest_memory_host_pointer(memory, 8192, 0))
-        XCTAssertNil(spartan_guest_memory_host_pointer(memory, 8192, 1))
+        XCTAssertNotNil(spartan_guest_memory_host_pointer(memory, arenaSize, 0))
+        XCTAssertNil(spartan_guest_memory_host_pointer(memory, arenaSize, 1))
         XCTAssertNil(spartan_guest_memory_host_pointer(memory, UInt64.max, 1))
     }
 
