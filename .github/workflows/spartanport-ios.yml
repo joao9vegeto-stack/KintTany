@@ -36,6 +36,15 @@ jobs:
     steps:
       - name: Checkout only SpartanPort-iOS
         uses: actions/checkout@v4
+      - name: Validate iOS guest ELF staging layer
+        run: |
+          set -euo pipefail
+          clang -std=c11 -Wall -Wextra -Werror -ISpartanPort-iOS/Sources/Runtime \
+            SpartanPort-iOS/Sources/Runtime/SpartanIOSGuestMemory.c \
+            SpartanPort-iOS/Sources/Runtime/SpartanIOSGuestELFLoader.c \
+            SpartanPort-iOS/Tests/SpartanGuestELFLoaderTests.c \
+            -o "$RUNNER_TEMP/spartan-elf-loader-tests"
+          "$RUNNER_TEMP/spartan-elf-loader-tests"
       - name: Validate readiness audit helper
         run: |
           python3 -m py_compile tools/spartan-aot/audit_runtime_readiness.py

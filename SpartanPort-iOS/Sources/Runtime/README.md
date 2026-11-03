@@ -1,22 +1,23 @@
-# iOS guest data-memory layer (AOT-only runtime)
+# iOS guest-memory and ELF staging layer
 
-The guest arena is allocated with Apple's public `vm_allocate`, `vm_protect`
-and `vm_deallocate` APIs. The iOS SDK intentionally rejects
-`<mach/mach_vm.h>`; using the unsupported 64-bit Mach VM header caused the
-first Xcode 26 simulator test build to fail. On arm64, the public
-`vm_address_t` and `vm_size_t` are pointer-width and support the 64-bit arena.
+The guest arena uses Apple's public `vm_allocate`, `vm_protect` and
+`vm_deallocate` APIs. Guest addresses are offsets from the host base; no fixed
+address reservation or private Mach VM headers are used.
 
-* Guest addresses are offsets from the host base; no Linux low-address mapping
-  or fixed-address reservation is assumed.
-* Page protection accepts only read/write. `PROT_EXEC` is rejected.
-* Tests cover bounds, zero-length end pointers and executable-protection denial.
+`SpartanIOSGuestELFLoader` validates a reconstructed ELF64 little-endian
+x86-64 header and program-header table, stages each `PT_LOAD` at its guest
+virtual address, zero-fills BSS, records segment flags and requires the entry
+point to lie in an executable segment. Guest pages remain data-only:
+`PROT_EXEC` is rejected and ELF execute flags are metadata, not host page
+permissions.
 
-This is only a host data-memory primitive. It is not a PS4 CPU, GPU or syscall
-runtime and does not translate x86-64 instructions.
+This accepts a reconstructed ELF only. It does not decrypt PS4 SELF, apply
+dynamic relocations, load PRX dependencies, resolve imports, implement PS4
+syscalls/threads/TLS, execute x86-64, or provide the GNM renderer. It is a
+loader primitive, not a complete PS4 runtime. Game start remains blocked until
+static ARM64 AOT, strict dispatch, HLE/imports, thread support and GNM/Metal
+are implemented and linked.
 
-## Required CPU execution model
-
-The target remains static ARM64 AOT recompilation: translation must happen
-offline, before installation/build, and generated ARM64 objects must be linked
-into the signed application. Runtime code generation, JIT and executable guest
-memory are intentionally absent.
+Translation is offline. No JIT, runtime code generation, interpreter or
+emulation fallback is permitted; an unimplemented reached instruction must
+fail closed.
