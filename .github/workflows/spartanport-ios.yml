@@ -188,9 +188,9 @@ jobs:
             -derivedDataPath SpartanPort-iOS/build/DerivedData CODE_SIGNING_ALLOWED=NO build
           APP="SpartanPort-iOS/build/DerivedData/Build/Products/Release-iphoneos/SpartanPort.app"
           test -d "$APP"
-          nm -gU "$APP/SpartanPort" | grep -q '_SpartanIOSAOTRegister'
+          nm -a "$APP/SpartanPort" | grep -q '_SpartanIOSAOTIsRegistered'
           otool -L "$APP/SpartanPort" | grep -q 'GOW3Recompiled.framework/GOW3Recompiled'
-          nm -gU "$APP/Frameworks/GOW3Recompiled.framework/GOW3Recompiled" | grep -q '_bb_recomp_init'
+          nm -a "$APP/Frameworks/GOW3Recompiled.framework/GOW3Recompiled" | grep -q '_bb_recomp_init'
           echo "PASS: iOS app links the strict CPU dispatcher and embeds the generated game AOT framework."
       - name: Audit full-game AOT and runtime readiness
         run: |

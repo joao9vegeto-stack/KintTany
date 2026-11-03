@@ -5,6 +5,7 @@ struct ContentView: View {
     @StateObject private var gameFolder = GameFolderStore()
     @State private var showingFolderPicker = false
     @State private var kosmicKrispProbe = "Aguardando verificação"
+    @State private var aotRuntimeStatus = "Bridge ainda não consultado"
 
     private var executableSummary: String {
         if gameFolder.preparedExecutablePath != nil { return "ELF reconstruído" }
@@ -43,7 +44,7 @@ struct ContentView: View {
                                   good: gameFolder.preparedExecutablePath != nil)
                         statusRow("KosmicKrisp ICD", state: kosmicKrispProbe, good: kosmicKrispProbe.hasPrefix("ICD loaded"))
                         statusRow("Runtime PS4 ARM64", state: "Não integrado", good: false)
-                        statusRow("AOT x86-64 → ARM64", state: "Não integrado", good: false)
+                        statusRow("AOT x86-64 → ARM64", state: aotRuntimeStatus, good: aotRuntimeStatus.hasPrefix("Bridge linkado"))
                         Text("SELF/ELF validado estruturalmente não significa executável carregável. Iniciar permanece bloqueado até existir AOT ARM64 e runtime PS4.")
                             .font(.caption).foregroundStyle(.secondary).padding(.top, 4)
                         Text("Diagnóstico: Documents/diagnostico.txt").font(.caption2.monospaced()).foregroundStyle(.secondary)
@@ -55,6 +56,9 @@ struct ContentView: View {
             gameFolder.refresh()
             _ = SpartanKosmicKrispProbe()
             kosmicKrispProbe = String(cString: SpartanKosmicKrispProbeMessage())
+            let aotRegistered = SpartanIOSAOTIsRegistered() != 0
+            let aotFunctions = SpartanIOSAOTFunctionCount()
+            aotRuntimeStatus = aotRegistered ? "Bridge linkado - \(aotFunctions) funções registradas" : "Bridge linkado - aguardando ELF mapeado (\(aotFunctions) funções)"
         }
         .fileImporter(isPresented: $showingFolderPicker, allowedContentTypes: [.folder], allowsMultipleSelection: false) { result in
             switch result {
