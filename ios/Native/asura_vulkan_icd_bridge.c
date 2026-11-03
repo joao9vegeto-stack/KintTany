@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <pthread.h>
+#include <stdint.h>
 #ifndef RTLD_LOCAL
 #define RTLD_LOCAL 0
 #endif
@@ -22,9 +23,25 @@ static void asura_init_icd(void) {
     if (!sym) { snprintf(s_error, sizeof s_error, "KosmicKrisp ICD lacks vk_icdGetInstanceProcAddr"); fprintf(stderr, "[Asura-iOS] %s\n", s_error); return; }
     memcpy(&s_icd_get, &sym, sizeof s_icd_get);
 }
+/* The ICD interface deliberately does not provide layer enumeration.
+ * That entry point belongs to the Vulkan loader. This shim is the loader
+ * boundary used by ReXGlue, so it must provide the zero-layer implementation
+ * rather than asking the ICD for a function it is not required to export. */
+typedef int32_t AsuraVkResult;
+typedef struct VkLayerProperties VkLayerProperties;
+__attribute__((visibility("default")))
+AsuraVkResult vkEnumerateInstanceLayerProperties(uint32_t *count, VkLayerProperties *properties) {
+    (void)properties;
+    if (!count) return -3; /* VK_ERROR_INITIALIZATION_FAILED */
+    *count = 0;
+    return 0; /* VK_SUCCESS: this bundled runtime exposes no layers */
+}
+
 __attribute__((visibility("default")))
 AsuraVkVoidFunction vkGetInstanceProcAddr(AsuraVkInstance instance, const char *name) {
     if (!name) return NULL;
+    if (strcmp(name, "vkEnumerateInstanceLayerProperties") == 0)
+        return (AsuraVkVoidFunction)&vkEnumerateInstanceLayerProperties;
     pthread_once(&s_icd_once, asura_init_icd);
     if (!s_icd_get) return NULL;
     if (strcmp(name, "vkGetInstanceProcAddr") == 0) return (AsuraVkVoidFunction)&vkGetInstanceProcAddr;

@@ -148,6 +148,47 @@ ios_loader_replacement = """#if REX_PLATFORM_IOS
 if vulkan_text.count(ios_loader_anchor) != 1:
     raise SystemExit("unexpected Vulkan generic loader fallback")
 vulkan_text = vulkan_text.replace(ios_loader_anchor, ios_loader_replacement, 1)
+# ASURA_IOS_VULKAN_GLOBAL_ENTRYPOINT_DIAGNOSTICS_V1
+loader_anchor = """  if (!functions_loaded) {
+    REXLOG_ERROR("Failed to get Vulkan loader function pointers");
+    return nullptr;
+  }"""
+loader_replacement = """  if (!functions_loaded) {
+#if REX_PLATFORM_IOS
+    AsuraIOSLog(std::string("VULKAN_LOADER_ENTRYPOINTS get_proc=") +
+                (ifn.vkGetInstanceProcAddr ? "1" : "0") +
+                " destroy_instance=" + (ifn.vkDestroyInstance ? "1" : "0"));
+    AsuraIOSLog("VULKAN_LOADER_ENTRYPOINT_LOAD_FAILED");
+#endif
+    REXLOG_ERROR("Failed to get Vulkan loader function pointers");
+    return nullptr;
+  }"""
+assert vulkan_text.count(loader_anchor) == 1, "unexpected Vulkan loader entrypoint failure branch"
+vulkan_text = vulkan_text.replace(loader_anchor, loader_replacement, 1)
+global_anchor = """  if (!functions_loaded) {
+    REXLOG_ERROR(
+        "Failed to get Vulkan global function pointers via "
+        "vkGetInstanceProcAddr");
+    return nullptr;
+  }"""
+global_replacement = """#if REX_PLATFORM_IOS
+  AsuraIOSLog(std::string("VULKAN_GLOBAL_ENTRYPOINTS create=") +
+              (ifn.vkCreateInstance ? "1" : "0") +
+              " enum_extensions=" + (ifn.vkEnumerateInstanceExtensionProperties ? "1" : "0") +
+              " enum_layers=" + (ifn.vkEnumerateInstanceLayerProperties ? "1" : "0"));
+#endif
+  if (!functions_loaded) {
+#if REX_PLATFORM_IOS
+    AsuraIOSLog("VULKAN_GLOBAL_ENTRYPOINT_LOAD_FAILED");
+#endif
+    REXLOG_ERROR(
+        "Failed to get Vulkan global function pointers via "
+        "vkGetInstanceProcAddr");
+    return nullptr;
+  }"""
+assert vulkan_text.count(global_anchor) == 1, "unexpected Vulkan global entrypoint failure branch"
+vulkan_text = vulkan_text.replace(global_anchor, global_replacement, 1)
+
 vulkan_instance.write_text(vulkan_text)
 print("ASURA_IOS_VULKAN_ICD_BRIDGE_LOADER_PATCH_OK")
 print("ASURA_IOS_VULKAN_ICD_BUNDLE_PATH_V1_OK")
