@@ -109,6 +109,8 @@ jobs:
           grep -q "VK_USE_PLATFORM_METAL_EXT=1" ios/prepare_ios.py
           grep -q "vkEnumerateInstanceLayerProperties" ios/Native/asura_vulkan_icd_bridge.c
           grep -q "ASURA_IOS_VULKAN_GLOBAL_ENTRYPOINT_DIAGNOSTICS_V1" ios/launcher_patch.py
+          grep -q "ASURA_IOS_VULKAN_STAGE_DIAGNOSTICS_V2" ios/launcher_patch.py
+          grep -q "VULKAN_CREATE_INSTANCE_RESULT" ios/launcher_patch.py
           grep -q "ASURA_IOS_FIRST_PRESENT_GATE_V1" ios/launcher_patch.py
           grep -q "AsuraIOSNotifyFirstPresent" ios/asura_ios_native.h
           grep -q "ASURA_IOS_VK_DESTROY_INSTANCE_EXPORT_V1" ios/Native/asura_vulkan_icd_bridge.c

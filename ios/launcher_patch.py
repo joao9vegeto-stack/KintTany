@@ -189,7 +189,85 @@ global_replacement = """#if REX_PLATFORM_IOS
 assert vulkan_text.count(global_anchor) == 1, "unexpected Vulkan global entrypoint failure branch"
 vulkan_text = vulkan_text.replace(global_anchor, global_replacement, 1)
 
+# ASURA_IOS_VULKAN_STAGE_DIAGNOSTICS_V2
+ext_count_anchor = """    const VkResult get_supported_implementation_extension_count_result =
+        ifn.vkEnumerateInstanceExtensionProperties(
+            nullptr, &supported_implementation_extension_count, nullptr);"""
+ext_count_replacement = ext_count_anchor + """
+#if REX_PLATFORM_IOS
+    AsuraIOSLog("VULKAN_ENUM_EXTENSIONS_COUNT result=" +
+                std::to_string(get_supported_implementation_extension_count_result) +
+                " count=" + std::to_string(supported_implementation_extension_count));
+#endif"""
+assert vulkan_text.count(ext_count_anchor) == 1, "unexpected Vulkan extension-count call"
+vulkan_text = vulkan_text.replace(ext_count_anchor, ext_count_replacement, 1)
+
+ext_list_anchor = """      const VkResult get_supported_implementation_extensions_result =
+          ifn.vkEnumerateInstanceExtensionProperties(nullptr,
+                                                     &supported_implementation_extension_count,
+                                                     supported_implementation_extensions.data());"""
+ext_list_replacement = ext_list_anchor + """
+#if REX_PLATFORM_IOS
+      AsuraIOSLog("VULKAN_ENUM_EXTENSIONS_LIST result=" +
+                  std::to_string(get_supported_implementation_extensions_result) +
+                  " count=" + std::to_string(supported_implementation_extension_count));
+#endif"""
+assert vulkan_text.count(ext_list_anchor) == 1, "unexpected Vulkan extension-list call"
+vulkan_text = vulkan_text.replace(ext_list_anchor, ext_list_replacement, 1)
+
+layer_count_anchor = """      const VkResult get_available_layer_count_result =
+          ifn.vkEnumerateInstanceLayerProperties(&available_layer_count, nullptr);"""
+layer_count_replacement = layer_count_anchor + """
+#if REX_PLATFORM_IOS
+      AsuraIOSLog("VULKAN_ENUM_LAYERS_COUNT result=" +
+                  std::to_string(get_available_layer_count_result) +
+                  " count=" + std::to_string(available_layer_count));
+#endif"""
+assert vulkan_text.count(layer_count_anchor) == 1, "unexpected Vulkan layer-count call"
+vulkan_text = vulkan_text.replace(layer_count_anchor, layer_count_replacement, 1)
+
+create_anchor = """  VkResult instance_create_result =
+      ifn.vkCreateInstance(&instance_create_info, nullptr, &vulkan_instance->instance_);"""
+create_replacement = create_anchor + """
+#if REX_PLATFORM_IOS
+  AsuraIOSLog("VULKAN_CREATE_INSTANCE_RESULT=" +
+              std::to_string(instance_create_result) +
+              " enabled_extensions=" + std::to_string(instance_create_info.enabledExtensionCount) +
+              " enabled_layers=" + std::to_string(instance_create_info.enabledLayerCount) +
+              " api_version=" + std::to_string(application_info.apiVersion));
+#endif"""
+assert vulkan_text.count(create_anchor) == 1, "unexpected Vulkan vkCreateInstance call"
+vulkan_text = vulkan_text.replace(create_anchor, create_replacement, 1)
+
+retry_anchor = """    instance_create_result =
+        ifn.vkCreateInstance(&instance_create_info, nullptr, &vulkan_instance->instance_);"""
+retry_replacement = retry_anchor + """
+#if REX_PLATFORM_IOS
+    AsuraIOSLog("VULKAN_CREATE_INSTANCE_RETRY_RESULT=" + std::to_string(instance_create_result));
+#endif"""
+assert vulkan_text.count(retry_anchor) == 1, "unexpected Vulkan instance retry call"
+vulkan_text = vulkan_text.replace(retry_anchor, retry_replacement, 1)
+
+driver_anchor = """#if REX_PLATFORM_IOS
+  AsuraIOSLog(std::string("VULKAN_GLOBAL_ENTRYPOINTS create=") +"""
+driver_replacement = """#if REX_PLATFORM_IOS
+  if (!functions_loaded) {
+    using AsuraVulkanDriverErrorFn = const char* (*)();
+    auto driver_error_fn = vulkan_instance->loader_.GetSymbol<AsuraVulkanDriverErrorFn>("AsuraVulkanDriverError");
+    if (driver_error_fn) {
+      const char* driver_error = driver_error_fn();
+      if (driver_error && *driver_error) AsuraIOSLog(std::string("VULKAN_ICD_ERROR ") + driver_error);
+    } else {
+      AsuraIOSLog("VULKAN_ICD_ERROR_QUERY_SYMBOL_MISSING");
+    }
+  }
+  AsuraIOSLog(std::string("VULKAN_GLOBAL_ENTRYPOINTS create=") +"""
+assert vulkan_text.count(driver_anchor) == 1, "unexpected Vulkan global diagnostic anchor"
+vulkan_text = vulkan_text.replace(driver_anchor, driver_replacement, 1)
+
 vulkan_instance.write_text(vulkan_text)
+
+
 print("ASURA_IOS_VULKAN_ICD_BRIDGE_LOADER_PATCH_OK")
 print("ASURA_IOS_VULKAN_ICD_BUNDLE_PATH_V1_OK")
 
