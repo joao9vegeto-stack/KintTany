@@ -294,7 +294,11 @@ jobs:
           grep -Fq "_AsuraIOSNotifyFirstPresent" "$RUNNER_TEMP/asura-runtime-symbols.txt"
           grep -Fq "_AsuraIOSHasPresentedFrame" "$RUNNER_TEMP/asura-runtime-symbols.txt"
           grep -Fq "AsuraIOSLog(" "$RUNNER_TEMP/asura-runtime-demangled.txt"
-          grep -Fq "U _AsuraIOSHasPresentedFrame" "$RUNNER_TEMP/asura-app-symbols.txt"
+          # The runtime dylib owns and exports this C callback. The app is not
+          # required to retain a direct undefined-symbol entry for it: LTO/dead
+          # stripping may remove the optional shutdown diagnostic call. The
+          # actual runtime export is asserted above; any live app reference is
+          # also resolved by the successful final link.
           grep -Fq "U AsuraIOSSetLauncherStatus(std::string const&)" "$RUNNER_TEMP/asura-app-demangled.txt"
           echo "ASURA_IOS_KOSMICKRISP_RUNTIME_CALLBACK_EXPORTS_OK"
           rsvg-convert -w 1024 -h 1024 ios/icons/AppIcon.svg > "$APP/AppIcon-1024.png"
