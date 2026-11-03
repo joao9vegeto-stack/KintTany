@@ -10,6 +10,14 @@ import argparse
 import json
 from pathlib import Path
 
+CPU_RUNTIME_MARKERS = (
+    "bbcpu_run",
+    "SpartanIOSPS4CPU",
+    "spartan_ps4_cpu_dispatch",
+    "spartan_cpu_dispatch",
+)
+SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".m", ".mm", ".S"}
+
 
 def read_json(path: Path, label: str) -> dict:
     if not path.is_file():
@@ -21,6 +29,22 @@ def read_json(path: Path, label: str) -> dict:
     if not isinstance(value, dict):
         raise SystemExit(f"{label} must be a JSON object")
     return value
+
+
+def has_cpu_runtime(runtime_dir: Path) -> bool:
+    """Require an actual CPU/dispatcher implementation, not any C source file."""
+    if not runtime_dir.is_dir():
+        return False
+    for path in runtime_dir.rglob("*"):
+        if not path.is_file() or path.suffix not in SOURCE_SUFFIXES:
+            continue
+        try:
+            source = path.read_text(errors="ignore")
+        except OSError:
+            continue
+        if any(marker in source for marker in CPU_RUNTIME_MARKERS):
+            return True
+    return False
 
 
 def main() -> None:
@@ -51,15 +75,7 @@ def main() -> None:
         )
 
     runtime_dir = args.project / "SpartanPort-iOS/Sources/Runtime"
-    runtime_readme = runtime_dir / "README.md"
-    runtime_text = runtime_readme.read_text() if runtime_readme.is_file() else ""
-    app_has_cpu_runtime = any(runtime_dir.rglob("*")) and any(
-        p.suffix in {".c", ".cc", ".cpp", ".m", ".mm", ".S"}
-        and p.name.lower() != "spartaniosguestmemory.c"
-        for p in runtime_dir.rglob("*") if p.is_file()
-    )
-    # The existing guest-memory primitive is deliberately not counted as a CPU runtime.
-    app_has_cpu_runtime = app_has_cpu_runtime and "not a PS4 CPU" not in runtime_text
+    app_has_cpu_runtime = has_cpu_runtime(runtime_dir)
     app_has_aot_link = any(
         p.is_file() and p.suffix in {".yml", ".yaml", ".pbxproj", ".swift"}
         and ("libgow3-recompiled-ios" in p.read_text(errors="ignore")
