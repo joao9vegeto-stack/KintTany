@@ -72,7 +72,10 @@ manifest = {
     "compiled_sources": [src.name for src in sources],
     "archive_bytes": archive.stat().st_size,
     "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
-    "execution_model": "static generated ARM64 AOT only",
+    "execution_model": "generated ARM64 archive only; no executable PS4 runtime integration",
+    "complete_recompilation": False,
+    "runtime_integrated": False,
+    "game_start_ready": False,
     "compiled_cpu_runtime": False,
     "compiled_jit": False,
     "compiled_interpreter": False,
@@ -84,7 +87,7 @@ manifest = {
     "decoder_dependency_include": str(a.zycore_include),
     "static_gap_sites": coverage["distinct_gap_sites"],
     "static_gap_mnemonics": coverage.get("gap_mnemonics"),
-    "runtime_policy": "requires the matching GOW3_AOT_ONLY strict dispatcher; any reached gap must terminate, never interpret",
+    "runtime_policy": "the archive is not executable by the app until a matching strict dispatcher and PS4 runtime are integrated; any reached gap must terminate, never interpret",
 }
 (a.out / "aot-build-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 print(json.dumps(manifest, indent=2))

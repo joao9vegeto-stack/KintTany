@@ -36,6 +36,10 @@ jobs:
     steps:
       - name: Checkout only SpartanPort-iOS
         uses: actions/checkout@v4
+      - name: Validate readiness audit helper
+        run: |
+          python3 -m py_compile tools/spartan-aot/audit_runtime_readiness.py
+          python3 tools/spartan-aot/test_audit_runtime_readiness.py
       - name: Install native build tools
         run: |
           set -euo pipefail
@@ -98,6 +102,14 @@ jobs:
             --out "$RUNNER_TEMP/spartan-ios-aot"
           cat "$RUNNER_TEMP/spartan-ios-aot/aot-build-manifest.json"
           cat "$RUNNER_TEMP/spartan-prepared/aot/coverage-summary.json"
+      - name: Audit full-game AOT and runtime readiness
+        run: |
+          set -euo pipefail
+          python3 tools/spartan-aot/audit_runtime_readiness.py \
+            --prepared "$RUNNER_TEMP/spartan-prepared" \
+            --compiled "$RUNNER_TEMP/spartan-ios-aot" \
+            --project "$GITHUB_WORKSPACE"
+          cat "$RUNNER_TEMP/spartan-ios-aot/runtime-readiness.json"
       - name: Retain non-game diagnostic manifests only
         if: always()
         uses: actions/upload-artifact@v4
@@ -108,5 +120,11 @@ jobs:
             ${{ runner.temp }}/spartan-ios-aot/aot-build-manifest.json
             ${{ runner.temp }}/spartan-prepared/aot/coverage-summary.json
             ${{ runner.temp }}/spartan-prepared/aot/coverage-audit.log
+            ${{ runner.temp }}/spartan-prepared/aot/coverage-sites.local.json
+            ${{ runner.temp }}/spartan-prepared/link.json
+            ${{ runner.temp }}/spartan-prepared/native-inputs.json
+            ${{ runner.temp }}/spartan-prepared/aot/functions.tsv
+            ${{ runner.temp }}/spartan-prepared/aot/imports.tsv
+            ${{ runner.temp }}/spartan-ios-aot/runtime-readiness.json
           if-no-files-found: warn
           retention-days: 14
