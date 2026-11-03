@@ -157,6 +157,8 @@ jobs:
           path: |
             ${{ runner.temp }}/spartan-input/input-manifest.json
             ${{ runner.temp }}/spartan-ios-aot/aot-build-manifest.json
+            ${{ runner.temp }}/spartan-ios-aot/libgow3-recompiled-ios.dylib
+            ${{ runner.temp }}/spartan-prepared/boot-linked.bin
             ${{ runner.temp }}/spartan-prepared/aot/coverage-summary.json
             ${{ runner.temp }}/spartan-prepared/aot/coverage-audit.log
             ${{ runner.temp }}/spartan-prepared/aot/coverage-sites.local.json

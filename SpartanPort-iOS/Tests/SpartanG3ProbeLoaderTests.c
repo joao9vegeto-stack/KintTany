@@ -6,40 +6,5 @@
 #include <string.h>
 static void put64(uint8_t*p,uint64_t v){for(int i=0;i<8;i++)p[i]=(uint8_t)(v>>(8*i));}
 static uint64_t get64(const uint8_t*p){uint64_t v=0;for(int i=0;i<8;i++)v|=(uint64_t)p[i]<<(8*i);return v;}
-static uint8_t *fixture(size_t *length) {
-    const uint64_t size=64, ns=1,nr=3,ni=1,modules=0,bindings=1;
-    const size_t header=56, metadata=48, bindingCount=8, bindingBytes=24, segmentBytes=24, namesBytes=128, relocBytes=96;
-    *length=header+metadata+bindingCount+bindingBytes+segmentBytes+namesBytes+relocBytes+size;
-    uint8_t *b=calloc(1,*length); assert(b);
-    memcpy(b,"G3PROBE5",8); put64(b+8,size); put64(b+16,8); put64(b+24,ns); put64(b+32,nr); put64(b+40,ni);
-    size_t p=56; put64(b+p,0); p+=8; p+=32; put64(b+p,modules); p+=8;
-    put64(b+p,bindings); p+=8; put64(b+p,0); put64(b+p+8,48); put64(b+p+16,2); p+=24;
-    put64(b+p,0); put64(b+p+8,size); put64(b+p+16,5); p+=24;
-    memcpy(b+p,"libExample#libkernel",20); p+=128;
-    /* Relative pointer -> image+32. Function import -> image+48. TLS -> displacement 0x24. */
-    put64(b+p,16); put64(b+p+8,0); put64(b+p+16,32); put64(b+p+24,0); p+=32;
-    put64(b+p,24); put64(b+p+8,2); put64(b+p+16,0); put64(b+p+24,0); p+=32;
-    put64(b+p,4); put64(b+p+8,3); put64(b+p+16,0); put64(b+p+24,0); p+=32;
-    assert(p+size==*length);
-    b[p+8]=0xc3;
-    return b;
-}
-int main(void) {
-    size_t length=0; uint8_t *bytes=fixture(&length); char error[160];
-    SpartanG3ProbeImage *image=spartan_g3probe_load(bytes,length,0x24,error,sizeof(error));
-    assert(image && error[0]==0);
-    SpartanG3ProbeInfo info; assert(spartan_g3probe_info(image,&info));
-    assert(info.image_size==64 && info.entry_offset==8 && info.import_count==1);
-    assert(info.binding_count==1 && info.unresolved_import_count==0 && info.applied_relocation_count==3);
-    uint8_t *base=spartan_guest_memory_host_pointer(spartan_g3probe_memory(image),0,64);
-    assert(base && get64(base+16)==(uint64_t)(uintptr_t)(base+32));
-    assert(get64(base+24)==(uint64_t)(uintptr_t)(base+48));
-    assert(((uint32_t)base[4]|((uint32_t)base[5]<<8)|((uint32_t)base[6]<<16)|((uint32_t)base[7]<<24))==0x24);
-    assert(spartan_g3probe_entry(image)==(uint64_t)(uintptr_t)(base+8));
-    spartan_g3probe_destroy(image);
-    /* malformed/truncated inputs fail closed */
-    assert(!spartan_g3probe_load(bytes,length-1,0,error,sizeof(error)));
-    free(bytes);
-    puts("PASS: G3PROBE5 segment validation, relative/import/TLS relocations and entry mapping");
-    return 0;
-}
+static uint8_t*fixture(size_t*length){const uint64_t size=128,ns=2,nr=2,ni=1,modules=1,bindings=1;*length=56+8+32+8+56+8+24+ns*24+ni*128+nr*32+size;uint8_t*b=calloc(1,*length);assert(b);memcpy(b,"G3PROBE5",8);put64(b+8,size);put64(b+16,8);put64(b+24,ns);put64(b+32,nr);put64(b+40,ni);put64(b+48,0);size_t p=56;put64(b+p,4);p+=8;put64(b+p,16);put64(b+p+8,0);put64(b+p+16,32);put64(b+p+24,16);p+=32;put64(b+p,modules);p+=8;put64(b+p,64);put64(b+p+8,32);put64(b+p+16,64);put64(b+p+24,80);put64(b+p+32,16);put64(b+p+40,8);put64(b+p+48,2);p+=56;put64(b+p,bindings);p+=8;put64(b+p,0);put64(b+p+8,48);put64(b+p+16,2);p+=24;put64(b+p,0);put64(b+p+8,64);put64(b+p+16,5);p+=24;put64(b+p,64);put64(b+p+8,32);put64(b+p+16,4);p+=24;memcpy(b+p,"libExample#libkernel",20);p+=128;put64(b+p,16);put64(b+p+8,0);put64(b+p+16,32);put64(b+p+24,0);p+=32;put64(b+p,24);put64(b+p+8,2);put64(b+p+16,0);put64(b+p+24,0);p+=32;assert(p+size==*length);return b;}
+int main(void){size_t length=0;uint8_t*bytes=fixture(&length);char error[160];SpartanG3ProbeImage*image=spartan_g3probe_load(bytes,length,error,sizeof(error));assert(image&&error[0]==0);SpartanG3ProbeInfo info;assert(spartan_g3probe_info(image,&info));assert(info.image_size==128&&info.entry_offset==8&&info.procparam_offset==4);assert(info.import_count==1&&info.binding_count==1&&info.module_count==1&&info.segment_count==2);assert(info.main_tls_address==16&&info.main_tls_memory_size==32&&info.main_tls_alignment==16);assert(info.unresolved_import_count==0&&info.applied_relocation_count==2);SpartanG3ProbeModule module;assert(spartan_g3probe_module(image,0,&module));assert(module.base==64&&module.size==32&&module.tls_module_id==2&&module.tls_memory_size==16);SpartanG3ProbeSegment segment;assert(spartan_g3probe_segment(image,1,&segment));assert(segment.offset==64&&segment.size==32&&segment.flags==4);uint8_t*base=spartan_guest_memory_host_pointer(spartan_g3probe_memory(image),0,128);assert(base&&get64(base+16)==(uint64_t)(uintptr_t)(base+32));assert(get64(base+24)==(uint64_t)(uintptr_t)(base+48));assert(spartan_g3probe_entry(image)==(uint64_t)(uintptr_t)(base+8));spartan_g3probe_destroy(image);put64(bytes+56+48+8+56,0);image=spartan_g3probe_load(bytes,length,error,sizeof(error));assert(image&&spartan_g3probe_info(image,&info));assert(info.unresolved_import_count==1&&info.applied_relocation_count==1);base=spartan_guest_memory_host_pointer(spartan_g3probe_memory(image),0,128);assert(base&&get64(base+24)==0);spartan_g3probe_destroy(image);put64(bytes+56+48+8+56+8+24+2*24+128+8,3);assert(!spartan_g3probe_load(bytes,length,error,sizeof(error)));free(bytes);puts("PASS: exact G3PROBE5 header, module/TLS metadata, segments, relocations and unresolved imports");return 0;}

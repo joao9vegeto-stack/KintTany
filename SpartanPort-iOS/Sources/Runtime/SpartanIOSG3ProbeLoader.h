@@ -8,23 +8,19 @@ extern "C" {
 #endif
 typedef struct SpartanG3ProbeImage SpartanG3ProbeImage;
 typedef struct {
-    uint64_t image_size, entry_offset, import_count, binding_count;
-    uint64_t module_count, segment_count, relocation_count;
-    uint64_t unresolved_import_count, applied_relocation_count;
-    uint64_t image_base;
+ uint64_t image_size,entry_offset,procparam_offset,flags,import_count,binding_count,module_count,segment_count,relocation_count;
+ uint64_t unresolved_import_count,applied_relocation_count,image_base;
+ uint64_t main_tls_address,main_tls_file_size,main_tls_memory_size,main_tls_alignment;
 } SpartanG3ProbeInfo;
-/* Load the exact G3PROBE5 image emitted by gow3-macos-arm64/scripts/link_modules.py.
- * Relocations are applied to data-only host memory. Unresolved imports are counted and
- * remain zero; callers MUST NOT start the game while that count is nonzero.
- * TLS relocations use the supplied GS displacement (normally zero for bbcpu's TCB base).
- * No guest page is made executable. */
-SpartanG3ProbeImage *spartan_g3probe_load(const void *bytes, size_t length,
-                                         uint32_t gs_displacement,
-                                         char *error, size_t error_capacity);
+typedef struct { uint64_t base,size,init,tls_address,tls_memory_size,tls_file_size,tls_module_id; } SpartanG3ProbeModule;
+typedef struct { uint64_t offset,size,flags; } SpartanG3ProbeSegment;
+SpartanG3ProbeImage *spartan_g3probe_load(const void *bytes,size_t length,char *error,size_t error_capacity);
 void spartan_g3probe_destroy(SpartanG3ProbeImage *image);
 SpartanGuestMemory *spartan_g3probe_memory(SpartanG3ProbeImage *image);
 uint64_t spartan_g3probe_entry(const SpartanG3ProbeImage *image);
-int spartan_g3probe_info(const SpartanG3ProbeImage *image, SpartanG3ProbeInfo *info);
+int spartan_g3probe_info(const SpartanG3ProbeImage *image,SpartanG3ProbeInfo *info);
+int spartan_g3probe_module(const SpartanG3ProbeImage *image,uint64_t index,SpartanG3ProbeModule *module);
+int spartan_g3probe_segment(const SpartanG3ProbeImage *image,uint64_t index,SpartanG3ProbeSegment *segment);
 #ifdef __cplusplus
 }
 #endif
