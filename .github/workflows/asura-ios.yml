@@ -163,14 +163,29 @@ jobs:
       - name: Fetch pinned KosmicKrisp source and apply XOWUE iOS patches
         run: |
           set -euxo pipefail
+          # Try the pinned Mesa commit from the official remote first. A
+          # successful clone does not guarantee fetch availability (GitLab
+          # can return transient HTTP 5xx); retry the exact same SHA on mirror.
+          mesa_fetch_ok=false
           if git clone --filter=blob:none --no-checkout "$MESA_PRIMARY_URL" mesa-src; then
-            echo "official GitLab Mesa source"
+            if git -C mesa-src fetch --depth=1 origin "$MESA_KOSMICKRISP_SHA"; then
+              echo "official GitLab Mesa source and pinned commit fetched"
+              mesa_fetch_ok=true
+            else
+              echo "::warning::GitLab clone worked but fetching pinned Mesa commit failed; switching to GitHub mirror"
+              rm -rf mesa-src
+            fi
           else
+            echo "::warning::GitLab clone failed; switching to GitHub mirror"
             rm -rf mesa-src
-            git clone --filter=blob:none --no-checkout "$MESA_MIRROR_URL" mesa-src
           fi
-          git -C mesa-src fetch --depth=1 origin "$MESA_KOSMICKRISP_SHA"
+          if [[ "$mesa_fetch_ok" != true ]]; then
+            git clone --filter=blob:none --no-checkout "$MESA_MIRROR_URL" mesa-src
+            git -C mesa-src fetch --depth=1 origin "$MESA_KOSMICKRISP_SHA"
+          fi
           git -C mesa-src checkout --detach "$MESA_KOSMICKRISP_SHA"
+          test "$(git -C mesa-src rev-parse HEAD)" = "$MESA_KOSMICKRISP_SHA"
+          echo "MESA_KOSMICKRISP_PIN=$(git -C mesa-src rev-parse HEAD)"
           for patch in \
             "$GITHUB_WORKSPACE/ios/patches/0001-kosmickrisp-ios-m2.patch" \
             "$GITHUB_WORKSPACE/ios/patches/0002-kosmickrisp-ios-m3-metal-wsi.patch"; do
