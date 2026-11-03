@@ -72,5 +72,5 @@ manifest = {
     "compiled_fallback": False,
     "source_policy": "gow3-macos-arm64 packaging/macos/native/compile_game.py",
 }
-(a.out / "aot-build-manifest.json").write_text(json.dumps(manifest, indent=2) + "\\n")
+(a.out / "aot-build-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 print(json.dumps(manifest, indent=2))
