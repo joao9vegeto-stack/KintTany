@@ -15,6 +15,8 @@ import subprocess
 p = argparse.ArgumentParser()
 p.add_argument("--generated", type=Path, required=True)
 p.add_argument("--recomp", type=Path, required=True)
+p.add_argument("--zydis-include", type=Path, required=True)
+p.add_argument("--zycore-include", type=Path, required=True)
 p.add_argument("--coverage", type=Path, required=True)
 p.add_argument("--out", type=Path, required=True)
 a = p.parse_args()
@@ -47,6 +49,8 @@ flags = [
     "-ffp-contract=off", "-fno-strict-aliasing",
     "-I" + str(a.recomp / "src"),
     "-I" + str(a.recomp / "src/recomp"),
+    "-I" + str(a.zydis_include),
+    "-I" + str(a.zycore_include),
 ]
 objects = []
 for i, src in enumerate(sources):
@@ -75,6 +79,9 @@ manifest = {
     "compiled_decoder": False,
     "compiled_fallback": False,
     "source_policy": "gow3-macos-arm64 packaging/macos/native/compile_game.py",
+    "decoder_headers_only": True,
+    "decoder_include": str(a.zydis_include),
+    "decoder_dependency_include": str(a.zycore_include),
     "static_gap_sites": coverage["distinct_gap_sites"],
     "static_gap_mnemonics": coverage.get("gap_mnemonics"),
     "runtime_policy": "requires the matching GOW3_AOT_ONLY strict dispatcher; any reached gap must terminate, never interpret",
