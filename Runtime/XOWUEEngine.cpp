@@ -2103,7 +2103,20 @@ void runXowueAudioCallbackPump(const std::shared_ptr<GuestThread> &thread,
         callbackContext.r13.u32 = thread->pcrAddress;
         callbackContext.lr = 0u;
         callbackContext.r3.u32 = callbackContextValue;
+        // Match XenonRecomp's native guest-callback contract: seed the PPC
+        // FPSCR from this host worker's FP control state before entering AOT.
+        // The zero-initialized context otherwise carries a stale FP mode.
+        const uint32_t guestRoundingMode = callbackContext.fpscr.loadFromHost();
         PPC_STORE_U32(callbackContext.r1.u32, 0u);
+        static std::atomic<bool> fpscrLogged{false};
+        bool expectedFpscrLog = false;
+        if (fpscrLogged.compare_exchange_strong(expectedFpscrLog, true, std::memory_order_acq_rel)) {
+            char fpscrEvent[128];
+            std::snprintf(fpscrEvent, sizeof(fpscrEvent),
+                          "XOWUE_XAUDIO_FPSCR_INITIALIZED rounding_mode=%u thread=%u",
+                          guestRoundingMode, thread->id);
+            recordRuntimeTrace(fpscrEvent);
+        }
 
         try {
             checkpointGuestThread();

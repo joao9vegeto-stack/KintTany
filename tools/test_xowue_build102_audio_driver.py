@@ -15,6 +15,8 @@ required = (
     "callbackContext.r2.u32 = imageBase",
     "callbackContext.r13.u32 = thread->pcrAddress",
     "callbackContext.r3.u32 = callbackContextValue",
+    "callbackContext.fpscr.loadFromHost()",
+    "XOWUE_XAUDIO_FPSCR_INITIALIZED",
     "routine(callbackContext, base)",
     "XOWUE_XAUDIO_WORKER_START",
     "XOWUE_XAUDIO_CALLBACK",
@@ -40,3 +42,10 @@ assert "XOWUE_XAUDIO_" in engine
 assert "signalGuestEventHandle(0x4004ED80" not in engine
 assert "signalGuestEventHandle(0x4004EDD0" not in engine
 print("PASS: XAudio render-driver registration, dedicated guest thread/KPCR, 5.333 ms callback cadence, frame submit ABI, category-volume outputs, and no synthetic Bink wake")
+
+swift = Path("iOS/App/XOWUEDiagnostics.swift").read_text(encoding="utf-8")
+assert '"XOWUE_XAUDIO_"' in swift
+assert '"XOWUE_XMA_"' in swift
+assert "let audioDriver = Array(lines.filter {" in swift
+assert "+ boot + audioDriver + eventWaits" in swift
+print("PASS: PPC callback FPSCR initialized and XAudio/XMA lifecycle retained in compact iOS diagnostics")
