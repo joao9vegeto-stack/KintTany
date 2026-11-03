@@ -130,3 +130,26 @@ Run #82 passed the Ubuntu preflight, selected Xcode 26, and compiled all 434 Kos
 Run #104 (`41567466715`, commit `db52913edc4294c3a4742c4caa6b42fe51e4643a`) passed the Mesa/KosmicKrisp source build, XcodeGen and simulator tests, then failed only at the final device link. The linker reported 2,824 undefined symbols from Mesa's generated `wsi_common_entrypoints.c.o`. The `-u` list contained 568 symbols selected from archive definitions and had zero overlap with the unresolved-symbol list; increasing or renaming that force-extraction list could not close the missing dependency graph.
 
 The replacement integration pins the already-consumed PsTJohn dylib by its exact SHA-256, validates arm64/iOS Mach-O metadata before app compilation, and loads it through the same `dlopen`/ICD-entrypoint pattern used by PoPTST. The app bundle must contain `Frameworks/libKosmicKrisp.dylib`; the app executable must not have a duplicate static or dynamic Vulkan link dependency. This correction validates packaging and ICD discovery only; physical-device presentation and PS4 gameplay remain separate milestones.
+
+
+## iOS ARM64 strict CPU dispatcher port (2026-11-03)
+
+The native AOT workflow now additionally cross-compiles the upstream
+`bloodborne-recomp` CPU dispatcher for the iOS 17.4 ARM64 SDK. It builds
+Zycore and Zydis for the iOS target (not the macOS host), then compiles the
+pinned CPU sources with the exact `GOW3_AOT_ONLY` policy patch used by
+`gow3-macos-arm64`.
+
+The iOS CPU archive deliberately excludes `jit_arm64.c`. The patch removes
+the JIT dispatcher call and turns uncovered guest instructions/functions into
+fatal coverage errors; this is not an interpreter fallback. The build checks
+for the required dispatcher exports and rejects JIT symbols. The archive and
+its manifest are retained as CI artifacts.
+
+This is the first compiled iOS CPU-runtime component, not a claim of a
+playable port. The archive still requires a reviewed iOS host bridge for
+`runtime_low_map`, a complete PS4 module/relocation/import loader, the PS4
+HLE services, audio/input/filesystem integration, and a working shadPS4 GNM
+renderer/presenter. Until those pieces are linked into the app and exercised
+on device, game start remains disabled. Zydis and Zycore are external static
+link dependencies and are built for the same iOS ARM64 target in CI.

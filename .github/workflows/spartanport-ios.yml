@@ -90,6 +90,34 @@ jobs:
             -DCMAKE_PREFIX_PATH="$DEPS/install"
           cmake --build "$DEPS/aot-host" --parallel 6
           ctest --test-dir "$DEPS/aot-host" --output-on-failure
+      - name: Build the strict static ARM64 CPU dispatcher for iOS
+        run: |
+          set -euo pipefail
+          IOS_DEPS="$RUNNER_TEMP/ios-aot-deps"
+          mkdir -p "$IOS_DEPS/install"
+          cmake -S "$RUNNER_TEMP/zydis/dependencies/zycore" -B "$IOS_DEPS/zycore" -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=17.4 \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_INSTALL_PREFIX="$IOS_DEPS/install"
+          cmake --build "$IOS_DEPS/zycore" --parallel 6
+          cmake --install "$IOS_DEPS/zycore"
+          cmake -S "$RUNNER_TEMP/zydis" -B "$IOS_DEPS/zydis" -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=17.4 \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_INSTALL_PREFIX="$IOS_DEPS/install" \
+            -DCMAKE_PREFIX_PATH="$IOS_DEPS/install" \
+            -DCMAKE_C_FLAGS="-I$IOS_DEPS/install/include" -DZYAN_SYSTEM_ZYCORE=ON \
+            -DZYDIS_BUILD_TOOLS=OFF -DZYDIS_BUILD_EXAMPLES=OFF -DZYDIS_BUILD_DOXYGEN=OFF
+          cmake --build "$IOS_DEPS/zydis" --parallel 6
+          cmake --install "$IOS_DEPS/zydis"
+          python3 tools/spartan-aot/compile_ios_cpu_runtime.py \
+            --recomp "$RUNNER_TEMP/recomp" \
+            --zydis-include "$IOS_DEPS/install/include" \
+            --zycore-include "$IOS_DEPS/install/include" \
+            --out "$RUNNER_TEMP/spartan-ios-cpu"
+          cat "$RUNNER_TEMP/spartan-ios-cpu/ios-cpu-runtime-manifest.json"
       - name: Reconstruct the supplied SELF and prepare the real PS4 module graph
         run: |
           set -euo pipefail
@@ -135,5 +163,7 @@ jobs:
             ${{ runner.temp }}/spartan-prepared/aot/functions.tsv
             ${{ runner.temp }}/spartan-prepared/aot/imports.tsv
             ${{ runner.temp }}/spartan-ios-aot/runtime-readiness.json
+            ${{ runner.temp }}/spartan-ios-cpu/ios-cpu-runtime-manifest.json
+            ${{ runner.temp }}/spartan-ios-cpu/libgow3-aot-cpu-ios.a
           if-no-files-found: warn
           retention-days: 14
