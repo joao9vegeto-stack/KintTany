@@ -29,7 +29,7 @@ SpartanG3ProbeImage *spartan_g3probe_load(const void*input,size_t length,char*er
  const uint64_t main_tls_address=u64(b+pos),main_tls_filesz=u64(b+pos+8),main_tls_memsz=u64(b+pos+16),main_tls_align=u64(b+pos+24);pos+=32;
  modules=u64(b+pos);pos+=8;
  if(!advance(&pos,modules,MODULE_SIZE,length)){seterr(error,error_capacity,"invalid module table");return NULL;}
- const uint64_t modules_at=pos-8;
+ const uint64_t modules_at=HEADER_SIZE+48;
  pos=modules_at;
  if(!range(pos,8,length)){seterr(error,error_capacity,"missing binding count");return NULL;}
  bindings_count=u64(b+pos);pos+=8;
