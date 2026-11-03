@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Stage the original PS4 dump for the pinned upstream AOT preparer.
-
-Do not rewrite SELF containers here. The upstream parser consumes the original
-SELF entry flags and segment indices; replacing them with a guessed ELF breaks
-its loader and loses the original module metadata.
-"""
+"""Stage the original PS4 dump in the exact directory layout expected upstream."""
 from __future__ import annotations
 import argparse
 import hashlib
@@ -71,6 +66,16 @@ def validate_self(path: Path) -> dict:
         "entry_count": count, "entries": entries,
     }
 
+def copy_canonical(source: Path, target: Path) -> Path:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if source.resolve() != target.resolve():
+        shutil.copy2(source, target)
+    if not target.is_file() or target.stat().st_size != source.stat().st_size:
+        raise ValueError(f"Falha ao posicionar {source.name} em {target}")
+    if digest(source) != digest(target):
+        raise ValueError(f"SHA-256 diverge após posicionar {source.name}")
+    return target
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--eboot", required=True)
@@ -87,31 +92,41 @@ def main() -> None:
     with zipfile.ZipFile(archive) as zf:
         safe_extract(zf, game)
 
-    param = unique_file(game, "param.sfo")
-    if not param.read_bytes().startswith(b"\0PSF"):
+    param_source = unique_file(game, "param.sfo")
+    if not param_source.read_bytes().startswith(b"\0PSF"):
         raise ValueError("param.sfo sem magic PSF")
-    sfo_target = game / "sce_sys" / "param.sfo"
-    sfo_target.parent.mkdir(parents=True, exist_ok=True)
-    if param.resolve() != sfo_target.resolve():
-        shutil.copy2(param, sfo_target)
+    param_target = copy_canonical(param_source, game / "sce_sys" / "param.sfo")
 
+    # gow3-macos-arm64/scripts/prepare.py and link_modules.py open these exact paths.
     module_records = []
     for name in ("libc.prx", "libSceFios2.prx"):
-        module = unique_file(game, name)
+        source = unique_file(game, name)
+        target = copy_canonical(source, game / "sce_module" / name)
         module_records.append({
-            "name": name, "path": str(module.relative_to(output)),
-            **validate_self(module),
+            "name": name, "source_path": str(source.relative_to(output)),
+            "canonical_path": str(target.relative_to(output)),
+            **validate_self(target),
         })
 
-    eboot_target = game / "eboot.bin"
-    shutil.copy2(eboot, eboot_target)
+    eboot_target = copy_canonical(eboot, game / "eboot.bin")
     eboot_record = validate_self(eboot_target)
+
+    # Fail here, not deep in upstream code, if its required module/resource layout is absent.
+    required = [game / "sce_module" / "libc.prx",
+                game / "sce_module" / "libSceFios2.prx",
+                game / "sce_sys" / "param.sfo",
+                game / "dvdroot_ps4"]
+    missing = [str(p.relative_to(output)) for p in required if not p.exists()]
+    if missing:
+        raise ValueError("Estrutura requerida pelo preparador upstream ausente: " + ", ".join(missing))
+
     manifest = {
         "eboot": {"path": "game/eboot.bin", **eboot_record},
         "assets_zip": {"path": str(archive), "bytes": archive.stat().st_size, "sha256": digest(archive)},
         "validated_modules": module_records,
-        "param_sfo": "game/sce_sys/param.sfo",
-        "staging_policy": "Original SELF files preserved byte-for-byte; upstream prepare.py owns SELF parsing and ELF reconstruction.",
+        "param_sfo": str(param_target.relative_to(output)),
+        "required_paths_verified": [str(p.relative_to(output)) for p in required],
+        "staging_policy": "Original SELF bytes preserved; modules copied to exact upstream sce_module paths and SHA-256 verified.",
     }
     (output / "input-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(json.dumps(manifest, indent=2))
