@@ -86,42 +86,12 @@ jobs:
             "$RUNNER_TEMP/spartan-input/game" --out "$RUNNER_TEMP/spartan-prepared" \
             --tools "$RUNNER_TEMP/aot-deps/aot-host"
           test -s "$RUNNER_TEMP/spartan-prepared/aot/recomp.c"
-      - name: Build Zydis and Zycore for iOS ARM64
-        run: |
-          set -euo pipefail
-          DEPS="$RUNNER_TEMP/aot-deps"
-          IOS="$DEPS/ios"
-          mkdir -p "$IOS"
-          IOS_FLAGS="-DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=17.4 -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF"
-          cmake -S "$RUNNER_TEMP/zydis/dependencies/zycore" -B "$IOS/zycore" -G Ninja $IOS_FLAGS -DCMAKE_INSTALL_PREFIX="$IOS/install"
-          cmake --build "$IOS/zycore" --parallel 6
-          cmake --install "$IOS/zycore"
-          # Use the checked-out Zycore submodule as a CMake target. The package
-          # config produced by its install is not discoverable by find_package
-          # under the iOS cross-build's package search rules.
-          cmake -S "$RUNNER_TEMP/zydis" -B "$IOS/zydis" -G Ninja $IOS_FLAGS \
-            -DZYAN_SYSTEM_ZYCORE=OFF \
-            -DZYAN_ZYCORE_PATH="$RUNNER_TEMP/zydis/dependencies/zycore" \
-            -DCMAKE_INSTALL_PREFIX="$IOS/install" \
-            -DCMAKE_C_FLAGS="-I$IOS/install/include" \
-            -DZYDIS_BUILD_TOOLS=OFF -DZYDIS_BUILD_EXAMPLES=OFF -DZYDIS_BUILD_DOXYGEN=OFF
-          cmake --build "$IOS/zydis" --parallel 6
-          cmake --install "$IOS/zydis"
-          mkdir -p "$IOS/install/lib"
-          find "$IOS/zycore" -name 'libZycore.a' -exec cp {} "$IOS/install/lib/" \;
-          find "$IOS/zydis" -name 'libZydis.a' -exec cp {} "$IOS/install/lib/" \;
-          test -s "$IOS/install/lib/libZycore.a"
-          test -s "$IOS/install/lib/libZydis.a"
-          mkdir -p "$RUNNER_TEMP/zydis/build-ios/lib" "$RUNNER_TEMP/zydis/dependencies/zycore/build-ios/lib"
-          cp "$IOS/install/lib/libZydis.a" "$RUNNER_TEMP/zydis/build-ios/lib/"
-          cp "$IOS/install/lib/libZycore.a" "$RUNNER_TEMP/zydis/dependencies/zycore/build-ios/lib/"
       - name: Compile generated game functions as strict iOS ARM64 AOT
         run: |
           set -euo pipefail
           python3 tools/spartan-aot/compile_ios_aot.py \
             --generated "$RUNNER_TEMP/spartan-prepared/aot" \
             --recomp "$RUNNER_TEMP/recomp" \
-            --zydis "$RUNNER_TEMP/zydis" --zycore "$RUNNER_TEMP/zydis/dependencies/zycore" \
             --out "$RUNNER_TEMP/spartan-ios-aot"
           cat "$RUNNER_TEMP/spartan-ios-aot/aot-build-manifest.json"
           cat "$RUNNER_TEMP/spartan-prepared/aot/coverage-summary.json"
