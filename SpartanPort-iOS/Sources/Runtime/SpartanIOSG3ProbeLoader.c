@@ -150,10 +150,14 @@ fail:
     return NULL;
 }
 void spartan_g3probe_destroy(SpartanG3ProbeImage *image) {
-    if(!image) return; spartan_guest_memory_destroy(image->memory); free(image);
+    if(!image) return;
+    spartan_guest_memory_destroy(image->memory);
+    free(image);
 }
 SpartanGuestMemory *spartan_g3probe_memory(SpartanG3ProbeImage *image) { return image?image->memory:NULL; }
 uint64_t spartan_g3probe_entry(const SpartanG3ProbeImage *image) { return image?image->entry:0; }
 int spartan_g3probe_info(const SpartanG3ProbeImage *image,SpartanG3ProbeInfo *info) {
-    if(!image || !info) return 0; *info=image->info; return 1;
+    if(!image || !info) return 0;
+    *info=image->info;
+    return 1;
 }

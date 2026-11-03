@@ -4,7 +4,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-static void put32(uint8_t*p,uint32_t v){for(int i=0;i<4;i++)p[i]=(uint8_t)(v>>(8*i));}
 static void put64(uint8_t*p,uint64_t v){for(int i=0;i<8;i++)p[i]=(uint8_t)(v>>(8*i));}
 static uint64_t get64(const uint8_t*p){uint64_t v=0;for(int i=0;i<8;i++)v|=(uint64_t)p[i]<<(8*i);return v;}
 static uint8_t *fixture(size_t *length) {
@@ -39,7 +38,13 @@ int main(void) {
     assert(spartan_g3probe_entry(image)==(uint64_t)(uintptr_t)(base+8));
     spartan_g3probe_destroy(image);
     /* Unresolved imports are not silently fabricated: they remain zero and block readiness. */
-    put64(bytes+56+8+32+8+8,0); /* remove binding table row by changing count */
+    put64(bytes+104,0); /* binding count */
+    image=spartan_g3probe_load(bytes,length,0x24,error,sizeof(error));
+    assert(image && spartan_g3probe_info(image,&info));
+    assert(info.unresolved_import_count==1 && info.applied_relocation_count==2);
+    base=spartan_guest_memory_host_pointer(spartan_g3probe_memory(image),0,64);
+    assert(base && get64(base+24)==0);
+    spartan_g3probe_destroy(image);
     /* malformed/truncated inputs fail closed */
     assert(!spartan_g3probe_load(bytes,length-1,0,error,sizeof(error)));
     free(bytes);
