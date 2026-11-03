@@ -158,6 +158,16 @@ jobs:
             --report artifacts/xowue-global-native-pc.json
           test -s artifacts/xowue-global-native-pc.json
 
+      - name: Audit global AOT switch callsites skipped by generic lowering
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/audit_xowue_global_callsite_gaps.py
+          python3 tools/audit_xowue_global_callsite_gaps.py \
+            --ppc-dir generated/ppc \
+            --report artifacts/xowue-global-native-pc.json \
+            --out artifacts/xowue-global-callsite-audit.json
+          test -s artifacts/xowue-global-callsite-audit.json
+
       - name: Restore verified native PPC continuation and all safe local CTR branches
         run: |
           set -euo pipefail
@@ -234,6 +244,8 @@ jobs:
           python3 tools/test_xowue_build97_video_diagnostics.py
           python3 -m py_compile tools/test_xowue_build100_event_lifetime.py
           python3 tools/test_xowue_build100_event_lifetime.py
+          python3 -m py_compile tools/test_xowue_async_file_apc.py
+          python3 tools/test_xowue_async_file_apc.py
           python3 -m py_compile tools/test_xowue_build100_timer_apc.py
           python3 tools/test_xowue_build100_timer_apc.py
           python3 -m py_compile tools/test_xowue_build102_audio_driver.py
@@ -716,6 +728,7 @@ jobs:
           name: XOWUE-Global-AOT-Recovery
           path: |
             artifacts/xowue-global-native-pc.json
+            artifacts/xowue-global-callsite-audit.json
             tools/patch_xowue_global_native.py
           if-no-files-found: warn
           retention-days: 30

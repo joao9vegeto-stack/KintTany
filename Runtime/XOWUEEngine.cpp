@@ -42,6 +42,11 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <cmath>
+
+#if defined(__APPLE__)
+#include "../iOS/App/XOWUEAudioBackend.h"
+#endif
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -59,6 +64,7 @@ extern "C" void xowue_vulkan_backend_guest_swap(uint32_t frontbuffer,
                                                  uint32_t width,
                                                  uint32_t height)
     __attribute__((weak));
+extern "C" void xowue_vulkan_backend_wait_idle(void) __attribute__((weak));
 extern "C" void xowue_vulkan_backend_guest_frame_rgba(
     uint32_t frontbuffer, uint32_t width, uint32_t height, uint32_t format,
     const uint8_t *rgba, size_t byte_count) __attribute__((weak));
@@ -112,6 +118,7 @@ constexpr uint32_t kFirstPhysicalAllocation = 0x10000000u;
 constexpr uint32_t kLastPhysicalAllocation = 0x20000000u;
 static_assert(kLastPhysicalAllocation<=kFirstVirtualAllocation);
 constexpr uint32_t kNtStatusSuccess = 0x00000000u;
+constexpr uint32_t kNtStatusPending = 0x00000103u;
 constexpr uint32_t kNtStatusEndOfFile = 0xC0000011u;
 constexpr uint32_t kNtStatusNotImplemented = 0xC0000002u;
 constexpr uint32_t kNtStatusInvalidParameter = 0xC000000Du;
@@ -163,6 +170,7 @@ static_assert(kFirstGuestThreadStackTop <= kXenosGpuRegisterBase);
 constexpr uint32_t kXenosCommandProcessorWritePointerOffset = 0x0714u;
 constexpr uint32_t kXenosPm4SwapOpcode = 0x64u;
 constexpr uint32_t kXenosPm4IndirectBufferOpcode = 0x3Fu;
+constexpr uint32_t kXenosPm4IndirectBufferPfdOpcode = 0x37u;
 constexpr uint32_t kXenosPm4DrawIndexOpcode = 0x22u;
 constexpr uint32_t kXenosPm4DrawIndex2Opcode = 0x36u;
 constexpr uint32_t kXenosPm4DrawIndexBinOpcode = 0x34u;
@@ -255,6 +263,8 @@ struct GuestApc {
     uint32_t context = 0u;
     uint32_t argument1 = 0u;
     uint32_t argument2 = 0u;
+    // Deferred NT I/O work is executed when the guest thread delivers this APC.
+    std::function<void()> completion;
 };
 // std::thread's default secondary-thread stack on iOS is only 512 KB.
 // Recompiled PPC code nests deeply; the working MW2 iPad port gives every
@@ -408,6 +418,8 @@ struct XenosFrontendState {
     std::array<uint32_t, 6> swapFetch{};
     uint8_t swapFetchMask = 0;
     bool swapFetchValid = false;
+    uint64_t binMask = 0xFFFFFFFFull;
+    uint64_t binSelect = 0xFFFFFFFFull;
     uint32_t latestFrontbufferAddress = 0;
     uint32_t latestWidth = 0;
     uint32_t latestHeight = 0;
@@ -584,6 +596,10 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     if (event.find("XOWUE_XAUDIO_") != std::string::npos)
         return g_xaudioTraceLogs.fetch_add(1u, std::memory_order_relaxed) < 256u;
     if (event.find("B97_") != std::string::npos) return true;
+    if (event.find("B103_ASYNC_NTREADFILE_") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 512u;
+    }
     // Keep the exact event lifetime and wait transitions that decide whether
     // asynchronous movie/file work can unblock its guest consumer.
     if (event.find("B98_") != std::string::npos) {
@@ -1086,12 +1102,14 @@ void recordAotExecutionSummary(const char *reason) {
 void notifyGuestWaiters();
 
 void queueGuestApc(GuestThread *thread, uint32_t routine, uint32_t apcContext,
-                   uint32_t argument1, uint32_t argument2) {
+                   uint32_t argument1, uint32_t argument2,
+                   std::function<void()> completion = {}) {
     if (!thread || routine == 0u) return;
     routine &= ~1u;
     {
         std::lock_guard<std::mutex> lock(thread->apcMutex);
-        thread->pendingApcs.push_back({routine, apcContext, argument1, argument2});
+        thread->pendingApcs.push_back(
+            {routine, apcContext, argument1, argument2, std::move(completion)});
     }
     notifyGuestWaiters();
 }
@@ -1139,6 +1157,18 @@ bool deliverPendingGuestApcs() {
             if (thread->pendingApcs.empty()) break;
             apc = thread->pendingApcs.front();
             thread->pendingApcs.pop_front();
+        }
+        // Complete deferred I/O before the guest APC normal routine reads its
+        // IoStatusBlock or consumes the destination buffer.
+        if (apc.completion) {
+            try {
+                apc.completion();
+                delivered = true;
+            } catch (const std::exception &error) {
+                recordRuntimeTrace(std::string("APC completion failed: ") + error.what());
+            } catch (...) {
+                recordRuntimeTrace("APC completion failed with an unknown host exception");
+            }
         }
         PPCFunc *routine = findGuestFunction(apc.routine);
         if (!routine) {
@@ -1807,7 +1837,9 @@ struct GuestEventSignalOnReturn final {
 struct GuestFileCompletionSignalOnReturn final {
     explicit GuestFileCompletionSignalOnReturn(std::shared_ptr<GuestFile> value)
         : file(std::move(value)) {}
-    ~GuestFileCompletionSignalOnReturn() {
+    void signalNow() {
+        if (signaled) return;
+        signaled = true;
         if (!file || !file->completion) return;
         signalGuestWaitable(file->completion);
         std::string ext = file->path.extension().string();
@@ -1832,7 +1864,9 @@ struct GuestFileCompletionSignalOnReturn final {
             }
         }
     }
+    ~GuestFileCompletionSignalOnReturn() { signalNow(); }
     std::shared_ptr<GuestFile> file;
+    bool signaled = false;
 };
 
 std::shared_ptr<std::recursive_mutex> criticalSectionLock(uint32_t address) {
@@ -2180,11 +2214,14 @@ struct GuestThreadBinding final {
 constexpr auto kXowueAudioFrameInterval = std::chrono::microseconds(5333);
 constexpr auto kXowueAudioInitialDelay = std::chrono::milliseconds(100);
 constexpr uint32_t kXowueAudioDriverTag = 0x41550000u;
-constexpr uint32_t kXowueAudioFrameBytes = 6u * 256u * sizeof(float);
+constexpr uint32_t kXowueAudioChannels = 6u;
+constexpr uint32_t kXowueAudioSamplesPerFrame = 256u;
+constexpr uint32_t kXowueAudioFrameBytes =
+    kXowueAudioChannels * kXowueAudioSamplesPerFrame * sizeof(float);
 
-// Xbox titles register a guest mixer callback that must run every 256 samples
-// even when no host output device is available. Keep a real guest thread/KPCR
-// and discard submitted PCM only after the callback has advanced the mixer.
+// Xbox 360 XAudio render-driver frames are 256 samples x 6 channels of
+// planar big-endian float. Keep the guest callback cadence/KPCR and send its
+// converted mix to the native iOS audio sink without blocking guest mixing.
 void runXowueAudioCallbackPump(const std::shared_ptr<GuestThread> &thread,
                                uint32_t imageBase, uint8_t *base) {
     for (;;) {
@@ -5140,7 +5177,18 @@ void xowue_compat_import(const char *name, PPCContext &context, uint8_t *base) {
     if (api == "XamFree") {
         releaseGuestPhysicalRange(context.r3.u32); context.r3.u32 = 0u; return;
     }
-    if (api == "XAudioRenderDriverInitialize") { context.r3.u32 = kNtStatusSuccess; return; }
+    if (api == "XAudioRenderDriverInitialize") {
+#if defined(__APPLE__)
+        const int requested = XOWUEAudioStart();
+        recordRuntimeTrace(requested
+            ? "XOWUE_AUDIO_BACKEND_START requested=1 sample_rate=48000 guest_channels=6"
+            : "XOWUE_AUDIO_BACKEND_START requested=0");
+#else
+        recordRuntimeTrace("XOWUE_AUDIO_BACKEND_START unavailable=1");
+#endif
+        context.r3.u32 = kNtStatusSuccess;
+        return;
+    }
     if (api == "XAudioGetSpeakerConfig") { context.r3.u32 = 0x00000003u; return; }
     if (api == "XAudioGetVoiceCategoryVolume") {
         const uint32_t output = context.r4.u32;
@@ -5273,12 +5321,67 @@ void xowue_compat_import(const char *name, PPCContext &context, uint8_t *base) {
             frames = ++client->frames;
             g_xaudioFrameCount.fetch_add(1u, std::memory_order_relaxed);
         }
+
+        // XAudio's guest buffer is planar 5.1 BE float: FL, FR, FC, LFE,
+        // surround-L, surround-R. Decode it explicitly, then downmix to the
+        // stereo hardware route using standard -3 dB center/surround gains.
+        std::array<float, kXowueAudioSamplesPerFrame * 2u> stereoSamples{};
+        double sumSquares = 0.0;
+        float peak = 0.0f;
+        const auto loadChannelSample = [base, samples](uint32_t channel,
+                                                       uint32_t sampleIndex) {
+            const uint32_t address = samples +
+                (channel * kXowueAudioSamplesPerFrame + sampleIndex) * sizeof(uint32_t);
+            const uint32_t bits = loadGuestBe32(base, address);
+            float value = 0.0f;
+            std::memcpy(&value, &bits, sizeof(value));
+            return std::isfinite(value) ? value : 0.0f;
+        };
+        for (uint32_t i = 0u; i < kXowueAudioSamplesPerFrame; ++i) {
+            const float fl = loadChannelSample(0u, i);
+            const float fr = loadChannelSample(1u, i);
+            const float fc = loadChannelSample(2u, i);
+            const float lfe = loadChannelSample(3u, i);
+            const float sl = loadChannelSample(4u, i);
+            const float sr = loadChannelSample(5u, i);
+            const float left = std::clamp(
+                fl + 0.70710678f * fc + 0.5f * lfe + 0.70710678f * sl,
+                -1.0f, 1.0f);
+            const float right = std::clamp(
+                fr + 0.70710678f * fc + 0.5f * lfe + 0.70710678f * sr,
+                -1.0f, 1.0f);
+            stereoSamples[i * 2u] = left;
+            stereoSamples[i * 2u + 1u] = right;
+            peak = std::max(peak, std::max(std::fabs(left), std::fabs(right)));
+            sumSquares += static_cast<double>(left) * left +
+                          static_cast<double>(right) * right;
+        }
+
+        uint32_t hostQueue = 0u;
+        uint64_t dropped = 0u;
+        uint64_t underruns = 0u;
+        int backend = -1;
+        const char *outputState = "unavailable";
+#if defined(__APPLE__)
+        const int queued = XOWUEAudioSubmitStereoFrame(stereoSamples.data(),
+                                                        kXowueAudioSamplesPerFrame);
+        hostQueue = XOWUEAudioQueuedFrames();
+        dropped = XOWUEAudioDroppedFrames();
+        underruns = XOWUEAudioUnderrunFrames();
+        backend = XOWUEAudioBackendState();
+        outputState = queued ? "queued" : "queue_full";
+#endif
         context.r3.u32 = kNtStatusSuccess;
         if (frames <= 8u || frames % 1000u == 0u) {
-            char event[144];
+            char event[320];
+            const double rms = std::sqrt(sumSquares /
+                static_cast<double>(kXowueAudioSamplesPerFrame * 2u));
             std::snprintf(event, sizeof(event),
-                          "XOWUE_XAUDIO_SUBMIT handle=0x%08X frames=%llu samples=0x%08X output=discarded",
-                          handle, static_cast<unsigned long long>(frames), samples);
+                "XOWUE_XAUDIO_SUBMIT handle=0x%08X frames=%llu samples=0x%08X "
+                "output=%s queue=%u dropped=%llu underrun=%llu backend=%d peak=%.4f rms=%.4f",
+                handle, static_cast<unsigned long long>(frames), samples, outputState,
+                hostQueue, static_cast<unsigned long long>(dropped),
+                static_cast<unsigned long long>(underruns), backend, peak, rms);
             recordRuntimeTrace(event);
         }
         return;
@@ -6581,13 +6684,18 @@ static bool executeGuestPM4Words(uint8_t *base,
                                  uint32_t depth,
                                  XenosFrontendState &frontend,
                                  PM4ParseSummary &summary) {
-    if (!base || depth > 8u) {
+    if (!base || depth > 4u) {
         ++summary.malformed;
         return false;
     }
     size_t offset = 0u;
     while (offset < words.size()) {
         const uint32_t header = words[offset];
+        // Literal zero dwords are PM4 padding, not one-dword type-0 packets.
+        if (header == 0u) {
+            ++offset;
+            continue;
+        }
         const uint32_t type = header >> 30u;
         uint32_t payloadCount = 0u;
         if (type == 2u) {
@@ -6629,6 +6737,11 @@ static bool executeGuestPM4Words(uint8_t *base,
             writeXenosRegister(base, (header >> 11u) & 0x7FFu, words[offset + 2u], summary);
         } else if (type == 3u) {
             const uint32_t opcode = (header >> 8u) & 0x7Fu;
+            if ((header & 1u) != 0u &&
+                (!(frontend.binSelect & frontend.binMask) || opcode == kXenosPm4SwapOpcode)) {
+                offset += packetWords;
+                continue;
+            }
             const uint32_t tail = summary.tailCursor++ % summary.tailHeader.size();
             summary.tailHeader[tail] = header;
             summary.tailOpcode[tail] = opcode;
@@ -6652,7 +6765,19 @@ static bool executeGuestPM4Words(uint8_t *base,
                     recordRuntimeTrace(event);
                 }
             };
-            if ((opcode == 0x2Du || opcode == 0x55u || opcode == 0x56u) && payloadCount >= 2u) {
+            if ((opcode == 0x50u || opcode == 0x51u) && payloadCount >= 2u) {
+                const uint64_t value =
+                    (static_cast<uint64_t>(words[offset + 1u]) << 32u) |
+                    words[offset + 2u];
+                (opcode == 0x50u ? frontend.binMask : frontend.binSelect) = value;
+            } else if ((opcode >= 0x60u && opcode <= 0x63u) && payloadCount >= 1u) {
+                const bool isMask = opcode <= 0x61u;
+                const uint32_t shift = (opcode & 1u) ? 32u : 0u;
+                uint64_t &target = isMask ? frontend.binMask : frontend.binSelect;
+                const uint64_t laneMask = 0xFFFFFFFFull << shift;
+                target = (target & ~laneMask) |
+                    (static_cast<uint64_t>(words[offset + 1u]) << shift);
+            } else if ((opcode == 0x2Du || opcode == 0x55u || opcode == 0x56u) && payloadCount >= 2u) {
                 uint32_t first = words[offset + 1u] & (opcode == 0x2Du ? 0x7FFu : 0xFFFFu);
                 if (opcode == 0x2Du) {
                     const uint32_t kind = (words[offset + 1u] >> 16u) & 0xFFu;
@@ -6660,6 +6785,27 @@ static bool executeGuestPM4Words(uint8_t *base,
                     if (kind < 5u) writeConstantRange(first + bases[kind], 2u, payloadCount - 1u);
                 } else {
                     writeConstantRange(first, 2u, payloadCount - 1u);
+                }
+            } else if (opcode == 0x2Fu && payloadCount >= 3u) { // LOAD_ALU_CONSTANT
+                const uint32_t address = words[offset + 1u] & 0x3FFFFFFFu;
+                const uint32_t offsetType = words[offset + 2u];
+                const uint32_t sizeDwords = words[offset + 3u] & 0x0FFFu;
+                const uint32_t index = offsetType & 0x7FFu;
+                const uint32_t kind = (offsetType >> 16u) & 0xFFu;
+                constexpr uint32_t bases[] = {
+                    0x4000u, 0x4800u, 0x4900u, 0x4908u, 0x2000u
+                };
+                if (kind >= 5u || sizeDwords == 0u || sizeDwords > 4096u ||
+                    !validGuestRange(address, static_cast<uint64_t>(sizeDwords) * 4u)) {
+                    ++summary.malformed;
+                } else {
+                    for (uint32_t n = 0u; n < sizeDwords; ++n) {
+                        const uint32_t value = loadGuestBe32(base, address + n * 4u);
+                        writeXenosRegister(base, bases[kind] + index + n, value, summary);
+                    }
+                    recordXenosPm4Event(g_pm4EventTraceBudget,
+                        "XENOS_PM4_LOAD_ALU_CONSTANT address=0x%08X kind=%u index=0x%03X dwords=%u",
+                        address, kind, index, sizeDwords);
                 }
             } else if (opcode == 0x27u && payloadCount >= 2u) {
                 const uint32_t address = words[offset + 1u] & ~3u;
@@ -6712,7 +6858,14 @@ static bool executeGuestPM4Words(uint8_t *base,
                 const uint32_t value = xowue::xenos::ReadRegister(words[offset + 1u] & 0x1FFFu);
                 if (storeGpuMemory32(base, words[offset + 2u], value)) ++summary.guestMemoryWrites;
                 else ++summary.malformed;
+            } else if (opcode == 0x26u) { // WAIT_FOR_IDLE
+                if (xowue_vulkan_backend_wait_idle)
+                    xowue_vulkan_backend_wait_idle();
+                recordXenosPm4Event(g_pm4WaitTraceBudget,
+                    "XENOS_PM4_WAIT_FOR_IDLE native_completed_guest_swaps=1");
             } else if (opcode == 0x58u && payloadCount >= 3u) { // EVENT_WRITE_SHD
+                if (xowue_vulkan_backend_wait_idle)
+                    xowue_vulkan_backend_wait_idle();
                 const uint32_t initiator = words[offset + 1u];
                 writeXenosRegister(base, kXenosRegVgtEventInitiator, initiator & 0x3Fu, summary);
                 // Xenia's EVENT_WRITE_SHD bit 31 means WRITE_REAL_TIME_COUNTER,
@@ -6732,6 +6885,21 @@ static bool executeGuestPM4Words(uint8_t *base,
                 recordXenosPm4Event(g_pm4EventTraceBudget,
                     "XENOS_PM4_EVENT_WRITE_SHD initiator=0x%08X address=0x%08X value=0x%08X counter=%u",
                     initiator, address, value, writeCounter ? 1u : 0u);
+            } else if (opcode == 0x59u && payloadCount >= 3u) { // EVENT_WRITE_CFL
+                if (xowue_vulkan_backend_wait_idle)
+                    xowue_vulkan_backend_wait_idle();
+                const uint32_t initiator = words[offset + 1u];
+                writeXenosRegister(base, kXenosRegVgtEventInitiator, initiator & 0x3Fu, summary);
+                const uint32_t address = words[offset + 2u];
+                const uint32_t value = words[offset + 3u];
+                if (xenosCpWriteback32(base, address, value, 0x59u)) {
+                    ++summary.guestMemoryWrites;
+                } else {
+                    ++summary.malformed;
+                }
+                recordXenosPm4Event(g_pm4EventTraceBudget,
+                    "XENOS_PM4_EVENT_WRITE_CFL initiator=0x%08X address=0x%08X value=0x%08X",
+                    initiator, address, value);
             } else if (opcode == kXenosPm4EventWriteOpcode && payloadCount >= 1u) {
                 const uint32_t initiator = words[offset + 1u];
                 writeXenosRegister(base, kXenosRegVgtEventInitiator,
@@ -6807,21 +6975,21 @@ static bool executeGuestPM4Words(uint8_t *base,
                 const uint32_t poll = words[offset + 2u];
                 uint32_t value = 0u;
                 bool readable = true;
+                const bool hostCoherencyRegister =
+                    (waitInfo & 0x10u) == 0u && (poll & 0x7FFFu) == 0x0A31u;
                 if ((waitInfo & 0x10u) != 0u) readable = loadGpuMemory32(base, poll, value);
                 else value = xowue::xenos::ReadRegister(poll & 0x7FFFu);
-                bool matched = readable &&
-                    xenosCompare(waitInfo, value, words[offset + 4u], words[offset + 3u]);
-                // Xenia ExecutePacketType3_WAIT_REG_MEM: block the CP until
-                // the condition holds; keep vblank/interrupts flowing.
-                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                bool matched = hostCoherencyRegister || (readable &&
+                    xenosCompare(waitInfo, value, words[offset + 4u], words[offset + 3u]));
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
                 while (readable && !matched && !g_schedulerStopRequested.load() &&
                        std::chrono::steady_clock::now() < deadline) {
                     serviceGraphicsInterruptTick();
-                    std::this_thread::sleep_for(std::chrono::microseconds(250));
+                    std::this_thread::sleep_for(std::chrono::microseconds(50));
                     if ((waitInfo & 0x10u) != 0u) readable = loadGpuMemory32(base, poll, value);
                     else value = xowue::xenos::ReadRegister(poll & 0x7FFFu);
-                    matched = readable &&
-                        xenosCompare(waitInfo, value, words[offset + 4u], words[offset + 3u]);
+                    matched = hostCoherencyRegister || (readable &&
+                        xenosCompare(waitInfo, value, words[offset + 4u], words[offset + 3u]));
                 }
                 if (!matched) {
                     recordXenosPm4Event(g_pm4WaitTraceBudget,
@@ -6862,12 +7030,14 @@ static bool executeGuestPM4Words(uint8_t *base,
                 } else {
                     ++summary.malformed;
                 }
-            } else if (opcode == kXenosPm4IndirectBufferOpcode) {
+            } else if (opcode == kXenosPm4IndirectBufferOpcode ||
+                       opcode == kXenosPm4IndirectBufferPfdOpcode) {
                 ++summary.indirectBuffers;
-                if (payloadCount >= 2u && depth < 8u) {
+                if (payloadCount >= 2u && depth < 4u) {
                     const uint32_t address = words[offset + 1u];
                     const uint32_t count = words[offset + 2u] & 0x000FFFFFu;
-                    if (count != 0u && count <= (1u << 20u) &&
+                    if (count != 0u && count <= (16u << 10u) &&
+                        (address & 0x1Fu) == 0u &&
                         validGuestRange(address, static_cast<uint64_t>(count) * 4u)) {
                         std::vector<uint32_t> indirectWords;
                         indirectWords.reserve(count);
@@ -6886,19 +7056,29 @@ static bool executeGuestPM4Words(uint8_t *base,
                 const uint32_t frontbuffer = words[offset + 2u];
                 const uint32_t width = words[offset + 3u];
                 const uint32_t height = words[offset + 4u];
+                const uint32_t textureFormat =
+                    frontend.swapFetchValid ? (frontend.swapFetch[1] & 0x3Fu) : 0u;
                 frontend.latestFrontbufferAddress = frontbuffer;
                 frontend.latestWidth = width;
                 frontend.latestHeight = height;
                 frontend.lastSwapTimestampNs = static_cast<uint64_t>(
                     std::chrono::duration_cast<std::chrono::nanoseconds>(
                         std::chrono::steady_clock::now().time_since_epoch()).count());
+                char swapTrace[256];
+                std::snprintf(swapTrace, sizeof(swapTrace),
+                    "XOWUE_PM4_XE_SWAP sequence=%llu frontbuffer=0x%08X size=%ux%u fetch_valid=%u",
+                    static_cast<unsigned long long>(summary.swaps), frontbuffer,
+                    width, height, frontend.swapFetchValid ? 1u : 0u);
+                recordRuntimeTrace(swapTrace);
+                xowue::xenos::NotifyGuestSwap(frontbuffer,width,height,textureFormat);
+                if (xowue_vulkan_backend_guest_swap)
+                    xowue_vulkan_backend_guest_swap(frontbuffer, width, height);
                 if (!frontend.swapFetchValid) {
                     ++summary.frameDecodeFailures;
+                    recordRuntimeTrace("XOWUE_PM4_XE_SWAP native_present=queued cpu_fetch=unavailable");
                     offset += packetWords;
                     continue;
                 }
-                const uint32_t textureFormat = frontend.swapFetch[1] & 0x3Fu;
-                xowue::xenos::NotifyGuestSwap(frontbuffer,width,height,textureFormat);
                 std::vector<uint8_t> rgba;
                 uint32_t decodedAddress = 0u;
                 if (decodeXenosSwapTexture(base, frontend.swapFetch.data(),
@@ -6911,18 +7091,15 @@ static bool executeGuestPM4Words(uint8_t *base,
                     xowue::xenos::NotifyGuestResolve(decodedAddress,width,height,width,0u,1u);
                     xowue::xenos::NotifyGuestFramePixels(width,height,rgba.data(),rgba.size());
                     xowue::xenos::NotifyGuestFrameCommitted();
-                    if(xowue::xenos::ShouldPresentGuestFrame()){
-                        if (xowue_vulkan_backend_guest_swap)
-                            xowue_vulkan_backend_guest_swap(frontbuffer, width, height);
-                        if (xowue_vulkan_backend_guest_frame_rgba) {
-                            xowue_vulkan_backend_guest_frame_rgba(decodedAddress,width,height,textureFormat,rgba.data(),rgba.size());
-                            xowue::xenos::NotifyGuestFrameSubmitted();
-                        }
-                    } else {
-                        xowue::xenos::NotifyGuestFrameRejected("XENOS_STALE_GUEST_FRAME: swap_decode_not_ready_for_present");
+                    if (xowue::xenos::ShouldPresentGuestFrame() &&
+                        xowue_vulkan_backend_guest_frame_rgba) {
+                        xowue_vulkan_backend_guest_frame_rgba(decodedAddress,width,height,
+                            textureFormat,rgba.data(),rgba.size());
                     }
                 } else {
                     ++summary.frameDecodeFailures;
+                    xowue::xenos::NotifyGuestFrameRejected(
+                        "XENOS_STALE_GUEST_FRAME: swap_cpu_decode_failed");
                 }
             }
         }
@@ -6985,6 +7162,8 @@ void pumpGuestXenosRingBuffer() {
         g_xenosFrontend.swapFetch = frontend.swapFetch;
         g_xenosFrontend.swapFetchMask = frontend.swapFetchMask;
         g_xenosFrontend.swapFetchValid = frontend.swapFetchValid;
+        g_xenosFrontend.binMask = frontend.binMask;
+        g_xenosFrontend.binSelect = frontend.binSelect;
         g_xenosFrontend.packets += summary.packets;
         g_xenosFrontend.draws += summary.draws;
         g_xenosFrontend.indirectBuffers += summary.indirectBuffers;
@@ -7108,6 +7287,9 @@ void startGuestProgressWatchdog() {
 
 void xowue_VdSwap(PPCContext &context, uint8_t *base) {
     startGuestProgressWatchdog();
+    constexpr uint32_t kReservedDwords = 64u;
+    constexpr uint32_t kSwapSignature = 0x53574150u;
+    constexpr uint32_t kType2Nop = 0x80000000u;
     const uint32_t commandBuffer = context.r3.u32;
     const uint32_t fetch = context.r4.u32;
     const uint32_t frontbufferPointer = context.r8.u32;
@@ -7115,87 +7297,68 @@ void xowue_VdSwap(PPCContext &context, uint8_t *base) {
     const uint32_t colorSpacePointer = context.r10.u32;
     const uint32_t widthPointer = guestStackArgument(context, base, 9u);
     const uint32_t heightPointer = guestStackArgument(context, base, 10u);
-    if (!base || !validGuestRange(commandBuffer, 64u * 4u) ||
-        !validGuestRange(fetch, 6u * 4u) || !validGuestRange(frontbufferPointer, 4u) ||
-        !validGuestRange(textureFormatPointer, 4u) || !validGuestRange(colorSpacePointer, 4u) ||
-        !validGuestRange(widthPointer, 4u) || !validGuestRange(heightPointer, 4u)) {
+    if (!base || !validGuestRange(commandBuffer, kReservedDwords * 4u) ||
+        !validGuestRange(fetch, 6u * 4u) ||
+        !validGuestRange(frontbufferPointer, 4u) ||
+        !validGuestRange(textureFormatPointer, 4u) ||
+        !validGuestRange(colorSpacePointer, 4u) ||
+        !validGuestRange(widthPointer, 4u) ||
+        !validGuestRange(heightPointer, 4u)) {
+        context.r3.u32 = kNtStatusInvalidParameter;
         std::lock_guard<std::mutex> lock(g_xenosMutex);
         ++g_xenosFrontend.malformedPackets;
         recordRuntimeTrace("VdSwap rejected invalid guest pointer or stack argument");
         return;
     }
+
     const uint32_t frontbufferVirtualAddress = PPC_LOAD_U32(frontbufferPointer);
     const uint32_t textureFormat = PPC_LOAD_U32(textureFormatPointer);
     const uint32_t colorSpace = PPC_LOAD_U32(colorSpacePointer);
-    const uint32_t width = PPC_LOAD_U32(widthPointer);
-    const uint32_t height = PPC_LOAD_U32(heightPointer);
+    const uint32_t requestedWidth = PPC_LOAD_U32(widthPointer);
+    const uint32_t requestedHeight = PPC_LOAD_U32(heightPointer);
     uint32_t fetchWords[6]{};
-    for (uint32_t i = 0; i < 6u; ++i)
+    for (uint32_t i = 0u; i < 6u; ++i)
         fetchWords[i] = PPC_LOAD_U32(fetch + i * 4u);
+    const uint32_t fetchWidth = (fetchWords[2] & 0x1FFFu) + 1u;
+    const uint32_t fetchHeight = ((fetchWords[2] >> 13u) & 0x1FFFu) + 1u;
+    const uint32_t width = fetchWidth > 1u ? fetchWidth : requestedWidth;
+    const uint32_t height = fetchHeight > 1u ? fetchHeight : requestedHeight;
     const uint32_t frontbufferPhysicalAddress =
         ((fetchWords[1] >> 12u) & 0xFFFFFu) << 12u;
-    if (frontbufferVirtualAddress != frontbufferPhysicalAddress) {
-        recordRuntimeTrace("VdSwap frontbuffer pointer differs from Xenos fetch base; identity physical mapping retained");
-    }
-    for (uint32_t i = 0; i < 64u; ++i) PPC_STORE_U32(commandBuffer + i * 4u, 0x80000000u);
-    PPC_STORE_U32(commandBuffer + 0u, (5u << 16u) | 0x4800u); // Type 0, six fetch dwords.
-    for (uint32_t i = 0; i < 6u; ++i)
-        PPC_STORE_U32(commandBuffer + (i + 1u) * 4u, fetchWords[i]);
-    PPC_STORE_U32(commandBuffer + 7u * 4u,
-                  (3u << 30u) | (3u << 16u) | (kXenosPm4SwapOpcode << 8u));
-    PPC_STORE_U32(commandBuffer + 8u * 4u, 0x53574150u); // 'SWAP'.
-    PPC_STORE_U32(commandBuffer + 9u * 4u, frontbufferPhysicalAddress);
-    PPC_STORE_U32(commandBuffer + 10u * 4u, width);
-    PPC_STORE_U32(commandBuffer + 11u * 4u, height);
+    if (frontbufferVirtualAddress != frontbufferPhysicalAddress)
+        recordRuntimeTrace("VdSwap frontbuffer pointer differs from fetch base; fetch physical address retained");
 
-    // VdSwap is the title's presentation boundary. The system command buffer
-    // is not necessarily linked into the guest ring buffer on this runtime,
-    // so decode and present the supplied Xenos fetch directly as well.
-    std::vector<uint8_t> rgba;
-    uint32_t decodedAddress = 0u;
-    const bool decoded = decodeXenosSwapTexture(base, fetchWords, textureFormat,
-                                                 width, height, decodedAddress,
-                                                 rgba);
-    recordRuntimeTrace("B97_XENOS_SWAP_DECODE decoded=" + std::to_string(decoded ? 1 : 0) +
-        " width=" + std::to_string(width) + " height=" + std::to_string(height) +
-        " format=" + std::to_string(textureFormat) + " bytes=" + std::to_string(rgba.size()));
+    for (uint32_t i = 0u; i < kReservedDwords; ++i)
+        PPC_STORE_U32(commandBuffer + i * 4u, kType2Nop);
+    PPC_STORE_U32(commandBuffer + 0u,
+        (3u << 30u) | (3u << 16u) | (kXenosPm4SwapOpcode << 8u));
+    PPC_STORE_U32(commandBuffer + 4u, kSwapSignature);
+    PPC_STORE_U32(commandBuffer + 8u, frontbufferPhysicalAddress);
+    PPC_STORE_U32(commandBuffer + 12u, width);
+    PPC_STORE_U32(commandBuffer + 16u, height);
+
+    uint32_t ringAddress = 0u;
+    uint32_t ringSize = 0u;
     {
         std::lock_guard<std::mutex> lock(g_xenosMutex);
-        ++g_xenosFrontend.swaps;
-        g_xenosFrontend.latestFrontbufferAddress = frontbufferPhysicalAddress;
-        g_xenosFrontend.latestWidth = width;
-        g_xenosFrontend.latestHeight = height;
-        g_xenosFrontend.lastSwapTimestampNs = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()).count());
-        if (decoded) ++g_xenosFrontend.decodedFrames;
-        else ++g_xenosFrontend.malformedPackets;
+        ringAddress = g_xenosFrontend.ringBufferAddress;
+        ringSize = g_xenosFrontend.ringBufferSize;
     }
-    xowue::xenos::NotifyGuestSwap(frontbufferPhysicalAddress,width,height,textureFormat);
-    if (decoded) {
-        xowue::xenos::NotifyGuestResolve(decodedAddress,width,height,width,0u,1u);
-        xowue::xenos::NotifyGuestFramePixels(width,height,rgba.data(),rgba.size());
-        xowue::xenos::NotifyGuestFrameCommitted();
-        if(xowue::xenos::ShouldPresentGuestFrame()){
-            if (xowue_vulkan_backend_guest_swap)
-                xowue_vulkan_backend_guest_swap(frontbufferPhysicalAddress, width, height);
-            if (xowue_vulkan_backend_guest_frame_rgba) {
-                xowue_vulkan_backend_guest_frame_rgba(decodedAddress,width,height,textureFormat,rgba.data(),rgba.size());
-                xowue::xenos::NotifyGuestFrameSubmitted();
-            }
-        } else {
-            xowue::xenos::NotifyGuestFrameRejected("XENOS_STALE_GUEST_FRAME: vd_swap_decode_not_ready_for_present");
-        }
-    }
-
-    char event[256];
+    const bool commandBufferInsideRing = ringAddress != 0u &&
+        commandBuffer >= ringAddress &&
+        static_cast<uint64_t>(commandBuffer) + kReservedDwords * 4u <=
+            static_cast<uint64_t>(ringAddress) + ringSize;
+    char event[320];
     std::snprintf(event, sizeof(event),
-                  "VdSwap %s width=%u height=%u frontbuffer=0x%08X format=0x%08X colorspace=%u",
-                  decoded ? "decoded and presented guest framebuffer" : "framebuffer decode rejected",
-                  width, height, frontbufferPhysicalAddress, textureFormat, colorSpace);
+        "XOWUE_VDSWAP_PACKET_QUEUED command=0x%08X ring=0x%08X ring_size=0x%08X "
+        "in_ring=%u frontbuffer=0x%08X width=%u height=%u fetch_format=%u "
+        "requested=%ux%u colorspace=%u",
+        commandBuffer, ringAddress, ringSize, commandBufferInsideRing ? 1u : 0u,
+        frontbufferPhysicalAddress, width, height, textureFormat,
+        requestedWidth, requestedHeight, colorSpace);
     recordRuntimeTrace(event);
+    context.r3.u32 = 0u;
 }
-
 void xowue_VdInitializeScalerCommandBuffer(PPCContext &context, uint8_t *base) {
     const uint32_t destination = guestStackArgument(context, base, 11u);
     const uint32_t wordCount = guestStackArgument(context, base, 12u);
@@ -7695,53 +7858,127 @@ static uint64_t guestFileOffset(uint8_t *base, uint32_t address,
 }
 
 void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
-    GuestEventSignalOnReturn signal(context.r4.u32);
+    const uint32_t eventHandle = context.r4.u32;
     const uint32_t handle = context.r3.u32;
+    const uint32_t apcRoutine = context.r5.u32 & ~1u;
+    const uint32_t apcContext = context.r6.u32;
     const uint32_t ioStatus = context.r7.u32;
     const uint32_t buffer = context.r8.u32;
     const uint32_t length = context.r9.u32;
     const uint32_t offsetPointer = context.r10.u32;
     static std::atomic<uint64_t> s_b83ReadCalls{0u};
     const uint64_t b83ReadCall = s_b83ReadCalls.fetch_add(1u, std::memory_order_relaxed) + 1u;
-    const auto b83LogRead = [&](uint32_t status) {
+    const auto b83LogRead = [base, ioStatus, b83ReadCall, handle, length](uint32_t status) {
         const uint32_t iosbStatus = (base && validGuestRange(ioStatus, 8u)) ? PPC_LOAD_U32(ioStatus) : status;
-        char event[224]; std::snprintf(event, sizeof(event), "B83_NTREADFILE call=%llu thread=%u handle=0x%08X size=%u status=0x%08X iosb_status=0x%08X", static_cast<unsigned long long>(b83ReadCall), static_cast<uint32_t>(g_currentGuestThreadId), handle, length, status, iosbStatus);
+        char event[224];
+        std::snprintf(event, sizeof(event),
+            "B83_NTREADFILE call=%llu thread=%u handle=0x%08X size=%u status=0x%08X iosb_status=0x%08X",
+            static_cast<unsigned long long>(b83ReadCall), static_cast<uint32_t>(g_currentGuestThreadId),
+            handle, length, status, iosbStatus);
         recordRuntimeTrace(event);
     };
     const auto file = lookupGuestFile(handle);
-    GuestFileCompletionSignalOnReturn completionSignal(file);
-    if (!base || !file || file->directory || !file->readable || length > 64u * 1024u * 1024u ||
-        (length != 0u && !validGuestRange(buffer, length))) {
+    if (!base || !file || file->directory || !file->readable ||
+        length > 64u * 1024u * 1024u ||
+        (length != 0u && !validGuestRange(buffer, length)) ||
+        (ioStatus != 0u && !validGuestRange(ioStatus, 8u))) {
+        GuestEventSignalOnReturn signal(context.r4.u32);
+        GuestFileCompletionSignalOnReturn completionSignal(file);
         context.r3.u32 = file ? kNtStatusInvalidParameter : kNtStatusInvalidHandle;
         writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
         b83LogRead(context.r3.u32);
         return;
     }
-    std::lock_guard<std::mutex> lock(file->mutex);
-    const uint64_t offset = guestFileOffset(base, offsetPointer, file, false);
-    file->stream.clear();
-    file->stream.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
-    if (!file->stream) {
-        context.r3.u32 = kNtStatusUnsuccessful;
-        writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
-        b83LogRead(context.r3.u32);
-        return;
+
+    // Capture explicit offsets now. A null/current-file-pointer offset is
+    // resolved against the file position when this read transfer executes.
+    bool hasExplicitOffset = false;
+    uint64_t explicitOffset = 0u;
+    if (offsetPointer != 0u && validGuestRange(offsetPointer, 8u)) {
+        const uint64_t requestedOffset = PPC_LOAD_U64(offsetPointer);
+        if (requestedOffset != std::numeric_limits<uint64_t>::max()) {
+            hasExplicitOffset = true;
+            explicitOffset = requestedOffset;
+        }
     }
-    file->stream.read(reinterpret_cast<char *>(base + buffer), length);
-    const uint32_t bytesRead = static_cast<uint32_t>(file->stream.gcount());
-    const bool readEof = file->stream.eof();
-    const bool readBad = file->stream.bad();
-    const bool readFailed = file->stream.fail();
-    file->stream.clear();
-    if (offsetPointer == 0u) file->stream.seekg(static_cast<std::streamoff>(offset + bytesRead));
-    // NTSTATUS_END_OF_FILE is distinct from SUCCESS with a zero-byte read.
-    // ReXGlue's XFile/HostPathFile follows this contract; returning SUCCESS
-    // forever at EOF can keep UE3's async stream cache polling the same offset.
-    const uint32_t readStatus = (readBad || (readFailed && !readEof))
-        ? kNtStatusUnsuccessful
-        : ((length != 0u && bytesRead == 0u && readEof) ? kNtStatusEndOfFile : kNtStatusSuccess);
-    // Build 92: independently verify the bytes on disk against the guest buffer
-    // before waking the guest. A successful NTSTATUS alone does not prove data integrity.
+
+    struct GuestFileReadResult {
+        uint32_t status = kNtStatusUnsuccessful;
+        uint32_t bytesRead = 0u;
+        uint64_t offset = 0u;
+    };
+    const auto performRead = [file, base, buffer, length, hasExplicitOffset,
+                              explicitOffset, ioStatus, handle, eventHandle,
+                              apcRoutine, apcContext, b83LogRead]
+                             (bool asyncRead) -> GuestFileReadResult {
+        GuestFileReadResult result{};
+        uint64_t offset = 0u;
+        uint32_t bytesRead = 0u;
+        bool readEof = false;
+        bool readBad = false;
+        bool readFailed = false;
+        uint32_t readStatus = kNtStatusUnsuccessful;
+        std::vector<uint8_t> bounce;
+        try {
+            bounce.resize(length);
+            {
+                std::lock_guard<std::mutex> lock(file->mutex);
+                file->stream.clear();
+                if (hasExplicitOffset) {
+                    if (explicitOffset > static_cast<uint64_t>(std::numeric_limits<std::streamoff>::max())) {
+                        readStatus = kNtStatusInvalidParameter;
+                    } else {
+                        file->stream.seekg(static_cast<std::streamoff>(explicitOffset), std::ios::beg);
+                    }
+                } else if (file->writable) {
+                    file->stream.seekg(0, std::ios::cur);
+                }
+                if (readStatus != kNtStatusInvalidParameter && file->stream) {
+                    const auto position = file->stream.tellg();
+                    offset = position < 0 ? 0u : static_cast<uint64_t>(position);
+                    if (length != 0u) {
+                        file->stream.read(reinterpret_cast<char *>(bounce.data()),
+                                          static_cast<std::streamsize>(length));
+                        bytesRead = static_cast<uint32_t>(file->stream.gcount());
+                        readEof = file->stream.eof();
+                        readBad = file->stream.bad();
+                        readFailed = file->stream.fail();
+                    }
+                    readStatus = (readBad || (readFailed && !readEof))
+                        ? kNtStatusUnsuccessful
+                        : ((length != 0u && bytesRead == 0u && readEof)
+                               ? kNtStatusEndOfFile : kNtStatusSuccess);
+                    file->stream.clear();
+                    if (!hasExplicitOffset) {
+                        file->stream.seekg(static_cast<std::streamoff>(offset + bytesRead), std::ios::beg);
+                        if (!file->stream && readStatus == kNtStatusSuccess)
+                            readStatus = kNtStatusUnsuccessful;
+                        file->stream.clear();
+                    }
+                } else if (readStatus != kNtStatusInvalidParameter) {
+                    readStatus = kNtStatusUnsuccessful;
+                }
+            }
+            // Copy through host memory; direct fread into guest memory bypasses
+            // the runtime's watched-page write path used by Xenos shadow memory.
+            if (bytesRead != 0u) {
+                if (!validGuestRange(buffer, bytesRead)) {
+                    readStatus = kNtStatusInvalidParameter;
+                    bytesRead = 0u;
+                } else {
+                    std::memcpy(base + buffer, bounce.data(), bytesRead);
+                }
+            }
+        } catch (const std::exception &error) {
+            readStatus = kNtStatusUnsuccessful;
+            bytesRead = 0u;
+            recordRuntimeTrace(std::string("NtReadFile host transfer failed: ") + error.what());
+        } catch (...) {
+            readStatus = kNtStatusUnsuccessful;
+            bytesRead = 0u;
+            recordRuntimeTrace("NtReadFile host transfer failed with an unknown exception");
+        }
+
     std::string readExtension = file->path.extension().string();
     std::transform(readExtension.begin(), readExtension.end(), readExtension.begin(),
         [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -7825,24 +8062,92 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
             recordRuntimeTrace(event);
         }
     }
-    queueGuestApc(g_currentGuestThread, context.r5.u32, context.r6.u32, ioStatus, 0u);
-    context.r3.u32 = readStatus;
-    writeGuestIoStatus(base, ioStatus, readStatus, bytesRead);
-    // Commit BE IoStatusBlock and bytes-read before waking a synchronous guest read.
-    signal.signalNow();
-    b83LogRead(readStatus);
-    const uint64_t b87ReadLog = g_b87FileReadLogs.fetch_add(1u, std::memory_order_relaxed);
-    if (b87ReadLog < 64u || readStatus != kNtStatusSuccess || bytesRead < length) {
-        const std::string hostPath = file->path.string();
-        char event[1024];
-        std::snprintf(event, sizeof(event),
-            "B87_NTREADFILE call=%llu thread=%u handle=0x%08X path=%s offset=0x%016llX "
-            "requested=%u bytes=%u event=0x%08X status=0x%08X eof=%u fail=%u bad=%u",
-            static_cast<unsigned long long>(b87ReadLog + 1u), static_cast<uint32_t>(g_currentGuestThreadId),
-            handle, hostPath.c_str(), static_cast<unsigned long long>(offset), length, bytesRead,
-            context.r4.u32, readStatus, readEof ? 1u : 0u, readFailed ? 1u : 0u, readBad ? 1u : 0u);
-        recordRuntimeTrace(event);
+
+        writeGuestIoStatus(base, ioStatus, readStatus, bytesRead);
+        b83LogRead(readStatus);
+        const uint64_t b87ReadLog = g_b87FileReadLogs.fetch_add(1u, std::memory_order_relaxed);
+        if (b87ReadLog < 64u || readStatus != kNtStatusSuccess || bytesRead < length) {
+            const std::string hostPath = file->path.string();
+            char event[1024];
+            std::snprintf(event, sizeof(event),
+                "B87_NTREADFILE call=%llu thread=%u handle=0x%08X path=%s offset=0x%016llX "
+                "requested=%u bytes=%u event=0x%08X apc=0x%08X apc_context=0x%08X async=%u "
+                "status=0x%08X eof=%u fail=%u bad=%u",
+                static_cast<unsigned long long>(b87ReadLog + 1u), static_cast<uint32_t>(g_currentGuestThreadId),
+                handle, hostPath.c_str(), static_cast<unsigned long long>(offset), length, bytesRead,
+                eventHandle, apcRoutine, apcContext, asyncRead ? 1u : 0u,
+                readStatus, readEof ? 1u : 0u, readFailed ? 1u : 0u, readBad ? 1u : 0u);
+            recordRuntimeTrace(event);
+        }
+        result.status = readStatus;
+        result.bytesRead = bytesRead;
+        result.offset = offset;
+        return result;
+    };
+
+    GuestThread *apcThread = activeGuestApcThread();
+    if (apcRoutine != 0u && apcThread) {
+        // Match Xenia's Xbox-kernel NtReadFile contract: complete the transfer,
+        // publish the final IO_STATUS_BLOCK and signal the event first; the APC
+        // is only a notification delivered later by the guest alertable-wait path.
+        // Deferring the file transfer itself until APC delivery deadlocks callers
+        // that wait on the event before entering an alertable wait.
+        GuestFileCompletionSignalOnReturn completionSignal(file);
+        GuestEventSignalOnReturn eventSignal(eventHandle);
+        char submitEvent[512];
+        std::snprintf(submitEvent, sizeof(submitEvent),
+            "B103_ASYNC_NTREADFILE_SUBMIT call=%llu thread=%u handle=0x%08X path=%s "
+            "buffer=0x%08X size=%u event=0x%08X apc=0x%08X apc_context=0x%08X "
+            "iosb=0x%08X explicit_offset=%u offset=0x%016llX",
+            static_cast<unsigned long long>(b83ReadCall), static_cast<uint32_t>(g_currentGuestThreadId),
+            handle, file->path.string().c_str(), buffer, length, eventHandle, apcRoutine,
+            apcContext, ioStatus, hasExplicitOffset ? 1u : 0u,
+            static_cast<unsigned long long>(explicitOffset));
+        recordRuntimeTrace(submitEvent);
+
+        GuestFileReadResult result{};
+        try {
+            result = performRead(true);
+        } catch (...) {
+            result.status = kNtStatusUnsuccessful;
+            writeGuestIoStatus(base, ioStatus, result.status, 0u);
+            recordRuntimeTrace("B103_ASYNC_NTREADFILE_COMPLETE_EXCEPTION");
+        }
+        completionSignal.signalNow();
+        eventSignal.signalNow();
+
+        // APC delivery carries the already-final IOSB pointer as arg1. The
+        // context is opaque and may be null; the presence of apcRoutine controls
+        // whether a notification is queued.
+        queueGuestApc(apcThread, apcRoutine, apcContext, ioStatus, 0u);
+
+        char completeEvent[512];
+        std::snprintf(completeEvent, sizeof(completeEvent),
+            "B103_ASYNC_NTREADFILE_COMPLETE call=%llu thread=%u handle=0x%08X "
+            "offset=0x%016llX bytes=%u requested=%u status=0x%08X "
+            "event=0x%08X apc=0x%08X apc_context=0x%08X",
+            static_cast<unsigned long long>(b83ReadCall), static_cast<uint32_t>(g_currentGuestThreadId),
+            handle, static_cast<unsigned long long>(result.offset), result.bytesRead,
+            length, result.status, eventHandle, apcRoutine, apcContext);
+        recordRuntimeTrace(completeEvent);
+        context.r3.u32 = result.status;
+        return;
     }
+
+    if (apcRoutine != 0u && !apcThread)
+        recordRuntimeTrace("B103_ASYNC_NTREADFILE_FALLBACK no guest APC target; completing synchronously");
+    GuestEventSignalOnReturn signal(context.r4.u32);
+    GuestFileCompletionSignalOnReturn completionSignal(file);
+    GuestFileReadResult result{};
+    try {
+        result = performRead(false);
+    } catch (...) {
+        result.status = kNtStatusUnsuccessful;
+        writeGuestIoStatus(base, ioStatus, result.status, 0u);
+    }
+    completionSignal.signalNow();
+    signal.signalNow();
+    context.r3.u32 = result.status;
 }
 
 void xowue_NtWriteFile(PPCContext &context, uint8_t *base) {

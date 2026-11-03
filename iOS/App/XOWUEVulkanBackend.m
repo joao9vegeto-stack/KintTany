@@ -17,6 +17,7 @@ static void KKLog(NSString *format, ...);
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <time.h>
 #include <math.h>
 #include "Graphics/Xenos/XOWUEGuestDraw.h"
 extern bool xowue_xenos_commit_resolved_rgba(uint32_t dest,uint32_t pitch,
@@ -24,6 +25,9 @@ extern bool xowue_xenos_commit_resolved_rgba(uint32_t dest,uint32_t pitch,
 extern void xowue_log_stall_threads(void);
 
 static _Atomic(uint32_t) g_xowue_guest_swap_count = 0;
+static _Atomic(uint32_t) g_xowue_guest_swap_completed_count = 0;
+static pthread_mutex_t g_xowue_guest_swap_sync_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_xowue_guest_swap_sync_cond = PTHREAD_COND_INITIALIZER;
 static _Atomic(uint32_t) g_xowue_guest_width = 0;
 static _Atomic(uint32_t) g_xowue_guest_height = 0;
 static _Atomic(uint32_t) g_xowue_guest_frontbuffer = 0;
@@ -38,12 +42,53 @@ static uint32_t g_xowue_guest_frame_format = 0;
 static _Atomic uint64_t g_xowue_guest_nonblack = 0;
 static _Atomic uint64_t g_xowue_guest_checksum = 0;
 
+static bool KKWaitForGuestSwapCompletion(uint32_t target, uint32_t timeoutMs)
+{
+   if (pthread_main_np()) return false;
+   struct timespec deadline;
+   clock_gettime(CLOCK_REALTIME, &deadline);
+   deadline.tv_sec += timeoutMs / 1000u;
+   deadline.tv_nsec += (long)(timeoutMs % 1000u) * 1000000L;
+   if (deadline.tv_nsec >= 1000000000L) {
+      deadline.tv_sec += 1;
+      deadline.tv_nsec -= 1000000000L;
+   }
+
+   pthread_mutex_lock(&g_xowue_guest_swap_sync_mutex);
+   while (atomic_load_explicit(&g_xowue_guest_swap_completed_count,
+                               memory_order_acquire) < target) {
+      const int waitResult = pthread_cond_timedwait(
+          &g_xowue_guest_swap_sync_cond, &g_xowue_guest_swap_sync_mutex, &deadline);
+      if (waitResult != 0) break;
+   }
+   const bool completed = atomic_load_explicit(
+       &g_xowue_guest_swap_completed_count, memory_order_acquire) >= target;
+   pthread_mutex_unlock(&g_xowue_guest_swap_sync_mutex);
+   return completed;
+}
+
+void xowue_vulkan_backend_wait_idle(void)
+{
+   const uint32_t target = atomic_load_explicit(
+       &g_xowue_guest_swap_count, memory_order_acquire);
+   if (target == 0u || pthread_main_np()) return;
+   if (!KKWaitForGuestSwapCompletion(target, 500u))
+      KKLog(@"XOWUE_GPU_SWAP_WAIT timeout reason=wait_idle target=%u completed=%u",
+            target, atomic_load_explicit(&g_xowue_guest_swap_completed_count,
+                                         memory_order_relaxed));
+}
+
 void xowue_vulkan_backend_guest_swap(uint32_t frontbuffer, uint32_t width, uint32_t height)
 {
    atomic_store_explicit(&g_xowue_guest_frontbuffer, frontbuffer, memory_order_relaxed);
    atomic_store_explicit(&g_xowue_guest_width, width, memory_order_relaxed);
    atomic_store_explicit(&g_xowue_guest_height, height, memory_order_relaxed);
-   atomic_fetch_add_explicit(&g_xowue_guest_swap_count, 1, memory_order_relaxed);
+   const uint32_t serial = atomic_fetch_add_explicit(
+       &g_xowue_guest_swap_count, 1, memory_order_acq_rel) + 1u;
+   if (!pthread_main_np() && !KKWaitForGuestSwapCompletion(serial, 500u))
+      KKLog(@"XOWUE_GPU_SWAP_WAIT timeout reason=guest_swap target=%u completed=%u",
+            serial, atomic_load_explicit(&g_xowue_guest_swap_completed_count,
+                                         memory_order_relaxed));
 }
 
 void xowue_vulkan_backend_guest_frame_rgba(uint32_t frontbuffer,
@@ -64,17 +109,24 @@ void xowue_vulkan_backend_guest_frame_rgba(uint32_t frontbuffer,
    size_t nonblack = 0;
    uint64_t digest = 14695981039346656037ull;
    size_t pixelCount = (size_t)width * height;
+   for (size_t byte = 0; byte < required; ++byte)
+      digest = (digest ^ copy[byte]) * 1099511628211ull;
    for (size_t k = 0; k < pixelCount; ++k) {
       const uint8_t *c = copy + k * 4u;
       if (c[0] || c[1] || c[2]) ++nonblack;
-      digest = ((digest ^ c[0]) * 1099511628211ull)
-               ^ ((uint64_t)c[1] << 8) ^ ((uint64_t)c[2] << 16);
    }
    atomic_store_explicit(&g_xowue_guest_nonblack,(uint64_t)nonblack,memory_order_relaxed);
    atomic_store_explicit(&g_xowue_guest_checksum,digest,memory_order_relaxed);
-   KKLog(@"XENOS_GUEST_SWAP_RGBA nonblack=%zu total=%zu checksum=%016llX address=%08X format=%u",
-         nonblack,pixelCount,(unsigned long long)digest,frontbuffer,format);
    pthread_mutex_lock(&g_xowue_guest_frame_mutex);
+   if (g_xowue_guest_frame && g_xowue_guest_frame_bytes == required &&
+       g_xowue_guest_frame_width == width && g_xowue_guest_frame_height == height &&
+       memcmp(g_xowue_guest_frame, copy, required) == 0) {
+      pthread_mutex_unlock(&g_xowue_guest_frame_mutex);
+      free(copy);
+      KKLog(@"XENOS_GUEST_FRAME_UNCHANGED checksum=%016llX address=%08X format=%u",
+            (unsigned long long)digest,frontbuffer,format);
+      return;
+   }
    uint8_t *previous = g_xowue_guest_frame;
    g_xowue_guest_frame = copy;
    g_xowue_guest_frame_bytes = required;
@@ -84,6 +136,8 @@ void xowue_vulkan_backend_guest_frame_rgba(uint32_t frontbuffer,
    g_xowue_guest_frame_format = format;
    atomic_fetch_add_explicit(&g_xowue_guest_frame_count, 1, memory_order_relaxed);
    pthread_mutex_unlock(&g_xowue_guest_frame_mutex);
+   KKLog(@"XENOS_GUEST_SWAP_RGBA nonblack=%zu total=%zu checksum=%016llX address=%08X format=%u",
+         nonblack,pixelCount,(unsigned long long)digest,frontbuffer,format);
    free(previous);
 }
 
@@ -232,6 +286,7 @@ typedef struct KKVulkanState {
    uint64_t frame_count;
    uint64_t guest_frames_presented;
    uint64_t last_guest_decoded_serial;
+   uint32_t last_guest_swap_count;
    uint64_t guest_draws_submitted;
    bool ready;
 } KKVulkanState;
@@ -1133,6 +1188,11 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    if (!state->ready || !state->swapchain)
       return false;
 
+   const uint32_t guestSwapSerial = atomic_load_explicit(
+      &g_xowue_guest_swap_count, memory_order_acquire);
+   if (guestSwapSerial == state->last_guest_swap_count)
+      return true; // No new PM4 XE_SWAP: do not manufacture another host/game frame.
+
    // Create actual native Vulkan modules from the translated guest shaders.
    // Xenos EDRAM/pipelines/draws are tracked separately, never fabricated.
    KKSyncNativeShaders(state);
@@ -1166,8 +1226,10 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    const bool guest_frame_ready = KKWriteGuestFrame(state);
    const uint64_t currentGuestSerial = atomic_load_explicit(
       &g_xowue_guest_frame_count, memory_order_relaxed);
+   const bool newGuestFrame = guest_frame_ready &&
+      currentGuestSerial > state->last_guest_decoded_serial;
    const bool reuseComposed = g_xd.composed_valid && g_xd.composited_frame.buffer &&
-      currentGuestSerial == state->last_guest_decoded_serial;
+      !newGuestFrame;
 
    result = state->ResetCommandBuffer(state->command_buffer, 0);
    if (result != VK_SUCCESS) {
@@ -1216,7 +1278,7 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
       .baseArrayLayer = 0,
       .layerCount = 1,
    };
-   if (guest_frame_ready || reuseComposed) {
+   if (newGuestFrame || reuseComposed) {
       if (reuseComposed) XDReuseComposedFrameBarrier(state,state->command_buffer);
       VkBufferImageCopy copy = {
          .bufferOffset = 0,
@@ -1246,17 +1308,15 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &range);
    }
 
-   // A decoded guest framebuffer is already the title's real 1280x720
-   // color output. The current Xenos draw path still reports
-   // EDRAM_COLOR_SOURCE_UNAVAILABLE and produces a non-16:9 composite; drawing
-   // that incomplete queue over the decoded image corrupts its scale and can
-   // replace valid pixels with an empty render target. Preserve the real guest
-   // framebuffer until a complete EDRAM color source is available.
-   const uint32_t issuedGuestDraws = guest_frame_ready ? 0u :
+   // A CPU framebuffer is eligible only when its pixel content changed since
+   // the last successful guest present. An unchanged copyright image must never
+   // suppress native PM4/Xenos draws on subsequent guest swaps.
+   const uint32_t issuedGuestDraws = newGuestFrame ? 0u :
       XDProcessDraws(state, image_index, state->command_buffer);
    const bool capturedComposed = issuedGuestDraws && XDCacheComposedFrame(
       state,image_index,state->command_buffer);
-   if (!issuedGuestDraws && currentGuestSerial != state->last_guest_decoded_serial)
+   if (!issuedGuestDraws && !newGuestFrame &&
+       currentGuestSerial != state->last_guest_decoded_serial)
       g_xd.composed_valid=false;
 
    VkImageMemoryBarrier to_present = {
@@ -1385,12 +1445,20 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    }
 
    state->frame_count++;
-   // Re-presenting an old framebuffer is not another game frame.
-   const uint64_t decodedSerial = atomic_load_explicit(
-       &g_xowue_guest_frame_count, memory_order_relaxed);
-   if (guest_frame_ready && decodedSerial > state->last_guest_decoded_serial) {
-      state->guest_frames_presented += decodedSerial - state->last_guest_decoded_serial;
-      state->last_guest_decoded_serial = decodedSerial;
+   state->guest_frames_presented +=
+       static_cast<uint32_t>(guestSwapSerial - state->last_guest_swap_count);
+   state->last_guest_swap_count = guestSwapSerial;
+   atomic_store_explicit(&g_xowue_guest_swap_completed_count, guestSwapSerial,
+                         memory_order_release);
+   pthread_mutex_lock(&g_xowue_guest_swap_sync_mutex);
+   pthread_cond_broadcast(&g_xowue_guest_swap_sync_cond);
+   pthread_mutex_unlock(&g_xowue_guest_swap_sync_mutex);
+   if (newGuestFrame)
+      state->last_guest_decoded_serial = currentGuestSerial;
+   if (state->frame_count <= 4u || state->frame_count % 60u == 0u) {
+      KKLog(@"XOWUE_NATIVE_GUEST_FRAME serial=%u draws=%u fresh_cpu_frame=%u total=%llu",
+            guestSwapSerial, issuedGuestDraws, newGuestFrame ? 1u : 0u,
+            (unsigned long long)state->frame_count);
    }
    return true;
 }

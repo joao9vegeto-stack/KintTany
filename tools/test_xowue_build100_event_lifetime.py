@@ -27,9 +27,9 @@ for function in ("xowue_NtReadFile", "xowue_NtReadFileScatter", "xowue_NtWriteFi
 assert 'event.find("B98_")' in engine
 assert 'event.find("B99_")' in engine
 assert 'event.find("B95_SYNC_")' in engine
-for marker in ("B95_SYNC_", "B97_", "B98_", "B99_"):
+for marker in ("B95_SYNC_", "B97_", "B98_", "B99_", "B103_ASYNC_NTREADFILE_"):
     assert marker in diagnostics, marker
-assert "eventWaits + eventCompletions + movieFlow" in diagnostics
+assert "eventWaits + eventCompletions + asyncFileIo + movieFlow" in diagnostics
 assert '"B98_"' in diagnostics
 assert "B98_TIMER_" in diagnostics
 

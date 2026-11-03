@@ -25,7 +25,13 @@ assert "void NotifyGuestFrameSubmitted()" in bridge
 assert "guestFrame.copied_to_swapchain=true;" in bridge
 assert "guestFrame.copied_to_swapchain&&" not in bridge
 assert "NotifyGuestFrameSubmitted" in header
-assert engine.count("NotifyGuestFrameSubmitted();") == 3
+assert engine.count("NotifyGuestFrameSubmitted();") == 1
+pm4_swap = engine[engine.index("} else if (opcode == kXenosPm4SwapOpcode"):
+                  engine.index("\n            }\n        }", engine.index("} else if (opcode == kXenosPm4SwapOpcode"))]
+assert "NotifyGuestFrameSubmitted" not in pm4_swap
+vd_swap = engine[engine.index("void xowue_VdSwap("):
+                 engine.index("\nvoid xowue_VdInitializeScalerCommandBuffer", engine.index("void xowue_VdSwap("))]
+assert "NotifyGuestFrameSubmitted" not in vd_swap
 
 # 4. Scatter I/O distinguishes invalid pages, host errors and short EOF transfers.
 scatter = engine.split("void xowue_NtReadFileScatter", 1)[1].split("void xowue_NtDeviceIoControlFile", 1)[0]

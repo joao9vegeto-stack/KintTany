@@ -300,3 +300,61 @@ assert "if(t->loadPass)XD(DestroyRenderPass)" in guest_color
 assert "const VkRenderPass drawPass=" in renderer
 assert ".renderPass=drawPass,.framebuffer=colorTarget->framebuffer" in renderer
 print("PASS: Build 88 EDRAM CLEAR-on-first-use / LOAD-on-reuse and resolve layout restoration")
+
+
+# Build 105: MW2 command-processor semantics and real guest-frame pacing.
+assert "if (header == 0u)" in engine
+assert "kXenosPm4IndirectBufferPfdOpcode = 0x37u" in engine
+assert "depth < 4u" in engine
+assert "(address & 0x1Fu) == 0u" in engine
+assert "frontend.binMask" in engine and "frontend.binSelect" in engine
+swap_start = engine.index("} else if (opcode == kXenosPm4SwapOpcode")
+swap_end = engine.index("\n            }\n        }", swap_start)
+swap = engine[swap_start:swap_end]
+assert swap.index("NotifyGuestSwap") < swap.index("if (!frontend.swapFetchValid)")
+assert swap.index("xowue_vulkan_backend_guest_swap") < swap.index("if (!frontend.swapFetchValid)")
+vd_start = engine.index("void xowue_VdSwap(")
+vd_end = engine.index("\nvoid xowue_VdInitializeScalerCommandBuffer", vd_start)
+vd = engine[vd_start:vd_end]
+assert "XOWUE_VDSWAP_PACKET_QUEUED" in vd
+assert "decodeXenosSwapTexture" not in vd
+assert "xowue_vulkan_backend_guest_frame_rgba" not in vd
+assert "PPC_STORE_U32(commandBuffer + 4u, kSwapSignature)" in vd
+assert "context.r3.u32 = 0u" in vd
+assert "last_guest_swap_count" in vulkan
+assert "guestSwapSerial == state->last_guest_swap_count" in vulkan
+assert "newGuestFrame = guest_frame_ready" in vulkan
+assert "guest_frame_ready ? 0u" not in vulkan
+assert "XDProcessDraws(state, image_index, state->command_buffer)" in vulkan
+assert "XOWUE_NATIVE_GUEST_FRAME" in vulkan
+assert "XENOS_GUEST_FRAME_UNCHANGED" in vulkan
+print("PASS: Build 105 PM4/XE_SWAP frame path, fresh-only CPU fallback, native Xenos draws and guest-paced presents")
+
+assert "guestSwapSerial == state->last_guest_swap_count" in vulkan
+assert "newGuestFrame = guest_frame_ready" in vulkan
+assert "guest_frame_ready ? 0u" not in vulkan
+assert "XOWUE_NATIVE_GUEST_FRAME" in vulkan
+
+diagnostics=Path("iOS/App/XOWUEDiagnostics.swift").read_text()
+assert "XENOS_GUEST_FRAME_UNCHANGED" in vulkan
+assert "memcmp(g_xowue_guest_frame, copy, required)" in vulkan
+assert "XOWUE_VDSWAP_" in diagnostics
+assert "XOWUE_PM4_" in diagnostics
+assert "XOWUE_NATIVE_GUEST_FRAME" in diagnostics
+assert "XOWUE_PM4_XE_SWAP sequence=" in engine
+
+# Guest frame accounting must be driven by consumed PM4 swaps, not host refresh ticks.
+assert "state->guest_frames_presented +=" in vulkan
+assert "state->last_guest_swap_count = guestSwapSerial" in vulkan
+
+# MW2 end-of-pipe/fence behavior and ALU constant memory loads.
+assert "opcode == 0x2Fu" in engine and "XENOS_PM4_LOAD_ALU_CONSTANT" in engine
+assert "opcode == 0x59u" in engine and "XENOS_PM4_EVENT_WRITE_CFL" in engine
+assert "opcode == 0x26u" in engine and "xowue_vulkan_backend_wait_idle" in engine
+assert "xowue_vulkan_backend_wait_idle(void)" in engine
+assert "KKWaitForGuestSwapCompletion" in vulkan
+assert "g_xowue_guest_swap_completed_count" in vulkan
+assert "XOWUE_GPU_SWAP_WAIT" in vulkan and "XOWUE_GPU_SWAP_WAIT" in diagnostics
+
+audit_script=Path("tools/audit_xowue_global_callsite_gaps.py").read_text()
+assert 'if "PPC_CALL_INDIRECT_FUNC" in chunk:' in audit_script

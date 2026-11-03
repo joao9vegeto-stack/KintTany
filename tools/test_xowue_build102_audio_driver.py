@@ -4,6 +4,7 @@ from pathlib import Path
 
 engine = Path("Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
 workflow = Path(".github/workflows/xowue-ios.yml").read_text(encoding="utf-8")
+swift = Path("iOS/App/XOWUEDiagnostics.swift").read_text(encoding="utf-8")
 
 required = (
     "kXowueAudioFrameInterval = std::chrono::microseconds(5333)",
@@ -47,7 +48,12 @@ required = (
     "PPC_STORE_U32(output, mask)",
     "PPC_STORE_U32(output, 0x3F800000u)",
     "validGuestRange(samples, kXowueAudioFrameBytes)",
-    "output=discarded",
+    "output=%s",
+    "outputState = queued ? \"queued\" : \"queue_full\"",
+    "XOWUEAudioStart",
+    "XOWUEAudioSubmitStereoFrame",
+    "XOWUE_AUDIO_BACKEND_START",
+    "XOWUEAudioBackendState",
 )
 for token in required:
     assert token in engine, token
@@ -59,6 +65,12 @@ assert 'if (api == "XAudioRegisterRenderDriverClient" ||' not in engine
 assert 'if (api == "XAudioSubmitRenderDriverFrame" ||' not in engine
 assert "test_xowue_build102_audio_driver.py" in workflow
 assert "XOWUE_XAUDIO_" in engine
+assert "XOWUE_AUDIO_BACKEND_" in swift
+assert "XOWUEAudioSubmitStereoFrame" in engine
+assert "loadGuestBe32(base, address)" in engine
+assert "output=discarded" not in engine
+assert "let audioDriver = Array(lines.filter {" in swift
+assert '$0.contains("XOWUE_AUDIO_BACKEND_")' in swift
 assert "signalGuestEventHandle(0x4004ED80" not in engine
 assert "signalGuestEventHandle(0x4004EDD0" not in engine
 assert "waitable->handle == 0x115u" in engine
@@ -72,7 +84,22 @@ assert "PPC_STORE_U32(previousPointer, 1u)" not in engine
 assert "context.r3.u32 = affinity" in engine
 assert "std::thread hostThread" not in engine
 assert "thread->hostThread = std::thread(" not in engine
-print("PASS: XAudio callback ABI, timer correlation, and Xbox KPCR processor-affinity semantics")
+backend = Path("iOS/App/XOWUEAudioBackend.mm").read_text(encoding="utf-8")
+header = Path("iOS/App/XOWUEAudioBackend.h").read_text(encoding="utf-8")
+project = Path("iOS/project.yml").read_text(encoding="utf-8")
+assert '#include "../iOS/App/XOWUEAudioBackend.h"' in engine
+assert "AVAudioEngine" in backend
+assert "AVAudioSourceNode" in backend
+assert "AVAudioSessionCategoryPlayback" in backend
+assert "setPreferredSampleRate:48000.0" in backend
+assert "setPreferredIOBufferDuration" in backend
+assert "std::atomic<uint32_t>" in backend
+assert "kAudioRingCapacity" in backend
+assert "XOWUEAudioSubmitStereoFrame" in header
+assert "AVFAudio" in project
+assert "kXowueAudioChannels = 6u" in engine
+assert "kXowueAudioSamplesPerFrame = 256u" in engine
+print("PASS: XAudio guest 5.1 BE-float callback is downmixed and delivered to native iOS AVAudioEngine output")
 
 swift = Path("iOS/App/XOWUEDiagnostics.swift").read_text(encoding="utf-8")
 assert '"XOWUE_XAUDIO_"' in swift
@@ -80,3 +107,5 @@ assert '"XOWUE_XMA_"' in swift
 assert "let audioDriver = Array(lines.filter {" in swift
 assert "+ boot + audioDriver + eventWaits" in swift
 print("PASS: PPC callback FPSCR initialized and XAudio/XMA lifecycle retained in compact iOS diagnostics")
+
+assert "constexpr uint32_t kNtStatusPending = 0x00000103u;" in engine
