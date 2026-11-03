@@ -15,13 +15,6 @@ assert text.count(needle) == 1, "unexpected upstream CMake target layout"
 replacement = needle + '''
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
   target_sources(asura_wrath_recomp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/ios/kosmickrisp_probe.m")
-  target_sources(asura_wrath_recomp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/ios/asura_ios_native.mm")
-  set_source_files_properties(ios/asura_ios_native.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc -fblocks")
-  target_compile_definitions(asura_wrath_recomp PRIVATE ASURA_IOS_BUILD_NUMBER=\"${ASURA_IOS_BUILD_NUMBER}\")
-  target_link_libraries(asura_wrath_recomp PRIVATE
-    "-framework UIKit" "-framework Metal" "-framework QuartzCore"
-    "-framework Foundation" "-framework GameController"
-    "-framework UniformTypeIdentifiers")
   set_target_properties(asura_wrath_recomp PROPERTIES
     MACOSX_BUNDLE TRUE
     MACOSX_BUNDLE_GUI_IDENTIFIER "com.joaopedro.asuraswrath"
@@ -30,6 +23,37 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
 endif()
 '''
 cmake.write_text(text.replace(needle, replacement))
+
+# ASURA_IOS_NATIVE_HOST_OWNERSHIP_V2: keep host callbacks inside the runtime
+# dylib. ReXGlue's Vulkan/UI objects call these functions while librexruntime
+# is linked; defining them only in the app executable leaves dylib references
+# unresolved at link time.
+runtime_cmake = root / "tools/rexglue/src/system/CMakeLists.txt"
+runtime_text = runtime_cmake.read_text()
+runtime_target = "add_library(rexruntime SHARED ${REXSYSTEM_SOURCES})"
+runtime_marker = "ASURA_IOS_NATIVE_HOST_OWNERSHIP_V2"
+if runtime_marker not in runtime_text:
+    assert runtime_text.count(runtime_target) == 1, "unexpected rexruntime target declaration"
+    runtime_block = runtime_target + '''
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    target_sources(rexruntime PRIVATE "${CMAKE_SOURCE_DIR}/ios/asura_ios_native.mm")
+    set_source_files_properties("${CMAKE_SOURCE_DIR}/ios/asura_ios_native.mm"
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc -fblocks")
+    target_compile_definitions(rexruntime PRIVATE
+        ASURA_IOS_BUILD_NUMBER=\\\""${ASURA_IOS_BUILD_NUMBER}\\\"")
+    target_link_libraries(rexruntime PRIVATE
+        "-framework UIKit"
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework Foundation"
+        "-framework GameController"
+        "-framework UniformTypeIdentifiers")
+endif()
+# ASURA_IOS_NATIVE_HOST_OWNERSHIP_V2
+'''
+    runtime_text = runtime_text.replace(runtime_target, runtime_block, 1)
+    runtime_cmake.write_text(runtime_text)
+
 
 sdk = root / "tools/rexglue/CMakeLists.txt"
 sdk_text = sdk.read_text()

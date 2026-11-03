@@ -100,6 +100,9 @@ jobs:
           grep -q "APP_LAUNCH_GATE_PLAY_ACCEPTED" ios/asura_ios_native.mm
           grep -q "AsuraIOSDismissLauncher" ios/asura_ios_native.mm
           grep -q "AsuraIOSSetLauncherStatus" ios/asura_ios_native.mm
+          grep -q "ASURA_IOS_NATIVE_HOST_OWNERSHIP_V2" ios/prepare_ios.py
+          grep -q "target_sources(rexruntime PRIVATE" ios/prepare_ios.py
+          ! grep -q 'target_sources(asura_wrath_recomp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/ios/asura_ios_native.mm")' ios/prepare_ios.py
           python3 -m py_compile ios/launcher_patch.py ios/prepare_ios.py
           grep -q "ASURA_IOS_VULKAN_ICD_BRIDGE_LOADER_PATCH_OK" ios/launcher_patch.py
           grep -q "ASURA_IOS_FIRST_PRESENT_GATE_V1" ios/launcher_patch.py
@@ -281,10 +284,14 @@ jobs:
           xcrun --sdk iphoneos clang -target "arm64-apple-ios${IOS_DEPLOYMENT_TARGET}" -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" -dynamiclib -O2 -fvisibility=hidden ios/Native/asura_vulkan_icd_bridge.c -o "$APP/Frameworks/libvulkan.dylib" -Wl,-install_name,@rpath/libvulkan.dylib
           nm -gU "$APP/Frameworks/libvulkan.dylib" | grep -q "_vkGetInstanceProcAddr"
           nm -gU "$APP/Frameworks/libvulkan.dylib" | grep -q "_vkDestroyInstance"
-          nm -gU "$APP/asura_wrath_recomp" | grep -q "_AsuraIOSNotifyFirstPresent"
-          nm -gU "$APP/asura_wrath_recomp" | grep -q "_AsuraIOSHasPresentedFrame"
-          nm -gU "$APP/asura_wrath_recomp" | c++filt | grep -q "AsuraIOSLog("
-          echo "ASURA_IOS_KOSMICKRISP_ICD_BRIDGE_AND_HOST_CALLBACK_EXPORTS_OK"
+          # Native iOS host APIs are owned/exported by librexruntime.
+          nm -gU "$APP/Frameworks/librexruntime.dylib" | grep -q "_AsuraIOSNotifyFirstPresent"
+          nm -gU "$APP/Frameworks/librexruntime.dylib" | grep -q "_AsuraIOSHasPresentedFrame"
+          nm -gU "$APP/Frameworks/librexruntime.dylib" | c++filt | grep -q "AsuraIOSLog("
+          # The app imports host callbacks from the runtime; it does not own them.
+          nm -g "$APP/asura_wrath_recomp" | grep -q "U _AsuraIOSHasPresentedFrame"
+          nm -g "$APP/asura_wrath_recomp" | grep -q "U _AsuraIOSSetLauncherStatus"
+          echo "ASURA_IOS_KOSMICKRISP_RUNTIME_CALLBACK_EXPORTS_OK"
           rsvg-convert -w 1024 -h 1024 ios/icons/AppIcon.svg > "$APP/AppIcon-1024.png"
           sips -z 120 120 "$APP/AppIcon-1024.png" --out "$APP/AppIcon-60@2x.png" >/dev/null
           sips -z 180 180 "$APP/AppIcon-1024.png" --out "$APP/AppIcon-60@3x.png" >/dev/null
