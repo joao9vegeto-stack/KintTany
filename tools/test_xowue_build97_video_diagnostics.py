@@ -24,7 +24,10 @@ required = {
     "PPC media instruction words": "B97_MOVIE_PPC_WORD",
     "movie scatter read evidence": "B97_MOVIE_SCATTER",
     "movie close / transition evidence": "B97_MOVIE_CLOSE",
-    "Xenos decode boundary": "B97_XENOS_SWAP_DECODE",
+    "Xenos decode boundary": "decodeXenosSwapTexture(base, frontend.swapFetch.data(),",
+    "Xenos decode failure accounting": "++summary.frameDecodeFailures;",
+    "Xenos stale-frame rejection": "XENOS_STALE_GUEST_FRAME: swap_cpu_decode_failed",
+    "Xenos decoded-frame commit": "NotifyGuestFrameCommitted()",
     "real wait readiness": "waitable->signaled || waitable->unconsumedSignals",
     "PPC AOT execution telemetry": "recordAotFunctionExecution(guestAddress)",
     "PPC dispatch guard": "xowue_dispatch_guard::resolve",
@@ -47,6 +50,15 @@ for label, token in required.items():
     print(f"{'PASS' if ok else 'FAIL'}: {label}")
     if not ok:
         failed.append(label)
+
+swap_start = source.index("decodeXenosSwapTexture(base, frontend.swapFetch.data(),")
+swap_end = source.index("XENOS_STALE_GUEST_FRAME: swap_cpu_decode_failed", swap_start)
+swap_body = source[swap_start:swap_end]
+if "++frontend.decodedFrames;" not in swap_body or "NotifyGuestFrameCommitted()" not in swap_body:
+    failed.append("successful Xenos decode must commit a decoded guest frame")
+    print("FAIL: successful Xenos decode must commit a decoded guest frame")
+else:
+    print("PASS: successful Xenos decode commits a decoded guest frame")
 
 pointer_wait_start = source.index("std::shared_ptr<GuestWaitable> ensurePointerWaitable(")
 pointer_wait_end = source.index("\n}\n", pointer_wait_start)
