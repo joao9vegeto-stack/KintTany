@@ -45,6 +45,12 @@ jobs:
             SpartanPort-iOS/Tests/SpartanGuestELFLoaderTests.c \
             -o "$RUNNER_TEMP/spartan-elf-loader-tests"
           "$RUNNER_TEMP/spartan-elf-loader-tests"
+          clang -std=c11 -Wall -Wextra -Werror -ISpartanPort-iOS/Sources/Runtime \\
+            SpartanPort-iOS/Sources/Runtime/SpartanIOSGuestMemory.c \\
+            SpartanPort-iOS/Sources/Runtime/SpartanIOSG3ProbeLoader.c \\
+            SpartanPort-iOS/Tests/SpartanG3ProbeLoaderTests.c \\
+            -o "$RUNNER_TEMP/spartan-g3probe-loader-tests"
+          "$RUNNER_TEMP/spartan-g3probe-loader-tests"
       - name: Validate readiness audit helper
         run: |
           python3 -m py_compile tools/spartan-aot/audit_runtime_readiness.py

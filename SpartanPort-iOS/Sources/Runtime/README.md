@@ -21,3 +21,15 @@ are implemented and linked.
 Translation is offline. No JIT, runtime code generation, interpreter or
 emulation fallback is permitted; an unimplemented reached instruction must
 fail closed.
+
+
+## G3PROBE5 linked-image staging
+
+`SpartanIOSG3ProbeLoader` consumes the exact `G3PROBE5` container emitted by
+`gow3-macos-arm64/scripts/link_modules.py`. It validates the module, binding,
+segment, import-name and relocation tables; stages the linked image in data-only
+guest memory; applies relative relocations, resolved module imports and GS/TLS
+displacements; and returns the host-mapped entry address. Unresolved PS4 imports
+are counted and left zero, never replaced by fake success values. The caller
+must refuse game start while any remain. The image pages are never executable:
+the separately compiled ARM64 AOT functions are the only executable game code.
