@@ -290,7 +290,7 @@ jobs:
           nm -gU "$APP/Frameworks/librexruntime.dylib" | c++filt | grep -q "AsuraIOSLog("
           # The app imports host callbacks from the runtime; it does not own them.
           nm -g "$APP/asura_wrath_recomp" | grep -q "U _AsuraIOSHasPresentedFrame"
-          nm -g "$APP/asura_wrath_recomp" | grep -q "U _AsuraIOSSetLauncherStatus"
+          nm -g "$APP/asura_wrath_recomp" | c++filt | grep -Fq "U AsuraIOSSetLauncherStatus(std::string const&)"
           echo "ASURA_IOS_KOSMICKRISP_RUNTIME_CALLBACK_EXPORTS_OK"
           rsvg-convert -w 1024 -h 1024 ios/icons/AppIcon.svg > "$APP/AppIcon-1024.png"
           sips -z 120 120 "$APP/AppIcon-1024.png" --out "$APP/AppIcon-60@2x.png" >/dev/null

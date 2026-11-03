@@ -15,6 +15,7 @@ assert text.count(needle) == 1, "unexpected upstream CMake target layout"
 replacement = needle + '''
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
   target_sources(asura_wrath_recomp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/ios/kosmickrisp_probe.m")
+  target_link_libraries(asura_wrath_recomp PRIVATE "-framework Foundation")
   set_target_properties(asura_wrath_recomp PROPERTIES
     MACOSX_BUNDLE TRUE
     MACOSX_BUNDLE_GUI_IDENTIFIER "com.joaopedro.asuraswrath"
@@ -40,7 +41,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     set_source_files_properties("${CMAKE_SOURCE_DIR}/ios/asura_ios_native.mm"
         PROPERTIES COMPILE_FLAGS "-fobjc-arc -fblocks")
     target_compile_definitions(rexruntime PRIVATE
-        ASURA_IOS_BUILD_NUMBER=\\\""${ASURA_IOS_BUILD_NUMBER}\\\"")
+        "ASURA_IOS_BUILD_NUMBER=\\\"${ASURA_IOS_BUILD_NUMBER}\\\"")
     target_link_libraries(rexruntime PRIVATE
         "-framework UIKit"
         "-framework Metal"

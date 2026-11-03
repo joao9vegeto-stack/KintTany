@@ -159,4 +159,4 @@ extern "C" __attribute__((used, visibility("default"))) void AsuraIOSNotifyFirst
  AsuraIOSLog("VULKAN_FIRST_GUEST_FRAME_PRESENTED");
  AsuraIOSDismissLauncher();
 }
-void AsuraIOSSetLauncherStatus(const std::string&message){dispatch_async(dispatch_get_main_queue(),^{if(launcher_controller2){NSString*text=[NSString stringWithUTF8String:message.c_str()];[launcher_controller2 showLauncherMessage:text?:@"Falha ao iniciar o runtime";}log_line2("LAUNCHER_STATUS "+message);});}
+void AsuraIOSSetLauncherStatus(const std::string&message){dispatch_async(dispatch_get_main_queue(),^{if(launcher_controller2){NSString*text=[NSString stringWithUTF8String:message.c_str()];[launcher_controller2 showLauncherMessage:(text ?: @"Falha ao iniciar o runtime")];}log_line2("LAUNCHER_STATUS "+message);});}
