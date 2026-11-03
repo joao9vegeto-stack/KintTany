@@ -15,9 +15,9 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.joaopedro.spartanport
         PRODUCT_NAME: SpartanPort
+        LD_RUNPATH_SEARCH_PATHS: "@executable_path/Frameworks"
         SWIFT_VERSION: "5.0"
         IPHONEOS_DEPLOYMENT_TARGET: "17.4"
-        HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/../KosmicKrispiOS/build/include"
         SWIFT_OBJC_BRIDGING_HEADER: "Sources/SpartanPort-Bridging-Header.h"
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES

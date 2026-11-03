@@ -1,6 +1,6 @@
 # SpartanPort for iOS — engineering baseline
 
-Status: SpartanPort iOS shell is wired to the pinned KosmicKrisp Vulkan ICD. It links the iOS arm64 archive and probes the ICD entrypoints/instance extensions at launch. The reusable SDK lives in `KosmicKrispiOS/`; CI publishes one unsigned SpartanPort IPA and the reusable SDK as a separate artifact. No playable PS4 runtime is claimed; game-start remains disabled.
+Status: SpartanPort iOS shell loads the exact arm64 `libKosmicKrisp.dylib` already consumed by PoPTST from the successful PsTJohn run #125 artifact (commit `db014165eb39429ae37d1946db6fc83c600c63b3`, SHA-256 `593d3f39a4fc751cc51884383444a5599993012281e084ef01945db7a4e78a34`). The app resolves `vk_icdGetInstanceProcAddr` with `dlopen`/`dlsym`; CI validates the provider hash, iOS platform, architecture and bundle placement. `KosmicKrispiOS/` remains an optional SDK/build workspace; SpartanPort no longer rebuilds and statically relinks Mesa on every app build. CI publishes the SpartanPort IPA and PS4 AOT compatibility audit. No playable PS4 runtime is claimed; game-start remains disabled.
 
 ## Scope
 
@@ -30,7 +30,11 @@ Upstream references:
 
 ## KosmicKrisp backend reused from PsTJohn
 
-The graphics provider is the user's existing KosmicKrisp/Mesa port from `PsTJohn`, not a replacement MoltenVK backend. `KosmicKrispiOS/` contains the pinned Mesa build, M2 iOS platform patch, M3 Metal WSI patch, M3B smoke-target patch, reference CAMetalLayer test, static/dynamic adapters and CMake integration helper. The delivered `libkk-kosmickrisp-ios-arm64.a` must be a merged static dependency closure, not the bare Meson `libkk.a`: Mesa keeps `simple_mtx.c`, C11 thread support, NIR, Vulkan utilities, MSL compiler, Metal bridge and shader objects in separate static archives. The app force-loads the merged archive and does not permit `-undefined dynamic_lookup`; unresolved symbols must fail the Xcode link instead of surfacing as a dyld launch crash. CI also checks that Mesa's `_simple_mtx_plain_init_once` and C11 `mtx_init` implementations are defined in the delivered archive. CI compiles the M3B smoke executable as a build check but does not package a second IPA. Physical-device surface/swapchain presentation remains pending. A compile or extension probe is not evidence of game rendering.
+The graphics provider is the user's existing KosmicKrisp/Mesa port from `PsTJohn`, not a replacement MoltenVK backend. The integration follows the exact proven path already used by PoPTST: download the successful PsTJohn run #125 artifact (`39067594955`), extract `Payload/RPCS3.app/Frameworks/libKosmicKrisp.dylib`, and verify its pinned SHA-256 before embedding it in `SpartanPort.app/Frameworks`. PoPTST's workflow performs the same extraction and checks the same digest. SpartanPort loads the provider with `dlopen` and resolves `vk_icdGetInstanceProcAddr` with `dlsym`; it does not statically relink Mesa's internal dispatch archives into the app executable.
+
+This is a deliberate correction to the failed SpartanPort run #104 static-link path. That link failed with 2,824 unresolved symbols reported from Mesa's generated `wsi_common_entrypoints.c.o`; the generated `-u` extraction list contained 568 defined symbols but none of those unresolved names. The static-link experiment therefore did not establish a closed link dependency graph. Reusing the exact dylib that PoPTST already consumes removes that unsupported static-link assumption and keeps the backend binary reproducible. The optional source build and static/dynamic adapters remain in `KosmicKrispiOS/` for SDK development, not as a prerequisite of the SpartanPort app workflow.
+
+The probe only checks ICD loading and instance extensions. It does not create a Metal surface/swapchain or render a PS4 frame. Physical-device surface/swapchain presentation remains pending, and KosmicKrisp is only the Vulkan/Metal backend—not a PS4 renderer or CPU runtime.
 
 ## Required porting work
 
@@ -119,3 +123,10 @@ The next blocking work remains: verify the exact SELF segment encryption/compres
 ## CI audit — run #82 (2026-11-02)
 
 Run #82 passed the Ubuntu preflight, selected Xcode 26, and compiled all 434 KosmicKrisp static targets. It then stopped in a shell audit that required the generated command-dispatch archive's _kk_AcquireNextImageKHR reference to be weak. The pinned generated table emitted a binding that did not satisfy that overly strict audit, so XcodeGen, XCTest and IPA packaging were skipped. The audit no longer assumes that the optional generated thunk must be present in that archive; if another object requires it, the final iOS link resolves it, and that link deliberately has no -undefined dynamic_lookup escape hatch. This removes the premature gate; it does not claim that the subsequent app link or runtime has passed.
+
+
+## SpartanPort KosmicKrisp link failure correction — 2026-11-03
+
+Run #104 (`41567466715`, commit `db52913edc4294c3a4742c4caa6b42fe51e4643a`) passed the Mesa/KosmicKrisp source build, XcodeGen and simulator tests, then failed only at the final device link. The linker reported 2,824 undefined symbols from Mesa's generated `wsi_common_entrypoints.c.o`. The `-u` list contained 568 symbols selected from archive definitions and had zero overlap with the unresolved-symbol list; increasing or renaming that force-extraction list could not close the missing dependency graph.
+
+The replacement integration pins the already-consumed PsTJohn dylib by its exact SHA-256, validates arm64/iOS Mach-O metadata before app compilation, and loads it through the same `dlopen`/ICD-entrypoint pattern used by PoPTST. The app bundle must contain `Frameworks/libKosmicKrisp.dylib`; the app executable must not have a duplicate static or dynamic Vulkan link dependency. This correction validates packaging and ICD discovery only; physical-device presentation and PS4 gameplay remain separate milestones.
