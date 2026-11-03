@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Source-contract checks for completed XOWUE reads and APC notification ordering."""
+"""Source-contract checks for MW2-style deferred, APC-backed XOWUE file reads."""
 
 from pathlib import Path
 
@@ -8,14 +8,17 @@ ENGINE = (ROOT / "Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
 DIAGNOSTICS = (ROOT / "iOS/App/XOWUEDiagnostics.swift").read_text(encoding="utf-8")
 WORKFLOW = (ROOT / ".github/workflows/xowue-ios.yml").read_text(encoding="utf-8")
 
+
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise SystemExit(f"FAIL: {message}")
+
 
 def function_body(source: str, start: str, end: str) -> str:
     a = source.index(start)
     b = source.index(end, a)
     return source[a:b]
+
 
 apc = function_body(ENGINE, "struct GuestApc {", "};")
 require("std::function<void()> completion;" in apc,
@@ -31,39 +34,50 @@ delivery = function_body(ENGINE, "bool deliverPendingGuestApcs(", "\n}")
 require("apc.completion()" in delivery,
         "APC delivery must execute deferred I/O completion")
 require(delivery.index("apc.completion()") < delivery.index("findGuestFunction(apc.routine)"),
-        "file transfer must finish before the guest APC normal routine runs")
+        "deferred file transfer must finish before the guest APC routine runs")
 
 read = function_body(ENGINE, "void xowue_NtReadFile(", "\nvoid xowue_NtWriteFile(")
 for token in (
-    "const uint32_t apcRoutine = context.r5.u32 & ~1u;",
+    "const uint32_t apcRoutine = context.r5.u32 & ~3u;",
     "if (apcRoutine != 0u && apcThread)",
-    "std::vector<uint8_t> bounce;",
-    "bounce.resize(length);",
-    "std::memcpy(base + buffer, bounce.data(), bytesRead);",
+    "writeGuestIoStatus(base, ioStatus, kNtStatusPending, 0u);",
+    "auto completion = [performRead, file, base, ioStatus, eventHandle,",
+    "result = performRead(true);",
     "GuestFileCompletionSignalOnReturn completionSignal(file);",
     "GuestEventSignalOnReturn eventSignal(eventHandle);",
-    "result = performRead(true);",
-    "completionSignal.signalNow();",
-    "eventSignal.signalNow();",
-    "queueGuestApc(apcThread, apcRoutine, apcContext, ioStatus, 0u);",
-    "context.r3.u32 = result.status;",
+    "queueGuestApc(apcThread, apcRoutine, apcContext, ioStatus, 0u, std::move(completion));",
+    "context.r3.u32 = kNtStatusPending;",
     "B103_ASYNC_NTREADFILE_SUBMIT",
     "B103_ASYNC_NTREADFILE_COMPLETE",
 ):
-    require(token in read, f"NtReadFile missing required async/bounce-buffer behavior: {token}")
+    require(token in read, f"NtReadFile missing deferred APC/bounce-buffer behavior: {token}")
 
-require(read.index("performRead(true)") < read.index("completionSignal.signalNow()"),
-        "file read must finish before signaling file completion");
-require(read.index("completionSignal.signalNow()") < read.index("eventSignal.signalNow()"),
-        "file completion and final IOSB must precede event signaling");
-require(read.index("eventSignal.signalNow()") < read.index("queueGuestApc(apcThread"),
-        "the event must be signaled before the APC notification is queued");
-require("std::move(completion)" not in read,
-        "APC delivery must not own or defer the file transfer");
-require("if (apcContext != 0u)" not in read,
-        "a null APC context must suppress only the callback");
-require("reinterpret_cast<char *>(base + buffer)" not in read,
-        "NtReadFile must not read host files directly into guest memory")
+async_start = read.index("if (apcRoutine != 0u && apcThread)")
+async_end = read.index("if (apcRoutine != 0u && !apcThread)", async_start)
+async_read = read[async_start:async_end]
+completion_start = async_read.index("auto completion =")
+completion_end = async_read.index("};", completion_start)
+completion_body = async_read[completion_start:completion_end]
+
+require(async_read.index("writeGuestIoStatus(base, ioStatus, kNtStatusPending, 0u);") <
+        async_read.index("queueGuestApc("),
+        "IOSB must report STATUS_PENDING before the APC is queued")
+require("result = performRead(true);" in completion_body,
+        "file transfer must be owned by the deferred APC completion")
+require(completion_body.index("result = performRead(true);") <
+        completion_body.index("completionSignal.signalNow();") <
+        completion_body.index("eventSignal.signalNow();"),
+        "final IOSB and guest buffer must be published before completion signals")
+require(completion_end < async_read.index("queueGuestApc("),
+        "the APC must be queued with the completed deferred-work closure")
+require("std::move(completion)" in async_read,
+        "APC queue must own the deferred transfer closure")
+require("context.r3.u32 = kNtStatusPending;" in async_read,
+        "NtReadFile must return STATUS_PENDING for APC-backed reads")
+
+require("std::vector<uint8_t> bounce;" in read and
+        "std::memcpy(base + buffer, bounce.data(), bytesRead);" in read,
+        "file data must pass through a host bounce buffer into guest memory")
 require("B103_ASYNC_NTREADFILE_" in ENGINE,
         "async read markers must be emitted by the runtime")
 require('event.find("B103_ASYNC_NTREADFILE_")' in ENGINE,
@@ -73,4 +87,20 @@ require("B103_ASYNC_NTREADFILE_" in DIAGNOSTICS and "asyncFileIo" in DIAGNOSTICS
 require("test_xowue_async_file_apc.py" in WORKFLOW,
         "the XOWUE iOS workflow must execute this source-contract test")
 
-print("PASS: XOWUE NtReadFile completes IOSB/event before queuing APC notification, including null APC context.")
+
+
+# User APCs are delivered only by alertable waits, never by IRQL/critical-region transitions.
+irql = function_body(ENGINE, 'if (api == "KfReleaseSpinLock")', 'if (api == "DbgBreakPoint")')
+require("deliverPendingGuestApcs()" not in irql,
+        "lowering IRQL or releasing a spinlock must not deliver user APCs")
+
+leave_critical = function_body(ENGINE, "void xowue_KeLeaveCriticalRegion(", "\nvoid xowue_KeRaiseIrqlToDpcLevel(")
+require("deliverPendingGuestApcs()" not in leave_critical,
+        "leaving a critical region must not deliver user APCs")
+
+delay = function_body(ENGINE, "void xowue_KeDelayExecutionThread(", "\nvoid ")
+require("if ((context.r4.u32 & 0xFFu) != 0u)" in delay and
+        "deliverPendingGuestApcs()" in delay,
+        "KeDelayExecutionThread may deliver user APCs only when alertable")
+
+print("PASS: XOWUE NtReadFile defers transfer, IOSB completion and event signalling until guest APC delivery.")

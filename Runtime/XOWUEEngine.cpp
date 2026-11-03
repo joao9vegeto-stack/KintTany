@@ -4798,7 +4798,7 @@ void xowue_compat_import(const char *name, PPCContext &context, uint8_t *base) {
         if (previousIrql > 2u) throw std::runtime_error("KfReleaseSpinLock received an invalid IRQL");
         const uint32_t oldIrql = g_guestIrql;
         g_guestIrql = previousIrql;
-        if (oldIrql > 1u && g_guestIrql <= 1u) deliverPendingGuestApcs();
+        // Lowering IRQL does not deliver user APCs; they require an alertable wait.
         return;
     }
     if (api == "KfLowerIrql") {
@@ -4807,7 +4807,7 @@ void xowue_compat_import(const char *name, PPCContext &context, uint8_t *base) {
             throw std::runtime_error("KfLowerIrql attempted to raise IRQL or use an invalid level");
         const uint32_t oldIrql = g_guestIrql;
         g_guestIrql = targetIrql;
-        if (oldIrql > 1u && targetIrql <= 1u) deliverPendingGuestApcs();
+        // User APC delivery is reserved for an alertable wait, not KfLowerIrql.
         return;
     }
     if (api == "DbgBreakPoint") {
@@ -7860,7 +7860,7 @@ static uint64_t guestFileOffset(uint8_t *base, uint32_t address,
 void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
     const uint32_t eventHandle = context.r4.u32;
     const uint32_t handle = context.r3.u32;
-    const uint32_t apcRoutine = context.r5.u32 & ~1u;
+    const uint32_t apcRoutine = context.r5.u32 & ~3u;
     const uint32_t apcContext = context.r6.u32;
     const uint32_t ioStatus = context.r7.u32;
     const uint32_t buffer = context.r8.u32;
@@ -8087,13 +8087,11 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
 
     GuestThread *apcThread = activeGuestApcThread();
     if (apcRoutine != 0u && apcThread) {
-        // Match Xenia's Xbox-kernel NtReadFile contract: complete the transfer,
-        // publish the final IO_STATUS_BLOCK and signal the event first; the APC
-        // is only a notification delivered later by the guest alertable-wait path.
-        // Deferring the file transfer itself until APC delivery deadlocks callers
-        // that wait on the event before entering an alertable wait.
-        GuestFileCompletionSignalOnReturn completionSignal(file);
-        GuestEventSignalOnReturn eventSignal(eventHandle);
+        // Match MW2 Recompiled's Xbox-kernel contract: when an APC routine is
+        // supplied, the file transfer is deferred until this guest thread
+        // reaches an alertable wait and the queued APC is actually delivered.
+        // UE3 media readers use this to keep the other half of a double buffer
+        // available while decompression is in progress.
         char submitEvent[512];
         std::snprintf(submitEvent, sizeof(submitEvent),
             "B103_ASYNC_NTREADFILE_SUBMIT call=%llu thread=%u handle=0x%08X path=%s "
@@ -8105,32 +8103,41 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
             static_cast<unsigned long long>(explicitOffset));
         recordRuntimeTrace(submitEvent);
 
-        GuestFileReadResult result{};
-        try {
-            result = performRead(true);
-        } catch (...) {
-            result.status = kNtStatusUnsuccessful;
-            writeGuestIoStatus(base, ioStatus, result.status, 0u);
-            recordRuntimeTrace("B103_ASYNC_NTREADFILE_COMPLETE_EXCEPTION");
-        }
-        completionSignal.signalNow();
-        eventSignal.signalNow();
+        // STATUS_PENDING and a zero Information field are visible immediately;
+        // the final IOSB, guest buffer and event are published by APC delivery.
+        writeGuestIoStatus(base, ioStatus, kNtStatusPending, 0u);
+        auto completion = [performRead, file, base, ioStatus, eventHandle,
+                           b83ReadCall, handle, length, apcRoutine, apcContext]() mutable {
+            GuestFileCompletionSignalOnReturn completionSignal(file);
+            GuestEventSignalOnReturn eventSignal(eventHandle);
+            GuestFileReadResult result{};
+            try {
+                result = performRead(true);
+            } catch (...) {
+                result.status = kNtStatusUnsuccessful;
+                writeGuestIoStatus(base, ioStatus, result.status, 0u);
+                recordRuntimeTrace("B103_ASYNC_NTREADFILE_COMPLETE_EXCEPTION");
+            }
+            // The transfer writes the final IOSB before either completion
+            // object is signalled; then the APC normal routine receives IOSB
+            // as arg1 and may safely consume the newly filled buffer.
+            completionSignal.signalNow();
+            eventSignal.signalNow();
 
-        // APC delivery carries the already-final IOSB pointer as arg1. The
-        // context is opaque and may be null; the presence of apcRoutine controls
-        // whether a notification is queued.
-        queueGuestApc(apcThread, apcRoutine, apcContext, ioStatus, 0u);
-
-        char completeEvent[512];
-        std::snprintf(completeEvent, sizeof(completeEvent),
-            "B103_ASYNC_NTREADFILE_COMPLETE call=%llu thread=%u handle=0x%08X "
-            "offset=0x%016llX bytes=%u requested=%u status=0x%08X "
-            "event=0x%08X apc=0x%08X apc_context=0x%08X",
-            static_cast<unsigned long long>(b83ReadCall), static_cast<uint32_t>(g_currentGuestThreadId),
-            handle, static_cast<unsigned long long>(result.offset), result.bytesRead,
-            length, result.status, eventHandle, apcRoutine, apcContext);
-        recordRuntimeTrace(completeEvent);
-        context.r3.u32 = result.status;
+            char completeEvent[512];
+            std::snprintf(completeEvent, sizeof(completeEvent),
+                "B103_ASYNC_NTREADFILE_COMPLETE call=%llu thread=%u handle=0x%08X "
+                "offset=0x%016llX bytes=%u requested=%u status=0x%08X "
+                "event=0x%08X apc=0x%08X apc_context=0x%08X",
+                static_cast<unsigned long long>(b83ReadCall),
+                static_cast<uint32_t>(g_currentGuestThreadId), handle,
+                static_cast<unsigned long long>(result.offset), result.bytesRead,
+                length, result.status, eventHandle, apcRoutine, apcContext);
+            recordRuntimeTrace(completeEvent);
+        };
+        queueGuestApc(apcThread, apcRoutine, apcContext, ioStatus, 0u, std::move(completion));
+        context.r3.u32 = kNtStatusPending;
+        b83LogRead(kNtStatusPending);
         return;
     }
 
@@ -9117,11 +9124,8 @@ void xowue_KeLeaveCriticalRegion(PPCContext &, uint8_t *base) {
         throw std::runtime_error("KeLeaveCriticalRegion APC disable count overflow");
     const int32_t next = count + 1;
     PPC_STORE_U32(address, static_cast<uint32_t>(next));
-    if (next == 0) {
-        const bool delivered = deliverPendingGuestApcs();
-        recordRuntimeTrace(delivered ? "KeLeaveCriticalRegion delivered queued APCs"
-                                    : "KeLeaveCriticalRegion APC delivery point reached");
-    }
+    if (next == 0)
+        recordRuntimeTrace("KeLeaveCriticalRegion APCs remain queued until an alertable wait");
 }
 
 void xowue_KeRaiseIrqlToDpcLevel(PPCContext &context) {

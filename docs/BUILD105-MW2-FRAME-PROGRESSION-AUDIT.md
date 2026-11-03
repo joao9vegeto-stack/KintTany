@@ -16,7 +16,7 @@ A etapa Build arm64 AOT engine falhou porque o caminho NtReadFile referenciava k
 
 ## Alterações consolidadas
 1. STATUS_PENDING declarado.
-2. NtReadFile publica IOSB e sinaliza evento antes de enfileirar a notificação APC; contexto APC nulo não suprime o callback.
+2. NtReadFile com APC segue o contrato de MW2 Recompiled: publica STATUS_PENDING no IOSB, enfileira a transferência como trabalho de conclusão da APC e só lê/copía os bytes, grava o IOSB final e sinaliza os objetos quando o thread entra em espera alertável e entrega a APC. A rotina recebe o IOSB como argumento 1. A leitura sem APC continua síncrona.
 3. Parser PM4 alinhado aos limites e à semântica de padding/predicação do MW2.
 4. VdSwap segue o layout reservado de 64 dwords, registra endereços/ring e deixa contagem e apresentação ao command processor.
 5. XE_SWAP notifica o backend nativo mesmo sem fetch CPU válido.
@@ -49,3 +49,19 @@ A cobertura total de shaders, texturas e EDRAM só pode ser considerada comprova
 - 1.158 destinos de tabela classificados como alvos locais nativos; zero destinos de tabela não resolvidos.
 - 18 callsites foram ignorados pelo pass genérico porque o trecho não continha o wrapper exato PPC_CALL_INDIRECT_FUNC. Isso não prova ausência de código: o próximo passo agora registra owner, unidade e trecho para distinguir switch/goto nativo já existente de dispatch ainda guardado.
 - Nenhuma continuação cross-function adicional foi necessária neste conjunto (native_continuations=0), pois os destinos verificados estavam dentro dos owners nativos.
+
+
+## Correção de paridade NtReadFile (Build 105.9)
+A comparação direta com `PaulCombal/mw2-recompiled/runtime/kernel/files.cpp` mostrou que o caminho com rotina APC precisa adiar a própria transferência, não apenas a notificação: o jogo mantém um double buffer enquanto descomprime o outro. O runtime agora:
+- remove os bits baixos do ponteiro da rotina APC (`& ~3u`);
+- grava `STATUS_PENDING (0x00000103)` e Information=0 no IOSB na submissão;
+- guarda a leitura por bounce buffer dentro de `GuestApc::completion`;
+- executa a transferência antes da rotina normal da APC na entrega alertável;
+- grava o IOSB final e só então sinaliza a conclusão do arquivo e o evento;
+- mantém o caminho síncrono quando não há rotina APC.
+
+A implementação anterior que completava a leitura e sinalizava o evento no momento da chamada estava fora de paridade com MW2 e foi substituída. O contrato está protegido por `tools/test_xowue_async_file_apc.py`.
+
+
+## User APC delivery parity correction
+MW2 Recompiled delivers queued user APCs only from alertable waits. XOWUE no longer dispatches user APCs merely because `KeLeaveCriticalRegion`, `KfReleaseSpinLock`, or `KfLowerIrql` restored an APC-enabled/lower-IRQL state. The queue remains pending until `Nt/KeWaitFor*` or alertable `KeDelayExecutionThread` reaches its delivery point. This preserves the deferred-media-read/double-buffer contract.
