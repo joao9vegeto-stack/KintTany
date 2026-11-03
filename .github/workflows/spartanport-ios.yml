@@ -108,7 +108,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
             -DCMAKE_INSTALL_PREFIX="$IOS_DEPS/install" \
             -DCMAKE_PREFIX_PATH="$IOS_DEPS/install" \
-            -DCMAKE_C_FLAGS="-I$IOS_DEPS/install/include" -DZYAN_SYSTEM_ZYCORE=ON \
+            -DCMAKE_C_FLAGS="-I$IOS_DEPS/install/include" \
             -DZYDIS_BUILD_TOOLS=OFF -DZYDIS_BUILD_EXAMPLES=OFF -DZYDIS_BUILD_DOXYGEN=OFF
           cmake --build "$IOS_DEPS/zydis" --parallel 6
           cmake --install "$IOS_DEPS/zydis"
