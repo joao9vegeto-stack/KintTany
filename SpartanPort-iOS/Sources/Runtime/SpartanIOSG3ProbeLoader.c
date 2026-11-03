@@ -23,9 +23,6 @@ struct SpartanG3ProbeImage {
 static uint64_t u64(const uint8_t *p) {
     uint64_t v=0; for (unsigned i=0;i<8;i++) v|=(uint64_t)p[i]<<(i*8); return v;
 }
-static uint32_t u32(const uint8_t *p) {
-    return (uint32_t)p[0]|((uint32_t)p[1]<<8)|((uint32_t)p[2]<<16)|((uint32_t)p[3]<<24);
-}
 static void w32(uint8_t *p,uint32_t v) { for(unsigned i=0;i<4;i++) p[i]=(uint8_t)(v>>(i*8)); }
 static void w64(uint8_t *p,uint64_t v) { for(unsigned i=0;i<8;i++) p[i]=(uint8_t)(v>>(i*8)); }
 static int range(uint64_t at,uint64_t n,uint64_t limit) { return at<=limit && n<=limit-at; }
