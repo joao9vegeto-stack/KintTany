@@ -7,3 +7,6 @@ void AsuraIOSShowLauncher(std::string detected, std::function<std::string()> res
                           std::function<void(std::string)> start);
 std::string AsuraIOSWaitForGameSelection(std::string detected,
                                          std::function<std::string()> rescan);
+
+void AsuraIOSDismissLauncher();
+void AsuraIOSSetLauncherStatus(const std::string& message);

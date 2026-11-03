@@ -39,6 +39,9 @@ jobs:
           cp -R ios upstream/ios
           python3 upstream/ios/prepare_ios.py
           python3 ios/launcher_patch.py
+          grep -q "ASURA_IOS_PLATFORM_MACROS_V1" upstream/tools/rexglue/include/rex/platform.h
+          printf '#include <rex/platform.h>\n#if !REX_PLATFORM_IOS\n#error iOS platform macro is not active\n#endif\n#if !REX_PLATFORM_MAC\n#error Metal surface platform macro is not active\n#endif\n' | xcrun --sdk iphoneos clang++ -target "arm64-apple-ios${IOS_DEPLOYMENT_TARGET}" -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" -I upstream/tools/rexglue/include -x c++ -fsyntax-only -
+          echo "ASURA_IOS_PLATFORM_MACROS_COMPILE_CHECK_OK"
           python3 - <<'PY'
           from pathlib import Path
           import sys
@@ -86,6 +89,11 @@ jobs:
           grep -q "LAUNCHER_WINDOW_ATTACHED_TO_FOREGROUND_SCENE" ios/asura_ios_native.mm
           grep -q "APP_LAUNCH_GATE_WAITING_FOR_PLAY" ios/asura_ios_native.mm
           grep -q "APP_LAUNCH_GATE_PLAY_ACCEPTED" ios/asura_ios_native.mm
+          grep -q "AsuraIOSDismissLauncher" ios/asura_ios_native.mm
+          grep -q "AsuraIOSSetLauncherStatus" ios/asura_ios_native.mm
+          grep -q "ASURA_IOS_VULKAN_ICD_BRIDGE_LOADER_PATCH_OK" ios/launcher_patch.py
+          grep -q "ASURA_IOS_VULKAN_ICD_BUNDLE_PATH_V1_OK" ios/launcher_patch.py
+          grep -q "ASURA_IOS_REXAPP_PRESENTATION_DIAGNOSTICS_V1" ios/launcher_patch.py
           ! grep -q "LAUNCHER_WINDOW_MODE_LEGACY_FALLBACK" ios/asura_ios_native.mm
           BUILD_NUMBER=$(cat ios/BUILD_NUMBER)
           [[ "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]
@@ -242,6 +250,9 @@ jobs:
           cp "$SDK_DYLIB_DIR/librexruntime.dylib" "$APP/Frameworks/"
           cp "$SDK_DYLIB_DIR/librexgpu-xenos.dylib" "$APP/"
           cp upstream/build-ios/kosmickrisp/libvulkan_kosmickrisp.dylib "$APP/Frameworks/"
+          xcrun --sdk iphoneos clang -target "arm64-apple-ios${IOS_DEPLOYMENT_TARGET}" -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" -dynamiclib -O2 -fvisibility=hidden ios/Native/asura_vulkan_icd_bridge.c -o "$APP/Frameworks/libvulkan.dylib" -Wl,-install_name,@rpath/libvulkan.dylib
+          nm -gU "$APP/Frameworks/libvulkan.dylib" | grep -q "_vkGetInstanceProcAddr"
+          echo "ASURA_IOS_KOSMICKRISP_ICD_BRIDGE_OK"
           rsvg-convert -w 1024 -h 1024 ios/icons/AppIcon.svg > "$APP/AppIcon-1024.png"
           sips -z 120 120 "$APP/AppIcon-1024.png" --out "$APP/AppIcon-60@2x.png" >/dev/null
           sips -z 180 180 "$APP/AppIcon-1024.png" --out "$APP/AppIcon-60@3x.png" >/dev/null
@@ -250,7 +261,7 @@ jobs:
 
           # Remove every build-machine LC_RPATH from the executable and dylibs.
           # The final app uses only paths relative to its own bundle.
-          for image in "$APP/asura_wrath_recomp" "$APP/Frameworks/librexruntime.dylib" "$APP/librexgpu-xenos.dylib" "$APP/Frameworks/libvulkan_kosmickrisp.dylib"; do
+          for image in "$APP/asura_wrath_recomp" "$APP/Frameworks/librexruntime.dylib" "$APP/librexgpu-xenos.dylib" "$APP/Frameworks/libvulkan_kosmickrisp.dylib" "$APP/Frameworks/libvulkan.dylib"; do
             while IFS= read -r rpath; do
               [[ -z "$rpath" ]] && continue
               if [[ "$rpath" == /* || "$rpath" == *:* ]]; then
@@ -307,10 +318,16 @@ jobs:
           lipo "$APP/Frameworks/librexruntime.dylib" -verify_arch arm64
           lipo "$APP/librexgpu-xenos.dylib" -verify_arch arm64
           lipo "$APP/Frameworks/libvulkan_kosmickrisp.dylib" -verify_arch arm64
+          lipo "$APP/Frameworks/libvulkan.dylib" -verify_arch arm64
+          for image in "$APP/asura_wrath_recomp" "$APP/Frameworks/librexruntime.dylib" "$APP/librexgpu-xenos.dylib" "$APP/Frameworks/libvulkan_kosmickrisp.dylib" "$APP/Frameworks/libvulkan.dylib"; do
+            xcrun vtool -show-build "$image" | grep -q "platform IOS"
+          done
+          echo "ASURA_IOS_ALL_MACHO_IOS_PLATFORM_OK"
           plutil -lint "$APP/Info.plist"
           /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP/Info.plist" | grep -qx "asura_wrath_recomp"
           test -x "$APP/asura_wrath_recomp"
           test -f "$APP/Frameworks/libvulkan_kosmickrisp.dylib"
+          test -f "$APP/Frameworks/libvulkan.dylib"
           mkdir -p Payload artifacts
           cp -R "$APP" Payload/AsurasWrath.app
           IPA_PATH="artifacts/AsurasWrath-iOS-Build-${BUILD_NUMBER}.ipa"

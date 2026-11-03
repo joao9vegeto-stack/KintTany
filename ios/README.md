@@ -27,3 +27,12 @@ construct ReXApp or start the guest runtime. Tapping Play completes the factory
 gate, injects the selected folder through `OnConfigurePaths`, and only then
 continues the existing ReXApp startup. The old `OnFinalizePaths` launcher was
 removed because it ran after presentation initialization.
+
+
+## Build 9 — Vulkan iOS ICD bridge and launcher sizing
+
+Build 9 adds the iOS Vulkan loader shim used to forward `vkGetInstanceProcAddr`
+to the bundled KosmicKrisp ICD, disables macOS-only Vulkan loader discovery on
+iOS, and verifies that all packaged Mach-O images target iOS ARM64. The native
+launcher now uses a bounded, scrollable layout, abbreviated folder display,
+and remains visible until `OnPostSetup` confirms that the runtime has loaded.
