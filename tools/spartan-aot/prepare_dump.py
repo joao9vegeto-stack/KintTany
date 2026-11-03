@@ -76,6 +76,40 @@ def copy_canonical(source: Path, target: Path) -> Path:
         raise ValueError(f"SHA-256 diverge após posicionar {source.name}")
     return target
 
+def normalize_resource_root(game: Path) -> dict:
+    """Normalize an optional dvdroot_ps4 folder without fabricating game resources."""
+    target = game / "dvdroot_ps4"
+    candidates = [p for p in game.rglob("*") if p.is_dir()
+                  and p.name.lower() == "dvdroot_ps4" and p.resolve() != target.resolve()]
+    if target.is_dir():
+        candidates = [p for p in candidates if p.resolve() != target.resolve()]
+    if len(candidates) > 1:
+        raise ValueError("Mais de um diretório dvdroot_ps4 encontrado no ZIP: " +
+                         ", ".join(str(p.relative_to(game)) for p in candidates))
+    if candidates:
+        source = candidates[0]
+        target.mkdir(parents=True, exist_ok=True)
+        for child in source.iterdir():
+            destination = target / child.name
+            if destination.exists():
+                raise ValueError(f"Conflito ao normalizar recursos: {destination}")
+            if child.is_dir():
+                shutil.copytree(child, destination)
+            else:
+                shutil.copy2(child, destination)
+        if source != target:
+            shutil.rmtree(source)
+    else:
+        target.mkdir(parents=True, exist_ok=True)
+    files = [p for p in target.rglob("*") if p.is_file()]
+    return {
+        "path": "game/dvdroot_ps4",
+        "present_in_archive": bool(files),
+        "file_count": len(files),
+        "bytes": sum(p.stat().st_size for p in files),
+        "status": "resources staged" if files else "no dvdroot resources supplied; AOT preparation can proceed, runtime content remains incomplete",
+    }
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--eboot", required=True)
@@ -97,7 +131,6 @@ def main() -> None:
         raise ValueError("param.sfo sem magic PSF")
     param_target = copy_canonical(param_source, game / "sce_sys" / "param.sfo")
 
-    # gow3-macos-arm64/scripts/prepare.py and link_modules.py open these exact paths.
     module_records = []
     for name in ("libc.prx", "libSceFios2.prx"):
         source = unique_file(game, name)
@@ -110,8 +143,8 @@ def main() -> None:
 
     eboot_target = copy_canonical(eboot, game / "eboot.bin")
     eboot_record = validate_self(eboot_target)
+    resources = normalize_resource_root(game)
 
-    # Fail here, not deep in upstream code, if its required module/resource layout is absent.
     required = [game / "sce_module" / "libc.prx",
                 game / "sce_module" / "libSceFios2.prx",
                 game / "sce_sys" / "param.sfo",
@@ -125,8 +158,9 @@ def main() -> None:
         "assets_zip": {"path": str(archive), "bytes": archive.stat().st_size, "sha256": digest(archive)},
         "validated_modules": module_records,
         "param_sfo": str(param_target.relative_to(output)),
+        "resource_root": resources,
         "required_paths_verified": [str(p.relative_to(output)) for p in required],
-        "staging_policy": "Original SELF bytes preserved; modules copied to exact upstream sce_module paths and SHA-256 verified.",
+        "staging_policy": "Original SELF bytes preserved; modules copied to exact upstream sce_module paths and SHA-256 verified. Resource directory normalized only when supplied; no game data is fabricated.",
     }
     (output / "input-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(json.dumps(manifest, indent=2))
