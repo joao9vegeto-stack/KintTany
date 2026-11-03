@@ -64,17 +64,28 @@ jobs:
               raise SystemExit(f"expected exactly one OnPostSetup override, found {len(hooks)}")
           if 'AsuraIOSLog("HOOK OnPostSetup");' not in generated:
               raise SystemExit("original OnPostSetup hook was not instrumented")
-          if generated.count("OnFinalizePaths(") != 1:
-              raise SystemExit("expected exactly one OnFinalizePaths override")
-          print("ASURA_IOS_GENERATED_HOOKS_PREFLIGHT_OK")
+          if "ASURA_IOS_PLAY_GATE_V1" not in generated:
+              raise SystemExit("pre-ReXApp Play gate marker is missing")
+          if "AsuraIOSWaitForGameSelection" not in generated:
+              raise SystemExit("ReXApp factory does not wait for Play")
+          if "OnFinalizePaths(" in generated:
+              raise SystemExit("legacy post-presentation launcher remains")
+          if generated.count("void OnConfigurePaths(rex::PathConfig &paths) override") != 1:
+              raise SystemExit("selected path is not injected into the path hook")
+          if generated.find("AsuraIOSWaitForGameSelection") > generated.find("new AsurawrathApp"):
+              raise SystemExit("ReXApp is constructed before Play")
+          print("ASURA_IOS_PRE_REXAPP_PLAY_GATE_PREFLIGHT_OK")
           PY
-          grep -q "ASURA_IOS_NATIVE_LAUNCHER_V4" upstream/src/asurawrath_app.h
-          grep -q "OnFinalizePaths" upstream/src/asurawrath_app.h
+          grep -q "ASURA_IOS_PLAY_GATE_V1" upstream/src/asurawrath_app.h
+          grep -q "AsuraIOSWaitForGameSelection" upstream/src/asurawrath_app.h
+          ! grep -q "OnFinalizePaths" upstream/src/asurawrath_app.h
           ! grep -q "dispatch_semaphore_wait(asura_choice_ready" upstream/src/asurawrath_app.h
           grep -q "PROCESS_START" ios/asura_ios_native.mm
           grep -q "FATAL SIGNAL SIGSEGV" ios/asura_ios_native.mm
           grep -q "LAUNCHER_SCENE_WAIT" ios/asura_ios_native.mm
           grep -q "LAUNCHER_WINDOW_ATTACHED_TO_FOREGROUND_SCENE" ios/asura_ios_native.mm
+          grep -q "APP_LAUNCH_GATE_WAITING_FOR_PLAY" ios/asura_ios_native.mm
+          grep -q "APP_LAUNCH_GATE_PLAY_ACCEPTED" ios/asura_ios_native.mm
           ! grep -q "LAUNCHER_WINDOW_MODE_LEGACY_FALLBACK" ios/asura_ios_native.mm
           BUILD_NUMBER=$(cat ios/BUILD_NUMBER)
           [[ "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]

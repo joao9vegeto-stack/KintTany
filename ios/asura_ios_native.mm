@@ -1,10 +1,12 @@
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <CoreFoundation/CoreFoundation.h>
 #include <unistd.h>
 #include "asura_ios_native.h"
 #include <fstream>
 #include <mutex>
+#include <condition_variable>
 #include <ctime>
 #include <cstdlib>
 #include <exception>
@@ -80,12 +82,13 @@ void AsuraIOSShowLauncher(std::string p,std::function<std::string()>scan,std::fu
    if(!scene) {
     ++(*attempts);
     log_line2("LAUNCHER_SCENE_WAIT attempt="+std::to_string(*attempts));
-    if(*attempts<40) {
-     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(250 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{ (*present)(); });
-    } else {
-     log_line2("LAUNCHER_SCENE_UNAVAILABLE_TIMEOUT");
-     *present = nullptr;
+    if(*attempts>=240) {
+     log_line2("LAUNCHER_SCENE_WAIT_RETRY");
+     *attempts=0;
     }
+    // Keep retrying until UIKit has a foreground scene. Returning an empty
+    // app from the factory would make the SDL entry point dereference nullptr.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(250 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{ if (*present) (*present)(); });
     return;
    }
    for(UIWindow* w in scene.windows) if(w.isKeyWindow){prior_window2=w;break;}
@@ -100,5 +103,28 @@ void AsuraIOSShowLauncher(std::string p,std::function<std::string()>scan,std::fu
   });
  };
  (*present)();
+}
+std::string AsuraIOSWaitForGameSelection(std::string detected, std::function<std::string()> rescan) {
+ struct GateState { std::mutex mutex; std::condition_variable changed; bool completed=false; std::string selected; };
+ auto gate=std::make_shared<GateState>();
+ AsuraIOSLog("APP_LAUNCH_GATE_WAITING_FOR_PLAY");
+ AsuraIOSShowLauncher(std::move(detected), std::move(rescan), [gate](std::string selected) {
+  { std::lock_guard<std::mutex> lock(gate->mutex); gate->selected=std::move(selected); gate->completed=true; }
+  gate->changed.notify_all();
+ });
+ if ([NSThread isMainThread]) {
+  // Keep UIKit/UIScene callbacks and launcher button actions running while the
+  // factory waits. A blocking semaphore on the main thread would deadlock UI.
+  for (;;) {
+   { std::lock_guard<std::mutex> lock(gate->mutex); if (gate->completed) break; }
+   CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
+  }
+ } else {
+  std::unique_lock<std::mutex> lock(gate->mutex);
+  gate->changed.wait(lock, [&] { return gate->completed; });
+ }
+ std::lock_guard<std::mutex> lock(gate->mutex);
+ AsuraIOSLog("APP_LAUNCH_GATE_PLAY_ACCEPTED " + gate->selected);
+ return gate->selected;
 }
 __attribute__((constructor))static void AsuraIOSBootLog2(){init_log2();}
