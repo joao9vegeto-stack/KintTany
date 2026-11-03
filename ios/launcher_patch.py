@@ -61,7 +61,7 @@ code=r"""
 #endif
 namespace {
 std::filesystem::path ResolveAsuraGameRoot(const std::filesystem::path&p){std::error_code ec;if(p.empty()||!std::filesystem::is_directory(p,ec))return {};if(std::filesystem::is_regular_file(p/"default.xex",ec))return p;if(std::filesystem::is_regular_file(p/"BCGame"/"default.xex",ec))return p/"BCGame";if(std::filesystem::is_regular_file(p/"extracted"/"default.xex",ec))return p/"extracted";if(std::filesystem::is_regular_file(p/"extracted"/"BCGame"/"default.xex",ec))return p/"extracted"/"BCGame";return {};}
-std::filesystem::path FindAsuraGameRoot(const rex::PathConfig&paths){auto docs=std::filesystem::path(AsuraIOSDocumentsPath());auto user=paths.user_data_root;auto bundle=rex::filesystem::GetExecutableFolder();std::vector<std::filesystem::path>roots={paths.game_data_root,docs,docs/"Asura's Wrath",docs/"AsurasWrath",docs/"Asura",docs/"Game",docs/"Games",user,user/"Asura's Wrath",bundle,bundle/"Asura's Wrath",bundle.parent_path(),std::filesystem::current_path()};for(const auto&p:roots){auto f=ResolveAsuraGameRoot(p);if(!f.empty())return f;}std::error_code ec;for(const auto&p:{docs,user})if(!p.empty()&&std::filesystem::is_directory(p,ec))for(std::filesystem::directory_iterator i(p,ec),e;i!=e&&!ec;i.increment(ec))if(i->is_directory(ec)){auto f=ResolveAsuraGameRoot(i->path());if(!f.empty())return f;}return {};}
+std::filesystem::path FindAsuraGameRoot(const rex::PathConfig&paths){auto docs=std::filesystem::path(AsuraIOSDocumentsPath());auto user=paths.user_data_root;auto bundle=rex::GetExecutableFolder();std::vector<std::filesystem::path>roots={paths.game_data_root,docs,docs/"Asura's Wrath",docs/"AsurasWrath",docs/"Asura",docs/"Game",docs/"Games",user,user/"Asura's Wrath",bundle,bundle/"Asura's Wrath",bundle.parent_path(),std::filesystem::current_path()};for(const auto&p:roots){auto f=ResolveAsuraGameRoot(p);if(!f.empty())return f;}std::error_code ec;for(const auto&p:{docs,user})if(!p.empty()&&std::filesystem::is_directory(p,ec))for(std::filesystem::directory_iterator i(p,ec),e;i!=e&&!ec;i.increment(ec))if(i->is_directory(ec)){auto f=ResolveAsuraGameRoot(i->path());if(!f.empty())return f;}return {};}
 std::filesystem::path FindAsuraGameRootForLauncher(){auto docs=std::filesystem::path(AsuraIOSDocumentsPath());std::vector<std::filesystem::path>roots={docs,docs/"Asura's Wrath",docs/"AsurasWrath",docs/"Asura",docs/"Game",docs/"Games"};for(const auto&p:roots){auto f=ResolveAsuraGameRoot(p);if(!f.empty())return f;}std::error_code ec;if(std::filesystem::is_directory(docs,ec))for(std::filesystem::directory_iterator i(docs,ec),e;i!=e&&!ec;i.increment(ec))if(i->is_directory(ec)){auto f=ResolveAsuraGameRoot(i->path());if(!f.empty())return f;}return {};}
 std::string g_asura_ios_selected_game_root;
 // First guest-frame readiness is tracked by the native iOS host.
@@ -134,7 +134,7 @@ ios_loader_anchor = """  if (!loader_loaded) {
     loader_loaded = vulkan_instance->loader_.Load(platform::lib_names::kVulkanLoader);
   }"""
 ios_loader_replacement = """#if REX_PLATFORM_IOS
-  const auto ios_loader_path = rex::filesystem::GetExecutableFolder() / "Frameworks" / "libvulkan.dylib";
+  const auto ios_loader_path = rex::GetExecutableFolder() / "Frameworks" / "libvulkan.dylib";
   loader_loaded = vulkan_instance->loader_.Load(ios_loader_path);
   if (loader_loaded) {
     REXLOG_INFO("Loaded bundled iOS Vulkan ICD bridge from {}", ios_loader_path.string());
@@ -249,10 +249,10 @@ if presenter_marker not in presenter_text:
     if presenter_text.count(metal_anchor) != 1:
         raise SystemExit("unexpected Metal surface creation call")
     presenter_text = presenter_text.replace(metal_anchor, metal_replacement, 1)
-    swap_anchor = '''      paint_context_.swapchain = PaintContext::CreateSwapchainForVulkanSurface(
-          vulkan_device_, paint_context_.vulkan_surface, new_surface_width, new_surface_height,
-          VK_NULL_HANDLE, paint_context_.present_queue_family, new_swapchain_format,
-          paint_context_.swapchain_extent, paint_context_.swapchain_is_fifo, surface_unusable);'''
+    swap_anchor = '''    paint_context_.swapchain = PaintContext::CreateSwapchainForVulkanSurface(
+        vulkan_device_, paint_context_.vulkan_surface, new_surface_width, new_surface_height,
+        VK_NULL_HANDLE, paint_context_.present_queue_family, new_swapchain_format,
+        paint_context_.swapchain_extent, paint_context_.swapchain_is_fifo, surface_unusable);'''
     swap_replacement = swap_anchor + '''
 #if REX_PLATFORM_IOS
       AsuraIOSLog("VULKAN_SWAPCHAIN_CREATE_RESULT=" +
