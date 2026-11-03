@@ -100,6 +100,17 @@ assert 'elseif(APPLE)\n    set(REXUI_PLATFORM_SOURCES' in ui_text
 ui.write_text(ui_text.replace('elseif(APPLE)\n    set(REXUI_PLATFORM_SOURCES',
                               'elseif(APPLE)\n    set(REXUI_PLATFORM_SOURCES', 1))
 
+# ASURA_IOS_METAL_SURFACE_COMPILE_DEFINE_V1: make VK_EXT_metal_surface
+# visible to ReXGlue's Vulkan instance and presenter translation units.
+if "ASURA_IOS_METAL_SURFACE_COMPILE_DEFINE_V1" not in ui_text:
+    ui_text += """
+# ASURA_IOS_METAL_SURFACE_COMPILE_DEFINE_V1
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    target_compile_definitions(rexui PRIVATE VK_USE_PLATFORM_METAL_EXT=1)
+endif()
+"""
+    ui.write_text(ui_text)
+
 # The bundled Vulkan-Loader derives SYSTEM_PROCESSOR from
 # CMAKE_SYSTEM_PROCESSOR. CMake's iOS/Xcode toolchain can leave that empty
 # even with CMAKE_OSX_ARCHITECTURES=arm64, which makes its unquoted
