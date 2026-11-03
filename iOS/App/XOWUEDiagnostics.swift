@@ -87,7 +87,7 @@ enum XOWUEDiagnostics {
         let important = ["B83_", "B84_", "B85_", "B86_", "AOT_PROGRESS", "HOT_FN_CODE",
                          "THREAD_DUMP", "XENOS_", "PM4_", "SWAP_", "WAIT_", "VBLANK",
                          "GRAPHICS_INTERRUPT", "B90_STREAM_", "B92_XXX_INTEGRITY",
-                         "B92_BIK_INTEGRITY", "XOWUE_B92_QPC_", "XOWUE_USER_EXIT",
+                         "B92_BIK_INTEGRITY", "XOWUE_B92_QPC_", "B95_SYNC_", "B97_", "B98_", "B99_", "XOWUE_USER_EXIT",
                          "runtime.stop", "BOOT_", "CRASH ", "runtime.native_return"]
         if important.contains(where: { message.contains($0) }) {
             refreshCompactSummaryLocked(diagnosticURL: url)
@@ -143,6 +143,13 @@ enum XOWUEDiagnostics {
         let progress = Array(lines.filter {
             $0.contains("AOT_PROGRESS") || $0.contains("HOT_FN_CODE")
         }.suffix(12))
+        let eventWaits = Array(lines.filter {
+            $0.contains("B95_SYNC_") || $0.contains("B98_WAIT_") || $0.contains("B98_EVENT_") || $0.contains("B98_TIMER_")
+        }.suffix(96))
+        let eventCompletions = Array(lines.filter { $0.contains("B99_EVENT_") || $0.contains("B99_FILE_COMPLETION") }.suffix(48))
+        let movieFlow = Array(lines.filter {
+            $0.contains("B97_MOVIE_") || $0.contains("B97_XENOS_SWAP_DECODE")
+        }.suffix(48))
         let xxxIntegrity = Array(lines.filter { $0.contains("B92_XXX_INTEGRITY") }.suffix(16))
         let bikIntegrity = Array(lines.filter { $0.contains("B92_BIK_INTEGRITY") }.suffix(16))
         let qpcCaller = Array(lines.filter { $0.contains("XOWUE_B92_QPC_") }.suffix(24))
@@ -154,7 +161,7 @@ enum XOWUEDiagnostics {
             "XOWUE_BUILD_SUMMARY build=\(buildNumber) source=\(diagnosticFilename)",
             "DIAGNOSTIC_BYTES=\(data.count)",
             "CURRENT_BUILD_EVIDENCE_BEGIN"
-        ] + boot + progress + qpcCaller + xxxIntegrity + bikIntegrity + cancellation +
+        ] + boot + eventWaits + eventCompletions + movieFlow + progress + qpcCaller + xxxIntegrity + bikIntegrity + cancellation +
             b84 + b83 + b85 + streamState + streamAnomaly + streamObject + streamTable +
             streamRecent + legacyStream + legacyWaits + media + waits + gpu +
             streamTransition + streamWait + streamWaitAnomaly + fileReads +

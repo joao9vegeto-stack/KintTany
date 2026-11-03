@@ -128,6 +128,7 @@ constexpr uint32_t kFirstGuestEventObjectAddress = 0x7E000000u;
 constexpr uint32_t kLastGuestEventObjectAddress = 0x7F000000u;
 constexpr uint32_t kGuestEventObjectStride = 0x1000u;
 constexpr uint32_t kNtStatusTimeout = 0x00000102u;
+constexpr uint32_t kNtStatusTimerResumeIgnored = 0x40000025u;
 constexpr uint32_t kNtStatusCancelled = 0xC0000120u;
 constexpr uint32_t kNtStatusAbandonedWait0 = 0x00000080u;
 constexpr uint32_t kNtStatusWait0 = 0x00000000u;
@@ -203,6 +204,7 @@ struct GuestCommit {
     uint32_t size;
     uint32_t protection;
 };
+struct GuestThread;
 struct GuestWaitable {
     enum class Kind { Event, Thread, Semaphore, Mutant, Timer };
     Kind kind = Kind::Event;
@@ -215,6 +217,10 @@ struct GuestWaitable {
     uint32_t ownerThread = 0u;
     uint32_t recursion = 0u;
     uint64_t timerGeneration = 0u;
+    bool timerArmed = false;
+    uint32_t timerApcRoutine = 0u;
+    uint32_t timerApcContext = 0u;
+    std::weak_ptr<GuestThread> timerApcThread;
     uint64_t pulseGeneration = 0u;
     uint64_t signalGeneration = 0u;
     uint32_t unconsumedSignals = 0u;
@@ -395,6 +401,7 @@ std::array<std::atomic<bool>, 8> g_b97MoviePpcDumped{};
 std::atomic<uint32_t> g_b98WaitTargetLogs{0u};
 std::atomic<uint32_t> g_b98WaitResultLogs{0u};
 std::atomic<uint32_t> g_b98SignalAttemptLogs{0u};
+std::atomic<uint32_t> g_b98TimerFireLogs{0u};
 std::atomic<uint32_t> g_syncObjectRejectLogs{0u};
 std::mutex g_tlsMutex;
 std::mutex g_virtualMemoryMutex;
@@ -459,6 +466,20 @@ std::vector<std::shared_ptr<GuestThread>> snapshotAllGuestThreads() {
 
 bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     if (event.find("B97_") != std::string::npos) return true;
+    // Keep the exact event lifetime and wait transitions that decide whether
+    // asynchronous movie/file work can unblock its guest consumer.
+    if (event.find("B98_") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 256u;
+    }
+    if (event.find("B99_") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 256u;
+    }
+    if (event.find("B95_SYNC_") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 1024u;
+    }
     // Preserve only the first 200 records from each legacy high-volume family.
     if (event.find("B83_") != std::string::npos)
         return g_runtimeTracePersistB83.fetch_add(1, std::memory_order_relaxed) < 200u;
@@ -957,8 +978,21 @@ void queueGuestApc(GuestThread *thread, uint32_t routine, uint32_t apcContext,
     notifyGuestWaiters();
 }
 
+std::shared_ptr<GuestThread> retainCurrentGuestThread() {
+    if (!g_currentGuestThread) return g_mainGuestThread;
+    std::lock_guard<std::mutex> lock(g_guestThreadMutex);
+    for (const auto &thread : g_guestThreads) {
+        if (thread && thread.get() == g_currentGuestThread) return thread;
+    }
+    return {};
+}
+
+GuestThread *activeGuestApcThread() {
+    return g_currentGuestThread ? g_currentGuestThread : g_mainGuestThread.get();
+}
+
 bool guestApcCanInterruptWait() {
-    GuestThread *thread = g_currentGuestThread;
+    GuestThread *thread = activeGuestApcThread();
     const auto memory = g_activeGuestMemory.lock();
     uint8_t *base = memory ? memory->base : nullptr;
     if (!thread || g_guestIrql > 1u || !base ||
@@ -972,7 +1006,7 @@ bool guestApcCanInterruptWait() {
 }
 
 bool deliverPendingGuestApcs() {
-    GuestThread *thread = g_currentGuestThread;
+    GuestThread *thread = activeGuestApcThread();
     const auto memory = g_activeGuestMemory.lock();
     uint8_t *base = memory ? memory->base : nullptr;
     if (!thread || g_guestIrql > 1u || !base ||
@@ -1204,7 +1238,20 @@ static void markGuestWaitableSignaledLocked(const std::shared_ptr<GuestWaitable>
     if (waitable->unconsumedSignals == 0u) ++waitable->unconsumedSignals;
     waitable->signalCount.fetch_add(1u, std::memory_order_relaxed);
     syncGuestDispatcherSignalState(waitable);
-    if (waitable->handle == 0x115u) recordRuntimeTrace("B97_SIGNAL_TARGET handle=0x00000115 tid=" + std::to_string(g_currentGuestThreadId) + " creator_lr=" + std::to_string(waitable->creatorLr) + " generation=" + std::to_string(waitable->signalGeneration));
+    if (waitable->handle == 0x115u) {
+        char target[256];
+        std::snprintf(target, sizeof(target),
+            "B99_EVENT_SIGNAL_TARGET handle=0x00000115 tid=%u object=0x%08X creator_tid=%u creator_lr=0x%08X generation=%llu",
+            g_currentGuestThreadId, waitable->objectAddress, waitable->creatorTid,
+            waitable->creatorLr, static_cast<unsigned long long>(waitable->signalGeneration));
+        recordRuntimeTrace(target);
+        // Retain the established Build 97 marker for existing source-contract
+        // tests and older log parsers while adding the richer Build 99 record.
+        recordRuntimeTrace("B97_SIGNAL_TARGET handle=0x00000115 tid=" +
+            std::to_string(g_currentGuestThreadId) + " creator_lr=" +
+            std::to_string(waitable->creatorLr) + " generation=" +
+            std::to_string(waitable->signalGeneration));
+    }
     const uint32_t sequence = g_b95SyncSignalLogs.fetch_add(1u, std::memory_order_relaxed);
     if (sequence < 512u) {
         char event[288];
@@ -1237,17 +1284,21 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
     if (b98WaitSample != 0u &&
         (b98WaitSample <= 16u || (b98WaitSample % 256u) == 0u)) {
         char target[384];
+        const auto timerApcThread = waitable->timerApcThread.lock();
         std::snprintf(target, sizeof(target),
             "B98_WAIT_BEGIN sample=%u handle=0x00000115 tid=%u lr=0x%08X object=0x%08X kind=%u "
             "signaled=%u pending=%u generation=%llu creator_tid=%u creator_lr=0x%08X "
-            "manual=%u wait_count=%u",
+            "manual=%u wait_count=%u timer_gen=%llu apc=0x%08X apc_context=0x%08X apc_target=%u alertable=%u",
             b98WaitSample, g_currentGuestThreadId, currentLr, waitable->objectAddress,
             static_cast<unsigned>(waitable->kind), waitable->signaled ? 1u : 0u,
             waitable->unconsumedSignals,
             static_cast<unsigned long long>(waitable->signalGeneration),
             waitable->creatorTid, waitable->creatorLr,
             waitable->manualReset ? 1u : 0u,
-            waitable->waitCount.load(std::memory_order_relaxed));
+            waitable->waitCount.load(std::memory_order_relaxed),
+            static_cast<unsigned long long>(waitable->timerGeneration),
+            waitable->timerApcRoutine, waitable->timerApcContext,
+            timerApcThread ? timerApcThread->id : 0u, alertable ? 1u : 0u);
         recordRuntimeTrace(target);
     }
     if (waitSequence < 512u) {
@@ -1545,14 +1596,42 @@ void signalGuestEventHandle(uint32_t handle) {
 }
 
 struct GuestEventSignalOnReturn final {
-    explicit GuestEventSignalOnReturn(uint32_t eventHandle) : handle(eventHandle) {}
+    // An NT I/O request owns a reference to its event from submission until
+    // completion. NtClose may remove the numeric handle while the operation is
+    // still in flight; resolving the handle again at completion would then
+    // silently lose the completion signal and strand the waiting guest thread.
+    explicit GuestEventSignalOnReturn(uint32_t eventHandle)
+        : handle(eventHandle),
+          waitable(eventHandle != 0u ? lookupGuestWaitable(eventHandle) : nullptr) {}
     void signalNow() {
         if (signaled) return;
         signaled = true;
-        signalGuestEventHandle(handle);
+        if (!waitable || waitable->kind != GuestWaitable::Kind::Event) {
+            if (handle == 0x00000115u) {
+                recordRuntimeTrace("B99_EVENT_COMPLETION_MISSING handle=0x00000115 captured=0 kind=invalid");
+            }
+            return;
+        }
+        signalGuestWaitable(waitable);
+        if (handle == 0x00000115u) {
+            uint64_t generation = 0u;
+            uint32_t pending = 0u;
+            {
+                std::lock_guard<std::mutex> lock(waitable->mutex);
+                generation = waitable->signalGeneration;
+                pending = waitable->unconsumedSignals;
+            }
+            char event[256];
+            std::snprintf(event, sizeof(event),
+                "B99_EVENT_COMPLETION_SIGNAL handle=0x00000115 object=0x%08X generation=%llu pending=%u creator_tid=%u creator_lr=0x%08X",
+                waitable->objectAddress, static_cast<unsigned long long>(generation),
+                pending, waitable->creatorTid, waitable->creatorLr);
+            recordRuntimeTrace(event);
+        }
     }
     ~GuestEventSignalOnReturn() { signalNow(); }
     uint32_t handle;
+    std::shared_ptr<GuestWaitable> waitable;
     bool signaled = false;
 };
 
@@ -8418,6 +8497,8 @@ void xowue_NtCreateTimer(PPCContext &context, uint8_t *base) {
     timer->kind = GuestWaitable::Kind::Timer; timer->handle = handle;
     timer->objectAddress = object; timer->manualReset = timerType == 0u;
     timer->signaled = false;
+    timer->creatorLr = static_cast<uint32_t>(context.lr);
+    timer->creatorTid = g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId;
     {
         std::lock_guard<std::mutex> lock(g_guestObjectMutex);
         g_guestWaitables[handle] = timer; g_guestWaitables[object] = timer;
@@ -8426,23 +8507,37 @@ void xowue_NtCreateTimer(PPCContext &context, uint8_t *base) {
     PPC_STORE_U32(object, 8u);
     writeGuestDispatcherSignalState(timer, 0);
     PPC_STORE_U32(output, handle); context.r3.u32 = kNtStatusSuccess;
+    char event[256];
+    std::snprintf(event, sizeof(event),
+        "B98_TIMER_CREATE handle=0x%08X object=0x%08X type=%u manual=%u creator_tid=%u creator_lr=0x%08X",
+        handle, object, timerType, timer->manualReset ? 1u : 0u,
+        timer->creatorTid, timer->creatorLr);
+    recordRuntimeTrace(event);
 }
 
 void xowue_NtSetTimerEx(PPCContext &context, uint8_t *base) {
     const auto timer = lookupGuestWaitable(context.r3.u32);
     const uint32_t duePointer = context.r4.u32;
+    const uint32_t apcRoutine = context.r5.u32;
+    const uint32_t apcMode = context.r6.u32;
+    const uint32_t apcContext = context.r7.u32;
+    const uint32_t resume = context.r8.u32;
+    const uint32_t periodMs = context.r9.u32;
+    const uint32_t reserved = context.r10.u32;
     if (!base || !timer || timer->kind != GuestWaitable::Kind::Timer ||
         !validGuestRange(duePointer, 8u)) {
-        context.r3.u32 = timer ? kNtStatusInvalidParameter : kNtStatusInvalidHandle; return;
+        context.r3.u32 = timer ? kNtStatusInvalidParameter : kNtStatusInvalidHandle;
+        return;
+    }
+    // Xenia's xboxkrnl implementation returns STATUS_TIMER_RESUME_IGNORED
+    // without arming the timer when Resume is requested.
+    if (resume != 0u) {
+        context.r3.u32 = kNtStatusTimerResumeIgnored;
+        recordRuntimeTrace("B98_TIMER_SET_IGNORED handle=" + std::to_string(timer->handle) +
+            " reason=resume_requested");
+        return;
     }
     const int64_t due = static_cast<int64_t>(PPC_LOAD_U64(duePointer));
-    const uint32_t periodMs = context.r9.u32;
-    uint64_t generation = 0u;
-    {
-        std::lock_guard<std::mutex> lock(timer->mutex);
-        generation = ++timer->timerGeneration; timer->signaled = false;
-        syncGuestDispatcherSignalState(timer);
-    }
     int64_t delayTicks = due < 0 ? (due == std::numeric_limits<int64_t>::min()
         ? 86400LL * 10000000LL : -due) : 0;
     if (due > 0) {
@@ -8453,6 +8548,38 @@ void xowue_NtSetTimerEx(PPCContext &context, uint8_t *base) {
         delayTicks = std::max<int64_t>(0, due - nowTicks);
     }
     delayTicks = std::clamp<int64_t>(delayTicks, 0, 86400LL * 10000000LL);
+    const auto callbackThread = retainCurrentGuestThread();
+    const uint32_t setterTid = g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId;
+    const uint32_t setterLr = static_cast<uint32_t>(context.lr);
+    uint64_t generation = 0u;
+    {
+        std::lock_guard<std::mutex> lock(timer->mutex);
+        generation = ++timer->timerGeneration;
+        timer->timerArmed = true;
+        timer->signaled = false;
+        timer->unconsumedSignals = 0u;
+        timer->timerApcRoutine = apcRoutine;
+        timer->timerApcContext = apcContext;
+        timer->timerApcThread = callbackThread;
+        timer->creatorTid = setterTid;
+        timer->creatorLr = setterLr;
+        syncGuestDispatcherSignalState(timer);
+    }
+    char setEvent[384];
+    std::snprintf(setEvent, sizeof(setEvent),
+        "B98_TIMER_SET handle=0x%08X generation=%llu due=0x%016llX delay_ticks=%lld period_ms=%u "
+        "apc_routine=0x%08X apc_mode=%u apc_context=0x%08X resume=%u reserved=%u "
+        "setter_tid=%u setter_lr=0x%08X target_tid=%u",
+        timer->handle, static_cast<unsigned long long>(generation),
+        static_cast<unsigned long long>(static_cast<uint64_t>(due)),
+        static_cast<long long>(delayTicks), periodMs, apcRoutine, apcMode,
+        apcContext, resume, reserved, setterTid, setterLr,
+        callbackThread ? callbackThread->id : 0u);
+    recordRuntimeTrace(setEvent);
+    if (apcMode != 1u || reserved != 0u) {
+        recordRuntimeTrace("B98_TIMER_ARGUMENT_VARIANT handle=" + std::to_string(timer->handle) +
+            " apc_mode=" + std::to_string(apcMode) + " reserved=" + std::to_string(reserved));
+    }
     std::weak_ptr<GuestWaitable> weakTimer = timer;
     std::thread([weakTimer, generation, delayTicks, periodMs] {
         int64_t nextDelay = delayTicks;
@@ -8460,13 +8587,52 @@ void xowue_NtSetTimerEx(PPCContext &context, uint8_t *base) {
             std::this_thread::sleep_for(std::chrono::nanoseconds(nextDelay * 100));
             const auto current = weakTimer.lock();
             if (!current) return;
+            uint32_t routine = 0u;
+            uint32_t apcContextValue = 0u;
+            std::shared_ptr<GuestThread> targetThread;
+            uint64_t signalGeneration = 0u;
             {
                 std::lock_guard<std::mutex> lock(current->mutex);
-                if (current->timerGeneration != generation) return;
+                if (current->timerGeneration != generation || !current->timerArmed) return;
                 current->signaled = true;
+                if (periodMs == 0u) current->timerArmed = false;
+                if (current->unconsumedSignals == 0u) ++current->unconsumedSignals;
+                ++current->signalGeneration;
+                signalGeneration = current->signalGeneration;
+                current->signalCount.fetch_add(1u, std::memory_order_relaxed);
+                routine = current->timerApcRoutine;
+                apcContextValue = current->timerApcContext;
+                targetThread = current->timerApcThread.lock();
                 syncGuestDispatcherSignalState(current);
             }
-            current->changed.notify_all(); g_waitSetChanged.notify_all();
+            current->changed.notify_all();
+            g_waitSetChanged.notify_all();
+            bool apcQueued = false;
+            if (routine != 0u && targetThread) {
+                constexpr int64_t epoch = 116444736000000000LL;
+                const auto now = std::chrono::system_clock::now().time_since_epoch();
+                const uint64_t guestTime = static_cast<uint64_t>(epoch +
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(now).count() / 100);
+                queueGuestApc(targetThread.get(), routine, apcContextValue,
+                    static_cast<uint32_t>(guestTime),
+                    static_cast<uint32_t>(guestTime >> 32));
+                apcQueued = true;
+            }
+            char fireEvent[320];
+            std::snprintf(fireEvent, sizeof(fireEvent),
+                "B98_TIMER_FIRE handle=0x%08X generation=%llu signal_gen=%llu routine=0x%08X "
+                "apc_context=0x%08X target_tid=%u apc_queued=%u",
+                current->handle, static_cast<unsigned long long>(generation),
+                static_cast<unsigned long long>(signalGeneration), routine,
+                apcContextValue, targetThread ? targetThread->id : 0u,
+                apcQueued ? 1u : 0u);
+            const uint32_t fireSample = g_b98TimerFireLogs.fetch_add(1u, std::memory_order_relaxed);
+            if (fireSample < 256u || ((fireSample + 1u) % 256u) == 0u)
+                recordRuntimeTrace(fireEvent);
+            if (routine != 0u && !targetThread && fireSample < 256u) {
+                recordRuntimeTrace("B98_TIMER_APC_TARGET_MISSING handle=" +
+                    std::to_string(current->handle) + " routine=" + std::to_string(routine));
+            }
             if (periodMs == 0u) return;
             nextDelay = static_cast<int64_t>(periodMs) * 10000LL;
         }
@@ -8476,18 +8642,32 @@ void xowue_NtSetTimerEx(PPCContext &context, uint8_t *base) {
 
 void xowue_NtCancelTimer(PPCContext &context, uint8_t *base) {
     const auto timer = lookupGuestWaitable(context.r3.u32);
+    const uint32_t output = context.r4.u32;
+    if (output && base && validGuestRange(output, 4u)) PPC_STORE_U32(output, 0u);
     if (!timer || timer->kind != GuestWaitable::Kind::Timer) {
         context.r3.u32 = kNtStatusInvalidHandle; return;
     }
-    const uint32_t output = context.r4.u32;
+    bool wasArmed = false;
+    uint64_t generation = 0u;
     {
         std::lock_guard<std::mutex> lock(timer->mutex);
-        if (output && base && validGuestRange(output, 4u))
-            PPC_STORE_U32(output, timer->signaled ? 1u : 0u);
-        ++timer->timerGeneration; timer->signaled = false;
+        wasArmed = timer->timerArmed;
+        timer->timerArmed = false;
+        generation = ++timer->timerGeneration;
+        // Cancel stops future firings; it does not consume/reset a signal
+        // already delivered by the timer object.
+        timer->timerApcRoutine = 0u;
+        timer->timerApcContext = 0u;
+        timer->timerApcThread.reset();
         syncGuestDispatcherSignalState(timer);
     }
-    context.r3.u32 = kNtStatusSuccess;
+    char event[192];
+    std::snprintf(event, sizeof(event),
+        "B98_TIMER_CANCEL handle=0x%08X was_armed=%u generation=%llu",
+        timer->handle, wasArmed ? 1u : 0u,
+        static_cast<unsigned long long>(generation));
+    recordRuntimeTrace(event);
+    context.r3.u32 = wasArmed ? kNtStatusSuccess : kNtStatusUnsuccessful;
 }
 
 void xowue_ObCreateSymbolicLink(PPCContext &context, uint8_t *base) {
