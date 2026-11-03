@@ -11,8 +11,8 @@ on:
 
 concurrency:
   group: asura-ios-${{ github.ref }}
-  # Keep the active run; the new push remains queued behind it.
-  cancel-in-progress: false
+  # Only the latest branch snapshot should consume the iOS runner.
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -40,12 +40,42 @@ jobs:
           git clone --filter=blob:none --no-checkout https://github.com/PauloUbirajara/asuras-wrath-recomp.git upstream
           git -C upstream fetch --depth=1 origin "$ASURA_UPSTREAM_SHA"
           git -C upstream checkout --detach "$ASURA_UPSTREAM_SHA"
-          git -C upstream submodule update --init --recursive
+          git -C upstream submodule update --init --recursive --depth=1 --jobs 8
           test "$(git -C upstream rev-parse HEAD)" = "$ASURA_UPSTREAM_SHA"
           test "$(git -C upstream/tools/rexglue rev-parse HEAD)" = "$ASURA_REXGLUE_SHA"
           echo "ASURA_UPSTREAM_PIN=$ASURA_UPSTREAM_SHA"
           echo "ASURA_REXGLUE_PIN=$ASURA_REXGLUE_SHA"
           cp -R ios upstream/ios
+          # ASURA_IOS_PPC_AOT_SOURCE_COVERAGE_V1: verify every generated
+          # static PPC translation unit is present and attached to ReXGlue's
+          # object-library target before compiling the iOS executable.
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          root = Path("upstream")
+          source_manifest = root / "generated/default/sources.cmake"
+          cmake_manifest = root / "generated/rexglue.cmake"
+          if not source_manifest.is_file() or not cmake_manifest.is_file():
+              raise SystemExit("generated ReXGlue manifests are missing")
+          source_text = source_manifest.read_text()
+          cmake_text = cmake_manifest.read_text()
+          recomp_ids = sorted(int(x) for x in re.findall(r"asura_wrath_recomp\.(\d+)\.cpp", source_text))
+          if recomp_ids != list(range(207)):
+              raise SystemExit(f"expected 207 PPC AOT units [0..206], found {len(recomp_ids)}")
+          for index in recomp_ids:
+              if not (root / f"generated/default/asura_wrath_recomp.{index}.cpp").is_file():
+                  raise SystemExit(f"missing generated PPC unit {index}")
+              if not (root / f"generated/default/asura_wrath_funcs.{index}.h").is_file():
+                  raise SystemExit(f"missing generated PPC function header {index}")
+          for name in ("asura_wrath_init.cpp", "asura_wrath_register.cpp"):
+              if not (root / "generated/default" / name).is_file():
+                  raise SystemExit(f"missing generated entrypoint source {name}")
+          if "set(REXGLUE_ENTRYPOINT_GENERATED_SOURCES ${GENERATED_SOURCES})" not in cmake_text:
+              raise SystemExit("ReXGlue generated source list is not connected")
+          if "add_library(${target_name}_recomp OBJECT" not in cmake_text:
+              raise SystemExit("ReXGlue does not build generated PPC sources as an object target")
+          print("ASURA_IOS_PPC_AOT_SOURCE_COVERAGE_207_OK")
+          PY
           python3 upstream/ios/prepare_ios.py
           python3 ios/launcher_patch.py
           grep -q "ASURA_IOS_PLATFORM_MACROS_V1" upstream/tools/rexglue/include/rex/platform.h
@@ -93,7 +123,7 @@ jobs:
           ! grep -q "OnFinalizePaths" upstream/src/asurawrath_app.h
           ! grep -q "dispatch_semaphore_wait(asura_choice_ready" upstream/src/asurawrath_app.h
           grep -q "PROCESS_START" ios/asura_ios_native.mm
-          grep -q "FATAL SIGNAL SIGSEGV" ios/asura_ios_native.mm
+          grep -q "FATAL_SIGNAL sig=" ios/Native/asura_crash_recorder.c
           grep -q "LAUNCHER_SCENE_WAIT" ios/asura_ios_native.mm
           grep -q "LAUNCHER_WINDOW_ATTACHED_TO_FOREGROUND_SCENE" ios/asura_ios_native.mm
           grep -q "APP_LAUNCH_GATE_WAITING_FOR_PLAY" ios/asura_ios_native.mm
@@ -110,6 +140,12 @@ jobs:
           grep -q "vkEnumerateInstanceLayerProperties" ios/Native/asura_vulkan_icd_bridge.c
           grep -q "ASURA_IOS_VULKAN_GLOBAL_ENTRYPOINT_DIAGNOSTICS_V1" ios/launcher_patch.py
           grep -q "ASURA_IOS_VULKAN_STAGE_DIAGNOSTICS_V2" ios/launcher_patch.py
+          grep -q "ASURA_IOS_EXECUTION_LOG_V1" ios/asura_ios_native.mm
+          grep -q "ASURA_IOS_ARM64_CRASH_REGISTERS_V1" ios/Native/asura_crash_recorder.c
+          grep -q "AsuraCrashRecorderInstall" ios/asura_ios_native.mm
+          grep -q '#include "Native/asura_crash_recorder.h"' ios/asura_ios_native.mm
+          grep -q "ASURA_IOS_RUNTIME_EXECUTION_TRACE_V1" ios/launcher_patch.py
+          grep -q "ASURA_IOS_VULKAN_TEXTURE_TEARDOWN_TRACE_V1" ios/launcher_patch.py
           grep -q "VULKAN_CREATE_INSTANCE_RESULT" ios/launcher_patch.py
           grep -q "ASURA_IOS_FIRST_PRESENT_GATE_V1" ios/launcher_patch.py
           grep -q "AsuraIOSNotifyFirstPresent" ios/asura_ios_native.h
@@ -315,6 +351,7 @@ jobs:
           grep -Fq "_AsuraIOSNotifyFirstPresent" "$RUNNER_TEMP/asura-runtime-symbols.txt"
           grep -Fq "_AsuraIOSHasPresentedFrame" "$RUNNER_TEMP/asura-runtime-symbols.txt"
           grep -Fq "AsuraIOSLog(" "$RUNNER_TEMP/asura-runtime-demangled.txt"
+          grep -Fq "_AsuraCrashRecorderInstall" "$RUNNER_TEMP/asura-runtime-symbols.txt"
           # The runtime dylib owns and exports this C callback. The app is not
           # required to retain a direct undefined-symbol entry for it: LTO/dead
           # stripping may remove the optional shutdown diagnostic call. The

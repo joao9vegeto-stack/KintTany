@@ -37,7 +37,9 @@ if runtime_marker not in runtime_text:
     assert runtime_text.count(runtime_target) == 1, "unexpected rexruntime target declaration"
     runtime_block = runtime_target + '''
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
-    target_sources(rexruntime PRIVATE "${CMAKE_SOURCE_DIR}/ios/asura_ios_native.mm")
+    target_sources(rexruntime PRIVATE
+        "${CMAKE_SOURCE_DIR}/ios/asura_ios_native.mm"
+        "${CMAKE_SOURCE_DIR}/ios/Native/asura_crash_recorder.c")
     set_source_files_properties("${CMAKE_SOURCE_DIR}/ios/asura_ios_native.mm"
         PROPERTIES COMPILE_FLAGS "-fobjc-arc -fblocks")
     target_compile_definitions(rexruntime PRIVATE

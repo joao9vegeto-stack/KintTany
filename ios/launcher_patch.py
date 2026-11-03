@@ -463,3 +463,55 @@ if rex_marker not in rex_text:
 
 header.write_text(text)
 print("ASURA_IOS_PRE_REXAPP_PLAY_GATE_V1_OK")
+
+# ASURA_IOS_RUNTIME_EXECUTION_TRACE_V1: record ReXGlue setup and teardown
+# failures in Documents/log.txt, including the XEX and module transition.
+rex_app = root / "tools/rexglue/src/ui/rex_app.cpp"
+rex_text = rex_app.read_text()
+trace_marker = "ASURA_IOS_RUNTIME_EXECUTION_TRACE_V1"
+if trace_marker not in rex_text:
+    rex_text = rex_text.replace("auto status = runtime_->Setup(ppc_info_, std::move(config_));",
+        'AsuraIOSLog("REXAPP_RUNTIME_SETUP_BEGIN");\n  auto status = runtime_->Setup(ppc_info_, std::move(config_));', 1)
+    rex_text = rex_text.replace('REXLOG_ERROR("Runtime setup failed: {:08X}", status);',
+        'AsuraIOSLog("REXAPP_RUNTIME_SETUP_FAILED status=" + std::to_string(status));\n    REXLOG_ERROR("Runtime setup failed: {:08X}", status);', 1)
+    rex_text = rex_text.replace("  if (window_ && runtime_->input_system()) {",
+        '  AsuraIOSLog("REXAPP_RUNTIME_SETUP_OK");\n  if (window_ && runtime_->input_system()) {', 1)
+    rex_text = rex_text.replace('REXLOG_ERROR("Failed to load XEX ({}): {:08X}", xex_image, status);',
+        'AsuraIOSLog("REXAPP_XEX_LOAD_FAILED status=" + std::to_string(status));\n    REXLOG_ERROR("Failed to load XEX ({}): {:08X}", xex_image, status);', 1)
+    rex_text = rex_text.replace("  OnPostLoadXexImage();",
+        '  AsuraIOSLog("REXAPP_XEX_LOAD_OK");\n  OnPostLoadXexImage();', 1)
+    rex_text = rex_text.replace("  OnPostSetup();",
+        '  AsuraIOSLog("REXAPP_POST_SETUP_BEGIN");\n  OnPostSetup();\n  AsuraIOSLog("REXAPP_POST_SETUP_OK");', 1)
+    rex_text = rex_text.replace("void ReXApp::OnDestroy() {",
+        'void ReXApp::OnDestroy() {\n  AsuraIOSLog("REXAPP_ONDESTROY_BEGIN");', 1)
+    rex_text = rex_text.replace("    imgui_drawer_->SetPresenterAndImmediateDrawer(nullptr, nullptr);",
+        '    AsuraIOSLog("REXAPP_IMGUI_DETACH_BEGIN");\n    imgui_drawer_->SetPresenterAndImmediateDrawer(nullptr, nullptr);\n    AsuraIOSLog("REXAPP_IMGUI_DETACH_OK");', 1)
+    rex_text = rex_text.replace("    immediate_drawer_.reset();",
+        '    AsuraIOSLog("REXAPP_IMMEDIATE_DRAWER_DESTROY_BEGIN");\n    immediate_drawer_.reset();\n    AsuraIOSLog("REXAPP_IMMEDIATE_DRAWER_DESTROY_OK");', 1)
+    rex_text = rex_text.replace("  runtime_.reset();",
+        '  AsuraIOSLog("REXAPP_RUNTIME_DESTROY_BEGIN");\n  runtime_.reset();\n  AsuraIOSLog("REXAPP_RUNTIME_DESTROY_OK");', 1)
+    rex_text = rex_text.replace("      immediate_drawer_ = provider->CreateImmediateDrawer();",
+        '      immediate_drawer_ = provider->CreateImmediateDrawer();\n      AsuraIOSLog(immediate_drawer_ ? "REXAPP_IMMEDIATE_DRAWER_CREATE_OK" : "REXAPP_IMMEDIATE_DRAWER_CREATE_FAILED");', 1)
+    rex_text = rex_text.replace("#include <rex/rex_app.h>",
+        "#include <rex/rex_app.h>\n// " + trace_marker, 1)
+    rex_app.write_text(rex_text)
+    print("ASURA_IOS_RUNTIME_EXECUTION_TRACE_V1_OK")
+
+# ASURA_IOS_VULKAN_TEXTURE_TEARDOWN_TRACE_V1: wait for outstanding device work
+# before immediate UI texture memory is returned to the Metal residency set.
+drawer = root / "tools/rexglue/src/ui/vulkan/vulkan_immediate_drawer.cpp"
+drawer_text = drawer.read_text()
+drawer_marker = "ASURA_IOS_VULKAN_TEXTURE_TEARDOWN_TRACE_V1"
+if drawer_marker not in drawer_text:
+    drawer_text = drawer_text.replace('#include <rex/ui/vulkan/util.h>',
+        '#include <rex/ui/vulkan/util.h>\n#include <rex/platform.h>\n#include "../../asura_ios_native.h"\n// ' + drawer_marker, 1)
+    drawer_text = drawer_text.replace("VulkanImmediateDrawer::~VulkanImmediateDrawer() {",
+        'VulkanImmediateDrawer::~VulkanImmediateDrawer() {\n#if REX_PLATFORM_IOS\n  AsuraIOSLog("VULKAN_IMMEDIATE_DRAWER_DESTROY_BEGIN");\n  VkResult idle_result = vulkan_device_->functions().vkDeviceWaitIdle(vulkan_device_->device());\n  AsuraIOSLog("VULKAN_IMMEDIATE_DRAWER_DEVICE_WAIT_IDLE result=" + std::to_string(idle_result));\n#endif', 1)
+    drawer_text = drawer_text.replace("void VulkanImmediateDrawer::DestroyTextureResource(VulkanImmediateTexture::Resource& resource) {",
+        'void VulkanImmediateDrawer::DestroyTextureResource(VulkanImmediateTexture::Resource& resource) {\n#if REX_PLATFORM_IOS\n  AsuraIOSLog("VULKAN_IMMEDIATE_TEXTURE_DESTROY_BEGIN");\n#endif', 1)
+    drawer_text = drawer_text.replace("  dfn.vkDestroyImage(device, resource.image, nullptr);\n  dfn.vkFreeMemory(device, resource.memory, nullptr);",
+        '  dfn.vkDestroyImage(device, resource.image, nullptr);\n#if REX_PLATFORM_IOS\n  AsuraIOSLog("VULKAN_IMMEDIATE_TEXTURE_IMAGE_DESTROYED_MEMORY_FREE_BEGIN");\n#endif\n  dfn.vkFreeMemory(device, resource.memory, nullptr);\n#if REX_PLATFORM_IOS\n  AsuraIOSLog("VULKAN_IMMEDIATE_TEXTURE_DESTROY_OK");\n#endif', 1)
+    drawer_text = drawer_text.replace("  } else {\n    DestroyTextureResource(texture.resource_);\n  }",
+        '  } else {\n#if REX_PLATFORM_IOS\n    VkResult idle_result = vulkan_device_->functions().vkDeviceWaitIdle(vulkan_device_->device());\n    AsuraIOSLog("VULKAN_IMMEDIATE_TEXTURE_WAIT_IDLE result=" + std::to_string(idle_result));\n#endif\n    DestroyTextureResource(texture.resource_);\n  }', 1)
+    drawer.write_text(drawer_text)
+    print("ASURA_IOS_VULKAN_TEXTURE_TEARDOWN_TRACE_V1_OK")

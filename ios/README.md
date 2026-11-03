@@ -36,3 +36,12 @@ to the bundled KosmicKrisp ICD, disables macOS-only Vulkan loader discovery on
 iOS, and verifies that all packaged Mach-O images target iOS ARM64. The native
 launcher now uses a bounded, scrollable layout, abbreviated folder display,
 and remains visible until `OnPostSetup` confirms that the runtime has loaded.
+
+
+## Build 12 — persistent execution log and ARM64 crash report
+
+- Redirects native stdout/stderr and ReXGlue diagnostics into Documents/log.txt from process startup; every native event is appended and synchronously flushed.
+- Installs an ARM64 fatal-signal recorder that writes signal, fault address, si_code, PC/LR/FP/SP and x0-x7 to Documents/crash.txt, then re-raises the signal so iOS can still produce its .ips report.
+- Records Objective-C uncaught exceptions and std::terminate with exception reason and stack symbols.
+- Adds explicit runtime setup, XEX load, module setup, UI teardown and Vulkan texture-free checkpoints.
+- Waits for Vulkan device idle before immediate UI texture memory is freed during teardown.
