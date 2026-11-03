@@ -289,6 +289,19 @@ struct GuestThread {
     std::thread hostThread;
 };
 
+struct GuestAudioClient {
+    uint32_t handle = 0u;
+    uint32_t callback = 0u;
+    uint32_t context = 0u;
+    uint32_t volumeChangeMask = 0xFFFFFFFFu;
+    uint32_t inFlight = 0u;
+    bool inUse = false;
+    bool retiring = false;
+    std::chrono::steady_clock::time_point next{};
+    uint64_t callbacks = 0u;
+    uint64_t frames = 0u;
+};
+
 struct XenosFrontendState {
     uint32_t ringBufferAddress = 0;
     uint32_t ringBufferSize = 0;
@@ -443,6 +456,13 @@ std::unordered_map<uint32_t, std::shared_ptr<GuestThread>> g_guestThreadsByObjec
 std::shared_ptr<GuestThread> g_mainGuestThread;
 std::unordered_map<uint32_t, std::shared_ptr<GuestWaitable>> g_guestPointerWaitables;
 std::vector<std::shared_ptr<GuestThread>> g_guestThreads;
+std::mutex g_xaudioMutex;
+std::condition_variable g_xaudioChanged;
+std::array<std::shared_ptr<GuestAudioClient>, 8> g_xaudioClients{};
+std::shared_ptr<GuestThread> g_xowueAudioThread;
+std::atomic<uint64_t> g_xaudioCallbackCount{0u};
+std::atomic<uint64_t> g_xaudioFrameCount{0u};
+std::atomic<uint32_t> g_xaudioTraceLogs{0u};
 std::unordered_map<uint32_t, std::shared_ptr<std::recursive_mutex>> g_criticalSectionLocks;
 XenosFrontendState g_xenosFrontend;
 std::atomic<bool> g_schedulerStopRequested{false};
@@ -465,6 +485,8 @@ std::vector<std::shared_ptr<GuestThread>> snapshotAllGuestThreads() {
 }
 
 bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
+    if (event.find("XOWUE_XAUDIO_") != std::string::npos)
+        return g_xaudioTraceLogs.fetch_add(1u, std::memory_order_relaxed) < 256u;
     if (event.find("B97_") != std::string::npos) return true;
     // Keep the exact event lifetime and wait transitions that decide whether
     // asynchronous movie/file work can unblock its guest consumer.
@@ -1837,6 +1859,7 @@ void finishGuestThread(const std::shared_ptr<GuestThread> &thread, uint32_t exit
 void requestGuestSchedulerStop() {
     g_schedulerStopRequested.store(true);
     g_waitSetChanged.notify_all();
+    g_xaudioChanged.notify_all();
     notifyGuestWaiters();
 }
 
@@ -1898,6 +1921,8 @@ void resetGraphicsInterruptState() {
     for (auto &count : g_graphicsInterruptCounts) count.store(0u);
 }
 
+void resetXowueAudioRuntime();
+
 void stopGuestThreads() {
     requestGuestSchedulerStop();
     std::vector<std::shared_ptr<GuestThread>> threads;
@@ -1939,6 +1964,7 @@ void stopGuestThreads() {
     }
     g_mainGuestThread.reset();
     resetGraphicsInterruptState();
+    resetXowueAudioRuntime();
     {
         std::lock_guard<std::mutex> lock(g_criticalSectionMapMutex);
         g_criticalSectionLocks.clear();
@@ -2000,6 +2026,244 @@ struct GuestThreadBinding final {
         g_guestIrql = previousIrql;
     }
 };
+
+constexpr auto kXowueAudioFrameInterval = std::chrono::microseconds(5333);
+constexpr auto kXowueAudioInitialDelay = std::chrono::milliseconds(100);
+constexpr uint32_t kXowueAudioDriverTag = 0x41550000u;
+constexpr uint32_t kXowueAudioFrameBytes = 6u * 256u * sizeof(float);
+
+// Xbox titles register a guest mixer callback that must run every 256 samples
+// even when no host output device is available. Keep a real guest thread/KPCR
+// and discard submitted PCM only after the callback has advanced the mixer.
+void runXowueAudioCallbackPump(const std::shared_ptr<GuestThread> &thread,
+                               uint32_t imageBase, uint8_t *base) {
+    for (;;) {
+        std::shared_ptr<GuestAudioClient> client;
+        uint32_t slot = 0u;
+        uint32_t callback = 0u;
+        uint32_t callbackContextValue = 0u;
+        uint32_t handle = 0u;
+        {
+            std::unique_lock<std::mutex> lock(g_xaudioMutex);
+            for (;;) {
+                if (g_schedulerStopRequested.load()) return;
+                client.reset();
+                for (uint32_t i = 0u; i < g_xaudioClients.size(); ++i) {
+                    const auto &candidate = g_xaudioClients[i];
+                    if (candidate && candidate->inUse && !candidate->retiring &&
+                        (!client || candidate->next < client->next)) {
+                        client = candidate;
+                        slot = i;
+                    }
+                }
+                if (!client) {
+                    g_xaudioChanged.wait(lock);
+                    continue;
+                }
+                const auto now = std::chrono::steady_clock::now();
+                if (client->next > now) {
+                    g_xaudioChanged.wait_until(lock, client->next);
+                    continue;
+                }
+                auto due = client->next;
+                if (due + kXowueAudioFrameInterval * 40 < now) due = now;
+                client->next = std::max(due, now - kXowueAudioFrameInterval) +
+                               kXowueAudioFrameInterval;
+                ++client->inFlight;
+                callback = client->callback;
+                callbackContextValue = client->context;
+                handle = client->handle;
+                break;
+            }
+        }
+
+        PPCFunc *routine = findGuestFunction(callback);
+        if (!routine) {
+            {
+                std::lock_guard<std::mutex> lock(g_xaudioMutex);
+                if (client->inFlight != 0u) --client->inFlight;
+                if (client->retiring && client->inFlight == 0u &&
+                    g_xaudioClients[slot] == client) {
+                    g_xaudioClients[slot].reset();
+                }
+                g_xaudioChanged.notify_all();
+            }
+            char event[160];
+            std::snprintf(event, sizeof(event),
+                          "XOWUE_XAUDIO_CALLBACK_MISSING handle=0x%08X callback=0x%08X",
+                          handle, callback);
+            recordRuntimeTrace(event);
+            throw std::runtime_error("XAudio guest callback is absent from the AOT map");
+        }
+
+        PPCContext callbackContext{};
+        callbackContext.r1.u32 =
+            (thread->stackBase + thread->stackSize - 0x200u) & ~0xFu;
+        callbackContext.r2.u32 = imageBase;
+        callbackContext.r13.u32 = thread->pcrAddress;
+        callbackContext.lr = 0u;
+        callbackContext.r3.u32 = callbackContextValue;
+        PPC_STORE_U32(callbackContext.r1.u32, 0u);
+
+        try {
+            checkpointGuestThread();
+            routine(callbackContext, base);
+        } catch (...) {
+            std::lock_guard<std::mutex> lock(g_xaudioMutex);
+            if (client->inFlight != 0u) --client->inFlight;
+            if (client->retiring && client->inFlight == 0u &&
+                g_xaudioClients[slot] == client) {
+                g_xaudioClients[slot].reset();
+            }
+            g_xaudioChanged.notify_all();
+            throw;
+        }
+
+        uint64_t count = 0u;
+        {
+            std::lock_guard<std::mutex> lock(g_xaudioMutex);
+            if (client->inFlight != 0u) --client->inFlight;
+            ++client->callbacks;
+            if (client->retiring && client->inFlight == 0u &&
+                g_xaudioClients[slot] == client) {
+                g_xaudioClients[slot].reset();
+            }
+            g_xaudioChanged.notify_all();
+            count = g_xaudioCallbackCount.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        }
+        if (count <= 8u || count % 1000u == 0u) {
+            char event[192];
+            std::snprintf(event, sizeof(event),
+                          "XOWUE_XAUDIO_CALLBACK count=%llu handle=0x%08X callback=0x%08X context=0x%08X thread=%u",
+                          static_cast<unsigned long long>(count), handle, callback,
+                          callbackContextValue, thread->id);
+            recordRuntimeTrace(event);
+        }
+    }
+}
+
+bool startXowueAudioWorker(uint8_t *base, uint32_t callback) {
+    if (!base || g_schedulerStopRequested.load()) return false;
+    const auto memory = g_activeGuestMemory.lock();
+    if (!memory || memory->base != base) return false;
+
+    std::unique_lock<std::mutex> audioLock(g_xaudioMutex);
+    if (g_xowueAudioThread) return !g_xowueAudioThread->exited.load();
+
+    auto thread = std::make_shared<GuestThread>();
+    if (!allocateGuestThreadStack(0x00100000u, thread->stackBase, thread->stackSize)) {
+        recordRuntimeTrace("XOWUE_XAUDIO_WORKER failed to reserve a 1 MiB guest stack");
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> threadsLock(g_guestThreadMutex);
+        thread->id = g_nextGuestThreadId++;
+        thread->objectAddress = g_nextGuestThreadObjectAddress;
+        g_nextGuestThreadObjectAddress += 0x1000u;
+        thread->pcrAddress = g_nextGuestPcrAddress;
+        g_nextGuestPcrAddress += kGuestThreadMetadataStride;
+        thread->tlsAddress = g_nextGuestTlsAddress;
+        g_nextGuestTlsAddress += kGuestThreadTlsStride;
+    }
+    if (thread->objectAddress >= 0x7E000000u ||
+        thread->pcrAddress >= 0x7D000000u ||
+        thread->tlsAddress >= 0x7C000000u) {
+        recordRuntimeTrace("XOWUE_XAUDIO_WORKER guest thread metadata range exhausted");
+        return false;
+    }
+
+    thread->startAddress = callback;
+    thread->completion = std::make_shared<GuestWaitable>();
+    thread->completion->kind = GuestWaitable::Kind::Thread;
+    thread->completion->manualReset = true;
+    thread->completion->signaled = false;
+    thread->handle = allocateGuestHandle();
+    if (thread->handle == 0u) return false;
+    thread->completion->handle = thread->handle;
+    thread->completion->objectAddress = thread->objectAddress;
+    initializeGuestThreadEnvironment(base, thread->objectAddress, thread->pcrAddress,
+                                     thread->tlsAddress, thread->stackBase,
+                                     thread->stackSize, thread->id, callback, 0u, 0u);
+
+    std::unique_lock<std::mutex> threadsLock(g_guestThreadMutex);
+    if (g_schedulerStopRequested.load()) return false;
+    g_guestThreadsByHandle[thread->handle] = thread;
+    g_guestThreadsByObject[thread->objectAddress] = thread;
+    g_guestThreads.push_back(thread);
+    {
+        std::lock_guard<std::mutex> objectsLock(g_guestObjectMutex);
+        g_guestWaitables[thread->handle] = thread->completion;
+        g_guestWaitables[thread->objectAddress] = thread->completion;
+    }
+
+    const uint32_t imageBase = g_activeImageBase;
+    try {
+        thread->hostThread = std::thread([thread, memory, imageBase, base] {
+            GuestThreadBinding binding(thread.get());
+            uint32_t exitCode = kNtStatusSuccess;
+            try {
+                if (!memory || memory->base != base)
+                    throw std::runtime_error("XAudio worker lost its guest memory session");
+                char event[160];
+                std::snprintf(event, sizeof(event),
+                              "XOWUE_XAUDIO_WORKER_START thread=%u KPCR=0x%08X stack=0x%08X+0x%08X",
+                              thread->id, thread->pcrAddress, thread->stackBase, thread->stackSize);
+                recordRuntimeTrace(event);
+                runXowueAudioCallbackPump(thread, imageBase, base);
+                if (g_schedulerStopRequested.load()) exitCode = kNtStatusCancelled;
+            } catch (const GuestThreadExit &exit) {
+                exitCode = exit.exitCode;
+            } catch (const GuestThreadStopRequested &) {
+                exitCode = kNtStatusCancelled;
+            } catch (const std::exception &error) {
+                recordRuntimeTrace(std::string("XOWUE_XAUDIO_WORKER failed: ") + error.what());
+                exitCode = kNtStatusUnsuccessful;
+            } catch (...) {
+                recordRuntimeTrace("XOWUE_XAUDIO_WORKER failed with unknown exception");
+                exitCode = kNtStatusUnsuccessful;
+            }
+            finishGuestThread(thread, exitCode);
+        });
+    } catch (const std::system_error &error) {
+        {
+            std::lock_guard<std::mutex> objectsLock(g_guestObjectMutex);
+            g_guestWaitables.erase(thread->handle);
+            g_guestWaitables.erase(thread->objectAddress);
+        }
+        g_guestThreadsByHandle.erase(thread->handle);
+        g_guestThreadsByObject.erase(thread->objectAddress);
+        g_guestThreads.pop_back();
+        recordRuntimeTrace(std::string("XOWUE_XAUDIO_WORKER host thread creation failed: ") +
+                           error.what());
+        return false;
+    }
+    threadsLock.unlock();
+    g_xowueAudioThread = thread;
+    audioLock.unlock();
+    g_xaudioChanged.notify_all();
+    return true;
+}
+
+std::shared_ptr<GuestAudioClient> findXowueAudioClientLocked(uint32_t handle,
+                                                             uint32_t *slotOut = nullptr) {
+    if ((handle & 0xFFFF0000u) != kXowueAudioDriverTag) return nullptr;
+    const uint32_t slot = handle & 0xFFFFu;
+    if (slot >= g_xaudioClients.size()) return nullptr;
+    const auto &client = g_xaudioClients[slot];
+    if (!client || client->handle != handle || !client->inUse || client->retiring)
+        return nullptr;
+    if (slotOut) *slotOut = slot;
+    return client;
+}
+
+void resetXowueAudioRuntime() {
+    std::lock_guard<std::mutex> lock(g_xaudioMutex);
+    for (auto &client : g_xaudioClients) client.reset();
+    g_xowueAudioThread.reset();
+    g_xaudioCallbackCount.store(0u, std::memory_order_relaxed);
+    g_xaudioFrameCount.store(0u, std::memory_order_relaxed);
+    g_xaudioTraceLogs.store(0u, std::memory_order_relaxed);
+}
 
 bool graphicsInterruptCallbackRegistered() {
     std::lock_guard<std::mutex> lock(g_xenosMutex);
@@ -4699,12 +4963,153 @@ void xowue_compat_import(const char *name, PPCContext &context, uint8_t *base) {
     if (api == "XamFree") {
         releaseGuestPhysicalRange(context.r3.u32); context.r3.u32 = 0u; return;
     }
+    if (api == "XAudioRenderDriverInitialize") { context.r3.u32 = kNtStatusSuccess; return; }
     if (api == "XAudioGetSpeakerConfig") { context.r3.u32 = 0x00000003u; return; }
-    if (api == "XAudioGetVoiceCategoryVolume") { context.r3.u32 = 0x3F800000u; return; }
-    if (api == "XAudioGetVoiceCategoryVolumeChangeMask") { context.r3.u32 = 0u; return; }
-    if (api == "XAudioRegisterRenderDriverClient" || api == "XAudioSubmitRenderDriverFrame" ||
-        api == "XAudioUnregisterRenderDriverClient" || api == "XamVoiceClose" ||
-        api == "XamVoiceSubmitPacket") { context.r3.u32 = 0u; return; }
+    if (api == "XAudioGetVoiceCategoryVolume") {
+        const uint32_t output = context.r4.u32;
+        if (!base || !validGuestRange(output, 4u)) {
+            context.r3.u32 = kNtStatusInvalidParameter;
+            return;
+        }
+        PPC_STORE_U32(output, 0x3F800000u);
+        context.r3.u32 = kNtStatusSuccess;
+        return;
+    }
+    if (api == "XAudioGetVoiceCategoryVolumeChangeMask") {
+        const uint32_t handle = context.r3.u32;
+        const uint32_t output = context.r4.u32;
+        if (!base || !validGuestRange(output, 4u)) {
+            context.r3.u32 = kNtStatusInvalidParameter;
+            return;
+        }
+        uint32_t mask = 0u;
+        {
+            std::lock_guard<std::mutex> lock(g_xaudioMutex);
+            const auto client = findXowueAudioClientLocked(handle);
+            if (!client) {
+                context.r3.u32 = kNtStatusInvalidHandle;
+                return;
+            }
+            mask = client->volumeChangeMask;
+            client->volumeChangeMask = 0u;
+        }
+        PPC_STORE_U32(output, mask);
+        context.r3.u32 = kNtStatusSuccess;
+        return;
+    }
+    if (api == "XAudioRegisterRenderDriverClient") {
+        const uint32_t callbackPair = context.r3.u32;
+        const uint32_t driverOutput = context.r4.u32;
+        if (!base || !validGuestRange(callbackPair, 8u) ||
+            !validGuestRange(driverOutput, 4u)) {
+            context.r3.u32 = kNtStatusInvalidParameter;
+            return;
+        }
+        const uint32_t callback = loadGuestBe32(base, callbackPair);
+        const uint32_t callbackContextValue = loadGuestBe32(base, callbackPair + 4u);
+        if (callback == 0u || !findGuestFunction(callback)) {
+            context.r3.u32 = kNtStatusInvalidParameter;
+            return;
+        }
+        if (!startXowueAudioWorker(base, callback)) {
+            context.r3.u32 = kNtStatusNoMemory;
+            return;
+        }
+        std::shared_ptr<GuestAudioClient> client;
+        uint32_t handle = 0u;
+        uint32_t workerId = 0u;
+        {
+            std::lock_guard<std::mutex> lock(g_xaudioMutex);
+            for (uint32_t i = 0u; i < g_xaudioClients.size(); ++i) {
+                if (g_xaudioClients[i]) continue;
+                client = std::make_shared<GuestAudioClient>();
+                client->handle = kXowueAudioDriverTag | i;
+                client->callback = callback;
+                client->context = callbackContextValue;
+                client->volumeChangeMask = 0xFFFFFFFFu;
+                client->next = std::chrono::steady_clock::now() + kXowueAudioInitialDelay;
+                client->inUse = true;
+                g_xaudioClients[i] = client;
+                handle = client->handle;
+                break;
+            }
+            workerId = g_xowueAudioThread ? g_xowueAudioThread->id : 0u;
+        }
+        if (!client) {
+            context.r3.u32 = kNtStatusNoMemory;
+            return;
+        }
+        PPC_STORE_U32(driverOutput, handle);
+        context.r3.u32 = kNtStatusSuccess;
+        char event[192];
+        std::snprintf(event, sizeof(event),
+                      "XOWUE_XAUDIO_REGISTER handle=0x%08X callback=0x%08X context=0x%08X thread=%u",
+                      handle, callback, callbackContextValue, workerId);
+        recordRuntimeTrace(event);
+        g_xaudioChanged.notify_all();
+        return;
+    }
+    if (api == "XAudioUnregisterRenderDriverClient") {
+        const uint32_t handle = context.r3.u32;
+        std::shared_ptr<GuestAudioClient> client;
+        uint32_t slot = 0u;
+        uint64_t callbacks = 0u;
+        uint64_t frames = 0u;
+        {
+            std::lock_guard<std::mutex> lock(g_xaudioMutex);
+            client = findXowueAudioClientLocked(handle, &slot);
+            if (!client) {
+                context.r3.u32 = kNtStatusInvalidHandle;
+                return;
+            }
+            client->inUse = false;
+            client->retiring = true;
+            callbacks = client->callbacks;
+            frames = client->frames;
+            if (client->inFlight == 0u) g_xaudioClients[slot].reset();
+        }
+        context.r3.u32 = kNtStatusSuccess;
+        char event[128];
+        std::snprintf(event, sizeof(event),
+                      "XOWUE_XAUDIO_UNREGISTER handle=0x%08X callbacks=%llu frames=%llu",
+                      handle, static_cast<unsigned long long>(callbacks),
+                      static_cast<unsigned long long>(frames));
+        recordRuntimeTrace(event);
+        g_xaudioChanged.notify_all();
+        return;
+    }
+    if (api == "XAudioSubmitRenderDriverFrame") {
+        const uint32_t handle = context.r3.u32;
+        const uint32_t samples = context.r4.u32;
+        if (!base || !validGuestRange(samples, kXowueAudioFrameBytes)) {
+            context.r3.u32 = kNtStatusInvalidParameter;
+            return;
+        }
+        uint64_t frames = 0u;
+        {
+            std::lock_guard<std::mutex> lock(g_xaudioMutex);
+            const auto client = findXowueAudioClientLocked(handle);
+            if (!client) {
+                context.r3.u32 = kNtStatusInvalidHandle;
+                return;
+            }
+            frames = ++client->frames;
+            g_xaudioFrameCount.fetch_add(1u, std::memory_order_relaxed);
+        }
+        context.r3.u32 = kNtStatusSuccess;
+        if (frames <= 8u || frames % 1000u == 0u) {
+            char event[144];
+            std::snprintf(event, sizeof(event),
+                          "XOWUE_XAUDIO_SUBMIT handle=0x%08X frames=%llu samples=0x%08X output=discarded",
+                          handle, static_cast<unsigned long long>(frames), samples);
+            recordRuntimeTrace(event);
+        }
+        return;
+    }
+    if (api == "XamVoiceClose" || api == "XamVoiceSubmitPacket") {
+        context.r3.u32 = 0u;
+        return;
+    }
     if (api == "XamVoiceCreate" || api == "XamVoiceHeadsetPresent") {
         if (api == "XamVoiceCreate" && base && validGuestRange(context.r5.u32, 4u))
             PPC_STORE_U32(context.r5.u32, 0u);

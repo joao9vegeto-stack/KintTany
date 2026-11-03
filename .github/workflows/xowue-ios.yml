@@ -236,6 +236,8 @@ jobs:
           python3 tools/test_xowue_build100_event_lifetime.py
           python3 -m py_compile tools/test_xowue_build100_timer_apc.py
           python3 tools/test_xowue_build100_timer_apc.py
+          python3 -m py_compile tools/test_xowue_build102_audio_driver.py
+          python3 tools/test_xowue_build102_audio_driver.py
 
       - name: Record native source of Wolverine's failing PPC CTR branch
         run: |
