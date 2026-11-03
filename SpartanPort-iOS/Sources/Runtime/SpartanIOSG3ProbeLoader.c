@@ -30,7 +30,6 @@ SpartanG3ProbeImage *spartan_g3probe_load(const void*input,size_t length,char*er
  modules=u64(b+pos);pos+=8;
  if(!advance(&pos,modules,MODULE_SIZE,length)){seterr(error,error_capacity,"invalid module table");return NULL;}
  const uint64_t modules_at=HEADER_SIZE+48;
- pos=modules_at;
  if(!range(pos,8,length)){seterr(error,error_capacity,"missing binding count");return NULL;}
  bindings_count=u64(b+pos);pos+=8;
  if(bindings_count>ni||!advance(&pos,bindings_count,BINDING_SIZE,length)){seterr(error,error_capacity,"invalid binding table");return NULL;}
