@@ -9,4 +9,6 @@ std::string AsuraIOSWaitForGameSelection(std::string detected,
                                          std::function<std::string()> rescan);
 
 void AsuraIOSDismissLauncher();
+extern "C" bool AsuraIOSHasPresentedFrame();
+extern "C" void AsuraIOSNotifyFirstPresent();
 void AsuraIOSSetLauncherStatus(const std::string& message);

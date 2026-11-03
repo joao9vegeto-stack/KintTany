@@ -11,7 +11,8 @@ on:
 
 concurrency:
   group: asura-ios-${{ github.ref }}
-  cancel-in-progress: true
+  # Keep the active run; the new push remains queued behind it.
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -29,13 +30,21 @@ jobs:
       LLVM_FORMULA: llvm@20
       SPIRV_LLVM_TRANSLATOR_SHA: e328468fd329342f1f60c12fdd19cc0faaa88f32
       IOS_DEPLOYMENT_TARGET: "17.4"
+      ASURA_UPSTREAM_SHA: 92989e4d81731c17cecacbdf4414ef12ae5a8100
+      ASURA_REXGLUE_SHA: 38b40e7424e5d3ce1afa38dca10e9a84b1aa2317
     steps:
       - uses: actions/checkout@v4
 
       - name: Checkout Asura's Wrath ReXGlue source
         run: |
-          git clone --recursive https://github.com/PauloUbirajara/asuras-wrath-recomp.git upstream
+          git clone --filter=blob:none --no-checkout https://github.com/PauloUbirajara/asuras-wrath-recomp.git upstream
+          git -C upstream fetch --depth=1 origin "$ASURA_UPSTREAM_SHA"
+          git -C upstream checkout --detach "$ASURA_UPSTREAM_SHA"
           git -C upstream submodule update --init --recursive
+          test "$(git -C upstream rev-parse HEAD)" = "$ASURA_UPSTREAM_SHA"
+          test "$(git -C upstream/tools/rexglue rev-parse HEAD)" = "$ASURA_REXGLUE_SHA"
+          echo "ASURA_UPSTREAM_PIN=$ASURA_UPSTREAM_SHA"
+          echo "ASURA_REXGLUE_PIN=$ASURA_REXGLUE_SHA"
           cp -R ios upstream/ios
           python3 upstream/ios/prepare_ios.py
           python3 ios/launcher_patch.py
@@ -91,7 +100,26 @@ jobs:
           grep -q "APP_LAUNCH_GATE_PLAY_ACCEPTED" ios/asura_ios_native.mm
           grep -q "AsuraIOSDismissLauncher" ios/asura_ios_native.mm
           grep -q "AsuraIOSSetLauncherStatus" ios/asura_ios_native.mm
+          python3 -m py_compile ios/launcher_patch.py ios/prepare_ios.py
           grep -q "ASURA_IOS_VULKAN_ICD_BRIDGE_LOADER_PATCH_OK" ios/launcher_patch.py
+          grep -q "ASURA_IOS_FIRST_PRESENT_GATE_V1" ios/launcher_patch.py
+          grep -q "AsuraIOSNotifyFirstPresent" ios/asura_ios_native.h
+          grep -q "ASURA_IOS_VK_DESTROY_INSTANCE_EXPORT_V1" ios/Native/asura_vulkan_icd_bridge.c
+          python3 - <<'PY'
+          from pathlib import Path
+          native = Path("ios/asura_ios_native.mm").read_text()
+          patch = Path("ios/launcher_patch.py").read_text()
+          if "\\\\n" in native:
+              raise SystemExit("native log source still contains double-escaped newline sequences")
+          if '"#include <rex/cvar.h>\\\\n#include <rex/filesystem.h>"' in patch:
+              raise SystemExit("Vulkan include patch still emits a literal backslash-n")
+          setup = patch.split("setup_hook=", 1)[1].split('code=r"""', 1)[0]
+          if "AsuraIOSDismissLauncher();" in setup:
+              raise SystemExit("launcher is still dismissed from OnPostSetup")
+          if "AsuraIOSNotifyFirstPresent" not in patch or "present_result" not in patch:
+              raise SystemExit("first guest-frame callback is not connected to Vulkan presentation")
+          print("ASURA_IOS_FIRST_PRESENT_AND_LOG_PREFLIGHT_OK")
+          PY
           grep -q "ASURA_IOS_VULKAN_ICD_BUNDLE_PATH_V1_OK" ios/launcher_patch.py
           grep -q "ASURA_IOS_REXAPP_PRESENTATION_DIAGNOSTICS_V1" ios/launcher_patch.py
           ! grep -q "LAUNCHER_WINDOW_MODE_LEGACY_FALLBACK" ios/asura_ios_native.mm
@@ -252,7 +280,11 @@ jobs:
           cp upstream/build-ios/kosmickrisp/libvulkan_kosmickrisp.dylib "$APP/Frameworks/"
           xcrun --sdk iphoneos clang -target "arm64-apple-ios${IOS_DEPLOYMENT_TARGET}" -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" -dynamiclib -O2 -fvisibility=hidden ios/Native/asura_vulkan_icd_bridge.c -o "$APP/Frameworks/libvulkan.dylib" -Wl,-install_name,@rpath/libvulkan.dylib
           nm -gU "$APP/Frameworks/libvulkan.dylib" | grep -q "_vkGetInstanceProcAddr"
-          echo "ASURA_IOS_KOSMICKRISP_ICD_BRIDGE_OK"
+          nm -gU "$APP/Frameworks/libvulkan.dylib" | grep -q "_vkDestroyInstance"
+          nm -gU "$APP/asura_wrath_recomp" | grep -q "_AsuraIOSNotifyFirstPresent"
+          nm -gU "$APP/asura_wrath_recomp" | grep -q "_AsuraIOSHasPresentedFrame"
+          nm -gU "$APP/asura_wrath_recomp" | c++filt | grep -q "AsuraIOSLog("
+          echo "ASURA_IOS_KOSMICKRISP_ICD_BRIDGE_AND_HOST_CALLBACK_EXPORTS_OK"
           rsvg-convert -w 1024 -h 1024 ios/icons/AppIcon.svg > "$APP/AppIcon-1024.png"
           sips -z 120 120 "$APP/AppIcon-1024.png" --out "$APP/AppIcon-60@2x.png" >/dev/null
           sips -z 180 180 "$APP/AppIcon-1024.png" --out "$APP/AppIcon-60@3x.png" >/dev/null

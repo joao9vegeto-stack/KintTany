@@ -177,7 +177,7 @@ bad_rpath = '''elseif(APPLE)
   target_link_options(asura_wrath_recomp PRIVATE "-Wl,-rpath,${REXSDK_DIR}/out/${REX_PLATFORM}:@executable_path/../../../tools/rexglue/out/${REX_PLATFORM}:@executable_path")
 '''
 good_rpath = '''elseif(APPLE AND CMAKE_SYSTEM_NAME STREQUAL "iOS")
-  target_link_options(asura_wrath_recomp PRIVATE "-Wl,-rpath,@executable_path/Frameworks")
+  target_link_options(asura_wrath_recomp PRIVATE "-Wl,-rpath,@executable_path/Frameworks" "-Wl,-export_dynamic")
 elseif(APPLE)
   target_link_options(asura_wrath_recomp PRIVATE "-Wl,-rpath,${REXSDK_DIR}/out/${REX_PLATFORM}:@executable_path/../../../tools/rexglue/out/${REX_PLATFORM}:@executable_path")
 '''
