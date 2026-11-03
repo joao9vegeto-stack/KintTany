@@ -117,19 +117,27 @@ def main():
     param=find_file(game,"param.sfo")
     psf=param.read_bytes()
     if not psf.startswith(b"\0PSF"): raise ValueError("param.sfo sem magic PSF")
+    module_records=[]
     for name in ("libc.prx","libSceFios2.prx"):
         p=find_file(game,name)
-        if p.read_bytes()[:4]!=b"\x7fELF": raise ValueError(f"{name} não é ELF plaintext; não é possível continuar")
+        raw=p.read_bytes()
+        try:
+            module_elf,module_meta=reconstruct_self(raw)
+        except Exception as exc:
+            raise ValueError(f"{name}: magic={raw[:16].hex()} bytes={len(raw)}; ELF plaintext indisponível: {exc}") from exc
         target=game/"sce_module"/name; target.parent.mkdir(parents=True,exist_ok=True)
-        if p.resolve()!=target.resolve(): shutil.copy2(p,target)
+        target.write_bytes(module_elf)
+        module_records.append({"name":name,"path":"game/sce_module/"+name,
+          "input_bytes":len(raw),"input_magic":raw[:16].hex(),
+          "output_bytes":len(module_elf),"sha256":hashlib.sha256(module_elf).hexdigest(),**module_meta})
     target_sfo=game/"sce_sys"/"param.sfo"; target_sfo.parent.mkdir(parents=True,exist_ok=True)
     if param.resolve()!=target_sfo.resolve(): shutil.copy2(param,target_sfo)
     elf,meta=reconstruct_self(eboot.read_bytes())
-    elf_path=game/"eboot.elf"; elf_path.write_bytes(elf)
+    elf_path=game/"eboot.bin"; elf_path.write_bytes(elf)
     manifest={"eboot":{"path":str(eboot),"bytes":eboot.stat().st_size,"sha256":sha256(eboot)},
       "assets_zip":{"path":str(archive),"bytes":archive.stat().st_size,"sha256":sha256(archive)},
-      "prepared_elf":{"path":"game/eboot.elf","bytes":len(elf),"sha256":hashlib.sha256(elf).hexdigest(),**meta},
-      "validated_modules":[{"name":n,"path":"game/sce_module/"+n,"sha256":sha256(game/"sce_module"/n)} for n in ("libc.prx","libSceFios2.prx")],
+      "prepared_elf":{"path":"game/eboot.bin","bytes":len(elf),"sha256":hashlib.sha256(elf).hexdigest(),**meta},
+      "validated_modules":module_records,
       "param_sfo":"game/sce_sys/param.sfo"}
     (out/"input-manifest.json").write_text(json.dumps(manifest,indent=2)+"\n")
     print(json.dumps(manifest,indent=2))
