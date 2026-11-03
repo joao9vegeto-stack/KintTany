@@ -15,6 +15,7 @@ import subprocess
 p = argparse.ArgumentParser()
 p.add_argument("--generated", type=Path, required=True)
 p.add_argument("--recomp", type=Path, required=True)
+p.add_argument("--coverage", type=Path, required=True)
 p.add_argument("--out", type=Path, required=True)
 a = p.parse_args()
 
@@ -30,11 +31,14 @@ sources = sorted(a.generated.glob("recomp*.c"))
 if not sources:
     raise SystemExit("No generated recomp*.c: refusing an empty AOT archive")
 
-# Never silently broaden this list to src/cpu/*.c. That directory contains
-# jit_arm64.c, interp.c, decode.c and the hybrid dispatch/fallback runtime.
-forbidden = ("jit_arm64.c", "interp.c", "decode.c", "cpu.c", "recomp.c")
-if any(src.name in forbidden for src in sources):
-    raise SystemExit("Generated-source set unexpectedly contains CPU runtime code")
+# Match gow3-macos-arm64 compile_game.py exactly: every generated
+# recomp*.c translation unit, including the legitimate generated recomp.c.
+# Never add the upstream src/cpu/*.c runtime files to this game-code archive.
+if any(src.parent.resolve() != a.generated.resolve() for src in sources):
+    raise SystemExit("AOT source escaped the generated directory")
+coverage = json.loads(a.coverage.read_text())
+if not isinstance(coverage.get("distinct_gap_sites"), int):
+    raise SystemExit("Coverage audit is missing distinct_gap_sites")
 
 flags = [
     "-target", "arm64-apple-ios17.4",
@@ -71,6 +75,9 @@ manifest = {
     "compiled_decoder": False,
     "compiled_fallback": False,
     "source_policy": "gow3-macos-arm64 packaging/macos/native/compile_game.py",
+    "static_gap_sites": coverage["distinct_gap_sites"],
+    "static_gap_mnemonics": coverage.get("gap_mnemonics"),
+    "runtime_policy": "requires the matching GOW3_AOT_ONLY strict dispatcher; any reached gap must terminate, never interpret",
 }
 (a.out / "aot-build-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 print(json.dumps(manifest, indent=2))
