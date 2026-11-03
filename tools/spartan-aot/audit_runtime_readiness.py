@@ -12,6 +12,8 @@ from pathlib import Path
 
 CPU_RUNTIME_MARKERS = (
     "bbcpu_run",
+    "bbcpu_recomp_load",
+    "bbcpu_call_on_stack",
     "SpartanIOSPS4CPU",
     "spartan_ps4_cpu_dispatch",
     "spartan_cpu_dispatch",

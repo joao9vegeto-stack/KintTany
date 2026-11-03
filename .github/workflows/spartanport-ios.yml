@@ -156,6 +156,37 @@ jobs:
             --out "$RUNNER_TEMP/spartan-ios-aot"
           cat "$RUNNER_TEMP/spartan-ios-aot/aot-build-manifest.json"
           cat "$RUNNER_TEMP/spartan-prepared/aot/coverage-summary.json"
+      - name: Package upstream AOT runtime into the iOS app and compile the real app target
+        run: |
+          set -euo pipefail
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          FRAMEWORK="$GITHUB_WORKSPACE/SpartanPort-iOS/Frameworks/GOW3Recompiled.framework"
+          mkdir -p "$FRAMEWORK" "$GITHUB_WORKSPACE/SpartanPort-iOS/Frameworks"
+          cp "$RUNNER_TEMP/spartan-ios-aot/libgow3-recompiled-ios.dylib" "$FRAMEWORK/GOW3Recompiled"
+          install_name_tool -id @rpath/GOW3Recompiled.framework/GOW3Recompiled "$FRAMEWORK/GOW3Recompiled"
+          cp "$RUNNER_TEMP/spartan-ios-cpu/libgow3-aot-cpu-ios.a" "$GITHUB_WORKSPACE/SpartanPort-iOS/Frameworks/"
+          cp "$RUNNER_TEMP/ios-aot-deps/install/lib/libZydis.a" "$GITHUB_WORKSPACE/SpartanPort-iOS/Frameworks/"
+          cp "$RUNNER_TEMP/ios-aot-deps/install/lib/libZycore.a" "$GITHUB_WORKSPACE/SpartanPort-iOS/Frameworks/"
+          cat > "$FRAMEWORK/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleExecutable</key><string>GOW3Recompiled</string>
+            <key>CFBundleIdentifier</key><string>com.joaopedro.spartanport.gow3aot</string>
+            <key>CFBundleName</key><string>GOW3Recompiled</string>
+            <key>CFBundlePackageType</key><string>FMWK</string>
+            <key>CFBundleVersion</key><string>1</string>
+            <key>CFBundleShortVersionString</key><string>1.0</string>
+          </dict></plist>
+          PLIST
+          plutil -lint "$FRAMEWORK/Info.plist"
+          test "$(xcrun lipo -archs "$FRAMEWORK/GOW3Recompiled")" = arm64
+          test "$(xcrun lipo -archs "$GITHUB_WORKSPACE/SpartanPort-iOS/Frameworks/libgow3-aot-cpu-ios.a")" = arm64
+          (cd SpartanPort-iOS && xcodegen generate)
+          xcodebuild -project SpartanPort-iOS/SpartanPort.xcodeproj -scheme SpartanPort \
+            -sdk iphoneos -configuration Release -destination 'generic/platform=iOS' \
+            -derivedDataPath SpartanPort-iOS/build/DerivedData CODE_SIGNING_ALLOWED=NO build
+          test -d SpartanPort-iOS/build/DerivedData/Build/Products/Release-iphoneos/SpartanPort.app
       - name: Audit full-game AOT and runtime readiness
         run: |
           set -euo pipefail
@@ -185,5 +216,6 @@ jobs:
             ${{ runner.temp }}/spartan-ios-aot/runtime-readiness.json
             ${{ runner.temp }}/spartan-ios-cpu/ios-cpu-runtime-manifest.json
             ${{ runner.temp }}/spartan-ios-cpu/libgow3-aot-cpu-ios.a
+            SpartanPort-iOS/build/DerivedData/Build/Products/Release-iphoneos/SpartanPort.app
           if-no-files-found: warn
           retention-days: 14

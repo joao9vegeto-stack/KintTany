@@ -11,6 +11,9 @@ targets:
     platform: iOS
     sources:
       - path: Sources
+    dependencies:
+      - framework: Frameworks/GOW3Recompiled.framework
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.joaopedro.spartanport
@@ -27,6 +30,8 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         SUPPORTS_MACCATALYST: NO
         ENABLE_PREVIEWS: YES
+        LIBRARY_SEARCH_PATHS: "$(inherited) $(PROJECT_DIR)/Frameworks"
+        OTHER_LDFLAGS: "$(inherited) -force_load $(PROJECT_DIR)/Frameworks/libgow3-aot-cpu-ios.a -force_load $(PROJECT_DIR)/Frameworks/libZydis.a -force_load $(PROJECT_DIR)/Frameworks/libZycore.a -ldl"
 
   SpartanPortTests:
     type: bundle.unit-test
