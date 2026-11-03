@@ -80,43 +80,38 @@ def reconstruct_self(data: bytes) -> tuple[bytes,dict]:
     out=bytearray(outsize); out[:64]=data[elf_off:elf_off+64]
     out[64:64+es*n]=data[phstart:phend]
     used=set(); mapped=[]
-    # The SELF table is followed by version/certification data. Some ELF
-    # metadata program headers (notably PT_SCE_COMMENT) are backed by this
-    # trailing extent rather than a normal segment-table entry.
-    tail_off=max((e["off"]+e["stored"] for e in entries), default=header_size)
-    payloads=[]
-    for e in entries:
-        payloads.append({**e,"payload":data[e["off"]:e["off"]+e["stored"]]})
-    if tail_off < len(data):
-        payloads.append({"i":-1,"off":tail_off,"stored":len(data)-tail_off,
-                         "unpacked":len(data)-tail_off,"encrypted":False,
-                         "compressed":False,"payload":data[tail_off:]})
-    def covered(h): return any(a<=h["off"] and b>=h["off"]+h["fs"] for a,b in mapped)
-    def place(h, payload):
-        if len(payload)!=h["fs"]: raise ValueError(f"Tamanho incompatível no segmento {h['i']}")
-        out[h["off"]:h["off"]+h["fs"]]=payload; mapped.append((h["off"],h["off"]+h["fs"]))
-    def place_entry(h):
+    # Public PS4 unfself layout: each SELF entry is a payload extent. Its
+    # FILE_SIZE is matched against ELF program-header p_filesz. Not every
+    # program header has a corresponding SELF payload (notably SCE metadata
+    # headers); the reference unfself implementation deliberately skips those.
+    payloads=[{**e,"payload":data[e["off"]:e["off"]+e["stored"]]} for e in entries]
+    def place(h, payload, entry):
+        if len(payload)<h["fs"]: raise ValueError(f"SELF entry {entry['i']} menor que p_filesz do segmento {h['i']}")
+        out[h["off"]:h["off"]+h["fs"]]=payload[:h["fs"]]
+        mapped.append((h["off"],h["off"]+h["fs"]))
+        used.add(entry["i"])
+    for h in ph:
+        if not h["fs"]: continue
         candidates=[e for e in payloads if e["i"] not in used and
                     (e["stored"]==h["fs"] or e["unpacked"]==h["fs"])]
-        usable=[e for e in candidates if not e["encrypted"] and not e["compressed"]]
-        if usable:
-            e=usable[0]
-            place(h,e["payload"][:h["fs"]]); used.add(e["i"]); return
-        if candidates:
-            e=candidates[0]
+        if not candidates:
+            if h["type"]==1:
+                raise ValueError(f"PT_LOAD {h['i']} sem SELF entry compatível (p_filesz=0x{h['fs']:x}); entradas restantes: {[(e['i'],e['stored'],e['unpacked']) for e in payloads if e['i'] not in used]}")
+            # PT_DYNAMIC/PT_NOTE/PT_SCE_* metadata headers are not guaranteed
+            # to own an independent SELF extent. Match when present; otherwise
+            # leave their bytes out exactly as the public unfself layout does.
+            continue
+        e=candidates[0]
+        if e["encrypted"] or e["compressed"]:
             reason="criptografada" if e["encrypted"] else "compactada"
             raise ValueError(f"SELF entry {e['i']} para segmento {h['i']} está {reason}; não é seguro reconstruir sem descriptografia/descompressão")
-        start=elf_off+h["off"]; end=start+h["fs"]
-        if end<=len(data): place(h,data[start:end]); return
-        sizes=sorted({e["stored"] for e in payloads if e["i"] not in used})
-        raise ValueError(f"Sem payload SELF de tamanho 0x{h['fs']:x} para program header {h['i']}; tamanhos disponíveis: {sizes[:24]}")
+        place(h,e["payload"],e)
     for h in ph:
-        if h["fs"] and not covered(h): place_entry(h)
-    for h in ph:
-        if h["fs"] and not covered(h): raise ValueError(f"Segmento {h['i']} não foi reconstruído")
+        if h["type"]==1 and h["fs"] and not any(a<=h["off"] and b>=h["off"]+h["fs"] for a,b in mapped):
+            raise ValueError(f"PT_LOAD {h['i']} não foi reconstruído")
     return bytes(out),{"format":"PS4 SELF -> ELF64 x86-64","program_headers":n,
                        "pt_load":sum(1 for h in ph if h["type"]==1 and h["fs"]),
-                       "elf_bytes":len(out),"self_entries":count,"mapping":"SELF payload extents matched to ELF program headers by exact file size"}
+                       "elf_bytes":len(out),"self_entries":count,"mapping":"PS4 unfself-compatible exact FILE_SIZE/p_filesz mapping; PT_LOAD required, unmatched metadata headers skipped"}
 
 def main():
     ap=argparse.ArgumentParser()
