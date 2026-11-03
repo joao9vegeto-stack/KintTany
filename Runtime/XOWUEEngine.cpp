@@ -293,6 +293,8 @@ struct GuestAudioClient {
     uint32_t handle = 0u;
     uint32_t callback = 0u;
     uint32_t context = 0u;
+    // Xbox/Xenia ABI: callback r3 points to a guest dword containing context.
+    uint32_t callbackArgumentWrapper = 0u;
     uint32_t volumeChangeMask = 0xFFFFFFFFu;
     uint32_t inFlight = 0u;
     bool inUse = false;
@@ -459,7 +461,9 @@ std::vector<std::shared_ptr<GuestThread>> g_guestThreads;
 std::mutex g_xaudioMutex;
 std::condition_variable g_xaudioChanged;
 std::array<std::shared_ptr<GuestAudioClient>, 8> g_xaudioClients{};
+std::array<uint32_t, 8> g_xaudioCallbackArgumentWrappers{};
 std::shared_ptr<GuestThread> g_xowueAudioThread;
+std::atomic<uint64_t> g_xaudioCallbackAttempts{0u};
 std::atomic<uint64_t> g_xaudioCallbackCount{0u};
 std::atomic<uint64_t> g_xaudioFrameCount{0u};
 std::atomic<uint32_t> g_xaudioTraceLogs{0u};
@@ -2042,6 +2046,7 @@ void runXowueAudioCallbackPump(const std::shared_ptr<GuestThread> &thread,
         uint32_t slot = 0u;
         uint32_t callback = 0u;
         uint32_t callbackContextValue = 0u;
+        uint32_t callbackArgumentWrapper = 0u;
         uint32_t handle = 0u;
         {
             std::unique_lock<std::mutex> lock(g_xaudioMutex);
@@ -2072,6 +2077,7 @@ void runXowueAudioCallbackPump(const std::shared_ptr<GuestThread> &thread,
                 ++client->inFlight;
                 callback = client->callback;
                 callbackContextValue = client->context;
+                callbackArgumentWrapper = client->callbackArgumentWrapper;
                 handle = client->handle;
                 break;
             }
@@ -2102,7 +2108,24 @@ void runXowueAudioCallbackPump(const std::shared_ptr<GuestThread> &thread,
         callbackContext.r2.u32 = imageBase;
         callbackContext.r13.u32 = thread->pcrAddress;
         callbackContext.lr = 0u;
-        callbackContext.r3.u32 = callbackContextValue;
+        // Xenia and Xenon both pass the address of a guest dword wrapper,
+        // not the callback's original context value directly.
+        if (!callbackArgumentWrapper || !validGuestRange(callbackArgumentWrapper, 4u) ||
+            PPC_LOAD_U32(callbackArgumentWrapper) != callbackContextValue) {
+            recordRuntimeTrace("XOWUE_XAUDIO_CALLBACK_ARGUMENT_INVALID");
+            throw std::runtime_error("XAudio callback argument wrapper is invalid");
+        }
+        callbackContext.r3.u32 = callbackArgumentWrapper;
+        const uint64_t attempt = g_xaudioCallbackAttempts.fetch_add(
+            1u, std::memory_order_relaxed) + 1u;
+        if (attempt <= 8u || attempt % 1000u == 0u) {
+            char event[224];
+            std::snprintf(event, sizeof(event),
+                "XOWUE_XAUDIO_CALLBACK_ENTER attempt=%llu handle=0x%08X callback=0x%08X wrapper=0x%08X value=0x%08X thread=%u",
+                static_cast<unsigned long long>(attempt), handle, callback,
+                callbackArgumentWrapper, callbackContextValue, thread->id);
+            recordRuntimeTrace(event);
+        }
         // Match XenonRecomp's native guest-callback contract: seed the PPC
         // FPSCR from this host worker's FP control state before entering AOT.
         // The zero-initialized context otherwise carries a stale FP mode.
@@ -2145,11 +2168,11 @@ void runXowueAudioCallbackPump(const std::shared_ptr<GuestThread> &thread,
             count = g_xaudioCallbackCount.fetch_add(1u, std::memory_order_relaxed) + 1u;
         }
         if (count <= 8u || count % 1000u == 0u) {
-            char event[192];
+            char event[224];
             std::snprintf(event, sizeof(event),
-                          "XOWUE_XAUDIO_CALLBACK count=%llu handle=0x%08X callback=0x%08X context=0x%08X thread=%u",
+                          "XOWUE_XAUDIO_CALLBACK_RETURN count=%llu handle=0x%08X callback=0x%08X wrapper=0x%08X value=0x%08X thread=%u",
                           static_cast<unsigned long long>(count), handle, callback,
-                          callbackContextValue, thread->id);
+                          callbackArgumentWrapper, callbackContextValue, thread->id);
             recordRuntimeTrace(event);
         }
     }
@@ -2273,6 +2296,8 @@ void resetXowueAudioRuntime() {
     std::lock_guard<std::mutex> lock(g_xaudioMutex);
     for (auto &client : g_xaudioClients) client.reset();
     g_xowueAudioThread.reset();
+    g_xaudioCallbackArgumentWrappers.fill(0u);
+    g_xaudioCallbackAttempts.store(0u, std::memory_order_relaxed);
     g_xaudioCallbackCount.store(0u, std::memory_order_relaxed);
     g_xaudioFrameCount.store(0u, std::memory_order_relaxed);
     g_xaudioTraceLogs.store(0u, std::memory_order_relaxed);
@@ -5035,10 +5060,21 @@ void xowue_compat_import(const char *name, PPCContext &context, uint8_t *base) {
             std::lock_guard<std::mutex> lock(g_xaudioMutex);
             for (uint32_t i = 0u; i < g_xaudioClients.size(); ++i) {
                 if (g_xaudioClients[i]) continue;
+                uint32_t wrapper = g_xaudioCallbackArgumentWrappers[i];
+                if (!wrapper) {
+                    wrapper = allocateSmallGuestPoolBlock(base, sizeof(uint32_t),
+                                                          alignof(uint32_t));
+                    if (!wrapper || !validGuestRange(wrapper, sizeof(uint32_t))) continue;
+                    g_xaudioCallbackArgumentWrappers[i] = wrapper;
+                }
+                // Xenia's AudioSystem::RegisterClient allocates this exact
+                // four-byte wrapper and the worker passes its address in r3.
+                PPC_STORE_U32(wrapper, callbackContextValue);
                 client = std::make_shared<GuestAudioClient>();
                 client->handle = kXowueAudioDriverTag | i;
                 client->callback = callback;
                 client->context = callbackContextValue;
+                client->callbackArgumentWrapper = wrapper;
                 client->volumeChangeMask = 0xFFFFFFFFu;
                 client->next = std::chrono::steady_clock::now() + kXowueAudioInitialDelay;
                 client->inUse = true;
@@ -5056,8 +5092,9 @@ void xowue_compat_import(const char *name, PPCContext &context, uint8_t *base) {
         context.r3.u32 = kNtStatusSuccess;
         char event[192];
         std::snprintf(event, sizeof(event),
-                      "XOWUE_XAUDIO_REGISTER handle=0x%08X callback=0x%08X context=0x%08X thread=%u",
-                      handle, callback, callbackContextValue, workerId);
+                      "XOWUE_XAUDIO_REGISTER handle=0x%08X callback=0x%08X context=0x%08X wrapper=0x%08X thread=%u",
+                      handle, callback, callbackContextValue,
+                      client->callbackArgumentWrapper, workerId);
         recordRuntimeTrace(event);
         g_xaudioChanged.notify_all();
         return;

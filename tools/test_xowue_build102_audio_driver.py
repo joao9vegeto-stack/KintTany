@@ -14,7 +14,13 @@ required = (
     "GuestThreadBinding binding(thread.get())",
     "callbackContext.r2.u32 = imageBase",
     "callbackContext.r13.u32 = thread->pcrAddress",
-    "callbackContext.r3.u32 = callbackContextValue",
+    "callbackContext.r3.u32 = callbackArgumentWrapper",
+    "callbackArgumentWrapper = client->callbackArgumentWrapper",
+    "client->callbackArgumentWrapper = wrapper",
+    "allocateSmallGuestPoolBlock(base, sizeof(uint32_t)",
+    "PPC_STORE_U32(wrapper, callbackContextValue)",
+    "XOWUE_XAUDIO_CALLBACK_ENTER",
+    "XOWUE_XAUDIO_CALLBACK_RETURN",
     "callbackContext.fpscr.loadFromHost()",
     "XOWUE_XAUDIO_FPSCR_INITIALIZED",
     "routine(callbackContext, base)",
@@ -35,6 +41,8 @@ required = (
 for token in required:
     assert token in engine, token
 
+assert "callbackContext.r3.u32 = callbackContextValue" not in engine
+assert "callbackContext.r3.u32 = callbackArgumentWrapper" in engine
 assert 'if (api == "XAudioRegisterRenderDriverClient" ||' not in engine
 assert 'if (api == "XAudioSubmitRenderDriverFrame" ||' not in engine
 assert "test_xowue_build102_audio_driver.py" in workflow
