@@ -1,5 +1,5 @@
-name: SpartanPort iOS + KosmicKrisp
-run-name: SpartanPort iOS ARM64 validation • macos-26-runner • ${{ github.sha }}
+name: SpartanPort native ARM64 AOT
+run-name: SpartanPort native AOT recompilation • ${{ github.sha }}
 on:
   push:
     branches: [SpartanPort-iOS]
@@ -30,166 +30,106 @@ jobs:
           git diff --check
           echo "PASS: optional KosmicKrisp SDK scripts parse cleanly."
 
-  ps4-aot-audit:
-    name: Analyze actual PS4 SELF with native ARM64 AOT recompiler
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
+  native-aot:
+    name: Static x86-64 to ARM64 iOS recompilation (gow3-macos-arm64)
+    runs-on: macos-26
+    timeout-minutes: 300
     steps:
-      - name: Checkout isolated port branch
+      - name: Checkout only SpartanPort-iOS
         uses: actions/checkout@v4
-      - name: Set up Go for pinned PS4Recomp source
-        uses: actions/setup-go@v6
-        with:
-          go-version: '1.27.1'
-          cache: false
-      - name: Fetch pinned PS4Recomp implementation
+      - name: Install native build tools
         run: |
           set -euo pipefail
-          git clone https://github.com/wie-project/PS4Recomp.git "$RUNNER_TEMP/PS4Recomp"
-          git -C "$RUNNER_TEMP/PS4Recomp" checkout --detach 5dc28943ba81550b04de37fc91e0b05e8d3bcec8
-          test "$(git -C "$RUNNER_TEMP/PS4Recomp" rev-parse HEAD)" = "5dc28943ba81550b04de37fc91e0b05e8d3bcec8"
-          mkdir -p "$RUNNER_TEMP/ps4-aot-audit"
-      - name: Test and build the AOT recompiler
-        working-directory: ${{ runner.temp }}/PS4Recomp
+          brew list ninja >/dev/null 2>&1 || brew install ninja
+          cmake --version
+          xcrun --sdk iphoneos --show-sdk-version
+      - name: Fetch pinned gow3 AOT integration and CPU recompiler
         run: |
           set -euo pipefail
-          go test -count=1 ./...
-          # The CLI locates pkg/runtime relative to its own executable.
-          # Keep the binary beside that directory, not in RUNNER_TEMP's parent.
-          go build -o "$RUNNER_TEMP/PS4Recomp/ps4-recomp" ./cmd/ps4-recomp
-          "$RUNNER_TEMP/PS4Recomp/ps4-recomp" version | tee "$RUNNER_TEMP/ps4-aot-audit/version.txt"
-      - name: Analyze the uploaded God of War III PS4 executable
+          git clone https://github.com/xPXavierx/gow3-macos-arm64.git "$RUNNER_TEMP/gow3"
+          git -C "$RUNNER_TEMP/gow3" checkout --detach eb9af23a198c577f8548a63471770e7b3316a369
+          git clone https://github.com/bloodborne-native/bloodborne-recomp.git "$RUNNER_TEMP/recomp"
+          git -C "$RUNNER_TEMP/recomp" checkout --detach 4b23a301944642f1e4e9e921418d4519dc36c315
+          git -C "$RUNNER_TEMP/recomp" apply "$RUNNER_TEMP/gow3/packaging/macos/aot/bloodborne-recomp-arm64.patch"
+          git clone --recursive --branch v4.1.1 https://github.com/zyantific/zydis.git "$RUNNER_TEMP/zydis"
+          git -C "$RUNNER_TEMP/zydis" checkout a2278f1d254e492f6a6b39f6cb5d1f5d515659dc
+          git -C "$RUNNER_TEMP/zydis" submodule update --init --recursive
+          test -f "$RUNNER_TEMP/recomp/tools/recomp/scan.c"
+          test -f "$RUNNER_TEMP/recomp/tools/recomp/bbrecomp.c"
+      - name: Build host ARM64 AOT scanner and generator
         run: |
           set -euo pipefail
-          test -s "$GITHUB_WORKSPACE/eboot.bin"
-          "$RUNNER_TEMP/PS4Recomp/ps4-recomp" analyze "$GITHUB_WORKSPACE/eboot.bin" 2>&1 | tee "$RUNNER_TEMP/ps4-aot-audit/analysis.txt"
-      - name: Generate AOT assembly and the real HLE import report
-        working-directory: ${{ runner.temp }}/PS4Recomp
+          DEPS="$RUNNER_TEMP/aot-deps"
+          mkdir -p "$DEPS/install"
+          cmake -S "$RUNNER_TEMP/zydis/dependencies/zycore" -B "$DEPS/zycore-host" -G Ninja \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_INSTALL_PREFIX="$DEPS/install"
+          cmake --build "$DEPS/zycore-host" --parallel 6
+          cmake --install "$DEPS/zycore-host"
+          cmake -S "$RUNNER_TEMP/zydis" -B "$DEPS/zydis-host" -G Ninja \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_INSTALL_PREFIX="$DEPS/install" -DCMAKE_PREFIX_PATH="$DEPS/install" \
+            -DCMAKE_C_FLAGS="-I$DEPS/install/include" -DZYAN_SYSTEM_ZYCORE=ON \
+            -DZYDIS_BUILD_TOOLS=OFF -DZYDIS_BUILD_EXAMPLES=OFF -DZYDIS_BUILD_DOXYGEN=OFF
+          cmake --build "$DEPS/zydis-host" --parallel 6
+          cmake --install "$DEPS/zydis-host"
+          cmake -S "$RUNNER_TEMP/gow3/packaging/macos/aot" -B "$DEPS/aot-host" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DGOW3_RECOMP_SOURCE_DIRECTORY="$RUNNER_TEMP/recomp" \
+            -DCMAKE_PREFIX_PATH="$DEPS/install"
+          cmake --build "$DEPS/aot-host" --parallel 6
+          ctest --test-dir "$DEPS/aot-host" --output-on-failure
+      - name: Reconstruct the supplied SELF and prepare the real PS4 module graph
         run: |
           set -euo pipefail
-          "$RUNNER_TEMP/PS4Recomp/ps4-recomp" -compile=false -out "$RUNNER_TEMP/ps4-aot-generated" \
-            "$GITHUB_WORKSPACE/eboot.bin" 2>&1 | tee "$RUNNER_TEMP/ps4-aot-audit/recompile.txt"
-          test -s "$RUNNER_TEMP/ps4-aot-generated/hle_report.txt"
-          cp "$RUNNER_TEMP/ps4-aot-generated/hle_report.txt" "$RUNNER_TEMP/ps4-aot-audit/hle_report.txt"
-          find "$RUNNER_TEMP/ps4-aot-generated" -type f -name '*.s' | wc -l | tee "$RUNNER_TEMP/ps4-aot-audit/assembly_chunks.txt"
-          find "$RUNNER_TEMP/ps4-aot-generated" -type f \( -name '*.c' -o -name '*.cpp' -o -name '*.m' -o -name '*.mm' \) | wc -l | tee "$RUNNER_TEMP/ps4-aot-audit/runtime_sources.txt"
-          # Do not publish generated game code; retain only static analysis and HLE metadata.
-          rm -rf "$RUNNER_TEMP/ps4-aot-generated"
-      - name: Upload AOT compatibility and import audit
+          python3 tools/spartan-aot/prepare_dump.py --eboot eboot.bin --assets-zip G3.zip --out "$RUNNER_TEMP/spartan-input"
+          cat "$RUNNER_TEMP/spartan-input/input-manifest.json"
+          python3 "$RUNNER_TEMP/gow3/packaging/macos/native/prepare_game.py" \
+            "$RUNNER_TEMP/spartan-input/game" --out "$RUNNER_TEMP/spartan-prepared" \
+            --tools "$RUNNER_TEMP/aot-deps/aot-host"
+          test -s "$RUNNER_TEMP/spartan-prepared/aot/recomp.c"
+      - name: Build Zydis and Zycore for iOS ARM64
+        run: |
+          set -euo pipefail
+          DEPS="$RUNNER_TEMP/aot-deps"
+          IOS="$DEPS/ios"
+          mkdir -p "$IOS"
+          IOS_FLAGS="-DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=17.4 -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF"
+          cmake -S "$RUNNER_TEMP/zydis/dependencies/zycore" -B "$IOS/zycore" -G Ninja $IOS_FLAGS -DCMAKE_INSTALL_PREFIX="$IOS/install"
+          cmake --build "$IOS/zycore" --parallel 6
+          cmake --install "$IOS/zycore"
+          cmake -S "$RUNNER_TEMP/zydis" -B "$IOS/zydis" -G Ninja $IOS_FLAGS \
+            -DCMAKE_INSTALL_PREFIX="$IOS/install" -DCMAKE_PREFIX_PATH="$IOS/install" \
+            -DCMAKE_C_FLAGS="-I$IOS/install/include" -DZYAN_SYSTEM_ZYCORE=ON \
+            -DZYDIS_BUILD_TOOLS=OFF -DZYDIS_BUILD_EXAMPLES=OFF -DZYDIS_BUILD_DOXYGEN=OFF
+          cmake --build "$IOS/zydis" --parallel 6
+          cmake --install "$IOS/zydis"
+          mkdir -p "$IOS/install/lib"
+          find "$IOS/zycore" -name 'libZycore.a' -exec cp {} "$IOS/install/lib/" \;
+          find "$IOS/zydis" -name 'libZydis.a' -exec cp {} "$IOS/install/lib/" \;
+          test -s "$IOS/install/lib/libZycore.a"
+          test -s "$IOS/install/lib/libZydis.a"
+          mkdir -p "$RUNNER_TEMP/zydis/build-ios/lib" "$RUNNER_TEMP/zydis/dependencies/zycore/build-ios/lib"
+          cp "$IOS/install/lib/libZydis.a" "$RUNNER_TEMP/zydis/build-ios/lib/"
+          cp "$IOS/install/lib/libZycore.a" "$RUNNER_TEMP/zydis/dependencies/zycore/build-ios/lib/"
+      - name: Compile generated game functions as strict iOS ARM64 AOT
+        run: |
+          set -euo pipefail
+          python3 tools/spartan-aot/compile_ios_aot.py \
+            --generated "$RUNNER_TEMP/spartan-prepared/aot" \
+            --recomp "$RUNNER_TEMP/recomp" \
+            --zydis "$RUNNER_TEMP/zydis" --zycore "$RUNNER_TEMP/zydis/dependencies/zycore" \
+            --out "$RUNNER_TEMP/spartan-ios-aot"
+          cat "$RUNNER_TEMP/spartan-ios-aot/aot-build-manifest.json"
+          cat "$RUNNER_TEMP/spartan-prepared/aot/coverage-summary.json"
+      - name: Retain non-game diagnostic manifests only
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: SpartanPort-PS4-AOT-Audit
-          path: ${{ runner.temp }}/ps4-aot-audit/
+          name: SpartanPort-AOT-Diagnostics
+          path: |
+            ${{ runner.temp }}/spartan-input/input-manifest.json
+            ${{ runner.temp }}/spartan-ios-aot/aot-build-manifest.json
+            ${{ runner.temp }}/spartan-prepared/aot/coverage-summary.json
+            ${{ runner.temp }}/spartan-prepared/aot/coverage-audit.log
           if-no-files-found: warn
           retention-days: 14
-
-  build:
-    name: Package SpartanPort with pinned PsTJohn KosmicKrisp ICD
-    runs-on: macos-26
-    timeout-minutes: 240
-    steps:
-      - name: Checkout isolated port branch
-        uses: actions/checkout@v4
-      - name: Select Xcode 26 and install XcodeGen
-        run: |
-          set -euo pipefail
-          xcode_apps=(/Applications/Xcode_26*.app)
-          test -d "${xcode_apps[0]}" || {
-            echo "ERROR: macos-26 runner has no Xcode 26 installation." >&2
-            ls -la /Applications/Xcode*.app || true
-            exit 1
-          }
-          sudo xcode-select --switch "${xcode_apps[${#xcode_apps[@]}-1]}/Contents/Developer"
-          xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-version
-          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
-      - name: Reuse the exact KosmicKrisp dylib already consumed by PoPTST
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/kosmickrisp"
-          gh run download 39067594955 --repo "$GITHUB_REPOSITORY" \
-            --name PsTJohn1-1.2-IPA --dir "$RUNNER_TEMP/kosmickrisp"
-          SOURCE_IPA="$RUNNER_TEMP/kosmickrisp/PsTJohn1-1.2.ipa"
-          DRIVER="$RUNNER_TEMP/kosmickrisp/libKosmicKrisp.dylib"
-          test -s "$SOURCE_IPA"
-          unzip -p "$SOURCE_IPA" Payload/RPCS3.app/Frameworks/libKosmicKrisp.dylib > "$DRIVER"
-          echo "593d3f39a4fc751cc51884383444a5599993012281e084ef01945db7a4e78a34  $DRIVER" | shasum -a 256 -c -
-          file "$DRIVER"
-          xcrun lipo "$DRIVER" -verify_arch arm64
-          nm -gU "$DRIVER" | grep -F '_vk_icdGetInstanceProcAddr'
-          xcrun vtool -show-build "$DRIVER" | tee "$RUNNER_TEMP/kosmickrisp/driver-build-platform.txt"
-          grep -E -qi "platform[[:space:]]+IOS|platform[[:space:]]+2" "$RUNNER_TEMP/kosmickrisp/driver-build-platform.txt"
-          if otool -L "$DRIVER" | grep -E '/opt/homebrew|/usr/local|MacOSX[.]sdk'; then
-            echo "ERROR: KosmicKrisp contains a host/macOS dependency." >&2
-            exit 1
-          fi
-          mkdir -p "$GITHUB_WORKSPACE/SpartanPort-iOS/Frameworks"
-          cp "$DRIVER" "$GITHUB_WORKSPACE/SpartanPort-iOS/Frameworks/libKosmicKrisp.dylib"
-      - name: Generate standalone SpartanPort Xcode project
-        working-directory: SpartanPort-iOS
-        run: xcodegen generate
-      - name: Select an available iPhone simulator
-        run: |
-          set -euo pipefail
-          SIM_UDID="$(xcrun simctl list devices available --json | python3 -c '
-          import json,sys
-          d=json.load(sys.stdin)
-          ds=[x for runtime,items in d.get("devices",{}).items() if "iOS" in runtime for x in items if x.get("isAvailable") and x.get("name","").startswith("iPhone")]
-          pref=[x for x in ds if x.get("name")=="iPhone 17 Pro"]
-          choices=pref or ds
-          print(choices[0]["udid"] if choices else "")
-          ')"
-          test -n "$SIM_UDID"
-          echo "SIMULATOR_UDID=$SIM_UDID" >> "$GITHUB_ENV"
-      - name: Run PS4 folder, ELF and param.sfo unit tests
-        working-directory: SpartanPort-iOS
-        run: |
-          set -euo pipefail
-          xcodebuild -project SpartanPort.xcodeproj -scheme SpartanPort -configuration Debug \
-            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
-            -derivedDataPath "$RUNNER_TEMP/SpartanPortTestDerived" CODE_SIGNING_ALLOWED=NO test
-      - name: Build SpartanPort for iOS device ARM64
-        working-directory: SpartanPort-iOS
-        run: |
-          set -euo pipefail
-          test -s Frameworks/libKosmicKrisp.dylib
-          xcodebuild -project SpartanPort.xcodeproj -scheme SpartanPort -configuration Release \
-            -sdk iphoneos -destination 'generic/platform=iOS' \
-            -derivedDataPath "$RUNNER_TEMP/SpartanPortDerived" CODE_SIGNING_ALLOWED=NO build
-      - name: Embed, sign and validate ARM64 IPA
-        run: |
-          set -euo pipefail
-          APP="$RUNNER_TEMP/SpartanPortDerived/Build/Products/Release-iphoneos/SpartanPort.app"
-          test -d "$APP"
-          EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")"
-          APP_BINARY="$APP/$EXECUTABLE"
-          DRIVER="$APP/Frameworks/libKosmicKrisp.dylib"
-          mkdir -p "$APP/Frameworks" "$RUNNER_TEMP/SpartanIPA/Payload"
-          cp SpartanPort-iOS/Frameworks/libKosmicKrisp.dylib "$DRIVER"
-          test -s "$APP_BINARY"
-          test -s "$DRIVER"
-          xcrun lipo "$APP_BINARY" -verify_arch arm64
-          xcrun lipo "$DRIVER" -verify_arch arm64
-          nm -gU "$DRIVER" | grep -F '_vk_icdGetInstanceProcAddr'
-          if otool -L "$APP_BINARY" | grep -E 'libKosmicKrisp|libvulkan[.]dylib'; then
-            echo "ERROR: the probe must resolve the pinned ICD through dlopen/dlsym, not a second linked Vulkan provider." >&2
-            exit 1
-          fi
-          codesign --force --sign - --timestamp=none "$DRIVER"
-          codesign --force --deep --sign - --timestamp=none "$APP"
-          codesign --verify --deep --strict --verbose=2 "$APP"
-          cp -R "$APP" "$RUNNER_TEMP/SpartanIPA/Payload/SpartanPort.app"
-          ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/SpartanIPA/Payload" SpartanPort-iOS-KosmicKrisp.ipa
-          unzip -t SpartanPort-iOS-KosmicKrisp.ipa
-          unzip -l SpartanPort-iOS-KosmicKrisp.ipa | grep -E 'Payload/SpartanPort.app/(Info.plist|SpartanPort|Frameworks/libKosmicKrisp[.]dylib)$'
-      - name: Upload SpartanPort iOS IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: SpartanPort-iOS-KosmicKrisp-IPA
-          path: SpartanPort-iOS-KosmicKrisp.ipa
-          if-no-files-found: error
-          retention-days: 30
-          compression-level: 0
