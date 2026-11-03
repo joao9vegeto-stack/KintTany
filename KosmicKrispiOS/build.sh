@@ -227,8 +227,14 @@ FORCE_LINK_SYMBOLS=()
 while IFS= read -r symbol; do
   [[ -n "$symbol" ]] && FORCE_LINK_SYMBOLS+=("$symbol")
 done < <(
-  nm -gU "${LINK_ARCHIVES[@]}" |
-    awk '{ symbol = $NF; if (symbol ~ /^_(kk|vk_common|wsi)_/) print symbol }' |
+  # macOS nm: -U means "undefined symbols only" (the inverse of
+  # what the linker extraction list needs). Use the complete global-symbol
+  # listing and explicitly discard Mach-O undefined entries.
+  nm -g "${LINK_ARCHIVES[@]}" |
+    awk '
+      /\(undefined\)/ { next }
+      $NF ~ /^_(kk|vk_common|wsi)_/ { print $NF }
+    ' |
     LC_ALL=C sort -u
 )
 test "${#FORCE_LINK_SYMBOLS[@]}" -gt 0 || {
