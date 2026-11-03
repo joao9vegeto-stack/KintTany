@@ -92,6 +92,7 @@ jobs:
           python3 tools/spartan-aot/compile_ios_aot.py \
             --generated "$RUNNER_TEMP/spartan-prepared/aot" \
             --recomp "$RUNNER_TEMP/recomp" \
+            --coverage "$RUNNER_TEMP/spartan-prepared/aot/coverage-summary.json" \
             --out "$RUNNER_TEMP/spartan-ios-aot"
           cat "$RUNNER_TEMP/spartan-ios-aot/aot-build-manifest.json"
           cat "$RUNNER_TEMP/spartan-prepared/aot/coverage-summary.json"
