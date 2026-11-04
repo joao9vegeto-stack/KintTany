@@ -2,7 +2,7 @@ name: iOS IPA
 
 on:
   push:
-    branches: [main]
+    branches: [main, g3riOS]
   pull_request:
   workflow_dispatch:
     inputs:
