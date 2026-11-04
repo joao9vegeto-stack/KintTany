@@ -302,7 +302,8 @@ static int window_reserve(void) {
     }
     uintptr_t base=(uintptr_t)p;
     /* Guest pointers are packed into 40-bit fields. Accept the kernel's relocated mmap
-     * result only if the complete window remains representable by those pointers. */
+     * result only if the complete window remains representable by those pointers. The returned
+ * address is used as the base for every guest-visible subrange; no caller assumes the old absolute VA. */
     if ((base & (PAGE-1)) || base>UINT64_C(0x10000000000)-WINDOW_SIZE) {
         munmap(p,WINDOW_SIZE);
         fprintf(stderr,"STOP: iOS returned an unusable guest window at %p (40-bit guest VA limit).\\n",p);
