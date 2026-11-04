@@ -208,14 +208,14 @@ static void load_button_maps(void) {
 }
 
 /* On-screen controls (iOS, Gow3TouchControls.swift): written by the UI thread, read here. */
-static uint32_t touch_buttons, touch_sticks=0x80808080u;
+#include "runtime_touch_input.h"
+static Gow3TouchInput touch_input = { .state = (uint64_t)GOW3_TOUCH_CENTERED_STICKS << 32, .pressed = 0 };
 void gow3_touch_pad(uint32_t buttons, uint32_t sticks) {
-    __atomic_store_n(&touch_buttons,buttons,__ATOMIC_RELAXED);
-    __atomic_store_n(&touch_sticks,sticks,__ATOMIC_RELAXED);
+    gow3_touch_input_publish(&touch_input,buttons,sticks);
 }
 /* For the window code (gpu/ios/window_ios.mm): the save list and the settings menu take gamepad
  * events, not the sampled state, so the on-screen buttons are replayed to them as events. */
-uint32_t gow3_touch_buttons(void) { return __atomic_load_n(&touch_buttons,__ATOMIC_RELAXED); }
+uint32_t gow3_touch_buttons(void) { return gow3_touch_input_buttons(&touch_input); }
 static void key_axis(uint8_t *axis, bool negative, bool positive) {
     if (negative || positive) *axis=(uint8_t)(128-(negative ? 128 : 0)+(positive ? 127 : 0));
 }
@@ -255,8 +255,9 @@ static void sample_host(PadData *d) {
     /* The on-screen controls add to the pad like the keyboard: a stick follows the touch while it
      * is off center. */
     /* 0x20000000 is the on-screen Menu button: for the settings menu only, never the game. */
-    const uint32_t touched=__atomic_load_n(&touch_buttons,__ATOMIC_RELAXED) & ~0x20000000u;
-    const uint32_t sticks=__atomic_load_n(&touch_sticks,__ATOMIC_RELAXED);
+    const Gow3TouchSnapshot touch=gow3_touch_input_read(&touch_input);
+    const uint32_t touched=(touch.buttons | touch.pressed) & ~0x20000000u;
+    const uint32_t sticks=touch.sticks;
     d->buttons|=touched;
     if (touched & BTN_L2) d->l2=255;
     if (touched & BTN_R2) d->r2=255;

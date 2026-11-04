@@ -11,5 +11,8 @@ $CC -std=c11 -O2 -g -Wall -Wextra -Werror -DGOW3_WINDOW_LAYOUT -pthread -Isrc \
 $CC -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -Isrc src/compat_darwin.c tests/test_compat_darwin.c \
   -o "$OUT/test_compat_darwin"
 "$OUT/test_compat_darwin"
+# Touch input: atomic button/stick snapshots and short-tap edge retention.
+$CC -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -Isrc tests/test_touch_input.c -o "$OUT/test_touch_input"
+"$OUT/test_touch_input"
 # The upstream (non-window) layout still builds.
 $CC -std=c11 -O2 -Wall -Wextra -Werror -pthread -I. -Isrc -c src/runtime_memory.c -o "$OUT/runtime_memory_upstream.o"
