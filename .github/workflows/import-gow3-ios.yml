@@ -1,9 +1,8 @@
-name: Import God of War III iOS into g3riOS
+name: Import God of War III iOS source into g3riOS
 
 on:
   push:
-    branches:
-      - g3riOS
+    branches: [g3riOS]
     paths:
       - ".github/workflows/import-gow3-ios.yml"
 
@@ -11,33 +10,33 @@ permissions:
   contents: write
 
 concurrency:
-  group: g3rios-import-gow3
+  group: g3rios-upstream-import
   cancel-in-progress: false
 
 jobs:
-  import-upstream:
+  import:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout destination branch
+      - name: Checkout g3riOS
         uses: actions/checkout@v4
         with:
           ref: g3riOS
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Fetch exact upstream Git tree
+      - name: Import exact upstream Git tree
         shell: bash
         run: |
           set -euo pipefail
           git remote add gow3-upstream https://github.com/MohinShaikh5689/god-of-war-3-ios.git
           git fetch --no-tags --depth=1 gow3-upstream main
           git read-tree --reset -u FETCH_HEAD
-          git status --short
           test -f README.md
           test -f native/runtime/src/runtime_memory.c
           test -f docs/AUDIT.md
+          git status --short
 
-      - name: Commit imported source snapshot
+      - name: Commit and push imported snapshot
         shell: bash
         run: |
           set -euo pipefail
