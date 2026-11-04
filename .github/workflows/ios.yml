@@ -94,8 +94,10 @@ jobs:
       - name: Native core (FEXCore + gow3core for iOS arm64)
         if: steps.native-cache.outputs.cache-hit != 'true'
         run: |
+          mkdir -p build
           set -o pipefail
           native/scripts/build-ios.sh build/native-ios 2>&1 | tee build/native-build.log
+          grep -q 'BUILD_IOS_SUCCESS:' build/native-build.log
 
       - name: Cargo cache
         uses: actions/cache@v4
