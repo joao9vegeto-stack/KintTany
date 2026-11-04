@@ -15,10 +15,10 @@ on:
 permissions:
   contents: read
 
-# Keep one active pipeline per branch; do not cancel a runner that has already started.
+# New commits supersede older builds on this branch; the newest commit contains all prior fixes.
 concurrency:
   group: gow3-ios-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   CONFIGURATION: ${{ inputs.configuration || 'Release' }}
