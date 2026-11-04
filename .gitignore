@@ -1,0 +1,6 @@
+ref/
+node_modules/
+build/
+*.ipa
+.DS_Store
+native/rppairing/target/

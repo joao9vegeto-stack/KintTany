@@ -1,0 +1,122 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// gow3: GOW3_GPU_PROFILE=1 — GPU time per render pass, dispatch and upscaler run. A timestamp is
+// written where each of them starts (and at the frame end); the time to the next timestamp is
+// charged to its label, barriers and copies recorded in between included. Results are read four
+// frames later and printed every 5 s: GPU ms per frame by label.
+// GOW3_GPU_PROFILE=2 (MoltenVK on Apple GPUs): those GPUs sample counters only at encoder
+// boundaries, and MoltenVK gives every timestamp in a command buffer the same value (the
+// profile read 0 ms everywhere). Mode 2 submits the command buffer after each timestamp, so
+// consecutive timestamps are command buffer completions and their difference is the GPU time of
+// the labelled work (plus any time the GPU sat idle waiting for it: the frame total is the frame
+// time, not GPU busy time). Extra submissions cost some speed; a diagnostic only.
+
+#pragma once
+
+#include <array>
+#include <chrono>
+#include <cstdio>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "common/types.h"
+#include "video_core/renderer_vulkan/vk_common.h"
+
+namespace Vulkan {
+
+class Instance;
+class Scheduler;
+
+class GpuProfiler {
+public:
+    /// The profiler when GOW3_GPU_PROFILE=1, else null.
+    static GpuProfiler* Get() noexcept {
+        return instance_ptr;
+    }
+    static void Init(const Instance& instance, Scheduler& scheduler);
+
+    /// Starts a segment labelled `key`; `describe` names it the first time the key is seen.
+    template <typename Describe>
+    void Mark(u64 key, Describe&& describe) {
+        if (!described.contains(key)) {
+            described.emplace(key, describe());
+        }
+        WriteTimestamp(key);
+    }
+
+    /// The label of the open segment, for Resume after a nested segment (transfers).
+    [[nodiscard]] u64 Current() const noexcept {
+        return current;
+    }
+    /// Continues the segment of `key` (a label seen before) where a nested one ends.
+    void Resume(u64 key) {
+        WriteTimestamp(key);
+    }
+
+    /// Whether `other` is the scheduler it records into (the presenter has its own).
+    [[nodiscard]] bool Records(const Scheduler* other) const noexcept {
+        return other == &scheduler;
+    }
+
+    /// Called by the scheduler as it submits: in mode 2 a timestamp for the open label (the
+    /// submission ends the command buffer itself), else the "between submissions" segment.
+    void OnSubmit();
+
+    /// At the display pass: closes the frame's last segment, reads an old frame's results.
+    void BeginFrame();
+
+    /// Mode 3: render passes are also split where the draws' shaders change, so each shader
+    /// pair gets its own GPU time, with its draw and vertex counts (CountDraw).
+    [[nodiscard]] bool SplitDraws() const noexcept {
+        return split_draws;
+    }
+    /// One draw of `vertices` (indices or vertices, times instances) in the open segment.
+    void CountDraw(u64 vertices) {
+        if (!paused && used[slice] > 0 && used[slice] < SliceQueries) {
+            auto& count = counts[slice][current];
+            ++count.draws;
+            count.vertices += vertices;
+        }
+    }
+
+private:
+    GpuProfiler(const Instance& instance, Scheduler& scheduler);
+    void WriteTimestamp(u64 key, bool submit = true);
+    void Collect(u32 slice);
+    void Print();
+
+    static constexpr u32 NumSlices = 4;
+    static constexpr u32 SliceQueries = 4096;
+    static inline GpuProfiler* instance_ptr = nullptr;
+
+    vk::Device device;
+    Scheduler& scheduler;
+    std::array<vk::UniqueQueryPool, NumSlices> pools; ///< gow3: one per slice (Metal size limit)
+    double period_ns = 1.0;
+    u32 slice = 0;
+    std::array<std::vector<u64>, NumSlices> keys; ///< label of each timestamp but the last
+    std::array<u32, NumSlices> used{};
+    std::array<bool, NumSlices> pending{};
+    std::array<u64, NumSlices> ticks{}; ///< scheduler tick of each pending slice's last timestamp
+    bool paused = false; ///< the next slice is still in flight: no timestamps this frame
+    std::unordered_map<u64, std::string> described;
+    struct Count {
+        u64 draws = 0;
+        u64 vertices = 0;
+    };
+    std::array<std::unordered_map<u64, Count>, NumSlices> counts; ///< mode 3, per label
+    struct Total {
+        double ms = 0;
+        u64 segments = 0;
+        Count count;
+    };
+    std::unordered_map<u64, Total> totals;
+    u64 frames = 0;
+    u64 current = 0;
+    bool submit_each = false;
+    bool split_draws = false;
+    bool submitting = false; ///< inside the submission a mode 2 timestamp started
+    std::chrono::steady_clock::time_point window = std::chrono::steady_clock::now();
+};
+
+} // namespace Vulkan
