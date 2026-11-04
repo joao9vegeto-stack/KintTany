@@ -1,4 +1,4 @@
-name: iOS IPA
+name: GoW3 iOS validation and IPA
 
 on:
   push:
@@ -15,6 +15,11 @@ on:
 permissions:
   contents: read
 
+# Keep one active pipeline per branch; do not cancel a runner that has already started.
+concurrency:
+  group: gow3-ios-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CONFIGURATION: ${{ inputs.configuration || 'Release' }}
   CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -25,7 +30,18 @@ env:
   CCACHE_INODECACHE: 'true'
 
 jobs:
+  # Fail fast on the cheap, platform-independent tests before allocating a macOS runner.
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Runtime tests (memory layout and Darwin compatibility)
+        run: native/runtime/tests/run.sh
+
+  # One native build compiles FEXCore, runtime and GPU together; no separate GPU/runtime jobs.
   ipa:
+    needs: validate
     runs-on: macos-26
     timeout-minutes: 120
     steps:
@@ -71,11 +87,15 @@ jobs:
           cmake --version
           ccache --zero-stats
 
+      - name: Native build dependencies
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        run: brew install glslang boost
+
       - name: Native core (FEXCore + gow3core for iOS arm64)
         if: steps.native-cache.outputs.cache-hit != 'true'
         run: |
-          brew install glslang boost
-          native/scripts/build-ios.sh build/native-ios
+          set -o pipefail
+          native/scripts/build-ios.sh build/native-ios 2>&1 | tee build/native-build.log
 
       - name: Cargo cache
         uses: actions/cache@v4
@@ -151,6 +171,7 @@ jobs:
           name: build-logs
           path: |
             build/xcodebuild.log
+            build/native-build.log
             build/native-ios/CMakeFiles/CMakeOutput.log
             build/native-ios/CMakeFiles/CMakeError.log
             build/native-ios/libs.txt
