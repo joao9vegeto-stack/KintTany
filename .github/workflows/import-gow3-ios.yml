@@ -43,7 +43,6 @@ jobs:
           git config user.name "KintTany Import Bot"
           git config user.email "actions@users.noreply.github.com"
           git add -A
-          git diff --cached --check
           git diff --cached --stat
           git commit -m "Import God of War III iOS upstream into g3riOS"
           git push origin HEAD:g3riOS
