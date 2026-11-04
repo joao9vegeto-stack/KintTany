@@ -70,7 +70,11 @@ static uintptr_t window_base;
 #define USER_MAX UINT64_C(0xfc00000000)
 #define LOW_MAX USER_MIN
 #endif
+#ifdef GOW3_WINDOW_LAYOUT
+static uintptr_t low_next;
+#else
 static uintptr_t low_next=LOW_MIN;
+#endif
 #define LIMIT 4096
 #define INVALID ((int32_t)UINT32_C(0x80020016))
 #define NO_MEMORY ((int32_t)UINT32_C(0x8002000c))
