@@ -21,22 +21,25 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: g3riOS
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: true
 
-      - name: Import exact upstream Git tree
+      - name: Import upstream source tree
         shell: bash
         run: |
           set -euo pipefail
           git remote add gow3-upstream https://github.com/MohinShaikh5689/god-of-war-3-ios.git
           git fetch --no-tags --depth=1 gow3-upstream main
           git read-tree --reset -u FETCH_HEAD
+          # GitHub's workflow token cannot push workflow files; those are restored
+          # separately through the repository Contents API after this source import.
+          rm -rf .github/workflows
           test -f README.md
           test -f native/runtime/src/runtime_memory.c
           test -f docs/AUDIT.md
           git status --short
 
-      - name: Commit and push imported snapshot
+      - name: Commit and push imported source snapshot
         shell: bash
         run: |
           set -euo pipefail
