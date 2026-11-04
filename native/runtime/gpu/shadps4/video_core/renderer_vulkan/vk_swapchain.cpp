@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -237,11 +238,23 @@ void Swapchain::SetSurfaceProperties() {
                                  std::min(capabilities.maxImageExtent.height, height));
     }
 
-    // Select number of images in swap chain, we prefer one buffer in the background to work on
+    // Default to one extra image for throughput. On iOS, GOW3_SWAPCHAIN_IMAGES can
+    // lower this to the surface minimum (usually two) to reduce presentation queueing/latency.
     image_count = capabilities.minImageCount + 1;
     if (capabilities.maxImageCount > 0) {
         image_count = std::min(image_count, capabilities.maxImageCount);
     }
+    if (const char* env = std::getenv("GOW3_SWAPCHAIN_IMAGES"); env && env[0]) {
+        const int requested = std::atoi(env);
+        if (requested > 0) {
+            const u32 upper = capabilities.maxImageCount > 0
+                                  ? capabilities.maxImageCount
+                                  : std::max(capabilities.minImageCount, static_cast<u32>(requested));
+            image_count = std::clamp(static_cast<u32>(requested), capabilities.minImageCount, upper);
+        }
+    }
+    std::printf("Swapchain images: %u (surface min=%u max=%u)\\n", image_count,
+                capabilities.minImageCount, capabilities.maxImageCount);
 
     // Prefer identity transform if possible
     transform = vk::SurfaceTransformFlagBitsKHR::eIdentity;

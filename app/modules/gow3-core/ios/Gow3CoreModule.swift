@@ -212,6 +212,13 @@ public class Gow3CoreModule: Module {
     // MoltenVK binds descriptor sets directly, not through Metal argument buffers: every resource read
     // of every shader got cheaper. Same scenes on 0.1.45: 28 -> 40 FPS light, 25 -> 29 medium, 20.5 -> 26 heavy.
     setenv("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "0", 0)
+    // Low-latency presentation: let MoltenVK enqueue queue work on its GCD worker instead of
+    // blocking the game thread in vkQueueSubmit/vkQueuePresentKHR. This moves the wait; it does
+    // not remove GPU work. The one-frame guest queue and two-image swapchain bound the backlog.
+    // env.txt is applied first, so explicit user A/B values always win over these defaults.
+    setenv("MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS", "0", 0)
+    setenv("GOW3_FRAMES_AHEAD", "1", 0)
+    setenv("GOW3_SWAPCHAIN_IMAGES", "2", 0)
     // FEX without x86 memory-ordering (TSO) emulation, as the Android port runs this game
     // (android/runtime/fex-config.json): cheaper loads and stores in the translated code. It crashed
     // on 0.1.35, which was the x18 bug (fixed in 0.1.45); on 0.1.45 the worst-frame p90 fell 83 -> 54 ms.
@@ -250,6 +257,7 @@ public class Gow3CoreModule: Module {
     watchThermalState(log: log)
     try? "--- \(Date()) start: \(args.joined(separator: " "))\n".appendLine(to: log)
     if !envFile.isEmpty { try? "--- env.txt: \(envFile.joined(separator: " "))\n".appendLine(to: log) }
+    try? "--- low-latency defaults: MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS=0; GOW3_FRAMES_AHEAD=1; GOW3_SWAPCHAIN_IMAGES=2; MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS=0\n".appendLine(to: log)
     let cStrings = args.map { strdup($0) }
     defer { cStrings.forEach { free($0) } }
     var argv: [UnsafePointer<CChar>?] = cStrings.map { UnsafePointer($0) }
