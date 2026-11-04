@@ -110,14 +110,31 @@ mkdir -p "$DEST"
 find "$OUT" -name '*.a' ! -name 'libJemallocDummy.a' | sort > "$OUT/libs.txt"
 sed 's/^/  /' "$OUT/libs.txt"
 xcrun libtool -static -no_warning_for_no_symbols -o "$DEST/libgow3core_all.a" $(cat "$OUT/libs.txt")
-# Every symbol the C API and FEXCore need must resolve inside the archive (plus libc/libc++).
-# Not `nm | grep -q`: grep exits at the first match and pipefail then fails on nm's SIGPIPE.
-SYMBOLS=$(nm -gU "$DEST/libgow3core_all.a" 2>/dev/null || true)
+# Check the merged archive with Apple's nm output format. Do not pipe nm into
+# grep -q: grep may close the pipe early and make nm fail under pipefail.
+echo "Validating exported symbols in $DEST/libgow3core_all.a"
+if ! nm -gU "$DEST/libgow3core_all.a" > "$OUT/archive-symbols.txt" 2> "$OUT/archive-nm.err"; then
+  cat "$OUT/archive-nm.err" >&2
+  echo "nm could not inspect libgow3core_all.a" >&2
+  exit 1
+fi
+missing=0
 for symbol in _gow3_selftest _gow3_start _gow3_gpu_screen_test _vkCreateInstance _vkCreateMetalSurfaceEXT \
     _gow3gpu_init _gow3_gpu_set_surface _SDL_Delay _avcodec_find_decoder _sws_scale \
     __ZN7FEXCore9Allocator6mallocEm ___clear_cache; do
-  grep -q " T $symbol\$" <<<"$SYMBOLS" || { echo "missing $symbol in libgow3core_all.a" >&2; exit 1; }
+  if ! awk -v wanted="$symbol" '
+    NF >= 2 && $NF == wanted && $(NF-1) ~ /^[Tt]$/ { found=1 }
+    END { exit(found ? 0 : 1) }
+  ' "$OUT/archive-symbols.txt"; then
+    echo "ERROR: required exported symbol is absent: $symbol" >&2
+    missing=1
+  fi
 done
+if [ "$missing" -ne 0 ]; then
+  echo "Archive symbol validation failed; full nm output: $OUT/archive-symbols.txt" >&2
+  exit 1
+fi
 mkdir -p "$DEST/include"
 cp "$ROOT/native/include/gow3core.h" "$DEST/include/"
 ls -la "$DEST"
+echo "BUILD_IOS_SUCCESS: native archive and exported-symbol validation passed"
