@@ -30,7 +30,17 @@
 
 Este projeto adapta para iOS a versão comunitária de **God of War III Remastered (PlayStation 4)** cuja linhagem de código passa pelo projeto Android e pelo port de PC.
 
-O motivo do fork é técnico: levar o runtime e o caminho gráfico do projeto original a um ambiente Apple Silicon móvel, sem depender de uma camada Android, de Turnip ou de um processo Linux separado. Isso exige substituir partes específicas de Linux/Android por implementações compatíveis com Darwin e iOS, integrar a execução JIT permitida pelo sistema, criar uma janela nativa baseada em `CAMetalLayer`, adaptar entrada e áudio e compilar o conjunto como um aplicativo iOS instalável.
+### Por que este fork foi criado: compatibilidade com iOS 26
+
+O motivo imediato e prioritário do fork foi uma **falha de execução no ambiente iOS 26**. O desenvolvimento upstream havia sido testado pelo desenvolvedor em uma versão diferente do sistema — iOS 27 — enquanto o aparelho usado neste projeto estava no iOS 26. Essa diferença de versão tornou a execução no iOS 26 o problema concreto que precisava ser investigado e resolvido. O objetivo nunca foi simplesmente reproduzir no iPhone o resultado obtido em iOS 27: era fazer o jogo funcionar no sistema efetivamente utilizado, iOS 26.
+
+Por isso, a primeira missão deste fork é **compatibilidade e execução confiável no iOS 26**: identificar diferenças de comportamento e APIs entre as versões, corrigir a integração com Darwin, memória virtual, sinais, JIT, inicialização, janela, entrada e áudio, e validar o resultado no aparelho com iOS 26. Uma compilação bem-sucedida, um IPA gerado ou um teste isolado de JIT não comprovam, por si só, que o jogo inicia e funciona corretamente. A compatibilidade com iOS 26 deve ser demonstrada por execução real de gameplay.
+
+O trabalho de portabilidade também precisa levar o runtime e o caminho gráfico a um ambiente Apple Silicon móvel, sem depender de uma camada Android, de Turnip ou de um processo Linux separado. Isso exige substituir partes específicas de Linux/Android por implementações compatíveis com Darwin e iOS, integrar a execução JIT permitida pelo sistema, criar uma janela nativa baseada em `CAMetalLayer`, adaptar entrada e áudio e compilar o conjunto como um aplicativo iOS instalável.
+
+### Segunda missão: 30 FPS reais
+
+**Somente depois de estabelecer uma execução estável no iOS 26, o foco de otimização é atingir 30 FPS reais e sustentados**, mantendo a resolução nativa de cena de 1920 × 1080. A meta de desempenho não substitui nem mascara o requisito de compatibilidade: reduzir resolução, limitar o contador de FPS ou obter um build verde não resolve uma falha de execução.
 
 O trabalho não consiste em converter previamente todo o executável do jogo para ARM64. O executável x86-64 do PS4 continua sendo executado por tradução dinâmica do FEXCore para ARM64; as bibliotecas e serviços do sistema PS4 são atendidos pelo runtime/HLE do port.
 
@@ -46,7 +56,7 @@ O projeto separa três coisas que não devem ser confundidas:
 - **FPS efetivamente sustentado:** quantidade de quadros completos que o jogo e a GPU conseguem produzir na cena testada.
 - **Taxa de apresentação da tela:** frequência com que o iOS apresenta imagens no display. Uma tela de 120 Hz não transforma, por si só, 25 FPS reais em 30 ou 60 FPS.
 
-O estado do projeto é experimental. Há evidências documentadas de inicialização, menus, vídeo de introdução, áudio e gameplay em aparelho real, além de otimizações que elevaram cenas de aproximadamente 8–12 FPS para perto de 27 FPS. Isso **não significa** que todas as cenas sustentem 30 FPS, que a renderização esteja livre de defeitos ou que a meta de 1080p/30 esteja concluída. Compatibilidade, estabilidade, temperatura, memória e desempenho ainda dependem de validação no dispositivo.
+O estado do projeto é experimental. Há evidências documentadas de inicialização, menus, vídeo de introdução, áudio e gameplay em aparelho real em testes anteriores, além de otimizações que elevaram cenas de aproximadamente 8–12 FPS para perto de 27 FPS. Esses resultados históricos **não comprovam que a revisão atual execute corretamente no iOS 26**. A prioridade vigente é reproduzir e corrigir a falha de execução nessa versão do sistema e validar o fluxo completo no aparelho. Depois disso, a meta é sustentar 30 FPS reais em 1080p. Não se considera o objetivo concluído por haver apenas compilação, IPA, tela de menu ou contador limitado a 30 FPS.
 
 ## Origem e linhagem do código
 
@@ -84,7 +94,7 @@ Aplicativo iOS (Expo / React Native)
 
 ## Histórico do desenvolvimento para iOS 26
 
-O histórico abaixo organiza os marcos técnicos documentados no repositório. Ele é uma síntese de etapas, não uma alegação de que cada tentativa intermediária tenha sido bem-sucedida.
+O histórico abaixo organiza os marcos técnicos documentados no repositório. A motivação que orienta a sequência é: primeiro corrigir a falha de execução no iOS 26 (o ambiente-alvo deste fork, diferente do iOS 27 usado no teste upstream); depois, com execução estável comprovada nesse sistema, otimizar para 30 FPS reais em 1920 × 1080. A lista é uma síntese de etapas, não uma alegação de que cada tentativa intermediária tenha sido bem-sucedida.
 
 ### Setembro de 2026 — criação da base de trabalho
 
@@ -100,7 +110,7 @@ O histórico abaixo organiza os marcos técnicos documentados no repositório. E
 - **FEXCore no iOS:** compilação nativa das bibliotecas FEXCore para iOS/ARM64 e adaptação de alocação, recursos da CPU host e contexto de sinais.
 - **20 de outubro — primeiro marco de execução JIT:** o self-test nativo e os testes de tradução FEXCore passaram em um iPhone 17 com JIT habilitado. Os resultados de memória, endereçamento e JIT foram documentados na auditoria.
 - **21 de outubro — JIT integrado ao aplicativo:** inclusão do helper de JIT baseado em StikJIT, com alocação de pool executável e alias de escrita. O teste de execução traduzida retornou o resultado esperado no aparelho.
-- **Pareamento:** integração do fluxo de pareamento no aplicativo, baseada no trabalho de Madeira. O pareamento dentro do app depende de iOS 27 ou posterior; o helper/JIT documentado tem suporte a partir do iOS 26, conforme as condições do sideload e do debugger.
+- **Pareamento e diferença entre versões:** integração do fluxo de pareamento no aplicativo, baseada no trabalho de Madeira. O pareamento dentro do próprio app depende de iOS 27 ou posterior; isso não muda o alvo principal deste fork, que é executar o jogo em iOS 26. O helper/JIT documentado tem caminho de uso a partir do iOS 26, sujeito às condições de sideload, debugger e entitlements. A dependência de um recurso disponível apenas no iOS 27 não pode ser tratada como solução para o aparelho-alvo em iOS 26; é necessário manter um caminho compatível com iOS 26 e testá-lo nesse sistema.
 
 ### Outubro de 2026 — GPU, janela e primeiro boot do jogo
 
@@ -127,8 +137,9 @@ O histórico abaixo organiza os marcos técnicos documentados no repositório. E
 ### Dispositivo e sistema
 
 - Projeto direcionado a dispositivos iOS com Apple Silicon; validação documentada em iPhone 17.
-- O trabalho de JIT foi desenvolvido para o ambiente de sideload/debugger do iOS 26 em diante.
-- Algumas funções de pareamento integrado exigem iOS 27 ou posterior. Consulte [docs/JIT.md](docs/JIT.md) antes de escolher o método de ativação.
+- **Alvo prioritário deste fork: iOS 26.** A execução do jogo nessa versão é o requisito central de compatibilidade e precisa ser validada no dispositivo; resultados obtidos apenas em iOS 27 não substituem esse teste.
+- O trabalho de JIT inclui um caminho para o ambiente de sideload/debugger do iOS 26 em diante, sujeito às condições de assinatura, entitlements e ativação.
+- Algumas funções de pareamento integrado exigem iOS 27 ou posterior. Elas são uma limitação específica desse método de pareamento, não uma mudança do alvo de execução do jogo. Consulte [docs/JIT.md](docs/JIT.md) e não dependa do pareamento integrado de iOS 27 para declarar compatibilidade com iOS 26.
 - A configuração de build atual declara deployment target iOS 17.0; isso é o mínimo de compilação configurado, **não** uma garantia de que todos os recursos de JIT funcionem em iOS 17.
 - Um sideloader compatível, Developer Mode e a configuração de JIT são necessários para executar o código x86-64 traduzido.
 
@@ -225,7 +236,7 @@ Documentos de referência:
 - [Status de outubro](docs/STATUS-2026-10-23.md) — marcos de estabilidade, GPU e texturas.
 - [Desempenho e meta 1080p/30](docs/PERFORMANCE-2026-11-04.md) — medições, otimizações e plano de validação.
 
-Para medir desempenho real, use a mesma cena/save, aparelho em condição térmica comparável e logs sem profiler intrusivo. Registre frame time, FPS efetivo, tempo de GPU por passe, draw count e estado térmico. O contador limitado a 30 FPS não comprova 30 FPS sustentados. CI comprova compilação e testes automatizados; não comprova desempenho ou estabilidade em gameplay no iPhone.
+A validação deve respeitar a ordem das metas. **Primeiro: iOS 26.** Reproduza a inicialização e o gameplay no aparelho com iOS 26, registre crash/logs, confirme JIT, loader, janela, áudio e input, e não aceite teste feito somente em iOS 27 como evidência de compatibilidade. **Depois: desempenho.** Use a mesma cena/save, aparelho em condição térmica comparável e logs sem profiler intrusivo. Registre frame time, FPS efetivo, tempo de GPU por passe, draw count e estado térmico. O contador limitado a 30 FPS não comprova 30 FPS sustentados. CI comprova compilação e testes automatizados; não comprova execução, estabilidade ou desempenho em gameplay no iPhone.
 
 ## Créditos e agradecimentos
 
