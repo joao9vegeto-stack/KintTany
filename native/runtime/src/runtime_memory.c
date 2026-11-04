@@ -50,15 +50,20 @@ static uint64_t pool_size_bytes(void) {
 #define FLEXIBLE_SIZE (UINT64_C(448) * 1024 * 1024)
 #define PAGE UINT64_C(16384)
 #ifdef GOW3_WINDOW_LAYOUT
-/* [LOW_MIN,BACKING_MIN) low map 4 GiB, [BACKING_MIN,USER_MIN) backing view 8 GiB, then 28 GiB of
- * PS4 user range. The rest of iOS's 64 GiB hole at 0x7000000000 (22 GiB) stays free: outside it the
- * app has only 1-3 GB of address space, too little for Metal buffers, FEX's thread caches and
- * stacks (a 48 GiB user range left none, and thread creation failed once GPU work started). */
-#define LOW_MIN UINT64_C(0x7000000000)
-#define BACKING_MIN UINT64_C(0x7100000000)
-#define USER_MIN UINT64_C(0x7300000000)
-#define USER_MAX UINT64_C(0x7A00000000)
+/* The PS4 guest needs one contiguous 40 GiB window: 4 GiB low host map, 8 GiB backing
+ * alias, then 28 GiB guest VA. Do not assume iOS places the Increased-Memory-limit hole
+ * at 0x7000000000: iOS 26.5 on some devices returns a valid large hole near 0x300000000
+ * when that address is supplied as an mmap hint. The actual base is selected at reserve time. */
+#define LOW_OFFSET UINT64_C(0)
+#define BACKING_OFFSET (UINT64_C(4) * 1024 * 1024 * 1024)
+#define USER_OFFSET (UINT64_C(12) * 1024 * 1024 * 1024)
+#define WINDOW_SIZE (UINT64_C(40) * 1024 * 1024 * 1024)
+#define LOW_MIN (window_base + LOW_OFFSET)
+#define BACKING_MIN (window_base + BACKING_OFFSET)
+#define USER_MIN (window_base + USER_OFFSET)
+#define USER_MAX (window_base + WINDOW_SIZE)
 #define LOW_MAX BACKING_MIN
+static uintptr_t window_base;
 #else
 #define LOW_MIN UINT64_C(0x0800000000)
 #define USER_MIN UINT64_C(0x1000000000)
@@ -277,20 +282,33 @@ static int pool(void) {
  * The whole window is one PROT_NONE reservation; mapping replaces part of it with MAP_FIXED and
  * unmapping puts the reservation back, so nothing else is ever placed inside it. */
 static int window_reserved;
+static uintptr_t low_next;
 static int window_fail(const char *what, uintptr_t address, uint64_t size) {
-    fprintf(stderr,"Runtime: %s failed at %p (+0x%" PRIx64 "): %s\n",what,(void *)address,size,strerror(errno));
+    fprintf(stderr,"Runtime: %s failed at %p (+0x%" PRIx64 "): %s\\n",what,(void *)address,size,strerror(errno));
     return -1;
 }
 static int window_reserve(void) {
     if (window_reserved) return 0;
-    void *p=mmap((void *)LOW_MIN,USER_MAX-LOW_MIN,PROT_NONE,MAP_PRIVATE|MAP_ANON|MAP_NORESERVE,-1,0);
-    if (p!=(void *)LOW_MIN) {
-        if (p!=MAP_FAILED) munmap(p,USER_MAX-LOW_MIN);
-        fprintf(stderr,"STOP: the guest address window [%p,%p) is not free (got %p). On iOS it needs the "
-                "increased-memory-limit entitlement.\n",(void *)LOW_MIN,(void *)USER_MAX,p);
+    const uintptr_t preferred=UINT64_C(0x7000000000);
+    void *p=mmap((void *)preferred,WINDOW_SIZE,PROT_NONE,MAP_PRIVATE|MAP_ANON|MAP_NORESERVE,-1,0);
+    if (p==MAP_FAILED) {
+        fprintf(stderr,"STOP: could not reserve the %llu GiB guest address window: %s\\n",
+                (unsigned long long)(WINDOW_SIZE>>30),strerror(errno));
         return -1;
     }
+    uintptr_t base=(uintptr_t)p;
+    /* Guest pointers are packed into 40-bit fields. Accept the kernel's relocated mmap
+     * result only if the complete window remains representable by those pointers. */
+    if ((base & (PAGE-1)) || base>UINT64_C(0x10000000000)-WINDOW_SIZE) {
+        munmap(p,WINDOW_SIZE);
+        fprintf(stderr,"STOP: iOS returned an unusable guest window at %p (40-bit guest VA limit).\\n",p);
+        return -1;
+    }
+    window_base=base;
+    low_next=LOW_MIN;
     window_reserved=1;
+    if (base!=(uintptr_t)preferred)
+        fprintf(stderr,"Runtime: relocated guest window from %p to %p (40 GiB).\\n",(void *)preferred,p);
     return 0;
 }
 void runtime_memory_reserve(void) { if (window_reserve()) exit(21); }
@@ -773,7 +791,7 @@ uintptr_t runtime_memory_resolve(const char *name) {
 }
 /* Host-owned memory the guest can see (image, stacks, trampolines) lives in
  * [LOW_MIN, LOW_MAX): PS4 code packs pointers into 40-bit fields. */
-static uintptr_t low_next=LOW_MIN;
+/* low_next is initialized after the window base has been selected. */
 void *runtime_low_map(size_t size, int prot) {
     size=align_up(size,PAGE);
     write_lock();
