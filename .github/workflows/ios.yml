@@ -1,0 +1,157 @@
+name: iOS IPA
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: Debug = dev client (JS from Metro), Release = standalone (JS bundled)
+        type: choice
+        options: [Debug, Release]
+        default: Release
+
+permissions:
+  contents: read
+
+env:
+  CONFIGURATION: ${{ inputs.configuration || 'Release' }}
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_MAXSIZE: 2G
+  CCACHE_SLOPPINESS: clang_index_store,file_stat_matches,include_file_ctime,include_file_mtime,ivfsoverlay,pch_defines,modules,system_headers,time_macros
+  CCACHE_FILECLONE: 'true'
+  CCACHE_DEPEND: 'true'
+  CCACHE_INODECACHE: 'true'
+
+jobs:
+  ipa:
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Select the latest stable Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      # The native core only changes with native/ or the FEX commit (or the compiler): restore
+      # the finished archive and skip the FEX checkout and build when none of them changed.
+      - name: Native core cache key
+        id: native-key
+        run: |
+          fex=$(git ls-tree -r HEAD native/third_party native/runtime/third_party native/runtime/gpu/third_party | grep '^160000' | shasum | cut -c1-12)
+          xcode=$(xcodebuild -version | shasum | cut -c1-12)
+          echo "key=native-${{ runner.os }}-$fex-$xcode-${{ hashFiles('native/cmake/**', 'native/cpu/**', 'native/jit/**', 'native/gpu/**', 'native/selftest/**', 'native/include/**', 'native/runtime/**', 'native/patches/**', 'native/scripts/build-ios.sh', 'native/scripts/fetch-submodules.sh') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the native core
+        id: native-cache
+        uses: actions/cache@v4
+        with:
+          path: app/modules/gow3-core/ios/lib
+          key: ${{ steps.native-key.outputs.key }}
+
+      - name: ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ runner.os }}-${{ github.sha }}
+          restore-keys: ccache-${{ runner.os }}-
+
+      - name: FEX and the submodules its iOS build needs
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        run: |
+          native/scripts/fetch-submodules.sh
+
+      - name: Tools
+        run: |
+          brew install ninja ccache
+          xcodebuild -version
+          cmake --version
+          ccache --zero-stats
+
+      - name: Native core (FEXCore + gow3core for iOS arm64)
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        run: |
+          brew install glslang boost
+          native/scripts/build-ios.sh build/native-ios
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            native/rppairing/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('native/rppairing/Cargo.lock', 'native/rppairing/src/**') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Pairing library (Rust, on-device pairing for the built-in JIT)
+        run: native/scripts/build-rppairing-ios.sh
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: CocoaPods cache
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/CocoaPods
+          key: pods-${{ runner.os }}-${{ hashFiles('app/package-lock.json') }}
+          restore-keys: pods-${{ runner.os }}-
+
+      - name: Expo prebuild
+        working-directory: app
+        run: |
+          npm ci
+          npx expo prebuild -p ios --clean
+
+      - name: Build the app (unsigned, ${{ env.CONFIGURATION }})
+        working-directory: app/ios
+        run: |
+          set -o pipefail
+          mkdir -p ../../build # only the native step creates it, and a cache hit skips that step
+          xcodebuild -workspace gow3ios.xcworkspace -scheme gow3ios -configuration "$CONFIGURATION" \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath ../../build/xcode \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build > ../../build/xcodebuild.log 2>&1 && status=0 || status=$?
+          grep -E 'error:|Undefined symbols|duplicate symbol|^  "|\*\* BUILD' ../../build/xcodebuild.log | head -80 || true
+          test "$status" -eq 0
+          # The executable must exist: a failed link still leaves a resource-only .app behind.
+          test -f "../../build/xcode/Build/Products/$CONFIGURATION-iphoneos/gow3ios.app/gow3ios"
+          ccache --show-stats || true
+
+      - name: JIT helper extension (StikJIT)
+        run: |
+          native/scripts/fetch-stikjit.sh build/stikjit
+          native/scripts/build-jit-helper.sh build/stikjit "build/xcode/Build/Products/$CONFIGURATION-iphoneos/gow3ios.app"
+
+      - name: Package the IPA (ad-hoc signed with the app's entitlements; the sideloader re-signs it)
+        run: |
+          APP="build/xcode/Build/Products/$CONFIGURATION-iphoneos/gow3ios.app"
+          find "$APP" \( -name '*.framework' -o -name '*.dylib' \) -prune -print0 | xargs -0 -n1 codesign -f -s -
+          find "$APP/PlugIns" -name '*.appex' -prune -print0 | xargs -0 -n1 codesign -f -s -
+          codesign -f -s - --entitlements app/ios/gow3ios/gow3ios.entitlements "$APP"
+          codesign -d --entitlements - "$APP"
+          mkdir -p build/ipa/Payload
+          cp -R "$APP" build/ipa/Payload/
+          (cd build/ipa && zip -qry "../gow3-ios-$CONFIGURATION.ipa" Payload)
+          ls -la build/gow3-ios-*.ipa
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: gow3-ios-${{ env.CONFIGURATION }}-ipa
+          path: build/gow3-ios-${{ env.CONFIGURATION }}.ipa
+
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: build-logs
+          path: |
+            build/xcodebuild.log
+            build/native-ios/CMakeFiles/CMakeOutput.log
+            build/native-ios/CMakeFiles/CMakeError.log
+            build/native-ios/libs.txt
+          if-no-files-found: ignore
