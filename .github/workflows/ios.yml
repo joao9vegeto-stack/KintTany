@@ -178,3 +178,5 @@ jobs:
             build/native-ios/CMakeFiles/CMakeError.log
             build/native-ios/libs.txt
           if-no-files-found: ignore
+
+# Queue retry trigger: no build behavior changes.
