@@ -200,6 +200,14 @@ public class Gow3CoreModule: Module {
     // motion buffer) drew 32768x32768 attachment-less passes that took ~19 ms of a 35 ms GPU frame
     // in Hades (0.1.38 profile). Off, heavy scenes went from 10-22 to 17-21 FPS, light ones 30 -> 41.
     setenv("GOW3_UPSCALER", "off", 0)
+    // FSR's Vulkan provider is not built on iOS. SceneTargets can still rasterize the
+    // 1080p scene into reduced proxy images, which the game's native post chain samples.
+    // Start at 640x360 and adapt down only when sustained frame intervals exceed 33.3 ms.
+    // env.txt is applied first, so explicit user overrides remain authoritative.
+    setenv("GOW3_UPSCALE_PRESET", "4", 0)
+    setenv("GOW3_IOS_SCENE_SCALE", "1", 0)
+    setenv("GOW3_IOS_ADAPTIVE_SCENE_SCALE", "1", 0)
+    setenv("GOW3_FPS_LIMIT", "30", 0)
     setenv("GOW3_OBJECT_MOTION", "0", 0)
     // MoltenVK binds descriptor sets directly, not through Metal argument buffers: every resource read
     // of every shader got cheaper. Same scenes on 0.1.45: 28 -> 40 FPS light, 25 -> 29 medium, 20.5 -> 26 heavy.

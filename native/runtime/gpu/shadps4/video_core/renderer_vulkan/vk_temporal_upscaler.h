@@ -207,6 +207,10 @@ private:
     bool reset = true;
     u64 frame_id = 0;
     std::chrono::steady_clock::time_point last_frame{};
+    // iOS scene-proxy controller: slow-frame hysteresis avoids reallocating proxy targets
+    // on isolated hitches; recovery is deliberately slower than downscaling.
+    std::chrono::steady_clock::time_point last_scene_frame{};
+    u32 ios_slow_frames = 0, ios_fast_frames = 0, ios_adaptive_level = 0;
 
     u32 width = 0, height = 0;             ///< render size
     u32 out_width = 0, out_height = 0;     ///< output size of the context

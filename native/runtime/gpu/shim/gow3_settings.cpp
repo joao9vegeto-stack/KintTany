@@ -184,7 +184,8 @@ void Load() {
         }
     }
     const std::pair<const char*, const char*> env_keys[] = {
-        {"GOW3_FSR_SHARPNESS", "sharpness"},        {"GOW3_JITTER", "jitter"},
+        {"GOW3_FPS_LIMIT", "fps_limit"},            {"GOW3_FSR_SHARPNESS", "sharpness"},
+        {"GOW3_JITTER", "jitter"},
         {"GOW3_REACTIVE", "reactive"},              {"GOW3_REACTIVE_SCALE", "reactive_scale"},
         {"GOW3_REACTIVE_THRESHOLD", "reactive_threshold"}, {"GOW3_REACTIVE_MAX", "reactive_max"},
         {"GOW3_UPSCALE_PRESET", "preset"},            {"GOW3_OBJECT_MOTION", "object_motion"},

@@ -26,6 +26,25 @@
 
 namespace Vulkan {
 
+namespace {
+bool SameRenderTargets(const RenderState& a, const RenderState& b) {
+    if (a.width != b.width || a.height != b.height || a.num_layers != b.num_layers ||
+        a.num_color_attachments != b.num_color_attachments) {
+        return false;
+    }
+    for (u32 i = 0; i < a.num_color_attachments; ++i) {
+        if (a.color_attachments[i].image_view != b.color_attachments[i].image_view ||
+            a.color_attachments[i].image_layout != b.color_attachments[i].image_layout) {
+            return false;
+        }
+    }
+    const auto& ad = a.depth_stencil_attachment;
+    const auto& bd = b.depth_stencil_attachment;
+    return ad.image_view == bd.image_view && ad.image_layout == bd.image_layout &&
+           ad.has_depth == bd.has_depth && ad.has_stencil == bd.has_stencil;
+}
+} // namespace
+
 std::mutex Scheduler::submit_mutex;
 
 Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
@@ -85,6 +104,50 @@ void Scheduler::RecordFullBarrier(vk::CommandBuffer cmdbuf) {
 
 void Scheduler::BeginRendering(const RenderState& new_state) {
     if (is_rendering && render_state == new_state) {
+        return;
+    }
+    if (is_rendering && SameRenderTargets(render_state, new_state)) {
+        std::array<vk::ClearAttachment, 9> clears{};
+        u32 clear_count = 0;
+        for (u32 i = 0; i < new_state.num_color_attachments; ++i) {
+            const auto& color = new_state.color_attachments[i];
+            if (color.is_clear) {
+                clears[clear_count++] = vk::ClearAttachment{
+                    .aspectMask = vk::ImageAspectFlagBits::eColor,
+                    .colorAttachment = i,
+                    .clearValue = vk::ClearValue{
+                        .color = vk::ClearColorValue{.uint32 = color.clear_value}},
+                };
+            }
+        }
+        const auto& depth = new_state.depth_stencil_attachment;
+        vk::ImageAspectFlags depth_aspects{};
+        if (depth.has_depth && depth.depth_clear) {
+            depth_aspects |= vk::ImageAspectFlagBits::eDepth;
+        }
+        if (depth.has_stencil && depth.stencil_clear) {
+            depth_aspects |= vk::ImageAspectFlagBits::eStencil;
+        }
+        if (depth_aspects) {
+            clears[clear_count++] = vk::ClearAttachment{
+                .aspectMask = depth_aspects,
+                .colorAttachment = 0,
+                .clearValue = vk::ClearValue{.depthStencil = vk::ClearDepthStencilValue{
+                    .depth = depth.depth_clear ? std::bit_cast<float>(depth.clear_value[0]) : 0.0f,
+                    .stencil = depth.stencil_clear ? depth.clear_value[1] : 0u}},
+            };
+        }
+        if (clear_count) {
+            const vk::ClearRect rect{
+                .rect = {{0, 0}, {new_state.width, new_state.height}},
+                .baseArrayLayer = 0,
+                .layerCount = new_state.num_layers,
+            };
+            Record([clears, clear_count, rect](vk::CommandBuffer cmdbuf) {
+                cmdbuf.clearAttachments(clear_count, clears.data(), 1, &rect);
+            });
+        }
+        render_state = new_state;
         return;
     }
     EndRendering();

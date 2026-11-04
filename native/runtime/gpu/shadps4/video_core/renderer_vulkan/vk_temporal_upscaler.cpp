@@ -299,6 +299,48 @@ bool TemporalUpscaler::OnFrameStart() {
     // The guest's startup resolution patch remains in effect until restart. Keep the FSR
     // model at the applied preset while the menu saves the requested one for run.sh.
     const int preset = Gow3Settings::RenderPreset();
+#if defined(__APPLE__) && TARGET_OS_IOS
+    static const bool ios_scene_scale = [] {
+        const char* value = std::getenv("GOW3_IOS_SCENE_SCALE");
+        return value && value[0] == '1';
+    }();
+    static const bool ios_adaptive_scale = [] {
+        const char* value = std::getenv("GOW3_IOS_ADAPTIVE_SCENE_SCALE");
+        return value && value[0] == '1';
+    }();
+    if (applied_preset != preset) {
+        ios_adaptive_level = 0;
+        ios_slow_frames = ios_fast_frames = 0;
+    }
+    if (ios_scene_scale && ios_adaptive_scale) {
+        const auto now = std::chrono::steady_clock::now();
+        if (last_scene_frame.time_since_epoch().count() != 0) {
+            const float frame_ms =
+                std::chrono::duration<float, std::milli>(now - last_scene_frame).count();
+            if (frame_ms > 36.0f && frame_ms < 250.0f) {
+                ++ios_slow_frames;
+                ios_fast_frames = 0;
+            } else if (frame_ms > 0.0f && frame_ms < 28.0f) {
+                ++ios_fast_frames;
+                ios_slow_frames = 0;
+            } else {
+                ios_slow_frames = ios_fast_frames = 0;
+            }
+            if (ios_slow_frames >= 8 && ios_adaptive_level < 3) {
+                ++ios_adaptive_level;
+                ios_slow_frames = ios_fast_frames = 0;
+                std::printf("iOS adaptive scene scale: downshift level %u after %.1f ms frames (30 FPS target)\n",
+                            ios_adaptive_level, frame_ms);
+            } else if (ios_fast_frames >= 180 && ios_adaptive_level > 0) {
+                --ios_adaptive_level;
+                ios_slow_frames = ios_fast_frames = 0;
+                std::printf("iOS adaptive scene scale: upshift level %u after %.1f ms frames\n",
+                            ios_adaptive_level, frame_ms);
+            }
+        }
+        last_scene_frame = now;
+    }
+#endif
     if (applied_preset != preset || settings.upscaler == Gow3Settings::UpscalerOff) failed = false;
     const bool active = Active();
     const bool jitter_on = active && settings.jitter && !Gow3Toggle::Disabled(1u << 25);
@@ -324,8 +366,24 @@ bool TemporalUpscaler::OnFrameStart() {
     // Dynamic scene resolution scaling (live preset switching) works on all GPUs.
     // On GPUs without D32S8 blit support, UI depth is cleared instead of copied from scene.
     if (!scaled_session) {
+#if defined(__APPLE__) && TARGET_OS_IOS
+        const bool scale_scene = active || ios_scene_scale;
+        auto scene_size = SceneResolution::ForPreset(
+            scale_scene ? preset : 0, {target_width, target_height});
+        if (ios_scene_scale && !active && ios_adaptive_scale && ios_adaptive_level) {
+            const double multiplier = 1.0 + 0.25 * double(ios_adaptive_level);
+            scene_size = SceneResolution::ForScale(
+                double(Gow3Settings::PresetScale(preset)) * multiplier,
+                {target_width, target_height});
+        }
+        if (scene_targets.SetSize(scene_size) && ios_scene_scale && !active) {
+            std::printf("iOS scene proxy rasterization: %ux%u, preset %d, adaptive level %u\n",
+                        scene_size.width, scene_size.height, preset, ios_adaptive_level);
+        }
+#else
         scene_targets.SetSize(SceneResolution::ForPreset(active ? preset : 0,
                                                         {target_width, target_height}));
+#endif
         render_width = scene_targets.Size().width;
         render_height = scene_targets.Size().height;
     }
@@ -1285,7 +1343,8 @@ std::array<u32, 2> TemporalUpscaler::SceneSize(u32 w, u32 h) const {
 }
 
 float TemporalUpscaler::SceneMipBias() const {
-    if (!Active() || Gow3Settings::Get().upscaler == Gow3Settings::UpscalerTaa) return 0.0f;
+    if ((!Active() && !scene_targets.Reduced()) ||
+        Gow3Settings::Get().upscaler == Gow3Settings::UpscalerTaa) return 0.0f;
     const float render = float(Gow3Settings::Get().active_render_width.load());
     const float output = float(Scaled() ? target_width : 1920u);
     return render > 0.0f && render < output ? std::log2(render / output) : 0.0f;

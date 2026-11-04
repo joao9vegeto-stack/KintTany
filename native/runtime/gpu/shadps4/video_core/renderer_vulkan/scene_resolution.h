@@ -10,12 +10,18 @@ struct Size {
     uint32_t width = 1920, height = 1080;
     bool operator==(const Size&) const = default;
 };
+inline Size ForScale(double scale, Size output = {}) {
+    // Keep dimensions even for half-resolution effects and avoid zero-sized proxy targets.
+    scale = std::max(1.0, scale);
+    const auto dimension = [scale](uint32_t value) {
+        return uint32_t(std::max(1l, std::lround(double(value) / scale / 2.0)) * 2);
+    };
+    return {dimension(output.width), dimension(output.height)};
+}
 inline Size ForPreset(int preset, Size output = {}) {
     // Even dimensions for half-resolution effects; match the preset labels exactly.
     constexpr std::array<double, 5> scales{1.0, 1.5, 1.7, 2.0, 3.0};
-    const double scale = scales[std::clamp(preset, 0, 4)];
-    return {uint32_t(std::max(1l, std::lround(output.width / scale / 2)) * 2),
-            uint32_t(std::max(1l, std::lround(output.height / scale / 2)) * 2)};
+    return ForScale(scales[std::clamp(preset, 0, 4)], output);
 }
 constexpr uint32_t Pack(Size size) { return size.width | (size.height << 16); }
 constexpr Size Unpack(uint32_t packed) {
