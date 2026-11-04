@@ -70,6 +70,7 @@ static uintptr_t window_base;
 #define USER_MAX UINT64_C(0xfc00000000)
 #define LOW_MAX USER_MIN
 #endif
+static uintptr_t low_next=LOW_MIN;
 #define LIMIT 4096
 #define INVALID ((int32_t)UINT32_C(0x80020016))
 #define NO_MEMORY ((int32_t)UINT32_C(0x8002000c))
@@ -282,9 +283,8 @@ static int pool(void) {
  * The whole window is one PROT_NONE reservation; mapping replaces part of it with MAP_FIXED and
  * unmapping puts the reservation back, so nothing else is ever placed inside it. */
 static int window_reserved;
-static uintptr_t low_next;
 static int window_fail(const char *what, uintptr_t address, uint64_t size) {
-    fprintf(stderr,"Runtime: %s failed at %p (+0x%" PRIx64 "): %s\\n",what,(void *)address,size,strerror(errno));
+    fprintf(stderr,"Runtime: %s failed at %p (+0x%" PRIx64 "): %s\n",what,(void *)address,size,strerror(errno));
     return -1;
 }
 static int window_reserve(void) {
@@ -791,7 +791,6 @@ uintptr_t runtime_memory_resolve(const char *name) {
 }
 /* Host-owned memory the guest can see (image, stacks, trampolines) lives in
  * [LOW_MIN, LOW_MAX): PS4 code packs pointers into 40-bit fields. */
-/* low_next is initialized after the window base has been selected. */
 void *runtime_low_map(size_t size, int prot) {
     size=align_up(size,PAGE);
     write_lock();
