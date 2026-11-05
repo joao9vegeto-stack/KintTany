@@ -29,6 +29,9 @@ declare class Gow3CoreModule extends NativeModule<{}> {
   startGameCpuOnly(): Promise<string>;
   /** Runs the game with graphics in a fullscreen Metal view (two-finger double tap hides it). */
   startGame(): Promise<string>;
+  /** Internal 3D raster scale: 1.0 = native 1920x1080, 2.25 = 854x480 test. */
+  sceneScaleFactor(): number;
+  setSceneScaleFactor(factor: number): void;
   /** Frame cap in gow3.ini (30, 60, or 0 for none), read when the game starts. */
   fpsLimit(): number;
   setFpsLimit(limit: number): void;

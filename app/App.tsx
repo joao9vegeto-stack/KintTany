@@ -151,6 +151,7 @@ export default function App() {
   const [gameLog, setGameLog] = useState(() => Gow3Core.readGameLog());
   const [gpuReport, setGpuReport] = useState('');
   const [fpsLimit, setFpsLimit] = useState(() => (hasFpsLimit ? Gow3Core.fpsLimit() : 30));
+  const [sceneScaleFactor, setSceneScaleFactor] = useState(() => Gow3Core.sceneScaleFactor());
   const [touchControls, setTouchControls] = useState(() => (hasTouchControls ? Gow3Core.touchControlsEnabled() : false));
   const [coverFailed, setCoverFailed] = useState(false);
 
@@ -266,6 +267,12 @@ export default function App() {
       : builtIn.reason
     : 'Checking…';
 
+  const cycleSceneScale = () => {
+    const next = sceneScaleFactor > 1.0 ? 1.0 : 2.25;
+    Gow3Core.setSceneScaleFactor(next);
+    setSceneScaleFactor(next);
+  };
+
   const cycleFps = () => {
     const next = FPS_LIMITS[(FPS_LIMITS.indexOf(fpsLimit) + 1) % FPS_LIMITS.length];
     Gow3Core.setFpsLimit(next);
@@ -348,12 +355,22 @@ export default function App() {
                 active={!!pad}
               />
             </View>
+            <View style={styles.quickRow}>
+              <QuickTile
+                title="INTERNAL 3D"
+                value={sceneScaleFactor > 1.0 ? '854×480' : '1920×1080'}
+                detail="Next launch · tap to A/B"
+                onPress={cycleSceneScale}
+                active={sceneScaleFactor > 1.0}
+              />
+            </View>
 
             <Text style={styles.section}>Tips</Text>
             <View style={styles.panel}>
               <Text style={styles.body}>• Menu (touch) or R3 + L2 opens the settings and cheats menu in game.</Text>
               <Text style={styles.body}>• Two-finger double tap on an empty spot returns here; the game keeps running.</Text>
               <Text style={styles.body}>• A 30 FPS cap keeps heavy fights steady and the phone cooler.</Text>
+              <Text style={styles.body}>• INTERNAL 3D switches the raster between 1920×1080 and 854×480; display output and UI stay at 1920×1080. It takes effect on the next app launch.</Text>
             </View>
           </>
         ) : null}

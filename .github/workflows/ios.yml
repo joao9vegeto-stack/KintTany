@@ -1,4 +1,5 @@
-name: GoW3 iOS validation and IPA
+name: B5 - GoW3 iOS validation and IPA
+run-name: B5 - iOS internal render-scale A/B
 
 on:
   push:
@@ -159,13 +160,13 @@ jobs:
           codesign -d --entitlements - "$APP"
           mkdir -p build/ipa/Payload
           cp -R "$APP" build/ipa/Payload/
-          (cd build/ipa && zip -qry "../gow3-ios-$CONFIGURATION.ipa" Payload)
-          ls -la build/gow3-ios-*.ipa
+          (cd build/ipa && zip -qry "../gow3-ios-B5-$CONFIGURATION.ipa" Payload)
+          ls -la build/gow3-ios-B5-*.ipa
 
       - uses: actions/upload-artifact@v5
         with:
-          name: gow3-ios-${{ env.CONFIGURATION }}-ipa
-          path: build/gow3-ios-${{ env.CONFIGURATION }}.ipa
+          name: B5-gow3-ios-${{ env.CONFIGURATION }}-ipa
+          path: build/gow3-ios-B5-${{ env.CONFIGURATION }}.ipa
 
       - uses: actions/upload-artifact@v5
         if: always()

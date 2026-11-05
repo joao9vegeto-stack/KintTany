@@ -100,6 +100,11 @@ public class Gow3CoreModule: Module {
 
   private static var gameStarted = false
 
+  private static let sceneScalePreferenceKey = "gow3.iosSceneScaleFactor"
+  private static var sceneScaleFactor: Double {
+    UserDefaults.standard.double(forKey: sceneScalePreferenceKey) == 2.25 ? 2.25 : 1.0
+  }
+
   /// JIT and the game files are ready, and the loader has not run yet (it runs once per launch).
   private static func checkCanStart() throws {
     guard !gameStarted else { throw Gow3Error(description: "The game already started; relaunch the app to start it again.") }
@@ -205,7 +210,10 @@ public class Gow3CoreModule: Module {
     // is draw/vertex work, not pixel fill, so aggressive downscaling sacrifices image quality
     // without addressing the measured bottleneck. env.txt can still opt into a test preset.
     setenv("GOW3_UPSCALE_PRESET", "0", 0)
-    setenv("GOW3_IOS_SCENE_SCALE", "0", 0)
+    // Enable the iOS proxy path, but keep native 1080p as the default. The launcher can select
+    // factor 2.25 (854x480) for a controlled A/B test; env.txt remains an explicit override.
+    setenv("GOW3_IOS_SCENE_SCALE", "1", 0)
+    setenv("GOW3_IOS_SCENE_SCALE_FACTOR", String(format: "%.2f", Self.sceneScaleFactor), 0)
     setenv("GOW3_IOS_ADAPTIVE_SCENE_SCALE", "0", 0)
     setenv("GOW3_FPS_LIMIT", "30", 0)
     setenv("GOW3_OBJECT_MOTION", "0", 0)
@@ -473,6 +481,16 @@ public class Gow3CoreModule: Module {
         }
       }
     }.runOnQueue(.main)
+
+    /// Internal 3D raster test: native 1920x1080 or reduced 854x480. Applied at the next app launch.
+    Function("sceneScaleFactor") { () -> Double in
+      Gow3CoreModule.sceneScaleFactor
+    }
+
+    Function("setSceneScaleFactor") { (factor: Double) in
+      UserDefaults.standard.set(factor == 2.25 ? 2.25 : 1.0,
+                                forKey: Gow3CoreModule.sceneScalePreferenceKey)
+    }
 
     /// The frame cap in Documents/gow3/user/gow3.ini (the in-game menu's setting, read at game start):
     /// 30 or 60, 0 for none. The iOS default is 30.

@@ -308,6 +308,14 @@ bool TemporalUpscaler::OnFrameStart() {
         const char* value = std::getenv("GOW3_IOS_ADAPTIVE_SCENE_SCALE");
         return value && value[0] == '1';
     }();
+    static const double ios_scene_scale_factor = [] {
+        const char* value = std::getenv("GOW3_IOS_SCENE_SCALE_FACTOR");
+        if (!value || !value[0]) return 1.0;
+        char* end = nullptr;
+        const double factor = std::strtod(value, &end);
+        return end != value && std::isfinite(factor) ? std::clamp(factor, 1.0, 4.0) : 1.0;
+    }();
+    static bool ios_scene_scale_reported = false;
     if (applied_preset != preset) {
         ios_adaptive_level = 0;
         ios_slow_frames = ios_fast_frames = 0;
@@ -368,17 +376,21 @@ bool TemporalUpscaler::OnFrameStart() {
     if (!scaled_session) {
 #if defined(__APPLE__) && TARGET_OS_IOS
         const bool scale_scene = active || ios_scene_scale;
-        auto scene_size = SceneResolution::ForPreset(
-            scale_scene ? preset : 0, {target_width, target_height});
+        auto scene_size = ios_scene_scale && !active
+            ? SceneResolution::ForScale(ios_scene_scale_factor, {target_width, target_height})
+            : SceneResolution::ForPreset(scale_scene ? preset : 0, {target_width, target_height});
         if (ios_scene_scale && !active && ios_adaptive_scale && ios_adaptive_level) {
             const double multiplier = 1.0 + 0.25 * double(ios_adaptive_level);
             scene_size = SceneResolution::ForScale(
-                double(Gow3Settings::PresetScale(preset)) * multiplier,
-                {target_width, target_height});
+                ios_scene_scale_factor * multiplier, {target_width, target_height});
         }
-        if (scene_targets.SetSize(scene_size) && ios_scene_scale && !active) {
-            std::printf("iOS scene proxy rasterization: %ux%u, preset %d, adaptive level %u\n",
-                        scene_size.width, scene_size.height, preset, ios_adaptive_level);
+        scene_targets.SetSize(scene_size);
+        if (ios_scene_scale && !active && (!ios_scene_scale_reported || changed)) {
+            const auto actual = scene_targets.Size();
+            std::printf("iOS internal 3D raster: %ux%u -> output %ux%u, factor %.2f, proxy %s\n",
+                        actual.width, actual.height, target_width, target_height,
+                        ios_scene_scale_factor, scene_targets.Reduced() ? "on" : "off");
+            ios_scene_scale_reported = true;
         }
 #else
         scene_targets.SetSize(SceneResolution::ForPreset(active ? preset : 0,
