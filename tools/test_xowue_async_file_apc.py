@@ -99,8 +99,8 @@ require("deliverPendingGuestApcs()" not in leave_critical,
         "leaving a critical region must not deliver user APCs")
 
 delay = function_body(ENGINE, "void xowue_KeDelayExecutionThread(", "\nvoid ")
-require("if ((context.r4.u32 & 0xFFu) != 0u)" in delay and
-        "deliverPendingGuestApcs()" in delay,
+require("const bool alertable = (context.r4.u32 & 0xFFu) != 0u;" in delay and
+        "if (alertable && deliverPendingGuestApcs())" in delay,
         "KeDelayExecutionThread may deliver user APCs only when alertable")
 require("context.r3.u32 = kNtStatusUserApc;" in delay and
         delay.index("context.r3.u32 = kNtStatusUserApc;") <
