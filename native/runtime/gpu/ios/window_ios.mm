@@ -19,6 +19,7 @@ std::mutex g_surface_mutex;
 std::condition_variable g_surface_cv;
 CAMetalLayer* g_layer; // strong (ARC)
 u32 g_width, g_height, g_refresh_hz = 60;
+bool g_app_active = true;
 } // namespace
 
 // runtime_pad.c: the on-screen controls' buttons (libScePad bits).
@@ -98,6 +99,14 @@ extern "C" void gow3_gpu_set_surface(void* metal_layer, uint32_t width, uint32_t
     g_surface_cv.notify_all();
 }
 
+extern "C" void gow3_gpu_set_active(uint32_t active) {
+    {
+        std::scoped_lock lock{g_surface_mutex};
+        g_app_active = active != 0;
+    }
+    if (active) g_surface_cv.notify_all();
+}
+
 namespace Frontend {
 
 u32 DisplayRefreshHz() {
@@ -150,9 +159,19 @@ void WindowSDL::UpdateTextTitle() {
 
 bool WindowSDL::PollEvents() {
     {
-        // The layer's drawable size follows the view (rotation, split screen): the swapchain
-        // reads the new size from GetWidth/GetHeight when it is recreated.
-        std::scoped_lock lock{g_surface_mutex};
+        std::unique_lock lock{g_surface_mutex};
+        static bool logged_pause = false;
+        if (!g_app_active) {
+            if (!logged_pause) {
+                std::printf("Window: pausing game/GPU submissions while iOS app is inactive\n");
+                logged_pause = true;
+            }
+            g_surface_cv.wait(lock, [] { return g_app_active; });
+        }
+        if (logged_pause) {
+            std::printf("Window: resuming game/GPU submissions after iOS activation\n");
+            logged_pause = false;
+        }
         width = s32(g_width);
         height = s32(g_height);
     }

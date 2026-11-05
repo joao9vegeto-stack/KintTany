@@ -105,6 +105,115 @@ public class Gow3CoreModule: Module {
     UserDefaults.standard.double(forKey: sceneScalePreferenceKey) == 2.25 ? 2.25 : 1.0
   }
 
+
+  private static let managedConfigRevisionKey = "gow3.managedConfigRevision"
+  private static let managedConfigRevision = 2
+
+  /// Refresh app-owned configuration. Custom environment entries and non-renderer settings are preserved.
+  private static func syncManagedConfigFiles() -> [String] {
+    let manager = FileManager.default
+    let userRoot = gameRoot.appendingPathComponent("user", isDirectory: true)
+    try? manager.createDirectory(at: gameRoot, withIntermediateDirectories: true)
+    try? manager.createDirectory(at: userRoot, withIntermediateDirectories: true)
+    let changed = UserDefaults.standard.integer(forKey: managedConfigRevisionKey) < managedConfigRevision
+    var messages: [String] = []
+    func backup(_ url: URL) {
+      guard manager.fileExists(atPath: url.path) else { return }
+      let destination = url.appendingPathExtension("before-revision-\(managedConfigRevision)")
+      guard !manager.fileExists(atPath: destination.path) else { return }
+      do {
+        try manager.copyItem(at: url, to: destination)
+        messages.append("backup: \(url.lastPathComponent)")
+      } catch {
+        messages.append("backup failed: \(url.lastPathComponent): \(error.localizedDescription)")
+      }
+    }
+    let managed: [String: String] = [
+      "GOW3_UPSCALER": "off", "GOW3_UPSCALE_PRESET": "0",
+      "GOW3_IOS_SCENE_SCALE": "1",
+      "GOW3_IOS_SCENE_SCALE_FACTOR": String(format: "%.2f", Self.sceneScaleFactor),
+      "GOW3_IOS_ADAPTIVE_SCENE_SCALE": "0", "GOW3_FPS_LIMIT": "30",
+      "GOW3_OBJECT_MOTION": "0", "GOW3_READBACK_LINEAR": "1",
+      "GOW3_DEFERRED_READBACK": "1", "GOW3_STALE_READBACK": "1",
+      "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS": "0",
+      "MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS": "0",
+      "GOW3_FRAMES_AHEAD": "1", "GOW3_SWAPCHAIN_IMAGES": "2",
+      "FEX_TSOENABLED": "0", "FEX_VECTORTSOENABLED": "0",
+      "FEX_MEMCPYSETTSOENABLED": "0", "FEX_HALFBARRIERTSOENABLED": "0"
+    ]
+    let reserved = Set(managed.keys).union([
+      "GOW3_CONFIG", "GOW3_DMEM_MB", "GOW3_POOL_DIR", "GOW3_TOGGLE_FILE",
+      "GOW3_CAPTURE_TRIGGER", "GOW3_REUPLOAD_TRIGGER", "GOW3_DUMP_TRIGGER",
+      "GOW3_DUMP_DIR", "GOW3_WRITE_TRACE_FILE", "GOW3_TILE_LOG",
+      "GOW3_FRAME_WATCHDOG", "GOW3_FRAME_STATS"
+    ])
+    let envURL = gameRoot.appendingPathComponent("env.txt")
+    if changed { backup(envURL) }
+    let previous = (try? String(contentsOf: envURL, encoding: .utf8)) ?? ""
+    var custom: [String] = []
+    for raw in previous.components(separatedBy: .newlines) {
+      let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+      if line.isEmpty { continue }
+      if line.hasPrefix("#") {
+        if !line.contains("Olympus managed environment") &&
+           !line.contains("Preserved custom environment") { custom.append(line) }
+        continue
+      }
+      let body = line.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)[0]
+      guard let equal = body.firstIndex(of: "=") else { custom.append(line); continue }
+      let key = body[..<equal].trimmingCharacters(in: .whitespaces)
+      if !reserved.contains(String(key)) { custom.append(line) }
+    }
+    var envText = "# Olympus managed environment revision \(managedConfigRevision)\n"
+    envText += managed.keys.sorted().map { "\($0)=\(managed[$0]!)" }.joined(separator: "\n")
+    if !custom.isEmpty {
+      envText += "\n# Preserved custom environment entries\n" + custom.joined(separator: "\n")
+    }
+    envText += "\n"
+    do {
+      try envText.write(to: envURL, atomically: true, encoding: .utf8)
+      messages.append("env.txt refreshed; kept \(custom.count) custom lines")
+    } catch {
+      messages.append("env.txt refresh failed: \(error.localizedDescription)")
+    }
+    if changed {
+      let iniURL = userRoot.appendingPathComponent("gow3.ini")
+      backup(iniURL)
+      let engine: [String: String] = [
+        "upscaler": "off", "preset": "0", "object_motion": "0",
+        "output_res": "1920x1080", "vsync": "1", "fps_limit": "30",
+        "async_shaders": "1", "frames_queued": "1",
+        "deferred_readback": "1", "stale_readback": "1"
+      ]
+      let previousINI = (try? String(contentsOf: iniURL, encoding: .utf8)) ?? ""
+      var seen = Set<String>(), result: [String] = []
+      for line in previousINI.components(separatedBy: .newlines) where !line.isEmpty {
+        guard let equal = line.firstIndex(of: "="),
+              !line.trimmingCharacters(in: .whitespaces).hasPrefix("#") else {
+          result.append(line); continue
+        }
+        let key = String(line[..<equal]).trimmingCharacters(in: .whitespaces)
+        if let value = engine[key] {
+          if seen.insert(key).inserted { result.append("\(key)=\(value)") }
+        } else { result.append(line) }
+      }
+      for key in engine.keys.sorted() where !seen.contains(key) {
+        result.append("\(key)=\(engine[key]!)")
+      }
+      do {
+        try result.joined(separator: "\n").write(to: iniURL, atomically: true, encoding: .utf8)
+        messages.append("gow3.ini renderer fields migrated; other preferences kept")
+      } catch {
+        messages.append("gow3.ini migration failed: \(error.localizedDescription)")
+      }
+    }
+    if !messages.contains(where: { $0.contains("failed") }) {
+      UserDefaults.standard.set(managedConfigRevision, forKey: managedConfigRevisionKey)
+    }
+    return messages
+  }
+
+
   /// JIT and the game files are ready, and the loader has not run yet (it runs once per launch).
   private static func checkCanStart() throws {
     guard !gameStarted else { throw Gow3Error(description: "The game already started; relaunch the app to start it again.") }
@@ -172,6 +281,7 @@ public class Gow3CoreModule: Module {
   /// Runs the loader (gow3_start) on its own thread with the game in Documents/gow3.
   private static func startLoader(cpuOnly: Bool) throws {
     try checkCanStart()
+    let configMessages = syncManagedConfigFiles()
     let envFile = applyEnvFile()
     let root = gameRoot
     let manager = FileManager.default
@@ -264,6 +374,7 @@ public class Gow3CoreModule: Module {
     let log = gameLogURL.path
     watchThermalState(log: log)
     try? "--- \(Date()) start: \(args.joined(separator: " "))\n".appendLine(to: log)
+    for message in configMessages { try? "--- config: \(message)\n".appendLine(to: log) }
     if !envFile.isEmpty { try? "--- env.txt: \(envFile.joined(separator: " "))\n".appendLine(to: log) }
     try? "--- low-latency defaults: MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS=0; GOW3_FRAMES_AHEAD=1; GOW3_SWAPCHAIN_IMAGES=2; MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS=0\n".appendLine(to: log)
     let cStrings = args.map { strdup($0) }
@@ -470,8 +581,7 @@ public class Gow3CoreModule: Module {
           promise.reject(Gow3Error(description: "No window to present the Metal view in."))
           return
         }
-        controller.feedsGame = true
-        controller.publishSurface()
+        controller.startFeedingGame()
         controller.addTouchControls()
         do {
           try Gow3CoreModule.startLoader(cpuOnly: false)

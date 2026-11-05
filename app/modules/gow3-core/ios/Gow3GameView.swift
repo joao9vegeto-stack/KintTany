@@ -5,9 +5,29 @@
 import QuartzCore
 import UIKit
 
+@_silgen_name("gow3_gpu_set_active")
+private func gow3_gpu_set_active(_ active: UInt32)
+
 final class Gow3MetalView: UIView {
   override class var layerClass: AnyClass { CAMetalLayer.self }
   var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
+}
+
+private final class Gow3GPUActivityObserver {
+  static let shared = Gow3GPUActivityObserver()
+  private var observers: [NSObjectProtocol] = []
+
+  private init() {
+    let center = NotificationCenter.default
+    observers.append(center.addObserver(forName: UIApplication.willResignActiveNotification,
+                                         object: nil, queue: .main) { _ in
+      gow3_gpu_set_active(0)
+    })
+    observers.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification,
+                                         object: nil, queue: .main) { _ in
+      gow3_gpu_set_active(1)
+    })
+  }
 }
 
 final class Gow3GameViewController: UIViewController, UIGestureRecognizerDelegate {
@@ -48,6 +68,14 @@ final class Gow3GameViewController: UIViewController, UIGestureRecognizerDelegat
   @objc private func hideGameView() {
     guard feedsGame else { return }
     dismiss(animated: false)
+  }
+
+  /// Starts the game surface session and installs a process-wide UIKit lifecycle observer.
+  func startFeedingGame() {
+    _ = Gow3GPUActivityObserver.shared
+    feedsGame = true
+    publishSurface()
+    gow3_gpu_set_active(1)
   }
 
   /// Hands the layer, its pixel size and the screen's maximum refresh rate to the GPU library.

@@ -70,12 +70,15 @@ bool SceneTargets::ShaderResampled(const VideoCore::Image& image) const {
 // 1 for the scene size, 2 for half resolution (the game's post-processing chain), else 0.
 // Half resolution needs a scene size that halves exactly: the proxy keeps the scene's factor,
 // so the shaders' FragCoord conversion (1920 / scene width) stays correct for it.
+static bool AlignedTo(u32 actual, u32 expected) {
+    // Guest targets may contain a few pixels of allocation padding beyond the logical viewport.
+    return actual + 8 >= expected && actual <= expected + 8;
+}
 static u32 SizeDivisor(const VideoCore::ImageInfo& i, SceneResolution::Size scene) {
-    if (i.size.width == 1920 && i.size.height == 1080) return 1;
-    if (i.size.width == 960 && i.size.height == 540 && scene.width % 2 == 0 &&
-        scene.height % 2 == 0 && !Gow3Toggle::Disabled(Gow3Toggle::SceneHalfRes)) {
-        return 2;
-    }
+    if (AlignedTo(i.size.width, 1920) && AlignedTo(i.size.height, 1080)) return 1;
+    if (AlignedTo(i.size.width, 960) && AlignedTo(i.size.height, 540) &&
+        scene.width % 2 == 0 && scene.height % 2 == 0 &&
+        !Gow3Toggle::Disabled(Gow3Toggle::SceneHalfRes)) return 2;
     return 0;
 }
 bool SceneTargets::Eligible(const VideoCore::Image& image) const {

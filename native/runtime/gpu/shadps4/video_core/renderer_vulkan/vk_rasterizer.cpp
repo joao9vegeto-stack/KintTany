@@ -2779,7 +2779,39 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
     std::pair<vk::ImageView, vk::ImageLayout> original_color{};
     const auto& regs = Regs();
     const auto& key = pipeline->GetGraphicsKey();
-    if (std::popcount(key.mrt_mask & 0x7f) >= 5 && db_desc.first &&
+    const u32 gbuffer_targets = std::popcount(key.mrt_mask & 0x7f);
+    static const bool ios_scene_probe = [] {
+        const char* value = std::getenv("GOW3_IOS_SCENE_SCALE");
+        return value && value[0] == '1';
+    }();
+    static u32 ios_scene_probe_lines = 0;
+    if (ios_scene_probe && !scene_started && gbuffer_targets >= 5 && ios_scene_probe_lines < 24) {
+        ++ios_scene_probe_lines;
+        const auto camera_size = camera_motion->RenderSize();
+        if (db_desc.first) {
+            const auto& depth = texture_cache.GetImage(db_desc.first);
+            std::printf("iOS scene probe #%u: MRT %u mask %#x samples %u depth %ux%u %s eligible %u scene-eligible %u camera %ux%u\n",
+                        ios_scene_probe_lines, gbuffer_targets, key.mrt_mask, u32(key.num_samples),
+                        depth.info.size.width, depth.info.size.height,
+                        vk::to_string(depth.info.pixel_format).c_str(),
+                        scene_targets->Eligible(depth), scene_targets->EligibleScene(depth),
+                        camera_size[0], camera_size[1]);
+        } else {
+            std::printf("iOS scene probe #%u: MRT %u mask %#x samples %u depth none camera %ux%u\n",
+                        ios_scene_probe_lines, gbuffer_targets, key.mrt_mask, u32(key.num_samples),
+                        camera_size[0], camera_size[1]);
+        }
+        for (u32 cb = 0; cb < std::min<u32>(gbuffer_targets, 7); ++cb) {
+            if (!cb_descs[cb].first) continue;
+            const auto& color = texture_cache.GetImage(cb_descs[cb].first);
+            std::printf("  iOS scene color[%u]: %ux%u %s eligible %u bound %u rebind %u\n",
+                        cb, color.info.size.width, color.info.size.height,
+                        vk::to_string(color.info.pixel_format).c_str(),
+                        scene_targets->Eligible(color), u32(color.binding.is_bound),
+                        u32(color.binding.needs_rebind));
+        }
+    }
+    if (gbuffer_targets >= 5 && db_desc.first &&
         scene_targets->EligibleScene(texture_cache.GetImage(db_desc.first))) scene_started = true;
     // A proxy attachment cannot represent MSAA or a feedback loop that reads the
     // same image through the guest's native descriptor during this draw.
