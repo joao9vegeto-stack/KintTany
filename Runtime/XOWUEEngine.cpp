@@ -8821,16 +8821,25 @@ void xowue_KeSetBasePriorityThread(PPCContext &context) {
 }
 
 void xowue_KeDelayExecutionThread(PPCContext &context, uint8_t *base) {
-    // Build 83: preserve Xbox alertability semantics; non-alertable Sleep(0) must not run APCs.
-    if ((context.r4.u32 & 0xFFu) != 0u) {
+    const bool alertable = (context.r4.u32 & 0xFFu) != 0u;
+    auto noteUserApc = [] {
         static std::atomic<uint32_t> s_b83ApcLogs{0u};
-        if (deliverPendingGuestApcs()) {
-            const uint32_t n = s_b83ApcLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
-            char event[160];
-            std::snprintf(event, sizeof(event), "B83_APC_DELIVERED alertable=1 n=%u thread=%u", n, static_cast<uint32_t>(g_currentGuestThreadId));
-            recordRuntimeTrace(event);
-        }
+        const uint32_t n = s_b83ApcLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        char event[160];
+        std::snprintf(event, sizeof(event),
+            "B83_APC_DELIVERED alertable=1 n=%u thread=%u",
+            n, static_cast<uint32_t>(g_currentGuestThreadId));
+        recordRuntimeTrace(event);
+    };
+
+    // An alertable delay is a wait: delivering a user APC terminates it with
+    // STATUS_USER_APC, rather than pretending the requested delay completed.
+    if (alertable && deliverPendingGuestApcs()) {
+        noteUserApc();
+        context.r3.u32 = kNtStatusUserApc;
+        return;
     }
+
     const uint32_t intervalPointer = context.r5.u32;
     if (!base || intervalPointer > kGuestAddressSpaceSize - sizeof(uint64_t)) {
         context.r3.u32 = kNtStatusInvalidParameter;
@@ -8840,10 +8849,25 @@ void xowue_KeDelayExecutionThread(PPCContext &context, uint8_t *base) {
     if (interval < 0) {
         const int64_t ticks = interval == std::numeric_limits<int64_t>::min()
             ? 864000000000LL : std::min<int64_t>(-interval, 864000000000LL);
-        std::unique_lock<std::mutex> lock(g_waitSetMutex);
-        g_waitSetChanged.wait_for(lock, std::chrono::nanoseconds(ticks * 100), [] {
-            return g_schedulerStopRequested.load();
-        });
+        {
+            std::unique_lock<std::mutex> lock(g_waitSetMutex);
+            g_waitSetChanged.wait_for(lock, std::chrono::nanoseconds(ticks * 100), [&] {
+                return g_schedulerStopRequested.load() ||
+                    (alertable && guestApcCanInterruptWait());
+            });
+        }
+        // queueGuestApc notifies g_waitSetChanged, so an APC queued during an
+        // alertable delay wakes this wait and is delivered on the same thread.
+        if (alertable && deliverPendingGuestApcs()) {
+            noteUserApc();
+            context.r3.u32 = kNtStatusUserApc;
+            return;
+        }
+    } else {
+        // Xbox Sleep(0) is a scheduler yield, not a tight immediate return.
+        // Xenia/XeniOS yield for a zero timeout; MW2 Recompiled does the same
+        // for non-negative intervals.
+        std::this_thread::yield();
     }
     if (g_schedulerStopRequested.load() && g_currentGuestThreadId != 1u) {
         throw GuestThreadStopRequested{};

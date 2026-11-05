@@ -102,5 +102,13 @@ delay = function_body(ENGINE, "void xowue_KeDelayExecutionThread(", "\nvoid ")
 require("if ((context.r4.u32 & 0xFFu) != 0u)" in delay and
         "deliverPendingGuestApcs()" in delay,
         "KeDelayExecutionThread may deliver user APCs only when alertable")
+require("context.r3.u32 = kNtStatusUserApc;" in delay and
+        delay.index("context.r3.u32 = kNtStatusUserApc;") <
+        delay.index("const uint32_t intervalPointer"),
+        "an APC delivered at an alertable delay must return STATUS_USER_APC")
+require("std::this_thread::yield();" in delay,
+        "zero/non-negative KeDelayExecutionThread intervals must yield instead of spin")
+require("alertable && guestApcCanInterruptWait()" in delay,
+        "an APC queued during an alertable relative delay must interrupt the wait")
 
 print("PASS: XOWUE NtReadFile defers transfer, IOSB completion and event signalling until guest APC delivery.")
