@@ -256,6 +256,12 @@ jobs:
           python3 -m py_compile tools/test_xowue_build108_audio_input.py
           python3 tools/test_xowue_build108_audio_input.py
 
+      - name: Verify Xbox 360 RTL critical-section semantics
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/test_xowue_critical_sections.py
+          python3 tools/test_xowue_critical_sections.py
+
       - name: Verify XAM input imports reach native touch handlers
         run: |
           set -euo pipefail
