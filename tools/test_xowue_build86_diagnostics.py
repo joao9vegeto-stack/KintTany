@@ -53,7 +53,10 @@ assert "summaryRefreshScheduled" in diagnostics
 assert "XOWUE_XAM_PROFILE_" in diagnostics and "xamProfile" in diagnostics
 assert "xowueHandleXamUserReadProfileSettings" in engine
 assert "XOWUE_XAM_PROFILE_READ" in engine and "XOWUE_XAM_PROFILE_WRITE" in engine
-assert "kXamErrorInsufficientBuffer" in engine and "0x10040015u" in engine
+assert "kXamErrorInsufficientBuffer = 122u" in engine and "0x10040015u" in engine
+assert "flags=ex?context.r10.u32:0u,sizePtr=context.r9.u32" in engine
+assert "bool complete=false" in engine
+assert "finish(kXamErrorInsufficientBuffer,required);return;" in engine
 assert "context.r3.u32 == 0u ? kNtStatusSuccess : kXamNoSuchUser" not in engine
 assert "XOWUEDiagnostics.summaryFileURL()" in app
 assert "XOWUEDiagnostics.summaryFilename" in app
