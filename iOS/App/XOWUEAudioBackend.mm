@@ -1,5 +1,6 @@
 #import <AVFAudio/AVFAudio.h>
 #import <Foundation/Foundation.h>
+#import <dispatch/dispatch.h>
 
 #include <array>
 #include <atomic>
@@ -26,6 +27,15 @@ std::atomic<bool> g_startScheduled{false};
 uint32_t g_readOffset = 0u;
 AVAudioEngine *g_audioEngine = nil;
 AVAudioSourceNode *g_audioSource = nil;
+
+// AVAudioEngine/AVAudioSession lifecycle is serialized independently of the
+// SwiftUI main queue. Starting playback must never wait behind a full-screen
+// game view or its touch/render work.
+dispatch_queue_t audioControlQueue() {
+    static dispatch_queue_t queue =
+        dispatch_queue_create("com.joaopedro.xowue.audio-control", DISPATCH_QUEUE_SERIAL);
+    return queue;
+}
 
 bool readStereoSample(float &left, float &right) {
     const uint32_t read = g_readFrame.load(std::memory_order_relaxed);
@@ -86,7 +96,7 @@ OSStatus renderAudio(BOOL *isSilence,
     return noErr;
 }
 
-void startAudioOnMainThread() {
+void startAudioOnControlQueue() {
     if (g_backendState.load(std::memory_order_acquire) == 1 && g_audioEngine)
         return;
 
@@ -169,9 +179,9 @@ extern "C" int XOWUEAudioStart(void) {
     bool expected = false;
     if (g_startScheduled.compare_exchange_strong(expected, true,
                                                   std::memory_order_acq_rel)) {
-        dispatch_async(dispatch_get_main_queue(), ^{
+        dispatch_async(audioControlQueue(), ^{
             @autoreleasepool {
-                startAudioOnMainThread();
+                startAudioOnControlQueue();
             }
         });
     }
@@ -179,7 +189,7 @@ extern "C" int XOWUEAudioStart(void) {
 }
 
 extern "C" void XOWUEAudioStop(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    dispatch_async(audioControlQueue(), ^{
         [g_audioEngine stop];
         g_audioEngine = nil;
         g_audioSource = nil;

@@ -87,7 +87,7 @@ enum XOWUEDiagnostics {
         let important = ["B83_", "B84_", "B85_", "B86_", "AOT_PROGRESS", "HOT_FN_CODE",
                          "THREAD_DUMP", "XENOS_", "PM4_", "SWAP_", "WAIT_", "VBLANK",
                          "GRAPHICS_INTERRUPT", "B90_STREAM_", "B92_XXX_INTEGRITY",
-                         "B92_BIK_INTEGRITY", "XOWUE_B92_QPC_", "XOWUE_XAUDIO_", "XOWUE_XMA_", "XOWUE_AUDIO_BACKEND_", "XOWUE_VDSWAP_", "XOWUE_PM4_", "XOWUE_NATIVE_GUEST_FRAME", "XOWUE_GPU_SWAP_WAIT", "B95_SYNC_", "B97_", "B98_", "B99_", "B103_ASYNC_NTREADFILE_", "XOWUE_USER_EXIT",
+                         "B92_BIK_INTEGRITY", "XOWUE_B92_QPC_", "XOWUE_XAUDIO_", "XOWUE_XMA_", "XOWUE_AUDIO_BACKEND_", "XOWUE_INPUT_", "XOWUE_VDSWAP_", "XOWUE_PM4_", "XOWUE_NATIVE_GUEST_FRAME", "XOWUE_GPU_SWAP_WAIT", "B95_SYNC_", "B97_", "B98_", "B99_", "B103_ASYNC_NTREADFILE_", "XOWUE_USER_EXIT",
                          "runtime.stop", "BOOT_", "CRASH ", "runtime.native_return"]
         if important.contains(where: { message.contains($0) }) {
             refreshCompactSummaryLocked(diagnosticURL: url)
@@ -155,6 +155,7 @@ enum XOWUEDiagnostics {
         let audioDriver = Array(lines.filter {
             $0.contains("XOWUE_XAUDIO_") || $0.contains("XOWUE_XMA_") || $0.contains("XOWUE_AUDIO_BACKEND_")
         }.suffix(64))
+        let input = Array(lines.filter { $0.contains("XOWUE_INPUT_") }.suffix(48))
         let xxxIntegrity = Array(lines.filter { $0.contains("B92_XXX_INTEGRITY") }.suffix(16))
         let bikIntegrity = Array(lines.filter { $0.contains("B92_BIK_INTEGRITY") }.suffix(16))
         let qpcCaller = Array(lines.filter { $0.contains("XOWUE_B92_QPC_") }.suffix(24))
@@ -166,7 +167,7 @@ enum XOWUEDiagnostics {
             "XOWUE_BUILD_SUMMARY build=\(buildNumber) source=\(diagnosticFilename)",
             "DIAGNOSTIC_BYTES=\(data.count)",
             "CURRENT_BUILD_EVIDENCE_BEGIN"
-        ] + boot + audioDriver + eventWaits + eventCompletions + asyncFileIo + movieFlow + progress + qpcCaller + xxxIntegrity + bikIntegrity + cancellation +
+        ] + boot + audioDriver + input + eventWaits + eventCompletions + asyncFileIo + movieFlow + progress + qpcCaller + xxxIntegrity + bikIntegrity + cancellation +
             b84 + b83 + b85 + streamState + streamAnomaly + streamObject + streamTable +
             streamRecent + legacyStream + legacyWaits + media + waits + gpu +
             streamTransition + streamWait + streamWaitAnomaly + fileReads +

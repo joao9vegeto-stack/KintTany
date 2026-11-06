@@ -320,6 +320,7 @@ private final class XOWUETouchController: ObservableObject {
     private var leftY: Int16 = 0
     private var rightX: Int16 = 0
     private var rightY: Int16 = 0
+    private var diagnosticSendCount: UInt32 = 0
 
     func setButton(_ mask: UInt32, pressed: Bool) {
         let next = pressed ? (buttons | mask) : (buttons & ~mask)
@@ -376,6 +377,13 @@ private final class XOWUETouchController: ObservableObject {
             rightX,
             rightY
         )
+        diagnosticSendCount &+= 1
+        if diagnosticSendCount <= 32 || diagnosticSendCount % 64 == 0 {
+            XOWUEDiagnostics.log(
+                "XOWUE_INPUT_HOST seq=\(diagnosticSendCount) buttons=0x\(String(buttons, radix: 16)) " +
+                "triggers=\(leftTrigger),\(rightTrigger) sticks=\(leftX),\(leftY),\(rightX),\(rightY)"
+            )
+        }
     }
 }
 

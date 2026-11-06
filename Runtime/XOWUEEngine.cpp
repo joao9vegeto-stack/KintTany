@@ -4016,20 +4016,36 @@ extern "C" bool xowue_xenos_commit_resolved_rgba(
 extern "C" void xowue_set_touch_controller_state(
     uint32_t buttons, uint8_t left_trigger, uint8_t right_trigger,
     int16_t left_x, int16_t left_y, int16_t right_x, int16_t right_y) {
-    std::lock_guard<std::mutex> lock(g_touchControllerMutex);
-    const bool changed = g_touchController.buttons != buttons ||
-        g_touchController.leftTrigger != left_trigger ||
-        g_touchController.rightTrigger != right_trigger ||
-        g_touchController.leftX != left_x || g_touchController.leftY != left_y ||
-        g_touchController.rightX != right_x || g_touchController.rightY != right_y;
-    g_touchController.buttons = buttons;
-    g_touchController.leftTrigger = left_trigger;
-    g_touchController.rightTrigger = right_trigger;
-    g_touchController.leftX = left_x;
-    g_touchController.leftY = left_y;
-    g_touchController.rightX = right_x;
-    g_touchController.rightY = right_y;
-    if (changed) ++g_touchController.packetNumber;
+    uint32_t packet = 0u;
+    bool changed = false;
+    {
+        std::lock_guard<std::mutex> lock(g_touchControllerMutex);
+        changed = g_touchController.buttons != buttons ||
+            g_touchController.leftTrigger != left_trigger ||
+            g_touchController.rightTrigger != right_trigger ||
+            g_touchController.leftX != left_x || g_touchController.leftY != left_y ||
+            g_touchController.rightX != right_x || g_touchController.rightY != right_y;
+        g_touchController.buttons = buttons;
+        g_touchController.leftTrigger = left_trigger;
+        g_touchController.rightTrigger = right_trigger;
+        g_touchController.leftX = left_x;
+        g_touchController.leftY = left_y;
+        g_touchController.rightX = right_x;
+        g_touchController.rightY = right_y;
+        if (changed) packet = ++g_touchController.packetNumber;
+    }
+    if (changed) {
+        static std::atomic<uint32_t> inputNativeLogs{0u};
+        const uint32_t sequence = inputNativeLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        if (sequence <= 32u || sequence % 64u == 0u) {
+            char event[224];
+            std::snprintf(event, sizeof(event),
+                "XOWUE_INPUT_NATIVE seq=%u packet=%u buttons=0x%04X triggers=%u,%u sticks=%d,%d,%d,%d",
+                sequence, packet, buttons & 0xFFFFu, left_trigger, right_trigger,
+                left_x, left_y, right_x, right_y);
+            recordRuntimeTrace(event);
+        }
+    }
 }
 
 extern "C" int xowue_set_runtime_trace_path(const char *path) {
@@ -5440,6 +5456,14 @@ void xowue_compat_import(const char *name, PPCContext &context, uint8_t *base) {
             context.r3.u32 = kNtStatusInvalidParameter;
             return;
         }
+#if defined(__APPLE__)
+        const int audioStartRequested = XOWUEAudioStart();
+        char audioStartEvent[176];
+        std::snprintf(audioStartEvent, sizeof(audioStartEvent),
+                      "XOWUE_AUDIO_BACKEND_START source=render_driver_register requested=%d state=%d",
+                      audioStartRequested, XOWUEAudioBackendState());
+        recordRuntimeTrace(audioStartEvent);
+#endif
         if (!startXowueAudioWorker(base, callback)) {
             context.r3.u32 = kNtStatusNoMemory;
             return;
@@ -5574,6 +5598,16 @@ void xowue_compat_import(const char *name, PPCContext &context, uint8_t *base) {
         underruns = XOWUEAudioUnderrunFrames();
         backend = XOWUEAudioBackendState();
         outputState = queued ? "queued" : "queue_full";
+        static std::atomic<int> lastLoggedAudioBackendState{-2};
+        const int previousAudioBackendState =
+            lastLoggedAudioBackendState.exchange(backend, std::memory_order_acq_rel);
+        if (previousAudioBackendState != backend) {
+            char backendEvent[144];
+            std::snprintf(backendEvent, sizeof(backendEvent),
+                          "XOWUE_AUDIO_BACKEND_STATE previous=%d current=%d source=render_driver_submit",
+                          previousAudioBackendState, backend);
+            recordRuntimeTrace(backendEvent);
+        }
 #endif
         context.r3.u32 = kNtStatusSuccess;
         if (frames <= 8u || frames % 1000u == 0u) {
@@ -5603,6 +5637,12 @@ void xowue_compat_import(const char *name, PPCContext &context, uint8_t *base) {
         context.r3.u32 = 0u; return;
     }
     if (api == "XMACreateContext") {
+        static std::atomic<bool> xmaDecoderGapLogged{false};
+        bool expectedXmaGap = false;
+        if (xmaDecoderGapLogged.compare_exchange_strong(expectedXmaGap, true,
+                                                         std::memory_order_acq_rel)) {
+            recordRuntimeTrace("XOWUE_XMA_UNIMPLEMENTED decoder=missing mmio_base=0x7FEA0000 context_stub=allocation_only; no XMA PCM is produced");
+        }
         const uint32_t output = context.r3.u32;
         if (!base || !validGuestRange(output, 4u)) { context.r3.u32 = kNtStatusInvalidParameter; return; }
         const uint32_t contextAddress = allocateGuestPhysicalRange(base, 0x1000u, 0x1000u, 0x04u);
@@ -7710,6 +7750,15 @@ static uint32_t writeTouchGamepadState(uint8_t *base, uint32_t userIndex,
     {
         std::lock_guard<std::mutex> lock(g_touchControllerMutex);
         state = g_touchController;
+    }
+    static std::atomic<uint32_t> inputPollCalls{0u};
+    const uint32_t pollSequence = inputPollCalls.fetch_add(1u, std::memory_order_relaxed) + 1u;
+    if (pollSequence <= 16u || pollSequence % 120u == 0u) {
+        char pollEvent[192];
+        std::snprintf(pollEvent, sizeof(pollEvent),
+            "XOWUE_INPUT_POLL count=%u user=%u packet=%u buttons=0x%04X",
+            pollSequence, userIndex, state.packetNumber, state.buttons & 0xFFFFu);
+        recordRuntimeTrace(pollEvent);
     }
     // Confirm *consumption* of touch input by the guest, not merely that
     // Swift emitted a button press. Log each changed packet only once.
