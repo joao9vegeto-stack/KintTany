@@ -676,7 +676,8 @@ jobs:
           grep -Eq '_xowue_xenos_take_draws([[:space:]]|$)' artifacts/xowue-linked-symbols.txt
           grep -Eq '_xowue_xenos_record_submitted([[:space:]]|$)' artifacts/xowue-linked-symbols.txt
           strings "$APP/XOWUE" > artifacts/xowue-linked-strings.txt
-          grep -Fq 'XOWUE_REAL_FPS' artifacts/xowue-linked-strings.txt
+          grep -Fq 'XOWUE_GAME_FPS fps=' artifacts/xowue-linked-strings.txt
+          grep -Fq 'guest_vdswap_calls=' artifacts/xowue-linked-strings.txt
           grep -Fq 'vkCmdDraw' artifacts/xowue-linked-strings.txt
           grep -Fq 'XENOS_GPU_DRAWS_SUBMITTED' artifacts/xowue-linked-strings.txt
           grep -Fq 'XENOS_NATIVE_PIPELINE_CREATED' artifacts/xowue-linked-strings.txt
