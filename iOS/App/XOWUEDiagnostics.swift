@@ -3,12 +3,14 @@ import UIKit
 
 enum XOWUEDiagnostics {
     private static let lock = NSRecursiveLock()
+    private static let inputLogQueue = DispatchQueue(label: "com.joaopedro.xowue.input-diagnostics", qos: .utility)
     private static var started = false
     private static var buildNumber: String {
         let value = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
         return value?.isEmpty == false ? value! : "unknown"
     }
     static var diagnosticFilename: String { "diagnostico-build-\(buildNumber).txt" }
+    static var inputFilename: String { "input-build-\(buildNumber).txt" }
     static var summaryFilename: String { "resumo-b\(buildNumber).txt" }
     static var crashFilename: String { "crash-build-\(buildNumber).txt" }
 
@@ -46,8 +48,17 @@ enum XOWUEDiagnostics {
 
     /// Creates a bounded copy for sharing, preserving the first and last 256 KB.
     static func diagnosticExportURL() -> URL? {
+        inputLogQueue.sync {}
         guard let sourceURL = fileURL(named: diagnosticFilename),
-              let data = try? Data(contentsOf: sourceURL, options: .mappedIfSafe) else { return nil }
+              let sourceData = try? Data(contentsOf: sourceURL, options: .mappedIfSafe) else { return nil }
+        var data = sourceData
+        if let inputURL = fileURL(named: inputFilename),
+           let inputData = try? Data(contentsOf: inputURL, options: .mappedIfSafe),
+           !inputData.isEmpty {
+            data.append(Data("\nINPUT_EVENTS_BEGIN\n".utf8))
+            data.append(inputData)
+            data.append(Data("INPUT_EVENTS_END\n".utf8))
+        }
         let maxBytes = 24 * 1024
         let exportData: Data
         if data.count <= maxBytes {
@@ -79,6 +90,13 @@ enum XOWUEDiagnostics {
         return url
     }
 
+    static func logInput(_ message: String) {
+        inputLogQueue.async {
+            guard let url = fileURL(named: inputFilename) else { return }
+            appendLocked(message, to: url)
+        }
+    }
+
     static func log(_ message: String) {
         lock.lock()
         defer { lock.unlock() }
@@ -87,7 +105,7 @@ enum XOWUEDiagnostics {
         let important = ["B83_", "B84_", "B85_", "B86_", "AOT_PROGRESS", "HOT_FN_CODE",
                          "THREAD_DUMP", "XENOS_", "PM4_", "SWAP_", "WAIT_", "VBLANK",
                          "GRAPHICS_INTERRUPT", "B90_STREAM_", "B92_XXX_INTEGRITY",
-                         "B92_BIK_INTEGRITY", "XOWUE_B92_QPC_", "XOWUE_XAUDIO_", "XOWUE_XMA_", "XOWUE_AUDIO_BACKEND_", "XOWUE_INPUT_", "XOWUE_VDSWAP_", "XOWUE_PM4_", "XOWUE_NATIVE_GUEST_FRAME", "XOWUE_GPU_SWAP_WAIT", "B95_SYNC_", "B97_", "B98_", "B99_", "B103_ASYNC_NTREADFILE_", "XOWUE_USER_EXIT",
+                         "B92_BIK_INTEGRITY", "XOWUE_B92_QPC_", "XOWUE_XAUDIO_", "XOWUE_XMA_", "XOWUE_AUDIO_BACKEND_", "XOWUE_VDSWAP_", "XOWUE_PM4_", "XOWUE_NATIVE_GUEST_FRAME", "XOWUE_GPU_SWAP_WAIT", "B95_SYNC_", "B97_", "B98_", "B99_", "B103_ASYNC_NTREADFILE_", "XOWUE_USER_EXIT",
                          "runtime.stop", "BOOT_", "CRASH ", "runtime.native_return"]
         if important.contains(where: { message.contains($0) }) {
             refreshCompactSummaryLocked(diagnosticURL: url)
@@ -95,6 +113,7 @@ enum XOWUEDiagnostics {
     }
 
     static func summaryFileURL() -> URL? {
+        inputLogQueue.sync {}
         lock.lock()
         defer { lock.unlock() }
         guard let diagnosticURL = fileURL(named: diagnosticFilename) else { return nil }
@@ -155,7 +174,11 @@ enum XOWUEDiagnostics {
         let audioDriver = Array(lines.filter {
             $0.contains("XOWUE_XAUDIO_") || $0.contains("XOWUE_XMA_") || $0.contains("XOWUE_AUDIO_BACKEND_")
         }.suffix(64))
-        let input = Array(lines.filter { $0.contains("XOWUE_INPUT_") }.suffix(48))
+        let legacyInput = Array(lines.filter { $0.contains("XOWUE_INPUT_") }.suffix(48))
+        let inputSidecar = fileURL(named: inputFilename).flatMap {
+            try? Data(contentsOf: $0, options: .mappedIfSafe)
+        }.map { String(decoding: $0, as: UTF8.self).split(whereSeparator: \.isNewline).map(String.init) } ?? []
+        let input = Array((legacyInput + inputSidecar).suffix(48))
         let xxxIntegrity = Array(lines.filter { $0.contains("B92_XXX_INTEGRITY") }.suffix(16))
         let bikIntegrity = Array(lines.filter { $0.contains("B92_BIK_INTEGRITY") }.suffix(16))
         let qpcCaller = Array(lines.filter { $0.contains("XOWUE_B92_QPC_") }.suffix(24))

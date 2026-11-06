@@ -32,6 +32,16 @@ static _Atomic(uint32_t) g_xowue_guest_width = 0;
 static _Atomic(uint32_t) g_xowue_guest_height = 0;
 static _Atomic(uint32_t) g_xowue_guest_frontbuffer = 0;
 static _Atomic(uint64_t) g_xowue_guest_frame_count = 0;
+static _Atomic(bool) g_xowue_stall_diagnostic_queued = false;
+
+static dispatch_queue_t KKDiagnosticQueue(void) {
+   static dispatch_queue_t queue;
+   static dispatch_once_t onceToken;
+   dispatch_once(&onceToken, ^{
+      queue = dispatch_queue_create("com.joaopedro.xowue.runtime-diagnostics", DISPATCH_QUEUE_SERIAL);
+   });
+   return queue;
+}
 static pthread_mutex_t g_xowue_guest_frame_mutex = PTHREAD_MUTEX_INITIALIZER;
 static uint8_t *g_xowue_guest_frame = NULL;
 static size_t g_xowue_guest_frame_bytes = 0;
@@ -1406,31 +1416,27 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
                          (size_t)state->swapchain_extent.height;
       size_t samples=0, nonblack=0;
       uint64_t checksum=14695981039346656037ull;
+      uint32_t sampledMinX=UINT32_MAX,sampledMinY=UINT32_MAX,sampledMaxX=0,sampledMaxY=0;
+      const uint32_t stride=state->swapchain_extent.width;
       const size_t interval=total>8192u?total/8192u:1u;
       for (size_t k=0;k<total;k+=interval) {
          const uint8_t *c=pixels+k*4u;
-         if (c[0] || c[1] || c[2]) ++nonblack;
+         if (c[0] || c[1] || c[2]) {
+            ++nonblack;
+            const uint32_t x=(uint32_t)(k%stride), y=(uint32_t)(k/stride);
+            if (x<sampledMinX) sampledMinX=x;
+            if (y<sampledMinY) sampledMinY=y;
+            if (x>sampledMaxX) sampledMaxX=x;
+            if (y>sampledMaxY) sampledMaxY=y;
+         }
          checksum=((checksum ^ c[0]) * 1099511628211ull ^
                    ((uint64_t)c[1]<<8) ^ ((uint64_t)c[2]<<16));
          ++samples;
       }
-      size_t actualColored=0;
-       uint32_t minX=UINT32_MAX,minY=UINT32_MAX,maxX=0,maxY=0;
-       const uint32_t stride=state->swapchain_extent.width;
-       for (size_t k=0;k<total;++k) {
-          const uint8_t *c=pixels+k*4u;
-          if (!(c[0] || c[1] || c[2])) continue;
-          ++actualColored;
-          uint32_t x=(uint32_t)(k%stride), y=(uint32_t)(k/stride);
-          if (x<minX) minX=x;
-          if (y<minY) minY=y;
-          if (x>maxX) maxX=x;
-          if (y>maxY) maxY=y;
-       }
-       KKLog(@"XENOS_COMPOSITED_GPU_READBACK nonblack=%zu samples=%zu checksum=%016llX full_nonblack=%zu full_pixels=%zu bbox=%u,%u..%u,%u",
-            nonblack,samples,(unsigned long long)checksum,
-            actualColored,total,minX==UINT32_MAX?0:minX,
-            minY==UINT32_MAX?0:minY,maxX,maxY);
+      KKLog(@"XENOS_COMPOSITED_GPU_READBACK sampled_nonblack=%zu samples=%zu checksum=%016llX pixels_total=%zu sampled_bbox=%u,%u..%u,%u",
+            nonblack,samples,(unsigned long long)checksum,total,
+            sampledMinX==UINT32_MAX?0:sampledMinX,
+            sampledMinY==UINT32_MAX?0:sampledMinY,sampledMaxX,sampledMaxY);
       } else {
          KKLog(@"XENOS_COMPOSITED_GPU_READBACK_INVALIDATE_FAILED code=%d",invalidateResult);
       }
@@ -1470,7 +1476,9 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    UILabel *_statusLabel;
    UILabel *_fpsLabel;
    CFTimeInterval _lastFPSMeasurement;
-   uint64_t _lastGameFrames;
+   CFTimeInterval _lastStallDiagnostic;
+   uint32_t _lastGuestSwaps;
+   uint64_t _lastDecodedFrames;
    uint64_t _lastHostFrames;
    id _backgroundObserver;
    id _foregroundObserver;
@@ -1516,11 +1524,13 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    _fpsLabel.backgroundColor = [UIColor colorWithWhite:0 alpha:0.70];
    _fpsLabel.layer.cornerRadius = 8;
    _fpsLabel.layer.masksToBounds = YES;
-   _fpsLabel.text = @" JOGO 0.0 FPS\n Metal 0 Hz";
-   _fpsLabel.accessibilityLabel = @"FPS real do jogo e taxa de apresentação Metal";
+   _fpsLabel.text = @" XENOS SWAP 0.0/s  FB 0.0/s\n METAL 0 Hz";
+   _fpsLabel.accessibilityLabel = @"Taxa de swaps Xenos, atualizações do framebuffer da CPU e apresentações Metal";
    [self addSubview:_fpsLabel];
    _lastFPSMeasurement = CACurrentMediaTime();
-   _lastGameFrames = atomic_load_explicit(&g_xowue_guest_frame_count, memory_order_relaxed);
+   _lastStallDiagnostic = 0;
+   _lastGuestSwaps = atomic_load_explicit(&g_xowue_guest_swap_count, memory_order_relaxed);
+   _lastDecodedFrames = atomic_load_explicit(&g_xowue_guest_frame_count, memory_order_relaxed);
    _lastHostFrames = 0;
 
    __weak XOWUEVulkanView *weakSelf = self;
@@ -1565,9 +1575,9 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    // The outer SwiftUI header owns the top edge (SAIR + branding). Keep
    // the real guest-FPS badge centered at the bottom of the 16:9 game viewport
    // so it cannot cover those controls or the external FPS counters.
-   _fpsLabel.frame = CGRectMake(MAX(10.0, (self.bounds.size.width - 184.0) / 2.0),
+   _fpsLabel.frame = CGRectMake(MAX(10.0, (self.bounds.size.width - 244.0) / 2.0),
                                 MAX(10.0, self.bounds.size.height - 58.0),
-                                184.0, 46.0);
+                                244.0, 46.0);
    _fpsLabel.layer.zPosition = 1000.0;
    [self bringSubviewToFront:_fpsLabel];
    if (self.window && !_attempted)
@@ -1639,7 +1649,8 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
          _vk.swapchain_extent.width, _vk.swapchain_extent.height, _vk.swapchain_image_count);
 
    _lastFPSMeasurement = CACurrentMediaTime();
-   _lastGameFrames = atomic_load_explicit(&g_xowue_guest_frame_count, memory_order_relaxed);
+   _lastGuestSwaps = atomic_load_explicit(&g_xowue_guest_swap_count, memory_order_relaxed);
+   _lastDecodedFrames = atomic_load_explicit(&g_xowue_guest_frame_count, memory_order_relaxed);
    _lastHostFrames = _vk.frame_count;
    _displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(displayTick:)];
    _displayLink.preferredFramesPerSecond = 60;
@@ -1663,22 +1674,40 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    const CFTimeInterval now = CACurrentMediaTime();
    const double elapsed = now - _lastFPSMeasurement;
    if (elapsed >= 1.0) {
-      const uint64_t guestNow = atomic_load_explicit(
+      const uint32_t guestSwapsNow = atomic_load_explicit(
+         &g_xowue_guest_swap_count, memory_order_relaxed);
+      const uint64_t decodedNow = atomic_load_explicit(
          &g_xowue_guest_frame_count, memory_order_relaxed);
       const uint64_t hostNow = _vk.frame_count;
-      const uint64_t guestDelta = guestNow >= _lastGameFrames
-         ? guestNow - _lastGameFrames : 0u;
+      const uint32_t swapDelta = (uint32_t)(guestSwapsNow - _lastGuestSwaps);
+      const uint64_t decodedDelta = decodedNow >= _lastDecodedFrames
+         ? decodedNow - _lastDecodedFrames : 0u;
       const uint64_t hostDelta = hostNow >= _lastHostFrames
          ? hostNow - _lastHostFrames : 0u;
-      const double gameFPS = (double)guestDelta / elapsed;
-      const double hostFPS = (double)hostDelta / elapsed;
+      const double xenosSwapRate = (double)swapDelta / elapsed;
+      const double framebufferRate = (double)decodedDelta / elapsed;
+      const double metalRate = (double)hostDelta / elapsed;
       _fpsLabel.text = [NSString stringWithFormat:
-         @" JOGO %.1f FPS\n Metal %.0f Hz", gameFPS, hostFPS];
-      KKLog(@"XOWUE_REAL_FPS guest=%.2f present=%.2f fresh_guest_frames=%llu metal_presents=%llu interval=%.3f",
-            gameFPS, hostFPS, (unsigned long long)guestDelta,
-            (unsigned long long)hostDelta, elapsed);
-      xowue_log_stall_threads();
-      _lastGameFrames = guestNow;
+         @" XENOS SWAP %.1f/s  FB %.1f/s\n METAL %.0f Hz",
+         xenosSwapRate, framebufferRate, metalRate];
+      KKLog(@"XOWUE_REAL_FPS xenos_swaps=%.2f framebuffer_updates=%.2f metal_presents=%.2f guest_swap_delta=%u fresh_guest_frames=%llu metal_presents_delta=%llu interval=%.3f",
+            xenosSwapRate, framebufferRate, metalRate, swapDelta,
+            (unsigned long long)decodedDelta, (unsigned long long)hostDelta, elapsed);
+      if (now - _lastStallDiagnostic >= 5.0) {
+         bool expected = false;
+         if (atomic_compare_exchange_strong_explicit(
+                &g_xowue_stall_diagnostic_queued, &expected, true,
+                memory_order_acq_rel, memory_order_relaxed)) {
+            _lastStallDiagnostic = now;
+            dispatch_async(KKDiagnosticQueue(), ^{
+               xowue_log_stall_threads();
+               atomic_store_explicit(&g_xowue_stall_diagnostic_queued, false,
+                                     memory_order_release);
+            });
+         }
+      }
+      _lastGuestSwaps = guestSwapsNow;
+      _lastDecodedFrames = decodedNow;
       _lastHostFrames = hostNow;
       _lastFPSMeasurement = now;
    }

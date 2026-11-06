@@ -49,10 +49,11 @@ assert "fminf(targetW/1280.0f,targetH/720.0f)" in renderer
 print("PASS: Xenos guest viewport, real VTE flags and landscape aspect")
 
 # Verify no false-success graphics claim from sparse samples alone.
-assert "full_nonblack=%zu full_pixels=%zu" in vulkan
+assert "sampled_nonblack=%zu samples=%zu checksum=%016llX pixels_total=%zu sampled_bbox=" in vulkan
+assert "for (size_t k=0;k<total;++k)" not in vulkan
 assert "XENOS_GUEST_SWAP_RGBA" in vulkan
 assert "XOWUEOrientationDelegate" in Path("iOS/App/XOWUEApp.swift").read_text()
-print("PASS: UIKit effective orientation, exhaustive GPU readback and guest-swap pixel audit")
+print("PASS: UIKit effective orientation, bounded sampled GPU readback and guest-swap pixel audit")
 
 # Build 55 regression: EVENT_WRITE_SHD bit 31 is a counter write, never a CP interrupt.
 assert "const bool writeCounter = (initiator & 0x80000000u) != 0u" in engine
@@ -188,11 +189,14 @@ assert "xowue_request_stop()" in request_exit
 assert ".zIndex(1000)" in ui
 assert vulkan.count("UILabel *_fpsLabel;") == 1
 assert "g_xowue_guest_frame_count" in vulkan
-assert "XOWUE_REAL_FPS guest=" in vulkan
+assert "XOWUE_REAL_FPS xenos_swaps=" in vulkan
+assert "framebuffer_updates=" in vulkan
+assert "metal_presents=" in vulkan
+assert "XENOS SWAP" in vulkan and "FB %.1f/s" in vulkan and "METAL %.0f Hz" in vulkan
 assert "self.bounds.size.height - 58.0" in vulkan
 assert "_fpsLabel.layer.zPosition = 1000.0;" in vulkan
 assert "[self bringSubviewToFront:_fpsLabel];" in vulkan
-print("PASS: immediate SAIR dismissal after native stop request and isolated real guest FPS badge")
+print("PASS: immediate SAIR dismissal after native stop request and separate Xenos/FB/Metal rates")
 
 # Build 86: never fake EOF or report existing Bink files as missing.
 assert "isStartupMoviePath" in engine
@@ -234,7 +238,7 @@ print("PASS: Build 58 spinlock diagnostics, indexed UE3 VFS, clear-color resolve
 assert "top_fn=0x%08X" in engine and "prev_fn=0x%08X" in engine
 assert "r3=0x%08X r4=0x%08X r11=0x%08X r30=0x%08X r31=0x%08X" in engine
 assert "insns=%08X_%08X_%08X_%08X_%08X_%08X" in engine
-assert "SPINLOCK_ACTIVE worker_cp_pump=250us no_forced_guest_return" in engine
+assert "AOT_PLATEAU_ACTIVE worker_cp_pump=250us no_forced_guest_return" in engine
 assert "lastR3.store(context.r3.u32" in engine
 assert "lastR31.store(context.r31.u32" in engine
 assert "std::filesystem::weakly_canonical(hostPath, ec)" in engine

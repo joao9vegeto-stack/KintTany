@@ -685,7 +685,7 @@ jobs:
           grep -Fq 'XENOS_FRAGMENT_COLOR_OUTPUT_LINKED' artifacts/xowue-linked-strings.txt
           grep -Fq 'XENOS_COMPOSITED_GPU_READBACK' artifacts/xowue-linked-strings.txt
           grep -Fq 'XENOS_GUEST_SWAP_RGBA' artifacts/xowue-linked-strings.txt
-          grep -Fq 'full_nonblack' artifacts/xowue-linked-strings.txt
+          grep -Fq 'sampled_nonblack' artifacts/xowue-linked-strings.txt
           grep -Fq 'XENOS_DRAW_AUDIT' artifacts/xowue-linked-strings.txt
           grep -Fq 'XENOS_GUEST_SWAP_PRESTART' artifacts/xowue-linked-strings.txt
           grep -Fq 'XENOS_NATIVE_DRAW_OUTCOME' artifacts/xowue-linked-strings.txt

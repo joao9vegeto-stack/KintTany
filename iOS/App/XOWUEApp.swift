@@ -379,7 +379,7 @@ private final class XOWUETouchController: ObservableObject {
         )
         diagnosticSendCount &+= 1
         if diagnosticSendCount <= 32 || diagnosticSendCount % 64 == 0 {
-            XOWUEDiagnostics.log(
+            XOWUEDiagnostics.logInput(
                 "XOWUE_INPUT_HOST seq=\(diagnosticSendCount) buttons=0x\(String(buttons, radix: 16)) " +
                 "triggers=\(leftTrigger),\(rightTrigger) sticks=\(leftX),\(leftY),\(rightX),\(rightY)"
             )

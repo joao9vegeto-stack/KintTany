@@ -906,6 +906,7 @@ void recordAotFunctionExecution(uint32_t guestAddress) {
         lastDistinctCall = calls;
     }
     const bool qpcFastPath = guestAddress == 0x82C3C4D8u;
+    // Flat AOT-address occupancy is a heuristic, not proof of a guest spinlock.
     const bool plateau = !qpcFastPath && calls > 12000000u && calls - lastDistinctCall > 5000000u;
     if (plateau) {
         bool expectedDump = false;
@@ -1000,7 +1001,7 @@ void recordAotFunctionExecution(uint32_t guestAddress) {
             rankedHot[0].fn, rankedHot[0].count,
             g_currentGuestThread ? g_currentGuestThread->lastCallerFn.load(std::memory_order_relaxed) : 0u,
             lr, r3, r4, r11, r30, r31, insns[0], insns[1], insns[2], insns[3], insns[4], insns[5],
-            plateau ? " SPINLOCK_ACTIVE worker_cp_pump=250us no_forced_guest_return" : "");
+            plateau ? " AOT_PLATEAU_ACTIVE worker_cp_pump=250us no_forced_guest_return" : "");
         recordRuntimeTrace(event);
         if (plateau) {
             const auto snapshotMemory = g_activeGuestMemory.lock();
@@ -4016,7 +4017,6 @@ extern "C" bool xowue_xenos_commit_resolved_rgba(
 extern "C" void xowue_set_touch_controller_state(
     uint32_t buttons, uint8_t left_trigger, uint8_t right_trigger,
     int16_t left_x, int16_t left_y, int16_t right_x, int16_t right_y) {
-    uint32_t packet = 0u;
     bool changed = false;
     {
         std::lock_guard<std::mutex> lock(g_touchControllerMutex);
@@ -4032,20 +4032,10 @@ extern "C" void xowue_set_touch_controller_state(
         g_touchController.leftY = left_y;
         g_touchController.rightX = right_x;
         g_touchController.rightY = right_y;
-        if (changed) packet = ++g_touchController.packetNumber;
+        if (changed) ++g_touchController.packetNumber;
     }
-    if (changed) {
-        static std::atomic<uint32_t> inputNativeLogs{0u};
-        const uint32_t sequence = inputNativeLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
-        if (sequence <= 32u || sequence % 64u == 0u) {
-            char event[224];
-            std::snprintf(event, sizeof(event),
-                "XOWUE_INPUT_NATIVE seq=%u packet=%u buttons=0x%04X triggers=%u,%u sticks=%d,%d,%d,%d",
-                sequence, packet, buttons & 0xFFFFu, left_trigger, right_trigger,
-                left_x, left_y, right_x, right_y);
-            recordRuntimeTrace(event);
-        }
-    }
+    // Guest-consumed input remains traced by writeTouchGamepadState().
+    // Do not perform synchronous file/trace I/O from this MainActor setter.
 }
 
 extern "C" int xowue_set_runtime_trace_path(const char *path) {

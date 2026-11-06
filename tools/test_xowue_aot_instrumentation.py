@@ -198,10 +198,12 @@ assert 'Label("SAIR", systemImage: "power")' in swift
 assert 'Label("JOGO INSTALADO"' in swift
 assert "16.0 / 9.0" in swift and "9.0 / 16.0" in swift
 assert "XOWUE_REAL_FPS" in backend and "XOWUE_FPS" not in backend
-assert "guestDelta" in backend and "hostDelta" in backend
+assert "g_xowue_guest_swap_count" in backend
+assert "xenos_swaps=" in backend and "framebuffer_updates=" in backend and "metal_presents=" in backend
+assert "XENOS SWAP" in backend and "FB %.1f/s" in backend and "METAL %.0f Hz" in backend
 assert "XOWUE_MEDIA_INVENTORY" in engine
 assert "XOWUE_INPUT_POLLED" in engine
-print("PASS: native guest cancellation, real guest-frame FPS, 16:9 viewport, touch diagnostics")
+print("PASS: native guest cancellation, separate Xenos/FB/Metal rates, 16:9 viewport, touch diagnostics")
 
 
 # Build 64: runtime diagnostics must expose the complete hot set and build-specific bounded summary.
