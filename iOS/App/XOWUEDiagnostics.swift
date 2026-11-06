@@ -11,6 +11,7 @@ enum XOWUEDiagnostics {
     }
     static var diagnosticFilename: String { "diagnostico-build-\(buildNumber).txt" }
     static var inputFilename: String { "input-build-\(buildNumber).txt" }
+    static var guestInputFilename: String { "input-guest-build-\(buildNumber).txt" }
     static var summaryFilename: String { "resumo-b\(buildNumber).txt" }
     static var crashFilename: String { "crash-build-\(buildNumber).txt" }
 
@@ -58,6 +59,13 @@ enum XOWUEDiagnostics {
             data.append(Data("\nINPUT_EVENTS_BEGIN\n".utf8))
             data.append(inputData)
             data.append(Data("INPUT_EVENTS_END\n".utf8))
+        }
+        if let guestInputURL = fileURL(named: guestInputFilename),
+           let guestInputData = try? Data(contentsOf: guestInputURL, options: .mappedIfSafe),
+           !guestInputData.isEmpty {
+            data.append(Data("\nGUEST_INPUT_EVENTS_BEGIN\n".utf8))
+            data.append(guestInputData)
+            data.append(Data("GUEST_INPUT_EVENTS_END\n".utf8))
         }
         let maxBytes = 24 * 1024
         let exportData: Data
@@ -178,7 +186,10 @@ enum XOWUEDiagnostics {
         let inputSidecar = fileURL(named: inputFilename).flatMap {
             try? Data(contentsOf: $0, options: .mappedIfSafe)
         }.map { String(decoding: $0, as: UTF8.self).split(whereSeparator: \.isNewline).map(String.init) } ?? []
-        let input = Array((legacyInput + inputSidecar).suffix(48))
+        let guestInputSidecar = fileURL(named: guestInputFilename).flatMap {
+            try? Data(contentsOf: $0, options: .mappedIfSafe)
+        }.map { String(decoding: $0, as: UTF8.self).split(whereSeparator: \.isNewline).map(String.init) } ?? []
+        let input = Array((legacyInput + inputSidecar + guestInputSidecar).suffix(48))
         let xxxIntegrity = Array(lines.filter { $0.contains("B92_XXX_INTEGRITY") }.suffix(16))
         let bikIntegrity = Array(lines.filter { $0.contains("B92_BIK_INTEGRITY") }.suffix(16))
         let qpcCaller = Array(lines.filter { $0.contains("XOWUE_B92_QPC_") }.suffix(24))

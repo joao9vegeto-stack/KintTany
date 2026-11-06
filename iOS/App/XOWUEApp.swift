@@ -1180,11 +1180,13 @@ private final class XOWUEGameLibrary: ObservableObject {
         let shouldStopNativeSession = phase == .booting || gameSurfacePresented || exitRequested
         exitRequested = true
         XOWUEDiagnostics.log("runtime.stop requested by user phase=\(phase) surface=\(gameSurfacePresented) latched=\(exitRequested)")
-        status = "Encerrando sessão nativa…"
-        detail = "Solicitando cancelamento do runtime PPC."
-        // Always signal native cancellation. It is safe before boot and idempotent
-        // after a prior request; do not gate the only exit control on SwiftUI state.
-        xowue_request_stop()
+        status = "Retornando ao Launcher…"
+        detail = "A interface retorna sem aguardar o encerramento das threads PPC."
+        // Do not let a contended PPC/object mutex block SwiftUI's MainActor.
+        // Native cancellation is idempotent and is performed on a worker thread.
+        Task.detached(priority: .userInitiated) {
+            xowue_request_stop()
+        }
 
         // Return to the launcher immediately; never wait for a wedged guest thread.
         gameSurfacePresented = false

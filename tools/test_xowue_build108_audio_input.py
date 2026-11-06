@@ -77,6 +77,14 @@ require("XOWUE_INPUT_POLL" in poll,
         "guest XInput poll calls must be recorded even without a changed packet")
 require("XOWUE_INPUT_POLLED" in poll,
         "changed touch packets must still be recorded as guest-consumed input")
+require("persistGuestInputTrace(inputEvent)" in poll,
+        "guest-consumed controller state must survive the capped 2 MiB runtime trace")
+require("requested_user=%u normalized_user=%u flags=0x%08X" in poll,
+        "guest input records must preserve XAM/XInput user-index and flag arguments")
+require("api=%s poll=%u thread=%u" in poll,
+        "guest input records must identify the title API and PPC thread")
+require("input-guest-build-" in engine and "g_guestInputTraceFileDescriptor" in engine,
+        "guest polling must use a dedicated sidecar, not race the Swift host-input file")
 
 send_start = app.index("private func send() {", app.index("private final class XOWUETouchController"))
 send_end = app.index("\n    }", send_start) + 6
@@ -111,6 +119,8 @@ require("inputLogQueue.sync {}" in diagnostics,
         "explicit summary/export must drain pending input writes")
 require("inputSidecar" in diagnostics and "legacyInput" in diagnostics,
         "compact summary must merge sidecar and legacy input records")
+require("guestInputFilename" in diagnostics and "guestInputSidecar" in diagnostics,
+        "compact/exported diagnostics must include the native guest input sidecar")
 
 require("AOT_PLATEAU_ACTIVE" in engine and "SPINLOCK_ACTIVE" not in engine,
         "AOT plateau must not be reported as a proven guest spinlock")

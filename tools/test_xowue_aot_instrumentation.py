@@ -193,6 +193,15 @@ assert "if (g_schedulerStopRequested.load(std::memory_order_relaxed))" in engine
 ]
 assert 'recordAotExecutionSummary("user-exit")' in engine
 assert "xowue_request_stop()" in swift
+exit_start = swift.index("func requestExit()")
+exit_end = swift.index("\n    func runBoot()", exit_start)
+exit_body = swift[exit_start:exit_end]
+assert "Task.detached(priority: .userInitiated)" in exit_body
+assert exit_body.index("Task.detached") < exit_body.index("gameSurfacePresented = false")
+assert "requestGuestSchedulerStop();" in engine[
+    engine.index('extern "C" void xowue_request_stop(void)'):
+    engine.index("static void rebuildGuestPathIndex();")
+]
 assert "if exitRequested || outcome.code == 4" in swift
 assert 'Label("SAIR", systemImage: "power")' in swift
 assert 'Label("JOGO INSTALADO"' in swift

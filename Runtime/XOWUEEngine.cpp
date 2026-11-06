@@ -494,6 +494,11 @@ std::atomic<bool> g_guestProgressWatchdogStarted{false};
 std::mutex g_runtimeTraceMutex;
 std::mutex g_runtimeTraceFileMutex;
 int g_runtimeTraceFileDescriptor = -1;
+// Native guest polling uses a separate file so its writes never race the
+// Swift host-input queue's FileHandle seek/write sequence.
+std::mutex g_guestInputTraceFileMutex;
+int g_guestInputTraceFileDescriptor = -1;
+std::atomic<uint64_t> g_guestInputTraceSequence{0};
 std::atomic<size_t> g_runtimeTracePersistSequence{0};
 std::atomic<size_t> g_runtimeTracePersistFailures{0};
 std::atomic<size_t> g_runtimeTracePersistMilestones{0};
@@ -719,6 +724,24 @@ void persistRuntimeTrace(const std::string &tagged, size_t sequence) {
     size_t remaining = line.size();
     while (remaining > 0u) {
         const ssize_t written = ::write(g_runtimeTraceFileDescriptor, cursor, remaining);
+        if (written < 0 && errno == EINTR) continue;
+        if (written <= 0) break;
+        cursor += written;
+        remaining -= static_cast<size_t>(written);
+    }
+}
+
+void persistGuestInputTrace(const std::string &event) {
+    const uint64_t sequence =
+        g_guestInputTraceSequence.fetch_add(1u, std::memory_order_relaxed) + 1u;
+    const std::string line =
+        "XOWUE_INPUT_GUEST seq=" + std::to_string(sequence) + " " + event + "\n";
+    std::lock_guard<std::mutex> lock(g_guestInputTraceFileMutex);
+    if (g_guestInputTraceFileDescriptor < 0) return;
+    const char *cursor = line.data();
+    size_t remaining = line.size();
+    while (remaining > 0u) {
+        const ssize_t written = ::write(g_guestInputTraceFileDescriptor, cursor, remaining);
         if (written < 0 && errno == EINTR) continue;
         if (written <= 0) break;
         cursor += written;
@@ -4041,15 +4064,47 @@ extern "C" void xowue_set_touch_controller_state(
 }
 
 extern "C" int xowue_set_runtime_trace_path(const char *path) {
-    std::lock_guard<std::mutex> lock(g_runtimeTraceFileMutex);
-    if (g_runtimeTraceFileDescriptor >= 0) {
-        ::close(g_runtimeTraceFileDescriptor);
-        g_runtimeTraceFileDescriptor = -1;
+    int traceStatus = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_runtimeTraceFileMutex);
+        if (g_runtimeTraceFileDescriptor >= 0) {
+            ::close(g_runtimeTraceFileDescriptor);
+            g_runtimeTraceFileDescriptor = -1;
+        }
+        if (path && path[0] != '\0') {
+            g_runtimeTraceFileDescriptor = ::open(path, O_WRONLY | O_CREAT | O_APPEND, 0600);
+            if (g_runtimeTraceFileDescriptor < 0) traceStatus = errno;
+        }
     }
-    if (!path || path[0] == '\0') return 0;
 
-    g_runtimeTraceFileDescriptor = ::open(path, O_WRONLY | O_CREAT | O_APPEND, 0600);
-    return g_runtimeTraceFileDescriptor >= 0 ? 0 : errno;
+    int guestInputStatus = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_guestInputTraceFileMutex);
+        if (g_guestInputTraceFileDescriptor >= 0) {
+            ::close(g_guestInputTraceFileDescriptor);
+            g_guestInputTraceFileDescriptor = -1;
+        }
+        g_guestInputTraceSequence.store(0u, std::memory_order_relaxed);
+        if (path && path[0] != '\0') {
+            std::string inputPath(path);
+            const std::string diagnosticName = "diagnostico-build-";
+            const auto marker = inputPath.find(diagnosticName);
+            if (marker != std::string::npos) {
+                inputPath.replace(marker, diagnosticName.size(), "input-guest-build-");
+            } else {
+                inputPath += ".guest-input";
+            }
+            g_guestInputTraceFileDescriptor =
+                ::open(inputPath.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0600);
+            if (g_guestInputTraceFileDescriptor < 0) {
+                guestInputStatus = errno;
+            } else {
+                static constexpr char sessionMarker[] = "XOWUE_INPUT_GUEST_SESSION_OPEN\n";
+                (void)::write(g_guestInputTraceFileDescriptor, sessionMarker, sizeof(sessionMarker) - 1u);
+            }
+        }
+    }
+    return traceStatus != 0 ? traceStatus : guestInputStatus;
 }
 
 extern "C" int xowue_inspect_xex(const char *path, char *output, size_t output_capacity) {
@@ -4082,11 +4137,10 @@ static bool translateGuestFilePath(const std::string &guestPath, bool forWrite,
 // Exit must terminate guest PPC execution; dismissing the view alone leaves
 // native guest workers running indefinitely behind the single-game launcher.
 extern "C" void xowue_request_stop(void) {
-    // Cancellation is a lifecycle operation, not an optional telemetry feature.
-    // Always wake guest waiters and stop the PPC scheduler even before AOT
-    // execution counters have been enabled or after diagnostics are disabled.
-    recordRuntimeTrace("XOWUE_USER_EXIT scheduler cancellation requested");
+    // Publish cancellation before diagnostic locks or file I/O so a busy PPC
+    // guest observes the stop request as early as possible.
     requestGuestSchedulerStop();
+    recordRuntimeTrace("XOWUE_USER_EXIT scheduler cancellation requested");
 }
 
 static void rebuildGuestPathIndex();
@@ -4201,6 +4255,48 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
                                " present=" + (exists ? "1" : "0") +
                                " host=" + (mapped ? hostMovie.string() : "<rejected>"));
         }
+        // Enumerate the exact Xbox dump directory: a fixed PC/console movie
+        // list cannot establish which post-logo loading assets this disc has.
+        std::filesystem::path movieAnchor;
+        const bool movieAnchorMapped = translateGuestFilePath(
+            "D:\\WGame\\Movies\\Copyright.bik", false, movieAnchor);
+        uint32_t movieAssetCount = 0u;
+        bool hasFinalLoadingMovie = false;
+        std::error_code movieDirectoryError;
+        if (movieAnchorMapped &&
+            std::filesystem::is_directory(movieAnchor.parent_path(), movieDirectoryError)) {
+            for (std::filesystem::directory_iterator it(movieAnchor.parent_path(), movieDirectoryError), end;
+                 !movieDirectoryError && it != end; it.increment(movieDirectoryError)) {
+                const auto &entry = *it;
+                std::string extension = entry.path().extension().string();
+                std::transform(extension.begin(), extension.end(), extension.begin(),
+                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                if (extension != ".bik" && extension != ".xxx") continue;
+                std::error_code fileError;
+                if (!entry.is_regular_file(fileError) || fileError) continue;
+                const auto bytes = entry.file_size(fileError);
+                const std::string filename = entry.path().filename().string();
+                std::string lowerFilename = filename;
+                std::transform(lowerFilename.begin(), lowerFilename.end(), lowerFilename.begin(),
+                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                if (lowerFilename == "loading_screen_final.bik") hasFinalLoadingMovie = true;
+                if (movieAssetCount < 256u) {
+                    char movieEvent[512];
+                    std::snprintf(movieEvent, sizeof(movieEvent),
+                        "XOWUE_MEDIA_ENUM name=%s extension=%s bytes=%llu size_valid=%u",
+                        filename.c_str(), extension.c_str(),
+                        static_cast<unsigned long long>(fileError ? 0u : bytes),
+                        fileError ? 0u : 1u);
+                    recordRuntimeTrace(movieEvent);
+                }
+                ++movieAssetCount;
+            }
+        }
+        recordRuntimeTrace("XOWUE_MEDIA_ENUM_COMPLETE mapped=" +
+            std::to_string(movieAnchorMapped ? 1u : 0u) +
+            " count=" + std::to_string(movieAssetCount) +
+            " loading_screen_final=" + std::to_string(hasFinalLoadingMovie ? 1u : 0u) +
+            " iterator_error=" + std::to_string(movieDirectoryError.value()));
         const Image image = parseImage(path);
         g_activeImageBase = static_cast<uint32_t>(image.base);
         g_activeEntryPoint = static_cast<uint32_t>(image.entry_point);
@@ -7749,14 +7845,39 @@ static uint32_t xowueNormalizeXamUserIndex(uint32_t userIndex, uint32_t flags) {
 }
 
 static uint32_t writeTouchGamepadState(uint8_t *base, uint32_t userIndex,
-                                       uint32_t address) {
+                                       uint32_t address, const char *apiName,
+                                       uint32_t requestedUserIndex, uint32_t flags) {
+    static std::atomic<uint32_t> inputPollCalls{0u};
+    const uint32_t pollSequence =
+        inputPollCalls.fetch_add(1u, std::memory_order_relaxed) + 1u;
     // Only port 0 is connected. XAM's ANY/ANY_USER forms are normalized by
     // the XAM wrappers below, while plain XInput keeps its 0..3 contract.
     if (userIndex != 0u) {
+        char rejected[320];
+        std::snprintf(rejected, sizeof(rejected),
+            "api=%s poll=%u requested_user=%u normalized_user=%u flags=0x%08X output=0x%08X status=0x%08X reason=user_not_connected",
+            apiName, pollSequence, requestedUserIndex, userIndex, flags, address,
+            kXInputErrorDeviceNotConnected);
+        persistGuestInputTrace(rejected);
         return kXInputErrorDeviceNotConnected;
     }
-    if (address == 0u) return kNtStatusSuccess;
+    if (address == 0u) {
+        if (pollSequence <= 32u) {
+            char rejected[256];
+            std::snprintf(rejected, sizeof(rejected),
+                "api=%s poll=%u requested_user=%u normalized_user=%u flags=0x%08X output=0 status=0x%08X reason=null_output",
+                apiName, pollSequence, requestedUserIndex, userIndex, flags, kNtStatusSuccess);
+            persistGuestInputTrace(rejected);
+        }
+        return kNtStatusSuccess;
+    }
     if (!base || !validGuestRange(address, 16u)) {
+        char rejected[320];
+        std::snprintf(rejected, sizeof(rejected),
+            "api=%s poll=%u requested_user=%u normalized_user=%u flags=0x%08X output=0x%08X status=0x%08X reason=invalid_output",
+            apiName, pollSequence, requestedUserIndex, userIndex, flags, address,
+            kXInputErrorBadArguments);
+        persistGuestInputTrace(rejected);
         return kXInputErrorBadArguments;
     }
     TouchControllerState state;
@@ -7764,21 +7885,32 @@ static uint32_t writeTouchGamepadState(uint8_t *base, uint32_t userIndex,
         std::lock_guard<std::mutex> lock(g_touchControllerMutex);
         state = g_touchController;
     }
-    static std::atomic<uint32_t> inputPollCalls{0u};
-    const uint32_t pollSequence = inputPollCalls.fetch_add(1u, std::memory_order_relaxed) + 1u;
-    if (pollSequence <= 16u || pollSequence % 120u == 0u) {
-        char pollEvent[192];
-        std::snprintf(pollEvent, sizeof(pollEvent),
-            "XOWUE_INPUT_POLL count=%u user=%u packet=%u buttons=0x%04X",
-            pollSequence, userIndex, state.packetNumber, state.buttons & 0xFFFFu);
-        recordRuntimeTrace(pollEvent);
-    }
-    // Confirm *consumption* of touch input by the guest, not merely that
-    // Swift emitted a button press. Log each changed packet only once.
+    // Keep guest polls outside the 2 MiB runtime trace cap. The dedicated
+    // sidecar records the API, PPC thread, ABI arguments and exact guest state.
     static std::atomic<uint32_t> lastObservedPacket{0u};
     const uint32_t previouslyObserved = lastObservedPacket.exchange(
         state.packetNumber, std::memory_order_relaxed);
-    if (state.packetNumber && state.packetNumber != previouslyObserved) {
+    const bool packetChanged = state.packetNumber != 0u &&
+                               state.packetNumber != previouslyObserved;
+    if (pollSequence <= 64u || pollSequence % 120u == 0u || packetChanged) {
+        char inputEvent[512];
+        std::snprintf(inputEvent, sizeof(inputEvent),
+            "api=%s poll=%u thread=%u requested_user=%u normalized_user=%u flags=0x%08X output=0x%08X status=0x%08X packet=%u buttons=0x%04X triggers=%u,%u sticks=%d,%d,%d,%d",
+            apiName, pollSequence, g_currentGuestThreadId, requestedUserIndex, userIndex,
+            flags, address, kNtStatusSuccess, state.packetNumber, state.buttons & 0xFFFFu,
+            state.leftTrigger, state.rightTrigger, static_cast<int>(state.leftX),
+            static_cast<int>(state.leftY), static_cast<int>(state.rightX),
+            static_cast<int>(state.rightY));
+        persistGuestInputTrace(inputEvent);
+    }
+    if (pollSequence <= 16u || pollSequence % 120u == 0u) {
+        char pollEvent[192];
+        std::snprintf(pollEvent, sizeof(pollEvent),
+            "XOWUE_INPUT_POLL count=%u api=%s user=%u packet=%u buttons=0x%04X",
+            pollSequence, apiName, userIndex, state.packetNumber, state.buttons & 0xFFFFu);
+        recordRuntimeTrace(pollEvent);
+    }
+    if (packetChanged) {
         char inputEvent[160];
         std::snprintf(inputEvent, sizeof(inputEvent),
                       "XOWUE_INPUT_POLLED packet=%u buttons=0x%04X triggers=%u,%u",
@@ -7816,16 +7948,28 @@ static uint32_t writeTouchGamepadCapabilities(uint8_t *base, uint32_t userIndex,
 }
 
 void xowue_XInputGetState(PPCContext &context, uint8_t *base) {
-    context.r3.u32 = writeTouchGamepadState(base, context.r3.u32, context.r4.u32);
+    const uint32_t requestedUserIndex = context.r3.u32;
+    const uint32_t stateAddress = context.r4.u32;
+    context.r3.u32 = writeTouchGamepadState(
+        base, requestedUserIndex, stateAddress, "XInputGetState", requestedUserIndex, 0u);
 }
 
 void xowue_XamInputGetState(PPCContext &context, uint8_t *base) {
+    const uint32_t requestedUserIndex = context.r3.u32;
     const uint32_t flags = context.r4.u32;
-    const uint32_t userIndex = xowueNormalizeXamUserIndex(context.r3.u32, flags);
+    const uint32_t userIndex = xowueNormalizeXamUserIndex(requestedUserIndex, flags);
     const uint32_t stateAddress = context.r5.u32;
-    context.r3.u32 = !xowueXamFlagsAllowGamepad(flags)
-        ? kXInputErrorDeviceNotConnected
-        : writeTouchGamepadState(base, userIndex, stateAddress);
+    if (!xowueXamFlagsAllowGamepad(flags)) {
+        char rejected[320];
+        std::snprintf(rejected, sizeof(rejected),
+            "api=XamInputGetState requested_user=%u normalized_user=%u flags=0x%08X output=0x%08X status=0x%08X reason=gamepad_flag_missing",
+            requestedUserIndex, userIndex, flags, stateAddress, kXInputErrorDeviceNotConnected);
+        persistGuestInputTrace(rejected);
+        context.r3.u32 = kXInputErrorDeviceNotConnected;
+        return;
+    }
+    context.r3.u32 = writeTouchGamepadState(
+        base, userIndex, stateAddress, "XamInputGetState", requestedUserIndex, flags);
 }
 
 void xowue_XInputGetCapabilities(PPCContext &context, uint8_t *base) {
