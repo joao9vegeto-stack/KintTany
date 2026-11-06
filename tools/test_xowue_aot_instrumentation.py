@@ -197,10 +197,28 @@ assert "if exitRequested || outcome.code == 4" in swift
 assert 'Label("SAIR", systemImage: "power")' in swift
 assert 'Label("JOGO INSTALADO"' in swift
 assert "16.0 / 9.0" in swift and "9.0 / 16.0" in swift
-assert "XOWUE_REAL_FPS" in backend and "XOWUE_FPS" not in backend
+# The HUD's game FPS is the cadence of validated guest VdSwap API calls.
+# PM4/XE_SWAP consumption and Metal host presents are independent diagnostics.
+assert "XOWUE_GAME_FPS fps=" in backend
+assert "g_xowue_game_vdswap_request_count" in backend
+assert "guest_vdswap_calls=" in backend
+assert "XOWUE_REAL_FPS" not in backend and "XOWUE_FPS" not in backend
 assert "g_xowue_guest_swap_count" in backend
-assert "xenos_swaps=" in backend and "framebuffer_updates=" in backend and "metal_presents=" in backend
-assert "XENOS SWAP" in backend and "FB %.1f/s" in backend and "METAL %.0f Hz" in backend
+fps_start = backend.index("const uint32_t gameVdSwapCallsNow")
+fps_end = backend.index("if (now - _lastStallDiagnostic", fps_start)
+fps_context = backend[fps_start:fps_end]
+assert "g_xowue_game_vdswap_request_count" in fps_context
+assert "g_xowue_guest_swap_count" not in fps_context
+assert "guest_content_updates=" in fps_context and "metal_host_presents=" in fps_context
+assert '@" FPS JOGO %.1f"' in backend and "XENOS SWAP" not in backend
+assert "xowue_vulkan_backend_game_vdswap_request" in engine
+vd_start = engine.index("void xowue_VdSwap(")
+vd_end = engine.index("void xowue_VdInitializeScalerCommandBuffer", vd_start)
+assert "xowue_vulkan_backend_game_vdswap_request()" in engine[vd_start:vd_end]
+assert "XOWUE_GAME_FPS fps=" in backend
+assert "guest_vdswap_calls=" in backend
+assert "XENOS SWAP" not in backend
+assert "guest_content_updates=" in backend and "metal_host_presents=" in backend
 assert "XOWUE_MEDIA_INVENTORY" in engine
 assert "XOWUE_INPUT_POLLED" in engine
 print("PASS: native guest cancellation, separate Xenos/FB/Metal rates, 16:9 viewport, touch diagnostics")
