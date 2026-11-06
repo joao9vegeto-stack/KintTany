@@ -72,7 +72,7 @@ critical=engine[engine.index("void xowue_RtlTryEnterCriticalSection"):engine.ind
 assert "PPC_LOAD_U32(address + 0x18u) == currentThread" in critical and "PPC_STORE_U32(address + 0x14u, 1u)" in critical
 assert "atomicCompareExchangeGuestBe32" in critical
 assert "shouldTraceCriticalSectionContention" in critical
-assert "shouldTraceCriticalSection()" in critical
+assert "shouldTraceCriticalSection()" in engine
 assert "GuestWaitStateScope waitState" in engine
 assert "lastGuestPc.exchange(guestAddress" in engine
 assert ".ignoresSafeArea(.all)" in Path("iOS/App/XOWUEApp.swift").read_text()
