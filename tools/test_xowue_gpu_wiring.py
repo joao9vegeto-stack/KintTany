@@ -181,11 +181,14 @@ assert 'XOWUE_USER_EXIT scheduler cancellation requested' in stop_body
 ui = Path("iOS/App/XOWUEApp.swift").read_text()
 request_start = ui.index("    func requestExit() {")
 request_exit = ui[request_start:ui.index("\n    func runBoot()", request_start)]
-assert "shouldStopNativeSession = phase == .booting || gameSurfacePresented" in request_exit
+assert "guard phase == .booting || gameSurfacePresented || exitRequested else { return }" in request_exit
+assert "if phase != .booting" in request_exit
+assert "native call already returned" in request_exit
 assert "xowue_request_stop()" in request_exit
+assert "Task.detached(priority: .userInitiated)" in request_exit
 assert "gameSurfacePresented = false" in request_exit
-assert "Do not debounce/ignore repeated exit taps" in request_exit
-assert "xowue_request_stop()" in request_exit
+assert request_exit.index("if phase != .booting") < request_exit.index("gameSurfacePresented = false") < request_exit.index("xowue_request_stop()")
+assert "Aguardando o retorno do boot e a finalização das threads PPC." in request_exit
 assert ".zIndex(1000)" in ui
 assert vulkan.count("UILabel *_fpsLabel;") == 1
 assert "g_xowue_guest_frame_count" in vulkan
@@ -202,7 +205,7 @@ assert '@" FPS JOGO %.1f"' in vulkan and "XENOS SWAP" not in vulkan
 assert "self.bounds.size.height - 58.0" in vulkan
 assert "_fpsLabel.layer.zPosition = 1000.0;" in vulkan
 assert "[self bringSubviewToFront:_fpsLabel];" in vulkan
-print("PASS: immediate SAIR dismissal, game-originated VdSwap FPS and separate content/Metal diagnostics")
+print("PASS: SAIR requests cooperative native shutdown while booting; only an already-returned session dismisses immediately; game-originated VdSwap FPS and separate content/Metal diagnostics")
 
 # Build 86: never fake EOF or report existing Bink files as missing.
 assert "isStartupMoviePath" in engine
