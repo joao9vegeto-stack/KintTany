@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build 108 regression contract: native audio bring-up and complete touch observability."""
+"""Build 110 regression contract: audio, XAM input semantics, independent taps and game FPS."""
 from pathlib import Path
 
 engine = Path("Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
@@ -55,6 +55,20 @@ require("recordRuntimeTrace" not in setter,
         "C++ touch setter must not perform synchronous runtime file I/O")
 require("if (changed) ++g_touchController.packetNumber;" in setter,
         "touch packet sequence must still advance on state changes")
+require("kXInputFlagGamepad = 0x00000001u" in engine,
+        "XAM GAMEPAD flag must retain the documented low-bit value")
+require("kXInputFlagAnyUser = 1u << 30u" in engine,
+        "XAM ANY_USER must use bit 30, not bit 0")
+require("(userIndex & 0xFFu) == 0xFFu" in engine,
+        "XUSER_INDEX_ANY must be recognized on the XAM input path")
+require("xowueXamFlagsAllowGamepad(flags)" in engine,
+        "XAM state/capability queries must reject non-gamepad device requests")
+require("xowueNormalizeXamUserIndex(context.r3.u32, flags)" in engine,
+        "XamInputGetState must normalize ANY_USER and XUSER_INDEX_ANY")
+require("xowueNormalizeXamUserIndex(context.r4.u32, flags)" in engine,
+        "XamInputGetCapabilitiesEx must use its real user/flags argument positions")
+require("if (userIndex != 0u)" in engine,
+        "only the single connected touch gamepad at index zero may report connected")
 
 poll_start = engine.index("static uint32_t writeTouchGamepadState(")
 poll_end = engine.index("static uint32_t writeTouchGamepadCapabilities(", poll_start)
@@ -71,6 +85,16 @@ require("xowue_set_touch_controller_state(" in send,
         "Swift touch state must continue to enter the native controller")
 require("XOWUE_INPUT_HOST" in send and "XOWUEDiagnostics.logInput(" in send,
         "host touch events must use asynchronous input logging")
+require("buttonReleaseGeneration" in app and ".milliseconds(120)" in app,
+        "short button taps must remain available for at least one guest input poll")
+require("triggerReleaseGeneration" in app,
+        "short trigger taps must have independent release scheduling")
+require("A/B/X/Y can no longer steal a neighbouring button's touch" in app,
+        "ABXY touch targets must be non-overlapping")
+require("size: 44).offset(y: -34)" in app and ".frame(width: 116, height: 116)" in app,
+        "ABXY geometry must leave disjoint hit areas for all four face buttons")
+require("buttonReleaseGeneration[mask, default: 0] &+= 1" in app,
+        "repeated taps must cancel only the same button's pending release")
 
 require("static func logInput(_ message: String)" in diagnostics,
         "touch input must have a dedicated asynchronous logging API")
@@ -91,14 +115,24 @@ require("inputSidecar" in diagnostics and "legacyInput" in diagnostics,
 require("AOT_PLATEAU_ACTIVE" in engine and "SPINLOCK_ACTIVE" not in engine,
         "AOT plateau must not be reported as a proven guest spinlock")
 
-fps_start = backend.index("XOWUE_REAL_FPS")
+fps_start = backend.index("XOWUE_GAME_FPS")
 fps_context = backend[max(0, fps_start - 2600):fps_start + 2600]
-require("g_xowue_guest_swap_count" in fps_context and "xenos_swaps=" in fps_context,
-        "guest-side telemetry must count Xenos swaps")
-require("framebuffer_updates=" in fps_context and "metal_presents=" in fps_context,
-        "Xenos swaps, CPU framebuffer updates and host presents must be separate")
-require("XENOS SWAP" in backend and "FB %.1f/s" in backend and "METAL" in backend,
-        "HUD must label all three distinct rates")
+fps_start = backend.index("const uint32_t gameVdSwapCallsNow")
+fps_end = backend.index("if (now - _lastStallDiagnostic", fps_start)
+fps_context = backend[fps_start:fps_end]
+require("g_xowue_game_vdswap_request_count" in fps_context and "gameVdSwapRequestRate" in fps_context,
+        "game FPS must derive from the direct guest VdSwap API request counter")
+require("guest_vdswap_calls=" in fps_context and "g_xowue_guest_swap_count" not in fps_context,
+        "game FPS must count successful guest VdSwap calls, not PM4/XE_SWAP consumption")
+vd_start = engine.index("void xowue_VdSwap(")
+vd_end = engine.index("void xowue_VdInitializeScalerCommandBuffer", vd_start)
+vd_swap = engine[vd_start:vd_end]
+require("xowue_vulkan_backend_game_vdswap_request()" in vd_swap,
+        "only a successful guest VdSwap call may increment game FPS")
+require("guest_content_updates=" in fps_context and "metal_host_presents=" in fps_context,
+        "content updates and host presents must remain separate diagnostics")
+require('@" FPS JOGO %.1f"' in backend and "XENOS SWAP" not in backend,
+        "HUD must show game FPS only, never a Xenos/Metal refresh counter")
 require("dispatch_async(KKDiagnosticQueue()" in backend,
         "thread dumps must not execute synchronously on the display-link thread")
 render_start = backend.index("KKRenderFrame(KKVulkanState")
@@ -120,4 +154,4 @@ require("xowue_XamInputGetState" in stubs and "XamInputGetState" in stubs,
 require("test_xowue_build108_audio_input.py" in workflow,
         "CI must execute the Build 108 audio/input contract")
 
-print("PASS: XOWUE audio, asynchronous touch, separate frame rates, bounded GPU readback and AOT diagnostics")
+print("PASS: XOWUE audio, XAM/XInput semantics, independent touch pulses, game VdSwap FPS, bounded GPU readback and AOT diagnostics")

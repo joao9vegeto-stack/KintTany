@@ -64,6 +64,8 @@ extern "C" void xowue_vulkan_backend_guest_swap(uint32_t frontbuffer,
                                                  uint32_t width,
                                                  uint32_t height)
     __attribute__((weak));
+extern "C" void xowue_vulkan_backend_game_vdswap_request(void)
+    __attribute__((weak));
 extern "C" void xowue_vulkan_backend_wait_idle(void) __attribute__((weak));
 extern "C" void xowue_vulkan_backend_guest_frame_rgba(
     uint32_t frontbuffer, uint32_t width, uint32_t height, uint32_t format,
@@ -7591,6 +7593,10 @@ void xowue_VdSwap(PPCContext &context, uint8_t *base) {
         frontbufferPhysicalAddress, width, height, textureFormat,
         requestedWidth, requestedHeight, colorSpace);
     recordRuntimeTrace(event);
+    // Count this validated request from the guest title separately from
+    // the later PM4/XE_SWAP packet consumed by the Xenos renderer.
+    if (xowue_vulkan_backend_game_vdswap_request)
+        xowue_vulkan_backend_game_vdswap_request();
     context.r3.u32 = 0u;
 }
 void xowue_VdInitializeScalerCommandBuffer(PPCContext &context, uint8_t *base) {
@@ -7727,9 +7733,26 @@ void xowue_ExGetXConfigSetting(PPCContext &context, uint8_t *base) {
     recordRuntimeTrace(event);
 }
 
+constexpr uint32_t kXInputFlagGamepad = 0x00000001u;
+constexpr uint32_t kXInputFlagAnyUser = 1u << 30u; // XAM extension; not bit 0.
+
+static bool xowueXamFlagsAllowGamepad(uint32_t flags) {
+    // Match Xenia's XAM contract: reject a nonzero device-type mask unless
+    // GAMEPAD is among the requested types.
+    return (flags & 0xFFu) == 0u || (flags & kXInputFlagGamepad) != 0u;
+}
+
+static uint32_t xowueNormalizeXamUserIndex(uint32_t userIndex, uint32_t flags) {
+    if ((userIndex & 0xFFu) == 0xFFu || (flags & kXInputFlagAnyUser) != 0u)
+        return 0u; // This title exposes one physical gamepad at port zero.
+    return userIndex;
+}
+
 static uint32_t writeTouchGamepadState(uint8_t *base, uint32_t userIndex,
                                        uint32_t address) {
-    if (userIndex > 3u) {
+    // Only port 0 is connected. XAM's ANY/ANY_USER forms are normalized by
+    // the XAM wrappers below, while plain XInput keeps its 0..3 contract.
+    if (userIndex != 0u) {
         return kXInputErrorDeviceNotConnected;
     }
     if (address == 0u) return kNtStatusSuccess;
@@ -7797,19 +7820,39 @@ void xowue_XInputGetState(PPCContext &context, uint8_t *base) {
 }
 
 void xowue_XamInputGetState(PPCContext &context, uint8_t *base) {
-    context.r3.u32 = writeTouchGamepadState(base, context.r3.u32, context.r5.u32);
+    const uint32_t flags = context.r4.u32;
+    const uint32_t userIndex = xowueNormalizeXamUserIndex(context.r3.u32, flags);
+    const uint32_t stateAddress = context.r5.u32;
+    context.r3.u32 = !xowueXamFlagsAllowGamepad(flags)
+        ? kXInputErrorDeviceNotConnected
+        : writeTouchGamepadState(base, userIndex, stateAddress);
 }
 
 void xowue_XInputGetCapabilities(PPCContext &context, uint8_t *base) {
-    context.r3.u32 = writeTouchGamepadCapabilities(base, context.r3.u32, context.r5.u32);
+    const uint32_t userIndex = context.r3.u32;
+    const uint32_t flags = context.r4.u32;
+    const uint32_t capabilities = context.r5.u32;
+    context.r3.u32 = !xowueXamFlagsAllowGamepad(flags)
+        ? kXInputErrorDeviceNotConnected
+        : writeTouchGamepadCapabilities(base, userIndex, capabilities);
 }
 
 void xowue_XamInputGetCapabilities(PPCContext &context, uint8_t *base) {
-    xowue_XInputGetCapabilities(context, base);
+    const uint32_t flags = context.r4.u32;
+    const uint32_t userIndex = xowueNormalizeXamUserIndex(context.r3.u32, flags);
+    const uint32_t capabilities = context.r5.u32;
+    context.r3.u32 = !xowueXamFlagsAllowGamepad(flags)
+        ? kXInputErrorDeviceNotConnected
+        : writeTouchGamepadCapabilities(base, userIndex, capabilities);
 }
 
 void xowue_XamInputGetCapabilitiesEx(PPCContext &context, uint8_t *base) {
-    context.r3.u32 = writeTouchGamepadCapabilities(base, context.r4.u32, context.r6.u32);
+    const uint32_t flags = context.r5.u32;
+    const uint32_t userIndex = xowueNormalizeXamUserIndex(context.r4.u32, flags);
+    const uint32_t capabilities = context.r6.u32;
+    context.r3.u32 = !xowueXamFlagsAllowGamepad(flags)
+        ? kXInputErrorDeviceNotConnected
+        : writeTouchGamepadCapabilities(base, userIndex, capabilities);
 }
 
 void xowue_XInputSetState(PPCContext &context, uint8_t *base) {
@@ -7822,7 +7865,7 @@ void xowue_XInputSetState(PPCContext &context, uint8_t *base) {
 }
 
 void xowue_XamInputSetState(PPCContext &context, uint8_t *base) {
-    const uint32_t userIndex = context.r3.u32;
+    const uint32_t userIndex = (context.r3.u32 & 0xFFu) == 0xFFu ? 0u : context.r3.u32;
     const uint32_t vibration = context.r5.u32;
     context.r3.u32 = vibration == 0u || !base || !validGuestRange(vibration, 4u)
         ? kXInputErrorBadArguments

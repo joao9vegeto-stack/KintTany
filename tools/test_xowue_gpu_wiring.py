@@ -189,14 +189,20 @@ assert "xowue_request_stop()" in request_exit
 assert ".zIndex(1000)" in ui
 assert vulkan.count("UILabel *_fpsLabel;") == 1
 assert "g_xowue_guest_frame_count" in vulkan
-assert "XOWUE_REAL_FPS xenos_swaps=" in vulkan
-assert "framebuffer_updates=" in vulkan
-assert "metal_presents=" in vulkan
-assert "XENOS SWAP" in vulkan and "FB %.1f/s" in vulkan and "METAL %.0f Hz" in vulkan
+assert "XOWUE_GAME_FPS fps=" in vulkan
+assert "g_xowue_game_vdswap_request_count" in vulkan
+assert "guest_vdswap_calls=" in vulkan
+assert "xowue_vulkan_backend_game_vdswap_request" in engine
+vd_start = engine.index("void xowue_VdSwap(")
+vd_end = engine.index("void xowue_VdInitializeScalerCommandBuffer", vd_start)
+assert "xowue_vulkan_backend_game_vdswap_request()" in engine[vd_start:vd_end]
+assert "guest_content_updates=" in vulkan
+assert "metal_host_presents=" in vulkan
+assert '@" FPS JOGO %.1f"' in vulkan and "XENOS SWAP" not in vulkan
 assert "self.bounds.size.height - 58.0" in vulkan
 assert "_fpsLabel.layer.zPosition = 1000.0;" in vulkan
 assert "[self bringSubviewToFront:_fpsLabel];" in vulkan
-print("PASS: immediate SAIR dismissal after native stop request and separate Xenos/FB/Metal rates")
+print("PASS: immediate SAIR dismissal, game-originated VdSwap FPS and separate content/Metal diagnostics")
 
 # Build 86: never fake EOF or report existing Bink files as missing.
 assert "isStartupMoviePath" in engine

@@ -25,8 +25,17 @@ extern bool xowue_xenos_commit_resolved_rgba(uint32_t dest,uint32_t pitch,
 extern void xowue_log_stall_threads(void);
 
 static _Atomic(uint32_t) g_xowue_guest_swap_count = 0;
+static _Atomic(uint32_t) g_xowue_game_vdswap_request_count = 0;
 static _Atomic(uint32_t) g_xowue_guest_swap_completed_count = 0;
 static pthread_mutex_t g_xowue_guest_swap_sync_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Incremented only by the guest VdSwap API after its command is validated.
+// PM4/XE_SWAP consumption remains a separate Xenos renderer statistic.
+void xowue_vulkan_backend_game_vdswap_request(void)
+{
+   atomic_fetch_add_explicit(&g_xowue_game_vdswap_request_count, 1,
+                             memory_order_relaxed);
+}
 static pthread_cond_t g_xowue_guest_swap_sync_cond = PTHREAD_COND_INITIALIZER;
 static _Atomic(uint32_t) g_xowue_guest_width = 0;
 static _Atomic(uint32_t) g_xowue_guest_height = 0;
@@ -1477,7 +1486,7 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    UILabel *_fpsLabel;
    CFTimeInterval _lastFPSMeasurement;
    CFTimeInterval _lastStallDiagnostic;
-   uint32_t _lastGuestSwaps;
+   uint32_t _lastGameVdSwapCalls;
    uint64_t _lastDecodedFrames;
    uint64_t _lastHostFrames;
    id _backgroundObserver;
@@ -1514,22 +1523,22 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    [self addSubview:_statusLabel];
    _statusLabel.hidden = YES;
 
-   // Real game FPS counts fresh decoded Xbox guest frames, never repeated
-   // Metal presents. Both counters are shown so a frozen guest reads 0 FPS.
+   // Display only the title's own VdSwap/PM4_XE_SWAP frame cadence.
+   // CPU content changes and host Metal refresh are diagnostics, not game FPS.
    _fpsLabel = [[UILabel alloc] initWithFrame:CGRectZero];
-   _fpsLabel.numberOfLines = 2;
-   _fpsLabel.font = [UIFont monospacedDigitSystemFontOfSize:11 weight:UIFontWeightBold];
+   _fpsLabel.numberOfLines = 1;
+   _fpsLabel.font = [UIFont monospacedDigitSystemFontOfSize:12 weight:UIFontWeightBold];
    _fpsLabel.textAlignment = NSTextAlignmentLeft;
    _fpsLabel.textColor = UIColor.whiteColor;
    _fpsLabel.backgroundColor = [UIColor colorWithWhite:0 alpha:0.70];
    _fpsLabel.layer.cornerRadius = 8;
    _fpsLabel.layer.masksToBounds = YES;
-   _fpsLabel.text = @" XENOS SWAP 0.0/s  FB 0.0/s\n METAL 0 Hz";
-   _fpsLabel.accessibilityLabel = @"Taxa de swaps Xenos, atualizações do framebuffer da CPU e apresentações Metal";
+   _fpsLabel.text = @" FPS JOGO 0.0";
+   _fpsLabel.accessibilityLabel = @"Quadros por segundo solicitados pelo próprio jogo via VdSwap";
    [self addSubview:_fpsLabel];
    _lastFPSMeasurement = CACurrentMediaTime();
    _lastStallDiagnostic = 0;
-   _lastGuestSwaps = atomic_load_explicit(&g_xowue_guest_swap_count, memory_order_relaxed);
+   _lastGameVdSwapCalls = atomic_load_explicit(&g_xowue_game_vdswap_request_count, memory_order_relaxed);
    _lastDecodedFrames = atomic_load_explicit(&g_xowue_guest_frame_count, memory_order_relaxed);
    _lastHostFrames = 0;
 
@@ -1649,7 +1658,7 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
          _vk.swapchain_extent.width, _vk.swapchain_extent.height, _vk.swapchain_image_count);
 
    _lastFPSMeasurement = CACurrentMediaTime();
-   _lastGuestSwaps = atomic_load_explicit(&g_xowue_guest_swap_count, memory_order_relaxed);
+   _lastGameVdSwapCalls = atomic_load_explicit(&g_xowue_game_vdswap_request_count, memory_order_relaxed);
    _lastDecodedFrames = atomic_load_explicit(&g_xowue_guest_frame_count, memory_order_relaxed);
    _lastHostFrames = _vk.frame_count;
    _displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(displayTick:)];
@@ -1674,25 +1683,25 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    const CFTimeInterval now = CACurrentMediaTime();
    const double elapsed = now - _lastFPSMeasurement;
    if (elapsed >= 1.0) {
-      const uint32_t guestSwapsNow = atomic_load_explicit(
-         &g_xowue_guest_swap_count, memory_order_relaxed);
+      const uint32_t gameVdSwapCallsNow = atomic_load_explicit(
+         &g_xowue_game_vdswap_request_count, memory_order_relaxed);
       const uint64_t decodedNow = atomic_load_explicit(
          &g_xowue_guest_frame_count, memory_order_relaxed);
       const uint64_t hostNow = _vk.frame_count;
-      const uint32_t swapDelta = (uint32_t)(guestSwapsNow - _lastGuestSwaps);
+      const uint32_t gameVdSwapCallDelta =
+         (uint32_t)(gameVdSwapCallsNow - _lastGameVdSwapCalls);
       const uint64_t decodedDelta = decodedNow >= _lastDecodedFrames
          ? decodedNow - _lastDecodedFrames : 0u;
       const uint64_t hostDelta = hostNow >= _lastHostFrames
          ? hostNow - _lastHostFrames : 0u;
-      const double xenosSwapRate = (double)swapDelta / elapsed;
-      const double framebufferRate = (double)decodedDelta / elapsed;
-      const double metalRate = (double)hostDelta / elapsed;
-      _fpsLabel.text = [NSString stringWithFormat:
-         @" XENOS SWAP %.1f/s  FB %.1f/s\n METAL %.0f Hz",
-         xenosSwapRate, framebufferRate, metalRate];
-      KKLog(@"XOWUE_REAL_FPS xenos_swaps=%.2f framebuffer_updates=%.2f metal_presents=%.2f guest_swap_delta=%u fresh_guest_frames=%llu metal_presents_delta=%llu interval=%.3f",
-            xenosSwapRate, framebufferRate, metalRate, swapDelta,
-            (unsigned long long)decodedDelta, (unsigned long long)hostDelta, elapsed);
+      const double gameVdSwapRequestRate = (double)gameVdSwapCallDelta / elapsed;
+      const double framebufferContentRate = (double)decodedDelta / elapsed;
+      const double metalHostPresentRate = (double)hostDelta / elapsed;
+      _fpsLabel.text = [NSString stringWithFormat:@" FPS JOGO %.1f", gameVdSwapRequestRate];
+      KKLog(@"XOWUE_GAME_FPS fps=%.2f guest_vdswap_calls=%u interval=%.3f",
+            gameVdSwapRequestRate, gameVdSwapCallDelta, elapsed);
+      KKLog(@"XOWUE_FRAME_TELEMETRY guest_content_updates=%.2f metal_host_presents=%.2f interval=%.3f",
+            framebufferContentRate, metalHostPresentRate, elapsed);
       if (now - _lastStallDiagnostic >= 5.0) {
          bool expected = false;
          if (atomic_compare_exchange_strong_explicit(
@@ -1706,7 +1715,7 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
             });
          }
       }
-      _lastGuestSwaps = guestSwapsNow;
+      _lastGameVdSwapCalls = gameVdSwapCallsNow;
       _lastDecodedFrames = decodedNow;
       _lastHostFrames = hostNow;
       _lastFPSMeasurement = now;

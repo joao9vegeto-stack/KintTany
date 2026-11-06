@@ -321,24 +321,59 @@ private final class XOWUETouchController: ObservableObject {
     private var rightX: Int16 = 0
     private var rightY: Int16 = 0
     private var diagnosticSendCount: UInt32 = 0
+    private var buttonReleaseGeneration: [UInt32: UInt64] = [:]
+    private var triggerReleaseGeneration: [Bool: UInt64] = [:]
 
     func setButton(_ mask: UInt32, pressed: Bool) {
-        let next = pressed ? (buttons | mask) : (buttons & ~mask)
-        guard next != buttons else { return }
-        buttons = next
-        send()
+        if pressed {
+            buttonReleaseGeneration[mask, default: 0] &+= 1
+            let next = buttons | mask
+            guard next != buttons else { return }
+            buttons = next
+            send()
+            return
+        }
+        guard buttons & mask != 0 else { return }
+        let generation = (buttonReleaseGeneration[mask] ?? 0) &+ 1
+        buttonReleaseGeneration[mask] = generation
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(120)) { [weak self] in
+            guard let self, self.buttonReleaseGeneration[mask] == generation else { return }
+            let next = self.buttons & ~mask
+            guard next != self.buttons else { return }
+            self.buttons = next
+            self.send()
+        }
     }
 
     func setTrigger(left: Bool, pressed: Bool) {
         let value: UInt8 = pressed ? 255 : 0
-        if left {
-            guard leftTrigger != value else { return }
-            leftTrigger = value
-        } else {
-            guard rightTrigger != value else { return }
-            rightTrigger = value
+        if pressed {
+            triggerReleaseGeneration[left, default: 0] &+= 1
+            if left {
+                guard leftTrigger != value else { return }
+                leftTrigger = value
+            } else {
+                guard rightTrigger != value else { return }
+                rightTrigger = value
+            }
+            send()
+            return
         }
-        send()
+        let current = left ? leftTrigger : rightTrigger
+        guard current != 0 else { return }
+        let generation = (triggerReleaseGeneration[left] ?? 0) &+ 1
+        triggerReleaseGeneration[left] = generation
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(120)) { [weak self] in
+            guard let self, self.triggerReleaseGeneration[left] == generation else { return }
+            if left {
+                guard self.leftTrigger != 0 else { return }
+                self.leftTrigger = 0
+            } else {
+                guard self.rightTrigger != 0 else { return }
+                self.rightTrigger = 0
+            }
+            self.send()
+        }
     }
 
     func setStick(left: Bool, x: CGFloat, y: CGFloat) {
@@ -357,6 +392,13 @@ private final class XOWUETouchController: ObservableObject {
     }
 
     func releaseAll() {
+        // Invalidate delayed tap releases so hiding the HUD clears input immediately.
+        for mask in Array(buttonReleaseGeneration.keys) {
+            buttonReleaseGeneration[mask, default: 0] &+= 1
+        }
+        for side in Array(triggerReleaseGeneration.keys) {
+            triggerReleaseGeneration[side, default: 0] &+= 1
+        }
         buttons = 0
         leftTrigger = 0
         rightTrigger = 0
@@ -580,12 +622,14 @@ private struct XOWUETouchABXY: View {
 
     var body: some View {
         ZStack {
-            XOWUETouchButton(title: "Y", mask: XOWUEGamepadButton.y, input: input).offset(y: -30)
-            XOWUETouchButton(title: "A", mask: XOWUEGamepadButton.a, input: input).offset(y: 30)
-            XOWUETouchButton(title: "X", mask: XOWUEGamepadButton.x, input: input).offset(x: -30)
-            XOWUETouchButton(title: "B", mask: XOWUEGamepadButton.b, input: input).offset(x: 30)
+            // A/B/X/Y can no longer steal a neighbouring button's touch.
+            // Centre spacing exceeds the hit-circle diameter.
+            XOWUETouchButton(title: "Y", mask: XOWUEGamepadButton.y, input: input, size: 44).offset(y: -34)
+            XOWUETouchButton(title: "A", mask: XOWUEGamepadButton.a, input: input, size: 44).offset(y: 34)
+            XOWUETouchButton(title: "X", mask: XOWUEGamepadButton.x, input: input, size: 44).offset(x: -34)
+            XOWUETouchButton(title: "B", mask: XOWUEGamepadButton.b, input: input, size: 44).offset(x: 34)
         }
-        .frame(width: 126, height: 126)
+        .frame(width: 116, height: 116)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Botões A B X Y")
     }
