@@ -217,7 +217,7 @@ assert "guest_vdswap_calls=" in backend
 assert "XOWUE_REAL_FPS" not in backend and "XOWUE_FPS" not in backend
 assert "g_xowue_guest_swap_count" in backend
 fps_start = backend.index("const uint32_t gameVdSwapCallsNow")
-fps_end = backend.index("if (now - _lastStallDiagnostic", fps_start)
+fps_end = backend.index("if ((_vk.frame_count % 60u) == 0u)", fps_start)
 fps_context = backend[fps_start:fps_end]
 assert "g_xowue_game_vdswap_request_count" in fps_context
 assert "g_xowue_guest_swap_count" not in fps_context
