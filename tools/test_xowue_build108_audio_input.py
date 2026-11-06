@@ -78,7 +78,7 @@ require("XOWUE_INPUT_POLL" in poll,
 require("XOWUE_INPUT_POLLED" in poll,
         "changed touch packets must still be recorded as guest-consumed input")
 require("persistGuestInputTrace(inputEvent)" in poll,
-        "guest-consumed controller state must survive the capped 2 MiB runtime trace")
+        "guest-consumed controller state must survive the bounded runtime trace")
 require("requested_user=%u normalized_user=%u flags=0x%08X" in poll,
         "guest input records must preserve XAM/XInput user-index and flag arguments")
 require("api=%s poll=%u thread=%u" in poll,
@@ -114,8 +114,14 @@ require("scan.root path=" in app and "top_level_count=" in app,
 exit_start = app.index("func requestExit()")
 exit_end = app.index("\n    func runBoot()", exit_start)
 exit_body = app[exit_start:exit_end]
-require("xowue_request_stop()" in exit_body and "gameSurfacePresented = false" not in exit_body,
-        "SAIR must wait for native boot/session cleanup before dismissing the game surface")
+require("guard phase == .booting || gameSurfacePresented || exitRequested else { return }" in exit_body,
+        "SAIR must accept exit while the native boot is active")
+require("if phase != .booting" in exit_body and "native call already returned" in exit_body,
+        "SAIR may dismiss only after the native call has already returned")
+require(exit_body.index("if phase != .booting") < exit_body.index("gameSurfacePresented = false"),
+        "SAIR may dismiss the surface only inside the already-returned-session branch")
+require(exit_body.index("exitRequested = true") < exit_body.index("xowue_request_stop()"),
+        "SAIR must publish cancellation before asking the native scheduler to stop")
 require("if phase != .booting" in exit_body and "native call already returned" in exit_body,
         "SAIR must still dismiss an already-finished failed/stopped game surface")
 require("scan." in diagnostics and "XOWUE_MEDIA_ENUM" in diagnostics,
@@ -123,6 +129,12 @@ require("scan." in diagnostics and "XOWUE_MEDIA_ENUM" in diagnostics,
 
 require("static func logInput(_ message: String)" in diagnostics,
         "touch input must have a dedicated asynchronous logging API")
+require("let exportData = data" in diagnostics and "DIAGNOSTIC LOG TRUNCATED IN MIDDLE" not in diagnostics,
+        "shared diagnostic export must preserve the entire log, including its middle")
+require("size.intValue >= 16 * 1024 * 1024" in diagnostics,
+        "iOS diagnostics must retain the complete 16 MiB native trace budget")
+require("> 16384" in diagnostics,
+        "compact summary must retain its original 16 KiB bound; the full export carries complete movie/APC events")
 require("inputLogQueue.async" in diagnostics,
         "touch writes must run on a utility queue")
 require("inputFilename" in diagnostics,

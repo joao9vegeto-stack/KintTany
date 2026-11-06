@@ -36,8 +36,18 @@ required = {
     "Xenos frame commit": "NotifyGuestFrameCommitted",
     "Xenos frame submission boundary": "NotifyGuestFrameSubmitted",
     "scatter IOSB completion": "writeGuestIoStatus(base, ioStatus, status, total)",
-    "scatter APC delivery": "queueGuestApc(g_currentGuestThread, context.r5.u32, context.r6.u32, ioStatus, 0u)",
+    "scatter APC delivery follows Xenia's non-null APC-context rule": "if (context.r6.u32 != 0u) queueGuestApc(",
+    "scatter APC targets the current guest thread": "queueGuestApc(activeGuestApcThread(), context.r5.u32, context.r6.u32, ioStatus, 0u)",
+    "Xbox FILE_SEGMENT_ELEMENT uses 32-bit pointer stride": "PPC_LOAD_U32(segments + segmentIndex * 4u)",
+    "scatter segment-array bounds use 32-bit pointers": "static_cast<uint64_t>((length + 4095u) / 4096u) * 4u",
+    "scatter diagnostics report segment stride and pointers": "segment_stride=4 first_segment=0x",
+    "file objects retain NT synchronous-open flags": "file->synchronous = (options & (0x00000010u | 0x00000020u)) != 0u;",
+    "scatter async handles return STATUS_PENDING": "context.r3.u32 = file->synchronous ? status : kNtStatusPending;",
+    "NtReadFile async fallback returns STATUS_PENDING": "context.r3.u32 = file->synchronous ? result.status : kNtStatusPending;",
+    "FILE_USE_FILE_POINTER_POSITION (-2) is supported": "requested != std::numeric_limits<uint64_t>::max() - 1u",
+    "NtReadFile accepts current-position sentinel -2": "requestedOffset != std::numeric_limits<uint64_t>::max() - 1u",
     "scatter read diagnostics retained": "B95_SCATTER_READ",
+    "runtime trace cap preserves full startup movie sequence": "kMaxRuntimeTraceFileBytes = 16 * 1024 * 1024",
     "file object completion starts auto-reset unsignaled": "file->completion->manualReset = false;\n    file->completion->signaled = false;",
     "file completion RAII implementation": "struct GuestFileCompletionSignalOnReturn final",
     "file completion init telemetry": "B99_FILE_COMPLETION_INIT",
@@ -50,6 +60,13 @@ for label, token in required.items():
     print(f"{'PASS' if ok else 'FAIL'}: {label}")
     if not ok:
         failed.append(label)
+
+scatter_apc_enqueue = "if (context.r6.u32 != 0u) queueGuestApc(activeGuestApcThread(), context.r5.u32, context.r6.u32, ioStatus, 0u);"
+if source.count(scatter_apc_enqueue) != 3:
+    failed.append("scatter and file-write completions must enqueue APC only with a non-null context")
+    print("FAIL: scatter and file-write completions must enqueue APC only with a non-null context")
+else:
+    print("PASS: scatter and file-write completions enqueue APC only with a non-null context")
 
 swap_start = source.index("decodeXenosSwapTexture(base, frontend.swapFetch.data(),")
 swap_end = source.index("XENOS_STALE_GUEST_FRAME: swap_cpu_decode_failed", swap_start)

@@ -256,6 +256,8 @@ struct GuestFile {
     std::fstream stream;
     bool readable = false;
     bool writable = false;
+    // NT file objects are synchronous only when either FILE_SYNCHRONOUS_IO_* flag is set.
+    bool synchronous = false;
     bool directory = false;
     std::vector<std::filesystem::path> entries;
     size_t directoryCursor = 0;
@@ -709,11 +711,13 @@ void persistRuntimeTrace(const std::string &tagged, size_t sequence) {
     const std::string line = "RUNTIME seq=" + std::to_string(sequence) + " " + tagged + "\n";
     std::lock_guard<std::mutex> lock(g_runtimeTraceFileMutex);
     if (g_runtimeTraceFileDescriptor < 0) return;
-    constexpr off_t kMaxRuntimeTraceFileBytes = 2 * 1024 * 1024;
+    // Movie scatter/APC traces must survive the full six-video startup path.
+    // 2 MiB could be exhausted by early Bink reads before ue3_logo.bik ends.
+    constexpr off_t kMaxRuntimeTraceFileBytes = 16 * 1024 * 1024;
     const off_t currentSize = ::lseek(g_runtimeTraceFileDescriptor, 0, SEEK_END);
     if (currentSize < 0 || currentSize >= kMaxRuntimeTraceFileBytes) return;
     if (currentSize + static_cast<off_t>(line.size()) > kMaxRuntimeTraceFileBytes) {
-        static constexpr char marker[] = "RUNTIME TRACE_LIMIT_REACHED max_bytes=2097152; remaining events suppressed\n";
+        static constexpr char marker[] = "RUNTIME TRACE_LIMIT_REACHED max_bytes=16777216; remaining events suppressed\n";
         if (!g_runtimeTraceFileLimitMarkerWritten.exchange(true, std::memory_order_acq_rel) &&
             currentSize + static_cast<off_t>(sizeof(marker) - 1u) <= kMaxRuntimeTraceFileBytes)
             (void)::write(g_runtimeTraceFileDescriptor, marker, sizeof(marker) - 1u);
@@ -6439,6 +6443,7 @@ static uint32_t createGuestFile(uint8_t *base, const std::string &guestPath,
     if (!exists || ec) return 0xC0000034u;
     auto file = std::make_shared<GuestFile>();
     file->path = path;
+    file->synchronous = (options & (0x00000010u | 0x00000020u)) != 0u;
     file->directory = std::filesystem::is_directory(path, ec);
     if (file->directory && fileOnly) return kNtStatusInvalidParameter;
     if (!file->directory) {
@@ -8280,7 +8285,11 @@ static uint64_t guestFileOffset(uint8_t *base, uint32_t address,
                                 bool output) {
     if (address != 0u && validGuestRange(address, 8u)) {
         const uint64_t requested = PPC_LOAD_U64(address);
-        if (requested != std::numeric_limits<uint64_t>::max()) return requested;
+        // NT FILE_USE_FILE_POINTER_POSITION is -2 (0xFFFFFFFFFFFFFFFE).
+        // Treat it like a null ByteOffset and continue from the file object's
+        // current position instead of seeking to an impossible 64-bit offset.
+        if (requested != std::numeric_limits<uint64_t>::max() &&
+            requested != std::numeric_limits<uint64_t>::max() - 1u) return requested;
     }
     (void)base;
     const auto position = output ? file->stream.tellp() : file->stream.tellg();
@@ -8326,7 +8335,8 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
     uint64_t explicitOffset = 0u;
     if (offsetPointer != 0u && validGuestRange(offsetPointer, 8u)) {
         const uint64_t requestedOffset = PPC_LOAD_U64(offsetPointer);
-        if (requestedOffset != std::numeric_limits<uint64_t>::max()) {
+        if (requestedOffset != std::numeric_limits<uint64_t>::max() &&
+            requestedOffset != std::numeric_limits<uint64_t>::max() - 1u) {
             hasExplicitOffset = true;
             explicitOffset = requestedOffset;
         }
@@ -8584,7 +8594,9 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
     }
     completionSignal.signalNow();
     signal.signalNow();
-    context.r3.u32 = result.status;
+    // Preserve the Xbox asynchronous-handle contract even when this fallback
+    // path completes the host read inline; the final status remains in IOSB.
+    context.r3.u32 = file->synchronous ? result.status : kNtStatusPending;
 }
 
 void xowue_NtWriteFile(PPCContext &context, uint8_t *base) {
@@ -8613,8 +8625,8 @@ void xowue_NtWriteFile(PPCContext &context, uint8_t *base) {
         return;
     }
     if (offsetPointer == 0u) file->stream.seekp(static_cast<std::streamoff>(offset + length));
-    queueGuestApc(g_currentGuestThread, context.r5.u32, context.r6.u32, ioStatus, 0u);
-    context.r3.u32 = kNtStatusSuccess;
+    if (context.r6.u32 != 0u) queueGuestApc(activeGuestApcThread(), context.r5.u32, context.r6.u32, ioStatus, 0u);
+    context.r3.u32 = file->synchronous ? kNtStatusSuccess : kNtStatusPending;
     writeGuestIoStatus(base, ioStatus, kNtStatusSuccess, length);
 }
 
@@ -8902,7 +8914,7 @@ void xowue_NtReadFileScatter(PPCContext &context, uint8_t *base) {
     if (!base || !file || file->directory || !file->readable ||
         length > 64u * 1024u * 1024u ||
         (length != 0u && !validGuestRange(segments,
-            static_cast<uint64_t>((length + 4095u) / 4096u) * 8u))) {
+            static_cast<uint64_t>((length + 4095u) / 4096u) * 4u))) {
         context.r3.u32 = file ? kNtStatusInvalidParameter : kNtStatusInvalidHandle;
         writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
         return;
@@ -8914,14 +8926,24 @@ void xowue_NtReadFileScatter(PPCContext &context, uint8_t *base) {
     if (!file->stream) {
         context.r3.u32 = kNtStatusUnsuccessful;
         writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
-        queueGuestApc(g_currentGuestThread, context.r5.u32, context.r6.u32, ioStatus, 0u);
+        if (context.r6.u32 != 0u) queueGuestApc(activeGuestApcThread(), context.r5.u32, context.r6.u32, ioStatus, 0u);
         return;
     }
+    const uint32_t segmentCount = (length + 4095u) / 4096u;
+    const uint32_t firstSegment = segmentCount != 0u ? PPC_LOAD_U32(segments) : 0u;
+    const uint32_t lastSegment = segmentCount != 0u
+        ? PPC_LOAD_U32(segments + (segmentCount - 1u) * 4u) : 0u;
+    const uint64_t rawOffset = offsetPointer != 0u && validGuestRange(offsetPointer, 8u)
+        ? PPC_LOAD_U64(offsetPointer) : std::numeric_limits<uint64_t>::max();
+    const bool currentFilePosition = rawOffset == std::numeric_limits<uint64_t>::max() ||
+        rawOffset == std::numeric_limits<uint64_t>::max() - 1u;
     uint32_t total = 0u;
     uint32_t status = kNtStatusSuccess;
     while (total < length) {
         const uint32_t segmentIndex = total / 4096u;
-        const uint32_t segment = PPC_LOAD_U32(segments + segmentIndex * 8u);
+        // Xbox 360 FILE_SEGMENT_ELEMENT entries are 32-bit guest pointers.
+        // Xenia's XFile::ReadScatter walks a be<uint32_t> array (4-byte stride).
+        const uint32_t segment = PPC_LOAD_U32(segments + segmentIndex * 4u);
         const uint32_t chunk = std::min<uint32_t>(4096u, length - total);
         if (!validGuestRange(segment, chunk)) {
             status = kNtStatusInvalidParameter;
@@ -8952,17 +8974,28 @@ void xowue_NtReadFileScatter(PPCContext &context, uint8_t *base) {
         file->stream.clear();
     }
     writeGuestIoStatus(base, ioStatus, status, total);
-    queueGuestApc(g_currentGuestThread, context.r5.u32, context.r6.u32, ioStatus, 0u);
-    context.r3.u32 = status;
+    if (context.r6.u32 != 0u) queueGuestApc(activeGuestApcThread(), context.r5.u32, context.r6.u32, ioStatus, 0u);
+    // Xenia returns STATUS_PENDING for an asynchronous XFile even when its
+    // immediate host-side scatter transfer has already completed; IOSB holds
+    // the final transfer status and the file/event objects are signalled.
+    context.r3.u32 = file->synchronous ? status : kNtStatusPending;
     std::string ext = file->path.extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(),
         [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     if (ext == ".bik") {
         recordRuntimeTrace("B97_MOVIE_SCATTER handle=" + std::to_string(handle) +
             " path=" + file->path.string() + " offset=" + std::to_string(offset) +
-            " requested=" + std::to_string(length) + " transferred=" + std::to_string(total) +
+            " requested=" + std::to_string(length) + " segments=" + std::to_string(segmentCount) +
+            " segment_stride=4 first_segment=0x" + [&] { char v[9]; std::snprintf(v, sizeof(v), "%08X", firstSegment); return std::string(v); }() +
+            " last_segment=0x" + [&] { char v[9]; std::snprintf(v, sizeof(v), "%08X", lastSegment); return std::string(v); }() +
+            " offset_raw=0x" + [&] { char v[17]; std::snprintf(v, sizeof(v), "%016llX", static_cast<unsigned long long>(rawOffset)); return std::string(v); }() +
+            " offset_mode=" + std::string(currentFilePosition ? "current" : "explicit") +
+            " transferred=" + std::to_string(total) +
             " status=" + std::to_string(status) + " iosb=" + std::to_string(ioStatus) +
-            " apc=" + std::to_string(context.r5.u32) + " event=" + std::to_string(context.r4.u32));
+            " apc=" + std::to_string(context.r5.u32) + " apc_context=" + std::to_string(context.r6.u32) +
+            " synchronous=" + std::to_string(file->synchronous ? 1u : 0u) +
+            " return_status=" + std::to_string(file->synchronous ? status : kNtStatusPending) +
+            " event=" + std::to_string(context.r4.u32));
     }
     static std::atomic<uint32_t> s_b95ScatterLogs{0u};
     const uint32_t sequence = s_b95ScatterLogs.fetch_add(1u, std::memory_order_relaxed);

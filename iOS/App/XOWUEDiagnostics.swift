@@ -47,7 +47,7 @@ enum XOWUEDiagnostics {
         }
     }
 
-    /// Creates a bounded copy for sharing, preserving the first and last 256 KB.
+    /// Exports the complete diagnostic and input sidecars without dropping the middle.
     static func diagnosticExportURL() -> URL? {
         inputLogQueue.sync {}
         guard let sourceURL = fileURL(named: diagnosticFilename),
@@ -67,17 +67,10 @@ enum XOWUEDiagnostics {
             data.append(guestInputData)
             data.append(Data("GUEST_INPUT_EVENTS_END\n".utf8))
         }
-        let maxBytes = 24 * 1024
-        let exportData: Data
-        if data.count <= maxBytes {
-            exportData = data
-        } else {
-            let half = 12 * 1024
-            var bounded = Data(data.prefix(half))
-            bounded.append(Data("\n... [XOWUE DIAGNOSTIC LOG TRUNCATED IN MIDDLE (\(data.count) bytes total -> capped to 24 KB for iPhone)] ...\n".utf8))
-            bounded.append(Data(data.suffix(half)))
-            exportData = bounded
-        }
+        // The native runtime trace is bounded at 16 MiB. Export it whole:
+        // keeping only the first/last 12 KiB discarded the Bink completion,
+        // APC and PPC wait evidence needed to diagnose the final movie.
+        let exportData = data
         let exportURL = sourceURL.deletingLastPathComponent().appendingPathComponent("diagnostico-export-build-\(buildNumber).txt")
         do { try exportData.write(to: exportURL, options: .atomic); return exportURL } catch { return nil }
     }
@@ -261,7 +254,7 @@ enum XOWUEDiagnostics {
     private static func appendLocked(_ message: String, to url: URL) {
         ensureFile(url)
         if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-           let size = attributes[.size] as? NSNumber, size.intValue >= 2 * 1024 * 1024 { return }
+           let size = attributes[.size] as? NSNumber, size.intValue >= 16 * 1024 * 1024 { return }
         let timestamp = ISO8601DateFormatter().string(from: Date())
         guard let data = "\(timestamp) \(message)\n".data(using: .utf8) else { return }
 
