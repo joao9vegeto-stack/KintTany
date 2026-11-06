@@ -69,7 +69,8 @@ assert "scissor.extent.height=(uint32_t)fminf(720.0f" in renderer
 color=Path("iOS/App/XOWUEGuestColor.inc").read_text()
 assert "sourceHeight=t->extent.height<720u?t->extent.height:720u" in color
 critical=engine[engine.index("void xowue_RtlTryEnterCriticalSection"):engine.index("void xowue_RtlLeaveCriticalSection")]
-assert "owner == g_currentGuestThreadId" in critical and "recursion = 1u" in critical
+assert "PPC_LOAD_U32(address + 0x18u) == currentThread" in critical and "PPC_STORE_U32(address + 0x14u, 1u)" in critical
+assert "atomicCompareExchangeGuestBe32" in critical
 assert "shouldTraceCriticalSectionContention" in critical
 assert "shouldTraceCriticalSection()" in critical
 assert "GuestWaitStateScope waitState" in engine
