@@ -94,6 +94,8 @@ void xowue_note_scratch_reg4_write(uint32_t address, uint32_t value) {
 
 void pumpGuestXenosRingBuffer();
 static uint32_t loadGuestBe32(const uint8_t *base, uint32_t address);
+static void storeGuestBe32(uint8_t *base, uint32_t address, uint32_t value);
+static void updateXowueKernelTimeStampBundle(uint8_t *base);
 
 
 
@@ -469,6 +471,13 @@ std::vector<GuestCommit> g_virtualCommits;
 std::vector<GuestReservation> g_physicalAllocations;
 std::vector<std::string> g_runtimeTrace;
 uint32_t g_xexSystemFlags = 0;
+constexpr uint16_t kXowueKeTimeStampBundleOrdinal = 0x00ADu;
+constexpr uint16_t kXowueKeDebugMonitorDataOrdinal = 0x0059u;
+uint32_t g_xowueTimeStampBundleImportSite = 0u;
+uint32_t g_xowueDebugMonitorDataImportSite = 0u;
+uint32_t g_xowueTimeStampBundleAddress = 0u;
+uint64_t g_xowueTimeStampBundleBootNs = 0u;
+std::atomic<uint64_t> g_xowueTimeStampBundleLastUpdateNs{0u};
 std::array<bool, kTlsSlotCount> g_tlsAllocated{};
 std::array<uint32_t, kTlsSlotCount> g_tlsGenerations{};
 size_t g_tlsSlotLimit = kDefaultTlsSlotCount;
@@ -2077,8 +2086,10 @@ void serviceGraphicsInterruptTick() {
         g_xenosVblankCounter.fetch_add(1u, std::memory_order_relaxed);
         // GPU-synthesized MMIO reads (e.g. 0x1951 interrupt status) must
         // keep their value even if guest code stores into the window.
-        if (const auto memory = g_activeGuestMemory.lock())
+        if (const auto memory = g_activeGuestMemory.lock()) {
+            updateXowueKernelTimeStampBundle(memory->base);
             initializeXenosMmioRegisters(memory->base);
+        }
     }
     if (graphicsInterruptCallbackRegistered() &&
         !g_schedulerStopRequested.load() && !g_activeGuestMemory.expired()) {
@@ -2672,12 +2683,121 @@ std::vector<uint8_t> readFile(const char *path) {
     return bytes;
 }
 
+static void captureXowueKernelDataImportSites(const std::vector<uint8_t> &file,
+                                                 const Image &image) {
+    g_xowueTimeStampBundleImportSite = 0u;
+    g_xowueDebugMonitorDataImportSite = 0u;
+
+    const auto *imports = static_cast<const Xex2ImportHeader *>(
+        getOptHeaderPtr(file.data(), XEX_HEADER_IMPORT_LIBRARIES));
+    if (!imports) {
+        recordRuntimeTrace("XOWUE_KERNEL_DATA_IMPORTS header=missing");
+        return;
+    }
+
+    const size_t importsOffset = static_cast<size_t>(
+        reinterpret_cast<const uint8_t *>(imports) - file.data());
+    if (importsOffset > file.size() ||
+        sizeof(Xex2ImportHeader) > file.size() - importsOffset) {
+        throw std::runtime_error("XEX import header is outside the source file");
+    }
+
+    const uint32_t stringTableBytes = imports->sizeOfStringTable.get();
+    const uint32_t libraryCount = imports->numImports.get();
+    const uint64_t libraryOffset64 = static_cast<uint64_t>(importsOffset) +
+                                     sizeof(Xex2ImportHeader) + stringTableBytes;
+    if (libraryOffset64 > file.size() || libraryCount > 256u) {
+        throw std::runtime_error("XEX import string table or library count is invalid");
+    }
+
+    const char *stringTable = reinterpret_cast<const char *>(
+        file.data() + importsOffset + sizeof(Xex2ImportHeader));
+    std::vector<std::string_view> libraryNames;
+    libraryNames.reserve(libraryCount);
+    size_t stringOffset = 0u;
+    for (uint32_t i = 0u; i < libraryCount; ++i) {
+        if (stringOffset >= stringTableBytes) {
+            throw std::runtime_error("XEX import library name exceeds its string table");
+        }
+        const char *name = stringTable + stringOffset;
+        const size_t available = stringTableBytes - stringOffset;
+        const char *terminator = static_cast<const char *>(std::memchr(name, 0, available));
+        if (!terminator) {
+            throw std::runtime_error("XEX import library name is unterminated");
+        }
+        const size_t nameLength = static_cast<size_t>(terminator - name);
+        libraryNames.emplace_back(name, nameLength);
+        const size_t paddedLength = (nameLength + 1u + 3u) & ~size_t{3u};
+        if (paddedLength > available) {
+            throw std::runtime_error("XEX import library name padding exceeds its string table");
+        }
+        stringOffset += paddedLength;
+    }
+
+    const uint8_t *libraryBytes = file.data() + static_cast<size_t>(libraryOffset64);
+    size_t libraryBytesRemaining = file.size() - static_cast<size_t>(libraryOffset64);
+    auto assignImportSite = [](uint32_t &destination, uint32_t site,
+                               const char *name) {
+        if (destination != 0u && destination != site) {
+            throw std::runtime_error(std::string("XEX has duplicate variable imports for ") + name);
+        }
+        destination = site;
+    };
+
+    for (uint32_t libraryIndex = 0u; libraryIndex < libraryCount; ++libraryIndex) {
+        if (libraryBytesRemaining < sizeof(Xex2ImportLibrary)) {
+            throw std::runtime_error("XEX import library record is truncated");
+        }
+        const auto *library = reinterpret_cast<const Xex2ImportLibrary *>(libraryBytes);
+        const uint32_t importCount = library->numberOfImports.get();
+        const uint64_t recordBytes64 = sizeof(Xex2ImportLibrary) +
+            static_cast<uint64_t>(importCount) * sizeof(Xex2ImportDescriptor);
+        if (recordBytes64 > libraryBytesRemaining) {
+            throw std::runtime_error("XEX import descriptor array is truncated");
+        }
+
+        if (libraryNames[libraryIndex] == "xboxkrnl.exe") {
+            const auto *descriptors = reinterpret_cast<const Xex2ImportDescriptor *>(library + 1);
+            for (uint32_t importIndex = 0u; importIndex < importCount; ++importIndex) {
+                const uint32_t firstThunk = descriptors[importIndex].firstThunk.get();
+                const auto *thunk = static_cast<const Xex2ThunkData *>(image.Find(firstThunk));
+                if (!thunk) {
+                    throw std::runtime_error("XEX kernel import thunk is outside mapped image sections");
+                }
+                // XenonRecomp creates callable stubs only for type!=0. Kernel data
+                // exports (type==0) remain unresolved records in the loaded image.
+                if (thunk->originalData.type != 0u) continue;
+                const uint16_t ordinal = thunk->originalData.ordinal;
+                if (ordinal == kXowueKeTimeStampBundleOrdinal) {
+                    assignImportSite(g_xowueTimeStampBundleImportSite, firstThunk,
+                                     "KeTimeStampBundle (0xAD)");
+                } else if (ordinal == kXowueKeDebugMonitorDataOrdinal) {
+                    assignImportSite(g_xowueDebugMonitorDataImportSite, firstThunk,
+                                     "KeDebugMonitorData (0x59)");
+                }
+            }
+        }
+
+        const size_t recordBytes = static_cast<size_t>(recordBytes64);
+        libraryBytes += recordBytes;
+        libraryBytesRemaining -= recordBytes;
+    }
+
+    char event[192];
+    std::snprintf(event, sizeof(event),
+                  "XOWUE_KERNEL_DATA_IMPORTS libraries=%u KeTimeStampBundle=0x%08X KeDebugMonitorData=0x%08X",
+                  libraryCount, g_xowueTimeStampBundleImportSite,
+                  g_xowueDebugMonitorDataImportSite);
+    recordRuntimeTrace(event);
+}
+
 Image parseImage(const char *path) {
     const auto file = readFile(path);
     if (file.size() < 4 || std::memcmp(file.data(), "XEX2", 4) != 0) {
         throw std::runtime_error("the selected file is not an XEX2 executable");
     }
     Image image = Image::ParseImage(file.data(), file.size());
+    captureXowueKernelDataImportSites(file, image);
     if (!image.data || image.size == 0 || image.sections.empty()) {
         throw std::runtime_error("XEX parsing failed (unsupported or damaged image)");
     }
@@ -3502,6 +3622,82 @@ static uint32_t allocateSmallGuestPoolBlock(uint8_t *base, uint32_t size, uint32
     if (static_cast<uint64_t>(block) + size > g_smallGuestPoolEnd) return 0u;
     g_smallGuestPoolCursor = block + size; std::memset(base + block, 0, size); return block;
 }
+
+static uint64_t xowueMonotonicTimeNs() {
+#if defined(__APPLE__)
+    return clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+#else
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+#endif
+}
+
+static void installXowueKernelDataExports(uint8_t *base) {
+    if (!base) throw std::runtime_error("cannot install Xbox kernel data exports without guest memory");
+
+    g_xowueTimeStampBundleAddress = 0u;
+    g_xowueTimeStampBundleBootNs = xowueMonotonicTimeNs();
+    g_xowueTimeStampBundleLastUpdateNs.store(0u, std::memory_order_relaxed);
+
+    if (g_xowueTimeStampBundleImportSite != 0u) {
+        const uint32_t address = allocateSmallGuestPoolBlock(base, 24u, 16u);
+        if (address == 0u) throw std::runtime_error("could not allocate KeTimeStampBundle");
+        g_xowueTimeStampBundleAddress = address;
+        storeGuestBe32(base, g_xowueTimeStampBundleImportSite, address);
+        char event[160];
+        std::snprintf(event, sizeof(event),
+                      "XOWUE_KERNEL_DATA_EXPORT KeTimeStampBundle ordinal=0x00AD site=0x%08X value=0x%08X",
+                      g_xowueTimeStampBundleImportSite, address);
+        recordRuntimeTrace(event);
+    } else {
+        recordRuntimeTrace("XOWUE_KERNEL_DATA_EXPORT KeTimeStampBundle ordinal=0x00AD missing-from-XEX");
+    }
+
+    if (g_xowueDebugMonitorDataImportSite != 0u) {
+        const uint32_t zeroWord = allocateSmallGuestPoolBlock(base, 16u, 16u);
+        if (zeroWord == 0u) throw std::runtime_error("could not allocate KeDebugMonitorData");
+        storeGuestBe32(base, g_xowueDebugMonitorDataImportSite, zeroWord);
+        storeGuestBe32(base, zeroWord, 0u);
+        char event[160];
+        std::snprintf(event, sizeof(event),
+                      "XOWUE_KERNEL_DATA_EXPORT KeDebugMonitorData ordinal=0x0059 site=0x%08X value=0x%08X",
+                      g_xowueDebugMonitorDataImportSite, zeroWord);
+        recordRuntimeTrace(event);
+    } else {
+        recordRuntimeTrace("XOWUE_KERNEL_DATA_EXPORT KeDebugMonitorData ordinal=0x0059 missing-from-XEX");
+    }
+
+    updateXowueKernelTimeStampBundle(base);
+}
+
+static void updateXowueKernelTimeStampBundle(uint8_t *base) {
+    const uint32_t address = g_xowueTimeStampBundleAddress;
+    if (!base || address == 0u || !validGuestRange(address, 24u)) return;
+
+    const uint64_t nowNs = xowueMonotonicTimeNs();
+    uint64_t previous = g_xowueTimeStampBundleLastUpdateNs.load(std::memory_order_relaxed);
+    if (previous != 0u && nowNs >= previous && nowNs - previous < 1000000ull) return;
+    if (!g_xowueTimeStampBundleLastUpdateNs.compare_exchange_strong(
+            previous, nowNs, std::memory_order_acq_rel, std::memory_order_relaxed)) return;
+
+    const uint64_t elapsedNs = nowNs >= g_xowueTimeStampBundleBootNs
+        ? nowNs - g_xowueTimeStampBundleBootNs : 0u;
+    const uint64_t interruptTime100ns = elapsedNs / 100u;
+    const uint32_t tickCountMs = static_cast<uint32_t>(elapsedNs / 1000000ull);
+
+    const auto wallNsSigned = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const uint64_t wallFileTime100ns = 116444736000000000ull +
+        static_cast<uint64_t>(wallNsSigned > 0 ? wallNsSigned : 0) / 100u;
+
+    storeGuestBe32(base, address + 0u, static_cast<uint32_t>(interruptTime100ns >> 32u));
+    storeGuestBe32(base, address + 4u, static_cast<uint32_t>(interruptTime100ns));
+    storeGuestBe32(base, address + 8u, static_cast<uint32_t>(wallFileTime100ns >> 32u));
+    storeGuestBe32(base, address + 12u, static_cast<uint32_t>(wallFileTime100ns));
+    storeGuestBe32(base, address + 16u, tickCountMs);
+    storeGuestBe32(base, address + 20u, 0u);
+}
+
 static void __xowue_sub_83847ABC_alloc(PPCContext &ctx, uint8_t *base) {
     const uint32_t heap = ctx.r3.u32, align = std::max<uint32_t>(ctx.r4.u32, 16u), outPtr = ctx.r5.u32, size = ctx.r6.u32 ? ctx.r6.u32 : 64u;
     const uint32_t block = allocateSmallGuestPoolBlock(base, size, align);
@@ -4061,6 +4257,7 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             g_guestThreads.clear();
         }
         copyImage(image, *memory);
+        installXowueKernelDataExports(memory->base);
         for (const uint32_t auditAddress : {0x82C4BE30u, 0x82C3C4D8u, 0x82B3DE30u, 0x82B423C0u}) {
             uint32_t words[16]{};
             if (validGuestRange(auditAddress, sizeof(words))) {
@@ -4760,6 +4957,13 @@ void xowue_compat_import(const char *name, PPCContext &context, uint8_t *base) {
     constexpr uint32_t kXamNoSuchUser = 0x80070490u;
     constexpr uint32_t kNotImplemented = 0x80004001u;
     constexpr uint64_t kLocalUserXuid = 0xE000000000000001ull;
+    if (api == "GetTickCount" || api == "XamGetTickCount") {
+        updateXowueKernelTimeStampBundle(base);
+        context.r3.u32 = g_xowueTimeStampBundleAddress != 0u && base
+            ? loadGuestBe32(base, g_xowueTimeStampBundleAddress + 16u)
+            : static_cast<uint32_t>((xowueMonotonicTimeNs() - g_xowueTimeStampBundleBootNs) / 1000000ull);
+        return;
+    }
     if (handleNetDllSocketImport(api, context, base)) return;
     auto clearOutput = [base](uint32_t address, uint32_t size) {
         if (base && size && validGuestRange(address, size)) std::memset(base + address, 0, size);
@@ -9046,12 +9250,9 @@ extern "C" uint64_t xowue_guest_timebase(void) {
     if (g_schedulerStopRequested.load(std::memory_order_relaxed))
         throw GuestThreadStopRequested{};
     // Match KeQueryPerformanceFrequency's guest-visible 50 MHz clock domain.
-#if defined(__APPLE__)
-    const uint64_t ns = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-#else
-    const uint64_t ns = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count());
-#endif
+const uint64_t ns = xowueMonotonicTimeNs();
+    if (const auto memory = g_activeGuestMemory.lock())
+        updateXowueKernelTimeStampBundle(memory->base);
     constexpr uint64_t rate = 50000000ull;
     return (ns / 1000000000ull) * rate + ((ns % 1000000000ull) * rate) / 1000000000ull;
 }
