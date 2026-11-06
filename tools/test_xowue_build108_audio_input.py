@@ -131,7 +131,7 @@ require("static func logInput(_ message: String)" in diagnostics,
         "touch input must have a dedicated asynchronous logging API")
 require("let maxExportBytes = 5 * 1024 * 1024" in diagnostics and "let exportData = data.count <= maxExportBytes" in diagnostics,
         "shared diagnostic export must never exceed the 5 MiB total budget")
-require("filename == diagnosticFilename) { maxBytes = 4 * 1024 * 1024 }" in diagnostics,
+require("if filename == diagnosticFilename { maxBytes = 4 * 1024 * 1024 }" in diagnostics,
         "main diagnostic log must be bounded at 4 MiB")
 require("filename == inputFilename) { maxBytes = 128 * 1024 }" in diagnostics and
         "filename == guestInputFilename) { maxBytes = 256 * 1024 }" in diagnostics,
