@@ -4,6 +4,8 @@ import UIKit
 enum XOWUEDiagnostics {
     private static let lock = NSRecursiveLock()
     private static let inputLogQueue = DispatchQueue(label: "com.joaopedro.xowue.input-diagnostics", qos: .utility)
+    private static let diagnosticLogQueue = DispatchQueue(label: "com.joaopedro.xowue.diagnostic-log", qos: .utility)
+    private static var summaryRefreshScheduled = false
     private static let appendLock = NSLock()
     private static var limitMarkersWritten = Set<String>()
     private static var started = false
@@ -42,7 +44,12 @@ enum XOWUEDiagnostics {
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
         appendLocked("APP_LAUNCH build=\(build) title_id=41560816 documents=\(documents.path)", to: diagnosticURL)
         appendLocked("APP_ENV device=\(UIDevice.current.model) os=\(UIDevice.current.systemVersion) bundle=\(Bundle.main.bundleIdentifier ?? "unknown") arch=arm64", to: diagnosticURL)
-        refreshCompactSummaryLocked(diagnosticURL: diagnosticURL)
+        diagnosticLogQueue.async {
+            inputLogQueue.sync {}
+            lock.lock()
+            refreshCompactSummaryLocked(diagnosticURL: diagnosticURL)
+            lock.unlock()
+        }
         NSSetUncaughtExceptionHandler { exception in
             let stack = exception.callStackSymbols.prefix(24).joined(separator: " | ")
             XOWUEDiagnostics.recordCrash("UNCAUGHT_NS_EXCEPTION name=\(exception.name.rawValue) reason=\(exception.reason ?? "none") stack=\(stack)")
@@ -52,7 +59,11 @@ enum XOWUEDiagnostics {
     /// Exports a bounded diagnostic set while preserving startup, the compact
     /// transition summary, recent runtime state and actual input transitions.
     static func diagnosticExportURL() -> URL? {
+        diagnosticLogQueue.sync {}
         inputLogQueue.sync {}
+        lock.lock()
+        if let diagnosticURL = fileURL(named: diagnosticFilename) { refreshCompactSummaryLocked(diagnosticURL: diagnosticURL) }
+        lock.unlock()
         guard let sourceURL = fileURL(named: diagnosticFilename),
               let sourceData = try? Data(contentsOf: sourceURL, options: .mappedIfSafe) else { return nil }
         let maxExportBytes = 5 * 1024 * 1024
@@ -118,21 +129,33 @@ enum XOWUEDiagnostics {
     }
 
     static func log(_ message: String) {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let url = fileURL(named: diagnosticFilename) else { return }
-        appendLocked(message, to: url)
         let important = ["scan.", "game.selected", "picker.", "import.", "B83_", "B84_", "B85_", "B86_", "AOT_PROGRESS", "HOT_FN_CODE",
                          "THREAD_DUMP", "XENOS_", "PM4_", "SWAP_", "WAIT_", "VBLANK",
                          "GRAPHICS_INTERRUPT", "B90_STREAM_", "B92_XXX_INTEGRITY",
-                         "B92_BIK_INTEGRITY", "XOWUE_B92_QPC_", "XOWUE_XAUDIO_", "XOWUE_XMA_", "XOWUE_AUDIO_BACKEND_", "XOWUE_VDSWAP_", "XOWUE_PM4_", "XOWUE_NATIVE_GUEST_FRAME", "XOWUE_GPU_SWAP_WAIT", "B95_SYNC_", "B97_", "B98_", "B99_", "B103_ASYNC_NTREADFILE_", "XOWUE_USER_EXIT", "XOWUE_B80_SETSTATE", "XOWUE_GAME_FPS",
+                         "B92_BIK_INTEGRITY", "XOWUE_B92_QPC_", "XOWUE_XAUDIO_", "XOWUE_XMA_", "XOWUE_AUDIO_BACKEND_", "XOWUE_VDSWAP_", "XOWUE_PM4_", "XOWUE_NATIVE_GUEST_FRAME", "XOWUE_GPU_SWAP_WAIT", "B95_SYNC_", "B97_", "B98_", "B99_", "B103_ASYNC_NTREADFILE_", "XOWUE_USER_EXIT", "XOWUE_XAM_PROFILE_", "XOWUE_B80_SETSTATE", "XOWUE_GAME_FPS",
                          "runtime.stop", "BOOT_", "CRASH ", "runtime.native_return"]
-        if important.contains(where: { message.contains($0) }) {
-            refreshCompactSummaryLocked(diagnosticURL: url)
+        let shouldRefresh = important.contains(where: { message.contains($0) })
+        diagnosticLogQueue.async {
+            lock.lock()
+            guard let url = fileURL(named: diagnosticFilename) else { lock.unlock(); return }
+            appendLocked(message, to: url)
+            let schedule = shouldRefresh && !summaryRefreshScheduled
+            if schedule { summaryRefreshScheduled = true }
+            lock.unlock()
+            if schedule {
+                diagnosticLogQueue.async {
+                    inputLogQueue.sync {}
+                    lock.lock()
+                    if let summaryURL = fileURL(named: diagnosticFilename) { refreshCompactSummaryLocked(diagnosticURL: summaryURL) }
+                    lock.unlock()
+                    summaryRefreshScheduled = false
+                }
+            }
         }
     }
 
     static func summaryFileURL() -> URL? {
+        diagnosticLogQueue.sync {}
         inputLogQueue.sync {}
         lock.lock()
         defer { lock.unlock() }
@@ -204,6 +227,7 @@ enum XOWUEDiagnostics {
             $0.contains("XOWUE_XAUDIO_") || $0.contains("XOWUE_XMA_") || $0.contains("XOWUE_AUDIO_BACKEND_")
         }.suffix(64))
         let legacyInput = Array(lines.filter { $0.contains("XOWUE_INPUT_") }.suffix(48))
+        let xamProfile = Array(lines.filter { $0.contains("XOWUE_XAM_PROFILE_") }.suffix(16))
         let inputSidecar = fileURL(named: inputFilename).flatMap {
             try? Data(contentsOf: $0, options: .mappedIfSafe)
         }.map { String(decoding: $0, as: UTF8.self).split(whereSeparator: \.isNewline).map(String.init) } ?? []
@@ -222,7 +246,7 @@ enum XOWUEDiagnostics {
             "XOWUE_BUILD_SUMMARY build=\(buildNumber) source=\(diagnosticFilename)",
             "DIAGNOSTIC_BYTES=\(data.count)",
             "CURRENT_BUILD_EVIDENCE_BEGIN"
-        ] + boot + audioDriver + input + eventWaits + eventCompletions + asyncFileIo + movieFlow + setState + stallThreads + gameFps + progress + qpcCaller + xxxIntegrity + bikIntegrity + cancellation +
+        ] + boot + audioDriver + input + xamProfile + eventWaits + eventCompletions + asyncFileIo + movieFlow + setState + stallThreads + gameFps + progress + qpcCaller + xxxIntegrity + bikIntegrity + cancellation +
             b84 + b83 + b85 + streamState + streamAnomaly + streamObject + streamTable +
             streamRecent + legacyStream + legacyWaits + media + waits + gpu +
             streamTransition + streamWait + streamWaitAnomaly + fileReads +
@@ -237,22 +261,11 @@ enum XOWUEDiagnostics {
     }
 
     static func bootStarted(path: String, build: String) {
-        lock.lock()
-        defer { lock.unlock() }
-        if let url = fileURL(named: diagnosticFilename) {
-            appendLocked("BOOT_STARTED build=\(build) title_id=41560816 xex=\(path)", to: url)
-            refreshCompactSummaryLocked(diagnosticURL: url)
-        }
+        log("BOOT_STARTED build=\(build) title_id=41560816 xex=\(path)")
     }
 
     static func bootFinished(code: Int32, text: String) {
-        lock.lock()
-        defer { lock.unlock() }
-        let result = "BOOT_FINISHED code=\(code)\n\(text)"
-        if let url = fileURL(named: diagnosticFilename) {
-            appendLocked(result, to: url)
-            refreshCompactSummaryLocked(diagnosticURL: url)
-        }
+        log("BOOT_FINISHED code=\(code)\n\(text)")
     }
 
     static func bootFailed(_ message: String) {
@@ -260,15 +273,10 @@ enum XOWUEDiagnostics {
     }
 
     static func recordCrash(_ message: String) {
+        log("CRASH \(message)")
         lock.lock()
         defer { lock.unlock() }
-        if let url = fileURL(named: diagnosticFilename) {
-            appendLocked("CRASH \(message)", to: url)
-            refreshCompactSummaryLocked(diagnosticURL: url)
-        }
-        if let url = fileURL(named: crashFilename) {
-            appendLocked("CRASH \(message)", to: url)
-        }
+        if let url = fileURL(named: crashFilename) { appendLocked("CRASH \(message)", to: url) }
     }
 
     private static func ensureFile(_ url: URL) {

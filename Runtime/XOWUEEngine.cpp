@@ -136,6 +136,7 @@ constexpr uint32_t kNtStatusMemoryNotAllocated = 0xC00000A0u;
 constexpr uint32_t kXbox360PerformanceFrequency = 50000000u;
 constexpr uint32_t kXamErrorNotFound = 0x80070490u;
 constexpr uint32_t kXamErrorInvalidParameter = 0x80070057u;
+constexpr uint32_t kXamErrorInsufficientBuffer = 0x8007007Au;
 constexpr uint32_t kNtStatusInvalidHandle = 0xC0000008u;
 constexpr uint32_t kNtStatusObjectTypeMismatch = 0xC0000024u;
 constexpr uint32_t kXboxEventObjectType = 0xD00EBEEFu;
@@ -573,6 +574,10 @@ std::mutex g_xenosMutex;
 std::mutex g_xenosPumpMutex;
 std::mutex g_touchControllerMutex;
 TouchControllerState g_touchController;
+std::atomic<uint32_t> g_touchControllerUpdateCount{0u};
+std::atomic<uint32_t> g_xowueInputPollCount{0u};
+std::atomic<uint32_t> g_xowueInputNonzeroPollCount{0u};
+std::atomic<bool> g_xowueInputSummaryLogged{false};
 std::condition_variable g_waitSetChanged;
 std::unordered_map<uint32_t, std::shared_ptr<GuestWaitable>> g_guestWaitables;
 std::unordered_map<uint32_t, uint32_t> g_guestObjectReferences;
@@ -4113,10 +4118,8 @@ extern "C" void xowue_set_touch_controller_state(
         g_touchController.rightX = right_x;
         g_touchController.rightY = right_y;
         if (changed) ++g_touchController.packetNumber;
+        if (changed) g_touchControllerUpdateCount.fetch_add(1u, std::memory_order_relaxed);
     }
-    // Guest-consumed input remains traced by writeTouchGamepadState().
-    // Do not perform synchronous file/trace I/O from this MainActor setter.
-}
 
 extern "C" int xowue_set_runtime_trace_path(const char *path) {
     int traceStatus = 0;
@@ -4193,8 +4196,15 @@ static bool translateGuestFilePath(const std::string &guestPath, bool forWrite,
 // Exit must terminate guest PPC execution; dismissing the view alone leaves
 // native guest workers running indefinitely behind the single-game launcher.
 extern "C" void xowue_request_stop(void) {
-    // Publish cancellation before diagnostic locks or file I/O so a busy PPC
-    // guest observes the stop request as early as possible.
+    if (!g_xowueInputSummaryLogged.exchange(true, std::memory_order_relaxed)) {
+        TouchControllerState state;
+        { std::lock_guard<std::mutex> lock(g_touchControllerMutex); state=g_touchController; }
+        char line[320];
+        std::snprintf(line,sizeof(line),"XOWUE_INPUT_SUMMARY host_updates=%u guest_polls=%u nonzero_polls=%u packet=%u buttons=0x%04X triggers=%u,%u sticks=%d,%d,%d,%d",
+            g_touchControllerUpdateCount.load(std::memory_order_relaxed),g_xowueInputPollCount.load(std::memory_order_relaxed),g_xowueInputNonzeroPollCount.load(std::memory_order_relaxed),
+            state.packetNumber,state.buttons&0xFFFFu,state.leftTrigger,state.rightTrigger,static_cast<int>(state.leftX),static_cast<int>(state.leftY),static_cast<int>(state.rightX),static_cast<int>(state.rightY));
+        recordRuntimeTrace(line);
+    }
     requestGuestSchedulerStop();
     recordRuntimeTrace("XOWUE_USER_EXIT scheduler cancellation requested");
 }
@@ -4217,6 +4227,10 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             g_runtimeTrace.clear();
         }
         g_runtimeTracePersistSequence.store(0, std::memory_order_relaxed);
+        g_touchControllerUpdateCount.store(0u, std::memory_order_relaxed);
+        g_xowueInputPollCount.store(0u, std::memory_order_relaxed);
+        g_xowueInputNonzeroPollCount.store(0u, std::memory_order_relaxed);
+        g_xowueInputSummaryLogged.store(false, std::memory_order_relaxed);
         g_runtimeTracePersistB83.store(0, std::memory_order_relaxed);
         g_runtimeTracePersistB84.store(0, std::memory_order_relaxed);
         g_runtimeTracePersistB85.store(0, std::memory_order_relaxed);
@@ -5112,6 +5126,28 @@ static std::string formatGuestVarargs(PPCContext &context, uint8_t *base,
     return output;
 }
 
+
+static void xowueHandleXamUserReadProfileSettings(std::string_view api,PPCContext &context,uint8_t *base,uint64_t localUserXuid){
+ struct ProfileSetting{uint32_t id;uint8_t type;bool isSet;uint32_t value32;const char*stringValue;};
+ static constexpr std::array<ProfileSetting,29> defaults{{
+ {0x10040002u,1u,true,0u,nullptr},{0x10040003u,1u,true,3u,nullptr},{0x10040004u,1u,true,0u,nullptr},{0x10040005u,1u,true,0u,nullptr},{0x10040006u,1u,true,250u,nullptr},{0x5004000Bu,5u,true,0u,nullptr},{0x1004000Cu,1u,true,0u,nullptr},{0x1004000Du,1u,true,0u,nullptr},{0x1004000Eu,1u,true,100u,nullptr},{0x402C0011u,4u,true,0u,""},{0x10040012u,1u,true,1u,nullptr},{0x10040013u,1u,true,0u,nullptr},{0x10040015u,1u,true,0u,nullptr},{0x10040018u,1u,true,0u,nullptr},{0x1004001Du,1u,true,0xFFFF0000u,nullptr},{0x1004001Eu,1u,true,0xFF00FF00u,nullptr},{0x10040022u,1u,true,1u,nullptr},{0x10040023u,1u,true,0u,nullptr},{0x10040024u,1u,true,0u,nullptr},{0x10040026u,1u,true,0u,nullptr},{0x10040027u,1u,true,0u,nullptr},{0x10040028u,1u,true,0u,nullptr},{0x10040029u,1u,true,0u,nullptr},{0x10040038u,1u,true,0u,nullptr},{0x10040039u,1u,true,0u,nullptr},{0x4064000Fu,4u,true,0u,"gamercard_picture_key"},{0x63E83FFFu,6u,false,0u,nullptr},{0x63E83FFEu,6u,false,0u,nullptr},{0x63E83FFDu,6u,false,0u,nullptr}}};
+ const bool ex=api=="XamUserReadProfileSettingsEx";const uint32_t title=context.r3.u32,user=context.r4.u32,xuidCount=context.r5.u32,xuids=context.r6.u32,count=context.r7.u32,idsPtr=context.r8.u32,flags=ex?context.r9.u32:0u,sizePtr=ex?context.r10.u32:context.r9.u32,buffer=ex?guestStackArgument(context,base,9u):context.r10.u32,overlapped=ex?guestStackArgument(context,base,10u):guestStackArgument(context,base,9u);
+ const auto finish=[&](uint32_t status,uint32_t info=0u){if(overlapped&&base&&validGuestRange(overlapped,16u)){PPC_STORE_U32(overlapped+4u,status);PPC_STORE_U32(overlapped+8u,info);PPC_STORE_U32(overlapped+12u,0u);const uint32_t ev=PPC_LOAD_U32(overlapped);if(ev)signalGuestEventHandle(ev);context.r3.u32=997u;}else context.r3.u32=status;char line[320];std::snprintf(line,sizeof(line),"XOWUE_XAM_PROFILE_READ api=%.*s title=0x%08X user=%u xuid_count=%u settings=%u buffer=0x%08X required=%u status=0x%08X overlapped=0x%08X",static_cast<int>(api.size()),api.data(),title,user,xuidCount,count,buffer,info,status,overlapped);recordRuntimeTrace(line);};
+ if(!base||flags||count==0u||count>32u||!validGuestRange(idsPtr,static_cast<uint64_t>(count)*4u)||!validGuestRange(sizePtr,4u)||xuidCount>1u||(xuidCount==1u&&!validGuestRange(xuids,8u))||(overlapped&&!validGuestRange(overlapped,16u))){finish(kXamErrorInvalidParameter);return;}
+ if(xuidCount==1u&&PPC_LOAD_U64(xuids)!=localUserXuid){finish(0x80070490u);return;}
+ std::array<uint32_t,32> ids{};uint64_t dataSize=0u;bool missing=false;
+ for(uint32_t i=0;i<count;++i){const uint32_t id=PPC_LOAD_U32(idsPtr+i*4u);ids[i]=id;if(std::none_of(defaults.begin(),defaults.end(),[id](const ProfileSetting&s){return s.id==id;}))missing=true;const uint32_t type=(id>>28u)&15u,size=(id>>16u)&0xFFFu;if(type==4u||type==6u)dataSize+=size;}
+ const uint64_t header=8u+static_cast<uint64_t>(count)*40u,required64=header+dataSize;if(required64>UINT32_MAX){finish(kXamErrorInvalidParameter);return;}const uint32_t required=static_cast<uint32_t>(required64),capacity=PPC_LOAD_U32(sizePtr);
+ if(capacity&&(buffer==0u||!validGuestRange(buffer,capacity))){finish(kXamErrorInvalidParameter,required);return;}
+ if(buffer==0u||capacity<required){if(capacity==0u)PPC_STORE_U32(sizePtr,required);finish(kXamErrorInsufficientBuffer,required);return;}
+ // r3 is Title ID; r4 is the user index.
+ if(xuidCount==0u&&user!=0u){finish(0x80070490u,required);return;}if(missing){finish(kXamErrorInvalidParameter,required);return;}
+ std::memset(base+buffer,0,required);PPC_STORE_U32(buffer,count);PPC_STORE_U32(buffer+4u,buffer+8u);uint32_t cursor=buffer+static_cast<uint32_t>(header);
+ for(uint32_t i=0;i<count;++i){const uint32_t id=ids[i];const auto f=std::find_if(defaults.begin(),defaults.end(),[id](const ProfileSetting&s){return s.id==id;});if(f==defaults.end())continue;const uint32_t entry=buffer+8u+i*40u;const bool titleSpecific=(id&0x3F00u)==0x3F00u;PPC_STORE_U32(entry,f->isSet?(titleSpecific?2u:1u):0u);PPC_STORE_U32(entry+4u,0u);if(xuidCount==1u)PPC_STORE_U64(entry+8u,localUserXuid);else PPC_STORE_U32(entry+8u,user);PPC_STORE_U32(entry+16u,id);PPC_STORE_U32(entry+20u,0u);if(!f->isSet)continue;base[entry+24u]=f->type;if(f->type==1u||f->type==5u)PPC_STORE_U32(entry+32u,f->value32);else if(f->type==4u&&f->stringValue&&f->stringValue[0]){const size_t chars=std::strlen(f->stringValue);const uint32_t bytes=static_cast<uint32_t>((chars+1u)*2u);PPC_STORE_U32(entry+32u,bytes);PPC_STORE_U32(entry+36u,cursor);for(size_t c=0;c<chars;++c)PPC_STORE_U16(cursor+static_cast<uint32_t>(c*2u),static_cast<uint8_t>(f->stringValue[c]));PPC_STORE_U16(cursor+static_cast<uint32_t>(chars*2u),0u);cursor+=bytes;}}
+ finish(kNtStatusSuccess,required);
+}
+static void xowueCompleteXamProfileOverlapped(uint8_t*base,uint32_t ov,uint32_t status,uint32_t info){if(!base||!ov||!validGuestRange(ov,16u))return;PPC_STORE_U32(ov+4u,status);PPC_STORE_U32(ov+8u,info);PPC_STORE_U32(ov+12u,0u);const uint32_t ev=PPC_LOAD_U32(ov);if(ev)signalGuestEventHandle(ev);}
+
 void xowue_compat_import(const char *name, PPCContext &context, uint8_t *base) {
     const std::string_view api = name ? name : "";
     constexpr uint32_t kXamNoSuchUser = 0x80070490u;
@@ -5443,8 +5479,16 @@ void xowue_compat_import(const char *name, PPCContext &context, uint8_t *base) {
         context.r3.u32 = kNtStatusSuccess; return;
     }
     if (api == "XamUserAreUsersFriends") { context.r3.u32 = 0u; return; }
-    if (api == "XamUserReadProfileSettings" || api == "XamUserWriteProfileSettings") {
-        context.r3.u32 = context.r3.u32 == 0u ? kNtStatusSuccess : kXamNoSuchUser; return;
+    if (api == "XamUserReadProfileSettings" || api == "XamUserReadProfileSettingsEx") {
+        xowueHandleXamUserReadProfileSettings(api, context, base, kLocalUserXuid); return;
+    }
+    if (api == "XamUserWriteProfileSettings") {
+        const uint32_t titleId=context.r3.u32,userIndex=context.r4.u32,count=context.r5.u32,settings=context.r6.u32,overlapped=context.r7.u32;
+        uint32_t status=kNtStatusSuccess;
+        if(!base||count==0u||count>32u||!validGuestRange(settings,static_cast<uint64_t>(count)*40u)||(overlapped&&!validGuestRange(overlapped,16u)))status=kXamErrorInvalidParameter;
+        else if(userIndex!=0u)status=kXamNoSuchUser;
+        if(overlapped&&status!=kXamErrorInvalidParameter){xowueCompleteXamProfileOverlapped(base,overlapped,status,0u);context.r3.u32=997u;}else context.r3.u32=status;
+        char line[224];std::snprintf(line,sizeof(line),"XOWUE_XAM_PROFILE_WRITE title=0x%08X user=%u settings=%u status=0x%08X",titleId,userIndex,count,status);recordRuntimeTrace(line);return;
     }
     if (api == "XamContentGetLicenseMask") {
         if (base && validGuestRange(context.r3.u32, 4u)) PPC_STORE_U32(context.r3.u32, 0xFFFFFFFFu);
@@ -7904,9 +7948,8 @@ static uint32_t xowueNormalizeXamUserIndex(uint32_t userIndex, uint32_t flags) {
 static uint32_t writeTouchGamepadState(uint8_t *base, uint32_t userIndex,
                                        uint32_t address, const char *apiName,
                                        uint32_t requestedUserIndex, uint32_t flags) {
-    static std::atomic<uint32_t> inputPollCalls{0u};
     const uint32_t pollSequence =
-        inputPollCalls.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        g_xowueInputPollCount.fetch_add(1u, std::memory_order_relaxed) + 1u;
     // Only port 0 is connected. XAM's ANY/ANY_USER forms are normalized by
     // the XAM wrappers below, while plain XInput keeps its 0..3 contract.
     if (userIndex != 0u) {
@@ -7947,6 +7990,10 @@ static uint32_t writeTouchGamepadState(uint8_t *base, uint32_t userIndex,
     {
         std::lock_guard<std::mutex> lock(g_touchControllerMutex);
         state = g_touchController;
+    }
+    if (state.buttons != 0u || state.leftTrigger != 0u || state.rightTrigger != 0u ||
+        state.leftX != 0 || state.leftY != 0 || state.rightX != 0 || state.rightY != 0) {
+        g_xowueInputNonzeroPollCount.fetch_add(1u, std::memory_order_relaxed);
     }
     // Keep guest polls outside the 2 MiB runtime trace cap. The dedicated
     // sidecar records the API, PPC thread, ABI arguments and exact guest state.

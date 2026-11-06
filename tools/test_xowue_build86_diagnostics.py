@@ -47,7 +47,14 @@ assert "streamTable" in diagnostics and "streamRecent" in diagnostics
 for required in ("summaryFilename", "summaryFileURL()", "refreshCompactSummaryLocked",
                  "B86_STREAM_", "B86_MEDIA_OPEN", "B87_STREAM_WAIT_STATE", "B87_STREAM_CACHE_ANOMALY", "B87_NTREADFILE"):
     assert required in diagnostics, f"summary generation missing {required}"
-assert diagnostics.count("refreshCompactSummaryLocked(diagnosticURL:") >= 4
+assert "diagnosticLogQueue.async" in diagnostics
+assert "diagnosticLogQueue.sync {}" in diagnostics
+assert "summaryRefreshScheduled" in diagnostics
+assert "XOWUE_XAM_PROFILE_" in diagnostics and "xamProfile" in diagnostics
+assert "xowueHandleXamUserReadProfileSettings" in engine
+assert "XOWUE_XAM_PROFILE_READ" in engine and "XOWUE_XAM_PROFILE_WRITE" in engine
+assert "kXamErrorInsufficientBuffer" in engine and "0x10040015u" in engine
+assert "context.r3.u32 == 0u ? kNtStatusSuccess : kXamNoSuchUser" not in engine
 assert "XOWUEDiagnostics.summaryFileURL()" in app
 assert "XOWUEDiagnostics.summaryFilename" in app
 print("PASS: Build 87 stream-wait tracing, bounded NT file I/O evidence, EOF status and app summary")

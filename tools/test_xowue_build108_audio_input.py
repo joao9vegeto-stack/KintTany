@@ -145,7 +145,7 @@ require("inputLogQueue.async" in diagnostics,
 require("inputFilename" in diagnostics,
         "touch events must be preserved in a sidecar file")
 important_start = diagnostics.index("let important = [")
-important_end = diagnostics.index("if important.contains", important_start)
+important_end = diagnostics.index("let shouldRefresh", important_start)
 important = diagnostics[important_start:important_end]
 require('"XOWUE_INPUT_"' not in important,
         "touch logs must not trigger expensive summary rebuilds")
