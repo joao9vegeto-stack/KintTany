@@ -166,7 +166,7 @@ require("AOT_PLATEAU_ACTIVE" in engine and "SPINLOCK_ACTIVE" not in engine,
 fps_start = backend.index("XOWUE_GAME_FPS")
 fps_context = backend[max(0, fps_start - 2600):fps_start + 2600]
 fps_start = backend.index("const uint32_t gameVdSwapCallsNow")
-fps_end = backend.index("if (now - _lastStallDiagnostic", fps_start)
+fps_end = backend.index("if ((_vk.frame_count % 60u) == 0u)", fps_start)
 fps_context = backend[fps_start:fps_end]
 require("g_xowue_game_vdswap_request_count" in fps_context and "gameVdSwapRequestRate" in fps_context,
         "game FPS must derive from the direct guest VdSwap API request counter")
