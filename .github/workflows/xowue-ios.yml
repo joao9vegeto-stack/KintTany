@@ -219,7 +219,7 @@ jobs:
               "landscape-right orientation": "UIInterfaceOrientationLandscapeRight" in project,
               "landscape presenter": "XOWUELandscapeHostingController" in app,
               "UIKit orientation refresh": "setNeedsUpdateOfSupportedInterfaceOrientations" in app,
-              "effective orientation mask": "effectiveMask = orientations" in app,
+              "effective orientation mask": "XOWUEOrientationDelegate.effectiveMask = orientations" in app,
               "real guest frame gate": "guest_frame_ready" in backend,
           }
           for label, ok in required.items():
