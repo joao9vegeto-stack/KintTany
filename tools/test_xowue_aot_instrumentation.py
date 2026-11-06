@@ -197,7 +197,7 @@ exit_start = swift.index("func requestExit()")
 exit_end = swift.index("\n    func runBoot()", exit_start)
 exit_body = swift[exit_start:exit_end]
 assert "Task.detached(priority: .userInitiated)" in exit_body
-assert exit_body.index("Task.detached") < exit_body.index("gameSurfacePresented = false")
+assert "gameSurfacePresented = false" not in exit_body
 assert "requestGuestSchedulerStop();" in engine[
     engine.index('extern "C" void xowue_request_stop(void)'):
     engine.index("static void rebuildGuestPathIndex();")

@@ -152,8 +152,6 @@ private struct XOWUELandscapePresenter: UIViewControllerRepresentable {
                 } else if anchor.presentedViewController != nil {
                     XOWUEDiagnostics.log("orientation.host dismissing anchor-presented game surface")
                     anchor.dismiss(animated: false)
-                } else {
-                    XOWUEDiagnostics.log("orientation.host dismiss requested; no modal attached to anchor/root")
                 }
             }
         }
@@ -323,55 +321,72 @@ private final class XOWUETouchController: ObservableObject {
     private var diagnosticSendCount: UInt32 = 0
     private var buttonReleaseGeneration: [UInt32: UInt64] = [:]
     private var triggerReleaseGeneration: [Bool: UInt64] = [:]
+    private var activeButtonTouches = Set<UInt32>()
+    private var activeTriggerTouches = Set<Bool>()
 
+    // Keep a short pulse long enough for the guest's polling thread, but do
+    // not merge a second physical tap into the first held state. A new touch
+    // during the release window forces a real up edge before the next down.
     func setButton(_ mask: UInt32, pressed: Bool) {
         if pressed {
+            guard activeButtonTouches.insert(mask).inserted else { return }
             buttonReleaseGeneration[mask, default: 0] &+= 1
-            let next = buttons | mask
-            guard next != buttons else { return }
-            buttons = next
-            send()
+            let generation = buttonReleaseGeneration[mask] ?? 0
+            if buttons & mask != 0 {
+                buttons &= ~mask
+                send()
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(16)) { [weak self] in
+                    guard let self, self.buttonReleaseGeneration[mask] == generation else { return }
+                    self.buttons |= mask
+                    self.send()
+                }
+            } else {
+                buttons |= mask
+                send()
+            }
             return
         }
-        guard buttons & mask != 0 else { return }
-        let generation = (buttonReleaseGeneration[mask] ?? 0) &+ 1
-        buttonReleaseGeneration[mask] = generation
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(120)) { [weak self] in
-            guard let self, self.buttonReleaseGeneration[mask] == generation else { return }
-            let next = self.buttons & ~mask
-            guard next != self.buttons else { return }
-            self.buttons = next
+        guard activeButtonTouches.remove(mask) != nil else { return }
+        let generation = buttonReleaseGeneration[mask] ?? 0
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
+            guard let self,
+                  self.buttonReleaseGeneration[mask] == generation,
+                  !self.activeButtonTouches.contains(mask),
+                  self.buttons & mask != 0 else { return }
+            self.buttons &= ~mask
             self.send()
         }
     }
 
     func setTrigger(left: Bool, pressed: Bool) {
-        let value: UInt8 = pressed ? 255 : 0
         if pressed {
+            guard activeTriggerTouches.insert(left).inserted else { return }
             triggerReleaseGeneration[left, default: 0] &+= 1
-            if left {
-                guard leftTrigger != value else { return }
-                leftTrigger = value
+            let generation = triggerReleaseGeneration[left] ?? 0
+            let current = left ? leftTrigger : rightTrigger
+            if current != 0 {
+                if left { leftTrigger = 0 } else { rightTrigger = 0 }
+                send()
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(16)) { [weak self] in
+                    guard let self, self.triggerReleaseGeneration[left] == generation else { return }
+                    if left { self.leftTrigger = 255 } else { self.rightTrigger = 255 }
+                    self.send()
+                }
             } else {
-                guard rightTrigger != value else { return }
-                rightTrigger = value
+                if left { leftTrigger = 255 } else { rightTrigger = 255 }
+                send()
             }
-            send()
             return
         }
-        let current = left ? leftTrigger : rightTrigger
-        guard current != 0 else { return }
-        let generation = (triggerReleaseGeneration[left] ?? 0) &+ 1
-        triggerReleaseGeneration[left] = generation
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(120)) { [weak self] in
-            guard let self, self.triggerReleaseGeneration[left] == generation else { return }
-            if left {
-                guard self.leftTrigger != 0 else { return }
-                self.leftTrigger = 0
-            } else {
-                guard self.rightTrigger != 0 else { return }
-                self.rightTrigger = 0
-            }
+        guard activeTriggerTouches.remove(left) != nil else { return }
+        let generation = triggerReleaseGeneration[left] ?? 0
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
+            guard let self,
+                  self.triggerReleaseGeneration[left] == generation,
+                  !self.activeTriggerTouches.contains(left) else { return }
+            let current = left ? self.leftTrigger : self.rightTrigger
+            guard current != 0 else { return }
+            if left { self.leftTrigger = 0 } else { self.rightTrigger = 0 }
             self.send()
         }
     }
@@ -399,6 +414,8 @@ private final class XOWUETouchController: ObservableObject {
         for side in Array(triggerReleaseGeneration.keys) {
             triggerReleaseGeneration[side, default: 0] &+= 1
         }
+        activeButtonTouches.removeAll()
+        activeTriggerTouches.removeAll()
         buttons = 0
         leftTrigger = 0
         rightTrigger = 0
@@ -735,29 +752,55 @@ private enum XOWUEFileStore {
     static func discoverLocalGames() throws -> [URL] {
         let fm = FileManager.default
         let docs = try documents()
-        let home = try prepareVisibleGameHome()
-        let roots = [docs, home]
+        _ = try prepareVisibleGameHome()
         var found: [String: URL] = [:]
+        let maximumDepth = 5
+        let maximumDirectories = 4096
 
-        for root in roots {
-            if try defaultXEX(in: root) != nil {
-                found[root.standardizedFileURL.path] = root
+        if try defaultXEX(in: docs) != nil {
+            found[docs.standardizedFileURL.path] = docs
+        }
+        guard let enumerator = fm.enumerator(
+            at: docs,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            XOWUEDiagnostics.log("scan.root path=\(docs.path) enumerator=unavailable")
+            return []
+        }
+
+        var examinedDirectories = 0
+        var truncated = false
+        while let item = enumerator.nextObject() as? URL {
+            let values = try item.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard values.isDirectory == true, values.isSymbolicLink != true else {
+                enumerator.skipDescendants()
+                continue
             }
-            let children = try fm.contentsOfDirectory(
-                at: root,
-                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
-                options: [.skipsHiddenFiles]
-            ).sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
-
-            for child in children {
-                if root == docs && child.standardizedFileURL == home.standardizedFileURL { continue }
-                let values = try child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-                guard values.isDirectory == true, values.isSymbolicLink != true else { continue }
-                if try defaultXEX(in: child) != nil {
-                    found[child.standardizedFileURL.path] = child
-                }
+            let relative = String(item.standardizedFileURL.path.dropFirst(docs.standardizedFileURL.path.count))
+            let depth = relative.split(separator: "/").count
+            if depth > maximumDepth {
+                enumerator.skipDescendants()
+                continue
+            }
+            examinedDirectories += 1
+            if examinedDirectories > maximumDirectories {
+                truncated = true
+                break
+            }
+            if try defaultXEX(in: item) != nil {
+                found[item.standardizedFileURL.path] = item
+                enumerator.skipDescendants()
             }
         }
+
+        let topLevel = (try? fm.contentsOfDirectory(atPath: docs.path)) ?? []
+        XOWUEDiagnostics.log(
+            "scan.root path=\(docs.path) top_level_count=\(topLevel.count) " +
+            "top_level=\(topLevel.sorted().prefix(32).joined(separator: "|")) " +
+            "examined_directories=\(examinedDirectories) max_depth=\(maximumDepth) " +
+            "truncated=\(truncated ? 1 : 0) candidates=\(found.count)"
+        )
         return found.values.sorted {
             $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending
         }
@@ -1174,43 +1217,24 @@ private final class XOWUEGameLibrary: ObservableObject {
     }
 
     func requestExit() {
-        // Do not debounce/ignore repeated exit taps. The previous implementation
-        // latched exitRequested while the native boot was stuck; every later tap
-        // returned here without issuing another stop request.
-        let shouldStopNativeSession = phase == .booting || gameSurfacePresented || exitRequested
+        // Do not dismiss the game surface merely because cancellation was sent.
+        // runBoot owns the native call and dismisses only after xowue_boot_xex
+        // returns through its session guards (including PPC thread cleanup).
+        guard phase == .booting || gameSurfacePresented || exitRequested else { return }
+        // A failed/stopped surface has no active boot call left to observe a
+        // cancellation. Dismiss that already-finished session directly.
+        if phase != .booting {
+            exitRequested = false
+            gameSurfacePresented = false
+            XOWUEDiagnostics.log("runtime.stop surface dismissed; native call already returned phase=\(phase)")
+            return
+        }
         exitRequested = true
         XOWUEDiagnostics.log("runtime.stop requested by user phase=\(phase) surface=\(gameSurfacePresented) latched=\(exitRequested)")
-        status = "Retornando ao Launcher…"
-        detail = "A interface retorna sem aguardar o encerramento das threads PPC."
-        // Do not let a contended PPC/object mutex block SwiftUI's MainActor.
-        // Native cancellation is idempotent and is performed on a worker thread.
+        status = "Encerrando o runtime nativo…"
+        detail = "Aguardando o retorno do boot e a finalização das threads PPC."
         Task.detached(priority: .userInitiated) {
             xowue_request_stop()
-        }
-
-        // Return to the launcher immediately; never wait for a wedged guest thread.
-        gameSurfacePresented = false
-
-        // The UIKit presenter can be removed from SwiftUI's tree in the same
-        // update that flips gameSurfacePresented. Explicitly locate and dismiss
-        // the actual landscape game controller from the active scene instead
-        // of relying only on the representable's next update callback.
-        if let scene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene }).first,
-           let root = scene.windows.first(where: { $0.isKeyWindow })?.rootViewController {
-            var current: UIViewController? = root
-            while let controller = current {
-                if let gameHost = controller as? XOWUELandscapeHostingController {
-                    XOWUEDiagnostics.log("orientation.host exit explicitly dismissing presented game controller")
-                    gameHost.dismiss(animated: false)
-                    break
-                }
-                current = controller.presentedViewController
-            }
-        }
-
-        if !shouldStopNativeSession {
-            exitRequested = false
         }
     }
 

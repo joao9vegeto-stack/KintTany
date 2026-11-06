@@ -93,16 +93,33 @@ require("xowue_set_touch_controller_state(" in send,
         "Swift touch state must continue to enter the native controller")
 require("XOWUE_INPUT_HOST" in send and "XOWUEDiagnostics.logInput(" in send,
         "host touch events must use asynchronous input logging")
-require("buttonReleaseGeneration" in app and ".milliseconds(120)" in app,
-        "short button taps must remain available for at least one guest input poll")
-require("triggerReleaseGeneration" in app,
-        "short trigger taps must have independent release scheduling")
+require("activeButtonTouches" in app and "activeTriggerTouches" in app,
+        "each physical touch must have its own begin/end edge state")
+require(".milliseconds(16)" in app and ".milliseconds(50)" in app,
+        "rapid repeated taps must emit a release edge then a guest-pollable press pulse")
+require("buttons &= ~mask" in app and "self.buttons |= mask" in app,
+        "a second tap during the minimum hold must force a distinct up/down transition")
+require("triggerReleaseGeneration" in app and "self.leftTrigger = 255" in app,
+        "short trigger taps must also preserve separate rapid touch edges")
 require("A/B/X/Y can no longer steal a neighbouring button's touch" in app,
         "ABXY touch targets must be non-overlapping")
 require("size: 44).offset(y: -34)" in app and ".frame(width: 116, height: 116)" in app,
         "ABXY geometry must leave disjoint hit areas for all four face buttons")
 require("buttonReleaseGeneration[mask, default: 0] &+= 1" in app,
-        "repeated taps must cancel only the same button's pending release")
+        "repeated taps must invalidate only the same button's pending release")
+require("maximumDepth = 5" in app and "maximumDirectories = 4096" in app and "enumerator.skipDescendants()" in app,
+        "local discovery must search bounded nested game folders without following symlinks")
+require("scan.root path=" in app and "top_level_count=" in app,
+        "launcher diagnostics must identify the actual searched Documents root and its contents")
+exit_start = app.index("func requestExit()")
+exit_end = app.index("\n    func runBoot()", exit_start)
+exit_body = app[exit_start:exit_end]
+require("xowue_request_stop()" in exit_body and "gameSurfacePresented = false" not in exit_body,
+        "SAIR must wait for native boot/session cleanup before dismissing the game surface")
+require("if phase != .booting" in exit_body and "native call already returned" in exit_body,
+        "SAIR must still dismiss an already-finished failed/stopped game surface")
+require("scan." in diagnostics and "XOWUE_MEDIA_ENUM" in diagnostics,
+        "compact diagnostics must retain launcher scan and movie inventory evidence")
 
 require("static func logInput(_ message: String)" in diagnostics,
         "touch input must have a dedicated asynchronous logging API")

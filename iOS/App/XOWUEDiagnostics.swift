@@ -110,7 +110,7 @@ enum XOWUEDiagnostics {
         defer { lock.unlock() }
         guard let url = fileURL(named: diagnosticFilename) else { return }
         appendLocked(message, to: url)
-        let important = ["B83_", "B84_", "B85_", "B86_", "AOT_PROGRESS", "HOT_FN_CODE",
+        let important = ["scan.", "game.selected", "picker.", "import.", "B83_", "B84_", "B85_", "B86_", "AOT_PROGRESS", "HOT_FN_CODE",
                          "THREAD_DUMP", "XENOS_", "PM4_", "SWAP_", "WAIT_", "VBLANK",
                          "GRAPHICS_INTERRUPT", "B90_STREAM_", "B92_XXX_INTEGRITY",
                          "B92_BIK_INTEGRITY", "XOWUE_B92_QPC_", "XOWUE_XAUDIO_", "XOWUE_XMA_", "XOWUE_AUDIO_BACKEND_", "XOWUE_VDSWAP_", "XOWUE_PM4_", "XOWUE_NATIVE_GUEST_FRAME", "XOWUE_GPU_SWAP_WAIT", "B95_SYNC_", "B97_", "B98_", "B99_", "B103_ASYNC_NTREADFILE_", "XOWUE_USER_EXIT",
@@ -137,7 +137,9 @@ enum XOWUEDiagnostics {
             $0.contains("APP_LAUNCH") || $0.contains("APP_ENV") ||
             $0.contains("BOOT_STARTED") || $0.contains("BOOT_FINISHED") ||
             $0.contains("BOOT_FAILED") || $0.contains("CRASH ") ||
-            $0.contains("runtime.native_return")
+            $0.contains("runtime.native_return") || $0.contains("scan.") ||
+            $0.contains("game.selected") || $0.contains("picker.") ||
+            $0.contains("import.") || $0.contains("runtime.stop")
         }.suffix(12))
         let streamState = Array(lines.filter { $0.contains("B86_STREAM_STATE") }.suffix(8))
         let streamAnomaly = Array(lines.filter { $0.contains("B86_STREAM_ANOMALY") }.suffix(1))
@@ -156,6 +158,7 @@ enum XOWUEDiagnostics {
         }.suffix(12))
         let media = Array(lines.filter {
             $0.contains("B86_MEDIA_OPEN") || $0.contains("XOWUE_MEDIA_INVENTORY") ||
+            $0.contains("XOWUE_MEDIA_ENUM") ||
             $0.contains("NtCreateFile path=") || $0.contains("NtOpenFile path=")
         }.suffix(32))
         let b83 = Array(lines.filter { $0.contains("B83_") }.suffix(24))
