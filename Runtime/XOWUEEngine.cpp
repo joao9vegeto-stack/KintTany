@@ -104,10 +104,6 @@ static void updateXowueKernelTimeStampBundle(uint8_t *base);
 bool validGuestRange(uint32_t address, uint64_t size);
 void initializeXenosMmioRegisters(uint8_t *base);
 void xowue_NtClose(PPCContext &context);
-void xowue_XamInputGetState(PPCContext &context, uint8_t *base);
-void xowue_XamInputGetCapabilities(PPCContext &context, uint8_t *base);
-void xowue_XamInputGetCapabilitiesEx(PPCContext &context, uint8_t *base);
-void xowue_XamInputSetState(PPCContext &context, uint8_t *base);
 void xowue_ExCreateThread(PPCContext &context, uint8_t *base);
 uint32_t guestStackArgument(PPCContext &context, uint8_t *base,
                             uint32_t argumentIndex);
@@ -201,11 +197,6 @@ constexpr uint32_t kXInputButtonX = 0x4000u;
 constexpr uint32_t kXInputButtonY = 0x8000u;
 constexpr uint32_t kXInputErrorDeviceNotConnected = 1167u;
 constexpr uint32_t kXInputErrorBadArguments = 160u;
-// Verified against xenia-project/xenia src/xenia/kernel/xam/xam_table.inc.
-constexpr uint16_t kXowueXamInputGetCapabilitiesOrdinal = 0x0190u;
-constexpr uint16_t kXowueXamInputGetStateOrdinal = 0x0191u;
-constexpr uint16_t kXowueXamInputSetStateOrdinal = 0x0192u;
-constexpr uint16_t kXowueXamInputGetCapabilitiesExOrdinal = 0x02ADu;
 
 thread_local uint32_t g_currentGuestThreadId = 1;
 std::atomic<uint32_t> g_mainThreadGuestLr{0u},g_mainThreadLastPc{0u},g_mainThreadPrevFn{0u},g_mainThreadLastR3{0u},g_mainThreadLastR4{0u},g_mainThreadLastR11{0u},g_mainThreadLastR30{0u},g_mainThreadLastR31{0u},g_mainThreadWaitTarget{0u};
@@ -563,8 +554,6 @@ std::mutex g_socketMutex;
 std::mutex g_l2Mutex;
 std::unordered_map<uint32_t, std::shared_ptr<GuestFile>> g_guestFiles;
 std::unordered_map<uint32_t, PPCFunc *> g_aotFunctionMap;
-struct XowueXamInputImport { uint32_t thunkAddress = 0u; uint16_t ordinal = 0u; };
-std::vector<XowueXamInputImport> g_xowueXamInputImports;
 std::unordered_map<uint32_t, std::shared_ptr<std::mutex>> g_guestSpinLocks;
 std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> g_ioShareByFileObject;
 std::unordered_map<uint32_t, int> g_guestSockets;
@@ -2784,27 +2773,28 @@ static void captureXowueKernelDataImportSites(const std::vector<uint8_t> &file,
                                                  const Image &image) {
     g_xowueTimeStampBundleImportSite = 0u;
     g_xowueDebugMonitorDataImportSite = 0u;
-    g_xowueXamInputImports.clear();
 
     const auto *imports = static_cast<const Xex2ImportHeader *>(
         getOptHeaderPtr(file.data(), XEX_HEADER_IMPORT_LIBRARIES));
     if (!imports) {
         recordRuntimeTrace("XOWUE_KERNEL_DATA_IMPORTS header=missing");
-        recordRuntimeTrace("XOWUE_INPUT_IMPORTS header=missing");
         return;
     }
+
     const size_t importsOffset = static_cast<size_t>(
         reinterpret_cast<const uint8_t *>(imports) - file.data());
     if (importsOffset > file.size() ||
-        sizeof(Xex2ImportHeader) > file.size() - importsOffset)
+        sizeof(Xex2ImportHeader) > file.size() - importsOffset) {
         throw std::runtime_error("XEX import header is outside the source file");
+    }
 
     const uint32_t stringTableBytes = imports->sizeOfStringTable.get();
     const uint32_t libraryCount = imports->numImports.get();
     const uint64_t libraryOffset64 = static_cast<uint64_t>(importsOffset) +
                                      sizeof(Xex2ImportHeader) + stringTableBytes;
-    if (libraryOffset64 > file.size() || libraryCount > 256u)
+    if (libraryOffset64 > file.size() || libraryCount > 256u) {
         throw std::runtime_error("XEX import string table or library count is invalid");
+    }
 
     const char *stringTable = reinterpret_cast<const char *>(
         file.data() + importsOffset + sizeof(Xex2ImportHeader));
@@ -2812,89 +2802,78 @@ static void captureXowueKernelDataImportSites(const std::vector<uint8_t> &file,
     libraryNames.reserve(libraryCount);
     size_t stringOffset = 0u;
     for (uint32_t i = 0u; i < libraryCount; ++i) {
-        if (stringOffset >= stringTableBytes)
+        if (stringOffset >= stringTableBytes) {
             throw std::runtime_error("XEX import library name exceeds its string table");
+        }
         const char *name = stringTable + stringOffset;
         const size_t available = stringTableBytes - stringOffset;
         const char *terminator = static_cast<const char *>(std::memchr(name, 0, available));
-        if (!terminator) throw std::runtime_error("XEX import library name is unterminated");
+        if (!terminator) {
+            throw std::runtime_error("XEX import library name is unterminated");
+        }
         const size_t nameLength = static_cast<size_t>(terminator - name);
         libraryNames.emplace_back(name, nameLength);
         const size_t paddedLength = (nameLength + 1u + 3u) & ~size_t{3u};
-        if (paddedLength > available)
+        if (paddedLength > available) {
             throw std::runtime_error("XEX import library name padding exceeds its string table");
+        }
         stringOffset += paddedLength;
     }
 
     const uint8_t *libraryBytes = file.data() + static_cast<size_t>(libraryOffset64);
     size_t libraryBytesRemaining = file.size() - static_cast<size_t>(libraryOffset64);
-    auto assignImportSite = [](uint32_t &destination, uint32_t site, const char *name) {
-        if (destination != 0u && destination != site)
+    auto assignImportSite = [](uint32_t &destination, uint32_t site,
+                               const char *name) {
+        if (destination != 0u && destination != site) {
             throw std::runtime_error(std::string("XEX has duplicate variable imports for ") + name);
+        }
         destination = site;
     };
-    uint32_t xamLibraryCount = 0u;
+
     for (uint32_t libraryIndex = 0u; libraryIndex < libraryCount; ++libraryIndex) {
-        if (libraryBytesRemaining < sizeof(Xex2ImportLibrary))
+        if (libraryBytesRemaining < sizeof(Xex2ImportLibrary)) {
             throw std::runtime_error("XEX import library record is truncated");
+        }
         const auto *library = reinterpret_cast<const Xex2ImportLibrary *>(libraryBytes);
         const uint32_t importCount = library->numberOfImports.get();
         const uint64_t recordBytes64 = sizeof(Xex2ImportLibrary) +
             static_cast<uint64_t>(importCount) * sizeof(Xex2ImportDescriptor);
-        if (recordBytes64 > libraryBytesRemaining)
+        if (recordBytes64 > libraryBytesRemaining) {
             throw std::runtime_error("XEX import descriptor array is truncated");
+        }
 
-        std::string normalized(libraryNames[libraryIndex]);
-        std::transform(normalized.begin(), normalized.end(), normalized.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        const bool kernelLibrary = normalized == "xboxkrnl.exe";
-        const bool xamLibrary = normalized == "xam.xex" || normalized == "xam";
-        if (xamLibrary) ++xamLibraryCount;
-        if (kernelLibrary || xamLibrary) {
+        if (libraryNames[libraryIndex] == "xboxkrnl.exe") {
             const auto *descriptors = reinterpret_cast<const Xex2ImportDescriptor *>(library + 1);
-            for (uint32_t index = 0u; index < importCount; ++index) {
-                const uint32_t firstThunk = descriptors[index].firstThunk.get();
+            for (uint32_t importIndex = 0u; importIndex < importCount; ++importIndex) {
+                const uint32_t firstThunk = descriptors[importIndex].firstThunk.get();
                 const auto *thunk = static_cast<const Xex2ThunkData *>(image.Find(firstThunk));
-                if (!thunk) throw std::runtime_error("XEX import thunk is outside mapped image sections");
-                const uint16_t ordinal = thunk->originalData.ordinal;
-                if (thunk->originalData.type == 0u) {
-                    if (kernelLibrary && ordinal == kXowueKeTimeStampBundleOrdinal)
-                        assignImportSite(g_xowueTimeStampBundleImportSite, firstThunk, "KeTimeStampBundle (0xAD)");
-                    else if (kernelLibrary && ordinal == kXowueKeDebugMonitorDataOrdinal)
-                        assignImportSite(g_xowueDebugMonitorDataImportSite, firstThunk, "KeDebugMonitorData (0x59)");
-                    continue;
+                if (!thunk) {
+                    throw std::runtime_error("XEX kernel import thunk is outside mapped image sections");
                 }
-                if (xamLibrary &&
-                    (ordinal == kXowueXamInputGetCapabilitiesOrdinal ||
-                     ordinal == kXowueXamInputGetStateOrdinal ||
-                     ordinal == kXowueXamInputSetStateOrdinal ||
-                     ordinal == kXowueXamInputGetCapabilitiesExOrdinal)) {
-                    const auto duplicate = std::find_if(
-                        g_xowueXamInputImports.begin(), g_xowueXamInputImports.end(),
-                        [firstThunk](const XowueXamInputImport &entry) {
-                            return entry.thunkAddress == firstThunk;
-                        });
-                    if (duplicate != g_xowueXamInputImports.end()) {
-                        if (duplicate->ordinal != ordinal)
-                            throw std::runtime_error("XEX XAM input thunk has conflicting ordinals");
-                    } else {
-                        g_xowueXamInputImports.push_back({firstThunk, ordinal});
-                    }
+                // XenonRecomp creates callable stubs only for type!=0. Kernel data
+                // exports (type==0) remain unresolved records in the loaded image.
+                if (thunk->originalData.type != 0u) continue;
+                const uint16_t ordinal = thunk->originalData.ordinal;
+                if (ordinal == kXowueKeTimeStampBundleOrdinal) {
+                    assignImportSite(g_xowueTimeStampBundleImportSite, firstThunk,
+                                     "KeTimeStampBundle (0xAD)");
+                } else if (ordinal == kXowueKeDebugMonitorDataOrdinal) {
+                    assignImportSite(g_xowueDebugMonitorDataImportSite, firstThunk,
+                                     "KeDebugMonitorData (0x59)");
                 }
             }
         }
+
         const size_t recordBytes = static_cast<size_t>(recordBytes64);
         libraryBytes += recordBytes;
         libraryBytesRemaining -= recordBytes;
     }
-    char event[256];
+
+    char event[192];
     std::snprintf(event, sizeof(event),
                   "XOWUE_KERNEL_DATA_IMPORTS libraries=%u KeTimeStampBundle=0x%08X KeDebugMonitorData=0x%08X",
-                  libraryCount, g_xowueTimeStampBundleImportSite, g_xowueDebugMonitorDataImportSite);
-    recordRuntimeTrace(event);
-    std::snprintf(event, sizeof(event),
-                  "XOWUE_INPUT_IMPORTS xam_libraries=%u handlers_detected=%zu",
-                  xamLibraryCount, g_xowueXamInputImports.size());
+                  libraryCount, g_xowueTimeStampBundleImportSite,
+                  g_xowueDebugMonitorDataImportSite);
     recordRuntimeTrace(event);
 }
 
@@ -2994,57 +2973,6 @@ size_t installDispatchTable(GuestMemory &memory) {
     }
     if (installed == 0) throw std::runtime_error("AOT function dispatch table is empty");
     return installed;
-}
-
-void installXowueXamInputImports(GuestMemory &memory) {
-    using XowuePpcFunction = decltype(PPCFuncMappings[0].host);
-    size_t patched = 0u;
-    size_t stateHandlers = 0u;
-    for (const auto &entry : g_xowueXamInputImports) {
-        XowuePpcFunction handler = nullptr;
-        const char *name = nullptr;
-        switch (entry.ordinal) {
-            case kXowueXamInputGetCapabilitiesOrdinal:
-                handler = &xowue_XamInputGetCapabilities; name = "XamInputGetCapabilities"; break;
-            case kXowueXamInputGetStateOrdinal:
-                handler = &xowue_XamInputGetState; name = "XamInputGetState"; ++stateHandlers; break;
-            case kXowueXamInputSetStateOrdinal:
-                handler = &xowue_XamInputSetState; name = "XamInputSetState"; break;
-            case kXowueXamInputGetCapabilitiesExOrdinal:
-                handler = &xowue_XamInputGetCapabilitiesEx; name = "XamInputGetCapabilitiesEx"; break;
-            default: continue;
-        }
-        if (!handler || entry.thunkAddress < PPC_CODE_BASE)
-            throw std::runtime_error("invalid XAM input import handler or thunk address");
-        const uint64_t codeOffset = entry.thunkAddress - PPC_CODE_BASE;
-        if (codeOffset >= PPC_CODE_SIZE)
-            throw std::runtime_error("XAM input import thunk exceeds the AOT dispatch range");
-        const auto mapping = g_aotFunctionMap.find(entry.thunkAddress);
-        if (mapping == g_aotFunctionMap.end()) {
-            char error[192];
-            std::snprintf(error, sizeof(error),
-                          "XAM input import 0x%04X thunk 0x%08X has no generated AOT dispatch slot",
-                          entry.ordinal, entry.thunkAddress);
-            throw std::runtime_error(error);
-        }
-        const uint64_t slotOffset = PPC_IMAGE_BASE + PPC_IMAGE_SIZE + codeOffset * 2u;
-        if (slotOffset > memory.size || sizeof(handler) > memory.size - slotOffset)
-            throw std::runtime_error("XAM input import dispatch slot exceeds guest memory");
-        mapping->second = handler;
-        auto *slot = reinterpret_cast<XowuePpcFunction *>(memory.base + slotOffset);
-        *slot = handler;
-        char event[192];
-        std::snprintf(event, sizeof(event),
-                      "XOWUE_INPUT_IMPORT_PATCH ordinal=0x%04X thunk=0x%08X handler=%s",
-                      entry.ordinal, entry.thunkAddress, name);
-        recordRuntimeTrace(event);
-        ++patched;
-    }
-    char summary[160];
-    std::snprintf(summary, sizeof(summary),
-                  "XOWUE_INPUT_IMPORT_PATCH_SUMMARY detected=%zu patched=%zu state_handlers=%zu",
-                  g_xowueXamInputImports.size(), patched, stateHandlers);
-    recordRuntimeTrace(summary);
 }
 
 void writeMessage(char *output, size_t capacity, const char *format, ...) {
@@ -4588,7 +4516,6 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             PPC_STORE_U32(execution + 0x14u, kXowueTitleId);
         }
         const size_t installed = installDispatchTable(*memory);
-        installXowueXamInputImports(*memory);
         recordRuntimeTrace("Guest memory mapeada; AOT dispatch entries=" + std::to_string(installed));
         recordRuntimeTrace("XEX TLS slots=" + std::to_string(g_tlsSlotLimit) +
                            " staticData=" + std::to_string(g_tlsStaticDataSize) +

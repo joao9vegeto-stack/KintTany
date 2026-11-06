@@ -1,36 +1,41 @@
 #!/usr/bin/env python3
-"""Regression checks for real XAM input import dispatch in XOWUE."""
+"""Verify XAM input imports are wired by the generated PPC runtime stubs."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ENGINE = (ROOT / "Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
+GENERATOR = (ROOT / "Runtime/generate_runtime_stubs.py").read_text(encoding="utf-8")
 
-ORDINALS = {
-    "GetCapabilities": "0190",
-    "GetState": "0191",
-    "SetState": "0192",
-    "GetCapabilitiesEx": "02AD",
+MAPPINGS = {
+    "XInputGetState": "xowue_XInputGetState",
+    "XamInputGetState": "xowue_XamInputGetState",
+    "XInputGetCapabilities": "xowue_XInputGetCapabilities",
+    "XamInputGetCapabilities": "xowue_XamInputGetCapabilities",
+    "XamInputGetCapabilitiesEx": "xowue_XamInputGetCapabilitiesEx",
+    "XInputSetState": "xowue_XInputSetState",
+    "XamInputSetState": "xowue_XamInputSetState",
 }
 
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
 
-for suffix, ordinal in ORDINALS.items():
-    require(f"constexpr uint16_t kXowueXamInput{suffix}Ordinal = 0x{ordinal}u;" in ENGINE,
-            f"XamInput{suffix} ordinal must match Xenia's XAM export table")
-    require(f"handler = &xowue_XamInput{suffix};" in ENGINE,
-            f"XamInput{suffix} must be registered to its native handler")
+require("imports = sorted(set(IMPORT_RE.findall(shared)))" in GENERATOR,
+        "the generator must derive stubs from the actual XEX import declarations")
+require('code.append("\\txowue_thread_checkpoint();")' in GENERATOR,
+        "every generated import stub must retain the PPC cancellation checkpoint")
+for api, handler in MAPPINGS.items():
+    require(f'elif name == "{api}":' in GENERATOR,
+            f"{api} must have an explicit generated import branch")
+    require(f'code.append("\\t{handler}(ctx, base);")' in GENERATOR,
+            f"{api} must dispatch to {handler}")
+    require(f"void {handler}(PPCContext &context, uint8_t *base)" in ENGINE,
+            f"{handler} must be implemented by the native runtime")
 
-require('normalized == "xam.xex"' in ENGINE, "XEX parser must identify xam.xex imports")
-require("thunk->originalData.type == 0u" in ENGINE, "data imports must remain distinct from function imports")
-require("g_xowueXamInputImports.push_back({firstThunk, ordinal});" in ENGINE,
-        "XAM function import thunk addresses must be retained")
-require("installXowueXamInputImports(*memory);" in ENGINE,
-        "XAM import patching must run after AOT dispatch installation")
-require("mapping->second = handler;" in ENGINE, "host AOT lookup must point at the native XAM handler")
-require("*slot = handler;" in ENGINE, "guest AOT dispatch slot must point at the native XAM handler")
-require("XOWUE_INPUT_IMPORT_PATCH_SUMMARY" in ENGINE, "runtime must report registered input handlers")
 require("XOWUE_INPUT_POLL" in ENGINE and "XOWUE_INPUT_POLLED" in ENGINE,
-        "guest-side polling and consumed state must remain observable")
-print("XOWUE_XAM_INPUT_IMPORT_DISPATCH_OK")
+        "guest polling and consumed state must remain observable")
+require("XOWUE_INPUT_SUMMARY" in ENGINE,
+        "exit diagnostics must preserve host updates and guest poll totals")
+require("installXowueXamInputImports" not in ENGINE,
+        "do not bypass the generated PPC import stub or its cancellation checkpoint")
+print("XOWUE_GENERATED_INPUT_IMPORTS_OK")
