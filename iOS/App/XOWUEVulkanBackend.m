@@ -19,6 +19,7 @@ static void KKLog(NSString *format, ...);
 #include <pthread.h>
 #include <time.h>
 #include <math.h>
+#include <sys/stat.h>
 #include "Graphics/Xenos/XOWUEGuestDraw.h"
 extern bool xowue_xenos_commit_resolved_rgba(uint32_t dest,uint32_t pitch,
     uint32_t height,uint32_t info,const uint8_t* rgba,size_t bytes);
@@ -42,6 +43,19 @@ static _Atomic(uint32_t) g_xowue_guest_height = 0;
 static _Atomic(uint32_t) g_xowue_guest_frontbuffer = 0;
 static _Atomic(uint64_t) g_xowue_guest_frame_count = 0;
 static _Atomic(bool) g_xowue_stall_diagnostic_queued = false;
+static _Atomic(bool) g_xowue_render_in_flight = false;
+static _Atomic(uint32_t) g_xowue_gpu_draw_log_count = 0;
+static pthread_mutex_t g_log_mutex = PTHREAD_MUTEX_INITIALIZER;
+static _Atomic(bool) g_log_limit_marker_written = false;
+
+static dispatch_queue_t KKGPUCompletionQueue(void) {
+   static dispatch_queue_t queue;
+   static dispatch_once_t onceToken;
+   dispatch_once(&onceToken, ^{
+      queue = dispatch_queue_create("com.joaopedro.xowue.gpu-completion", DISPATCH_QUEUE_SERIAL);
+   });
+   return queue;
+}
 
 static dispatch_queue_t KKDiagnosticQueue(void) {
    static dispatch_queue_t queue;
@@ -197,8 +211,25 @@ KKLog(NSString *format, ...)
 
    NSLog(@"%@", message);
    if (g_log_file) {
-      fprintf(g_log_file, "%s\n", message.UTF8String);
-      fflush(g_log_file);
+      pthread_mutex_lock(&g_log_mutex);
+      struct stat attributes = {0};
+      static const off_t kMaxBackendLogBytes = 4 * 1024 * 1024;
+      if (fstat(fileno(g_log_file), &attributes) == 0 && attributes.st_size < kMaxBackendLogBytes) {
+         const char *utf8 = message.UTF8String ?: "";
+         const size_t bytes = strlen(utf8);
+         if (attributes.st_size + (off_t)(bytes + 1u) <= kMaxBackendLogBytes) {
+            (void)fwrite(utf8, 1u, bytes, g_log_file);
+            (void)fwrite("\n", 1u, 1u, g_log_file);
+            fflush(g_log_file);
+         } else if (!atomic_exchange_explicit(&g_log_limit_marker_written, true, memory_order_acq_rel)) {
+            static const char marker[] = "XOWUE_BACKEND_LOG_LIMIT_REACHED max_bytes=4194304\n";
+            if (attributes.st_size + (off_t)(sizeof(marker) - 1u) <= kMaxBackendLogBytes) {
+               (void)fwrite(marker, 1u, sizeof(marker) - 1u, g_log_file);
+               fflush(g_log_file);
+            }
+         }
+      }
+      pthread_mutex_unlock(&g_log_mutex);
    }
    #if !__has_feature(objc_arc)
    [message release];
@@ -613,9 +644,8 @@ KKDestroyVulkan(KKVulkanState *state)
    if (!state)
       return;
 
-   if (state->device && state->DeviceWaitIdle)
-      state->DeviceWaitIdle(state->device);
-
+   // KKDestroySwapchain performs the single required device-idle wait.
+   // This function is dispatched to KKGPUCompletionQueue, never the UI thread.
    KKDestroySwapchain(state);
    XDDestroyRenderer(state);
    KKDestroyUploadBuffer(state);
@@ -1204,6 +1234,8 @@ KKCreateVulkan(KKVulkanState *state, CAMetalLayer *layer)
 static bool
 KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
 {
+   if (atomic_load_explicit(&g_xowue_render_in_flight, memory_order_acquire))
+      return true;
    if (!state->ready || !state->swapchain)
       return false;
 
@@ -1379,8 +1411,11 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    if (result == VK_SUCCESS && issuedGuestDraws) {
       xowue_xenos_record_submitted(issuedGuestDraws);
       state->guest_draws_submitted += issuedGuestDraws;
-      KKLog(@"XENOS_GPU_DRAWS_SUBMITTED=%u total=%llu",issuedGuestDraws,
-            (unsigned long long)state->guest_draws_submitted);
+      const uint32_t drawLogIndex = atomic_fetch_add_explicit(
+         &g_xowue_gpu_draw_log_count, 1u, memory_order_relaxed);
+      if (drawLogIndex < 4u || drawLogIndex % 60u == 0u)
+         KKLog(@"XENOS_GPU_DRAWS_SUBMITTED=%u total=%llu",issuedGuestDraws,
+               (unsigned long long)state->guest_draws_submitted);
    }
    if (result != VK_SUCCESS) {
       KKLog(@"FAIL vkQueueSubmit = %d", result);
@@ -1405,76 +1440,84 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
       return false;
    }
 
-   result = state->QueueWaitIdle(state->queue);
-   if (result == VK_SUCCESS && capturedComposed && g_xd.composited_frame.mapped) {
-      VkResult invalidateResult=VK_SUCCESS;
-      if (!(g_xd.composited_frame.flags&VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-         VkMappedMemoryRange mapped={.sType=VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
-            .memory=g_xd.composited_frame.memory,.offset=0,.size=VK_WHOLE_SIZE};
-         PFN_vkInvalidateMappedMemoryRanges invalidateMapped =
-            (PFN_vkInvalidateMappedMemoryRanges)state->GetDeviceProcAddr(
-               state->device,"vkInvalidateMappedMemoryRanges");
-         invalidateResult = invalidateMapped ? invalidateMapped(state->device,1,&mapped)
-                                             : VK_ERROR_EXTENSION_NOT_PRESENT;
-      }
-      if (invalidateResult == VK_SUCCESS) {
-      // Actual GPU readback after queue completion, not a draw-call counter.
-      // BGRA/RGBA swapchain formats both have first three color bytes.
-      const uint8_t *pixels=(const uint8_t*)g_xd.composited_frame.mapped;
-      const size_t total=(size_t)state->swapchain_extent.width *
-                         (size_t)state->swapchain_extent.height;
-      size_t samples=0, nonblack=0;
-      uint64_t checksum=14695981039346656037ull;
-      uint32_t sampledMinX=UINT32_MAX,sampledMinY=UINT32_MAX,sampledMaxX=0,sampledMaxY=0;
-      const uint32_t stride=state->swapchain_extent.width;
-      const size_t interval=total>8192u?total/8192u:1u;
-      for (size_t k=0;k<total;k+=interval) {
-         const uint8_t *c=pixels+k*4u;
-         if (c[0] || c[1] || c[2]) {
-            ++nonblack;
-            const uint32_t x=(uint32_t)(k%stride), y=(uint32_t)(k/stride);
-            if (x<sampledMinX) sampledMinX=x;
-            if (y<sampledMinY) sampledMinY=y;
-            if (x>sampledMaxX) sampledMaxX=x;
-            if (y>sampledMaxY) sampledMaxY=y;
-         }
-         checksum=((checksum ^ c[0]) * 1099511628211ull ^
-                   ((uint64_t)c[1]<<8) ^ ((uint64_t)c[2]<<16));
-         ++samples;
-      }
-      KKLog(@"XENOS_COMPOSITED_GPU_READBACK sampled_nonblack=%zu samples=%zu checksum=%016llX pixels_total=%zu sampled_bbox=%u,%u..%u,%u",
-            nonblack,samples,(unsigned long long)checksum,total,
-            sampledMinX==UINT32_MAX?0:sampledMinX,
-            sampledMinY==UINT32_MAX?0:sampledMinY,sampledMaxX,sampledMaxY);
-      } else {
-         KKLog(@"XENOS_COMPOSITED_GPU_READBACK_INVALIDATE_FAILED code=%d",invalidateResult);
-      }
-   }
-   if (result == VK_SUCCESS) {
-      XDCommitGuestResolves(state);
-      XDCollectPipelines(state);
-   }
-   if (result != VK_SUCCESS) {
-      KKLog(@"FAIL vkQueueWaitIdle = %d", result);
-      return false;
-   }
-
-   state->frame_count++;
+   // Never wait for queue completion on the UIKit display-link thread.
+   // The backend reuses one command buffer/semaphore pair, so later display
+   // ticks skip until this serialized completion task has finished.
+   const uint64_t frameSerial = state->frame_count + 1u;
+   state->frame_count = frameSerial;
    state->guest_frames_presented +=
-       (uint32_t)(guestSwapSerial - state->last_guest_swap_count);
+      (uint32_t)(guestSwapSerial - state->last_guest_swap_count);
    state->last_guest_swap_count = guestSwapSerial;
-   atomic_store_explicit(&g_xowue_guest_swap_completed_count, guestSwapSerial,
-                         memory_order_release);
-   pthread_mutex_lock(&g_xowue_guest_swap_sync_mutex);
-   pthread_cond_broadcast(&g_xowue_guest_swap_sync_cond);
-   pthread_mutex_unlock(&g_xowue_guest_swap_sync_mutex);
    if (newGuestFrame)
       state->last_guest_decoded_serial = currentGuestSerial;
-   if (state->frame_count <= 4u || state->frame_count % 60u == 0u) {
+   if (frameSerial <= 4u || frameSerial % 60u == 0u) {
       KKLog(@"XOWUE_NATIVE_GUEST_FRAME serial=%u draws=%u fresh_cpu_frame=%u total=%llu",
             guestSwapSerial, issuedGuestDraws, newGuestFrame ? 1u : 0u,
-            (unsigned long long)state->frame_count);
+            (unsigned long long)frameSerial);
    }
+   KKVulkanState completionState = *state;
+   atomic_store_explicit(&g_xowue_render_in_flight, true, memory_order_release);
+   dispatch_async(KKGPUCompletionQueue(), ^{
+      KKVulkanState localState = completionState;
+      VkResult waitResult = localState.QueueWaitIdle(localState.queue);
+      if (waitResult == VK_SUCCESS) {
+         if (capturedComposed && g_xd.composited_frame.mapped &&
+             (frameSerial <= 4u || frameSerial % 60u == 0u)) {
+            VkResult invalidateResult=VK_SUCCESS;
+            if (!(g_xd.composited_frame.flags&VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+               VkMappedMemoryRange mapped={.sType=VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
+                  .memory=g_xd.composited_frame.memory,.offset=0,.size=VK_WHOLE_SIZE};
+               PFN_vkInvalidateMappedMemoryRanges invalidateMapped =
+                  (PFN_vkInvalidateMappedMemoryRanges)localState.GetDeviceProcAddr(
+                     localState.device,"vkInvalidateMappedMemoryRanges");
+               invalidateResult = invalidateMapped ? invalidateMapped(localState.device,1,&mapped)
+                                                   : VK_ERROR_EXTENSION_NOT_PRESENT;
+            }
+            if (invalidateResult == VK_SUCCESS) {
+               const uint8_t *pixels=(const uint8_t*)g_xd.composited_frame.mapped;
+               const size_t total=(size_t)localState.swapchain_extent.width *
+                                  (size_t)localState.swapchain_extent.height;
+               size_t samples=0, nonblack=0;
+               uint64_t checksum=14695981039346656037ull;
+               uint32_t sampledMinX=UINT32_MAX,sampledMinY=UINT32_MAX,sampledMaxX=0,sampledMaxY=0;
+               const uint32_t stride=localState.swapchain_extent.width;
+               const size_t interval=total>8192u?total/8192u:1u;
+               for (size_t k=0;k<total;k+=interval) {
+                  const uint8_t *c=pixels+k*4u;
+                  if (c[0] || c[1] || c[2]) {
+                     ++nonblack;
+                     const uint32_t x=(uint32_t)(k%stride), y=(uint32_t)(k/stride);
+                     if (x<sampledMinX) sampledMinX=x;
+                     if (y<sampledMinY) sampledMinY=y;
+                     if (x>sampledMaxX) sampledMaxX=x;
+                     if (y>sampledMaxY) sampledMaxY=y;
+                  }
+                  checksum=((checksum ^ c[0]) * 1099511628211ull ^
+                            ((uint64_t)c[1]<<8) ^ ((uint64_t)c[2]<<16));
+                  ++samples;
+               }
+               KKLog(@"XENOS_COMPOSITED_GPU_READBACK sampled_nonblack=%zu samples=%zu checksum=%016llX pixels_total=%zu sampled_bbox=%u,%u..%u,%u",
+                     nonblack,samples,(unsigned long long)checksum,total,
+                     sampledMinX==UINT32_MAX?0:sampledMinX,
+                     sampledMinY==UINT32_MAX?0:sampledMinY,sampledMaxX,sampledMaxY);
+            } else {
+               KKLog(@"XENOS_COMPOSITED_GPU_READBACK_INVALIDATE_FAILED code=%d",invalidateResult);
+            }
+         }
+         XDCommitGuestResolves(&localState);
+         XDCollectPipelines(&localState);
+         atomic_store_explicit(&g_xowue_guest_swap_completed_count, guestSwapSerial,
+                               memory_order_release);
+         pthread_mutex_lock(&g_xowue_guest_swap_sync_mutex);
+         pthread_cond_broadcast(&g_xowue_guest_swap_sync_cond);
+         pthread_mutex_unlock(&g_xowue_guest_swap_sync_mutex);
+         atomic_store_explicit(&g_xowue_render_in_flight, false, memory_order_release);
+      } else {
+         // Do not reuse a command buffer/semaphore pair after an unsuccessful
+         // queue-idle result. Keep rendering gated; UI teardown remains async.
+         KKLog(@"FAIL vkQueueWaitIdle = %d; render reuse disabled", waitResult);
+      }
+   });
    return true;
 }
 
@@ -1489,6 +1532,7 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    uint32_t _lastGameVdSwapCalls;
    uint64_t _lastDecodedFrames;
    uint64_t _lastHostFrames;
+   uint32_t _consecutiveZeroGameVdSwapIntervals;
    id _backgroundObserver;
    id _foregroundObserver;
    BOOL _attempted;
@@ -1538,6 +1582,7 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    [self addSubview:_fpsLabel];
    _lastFPSMeasurement = CACurrentMediaTime();
    _lastStallDiagnostic = 0;
+   _consecutiveZeroGameVdSwapIntervals = 0u;
    _lastGameVdSwapCalls = atomic_load_explicit(&g_xowue_game_vdswap_request_count, memory_order_relaxed);
    _lastDecodedFrames = atomic_load_explicit(&g_xowue_guest_frame_count, memory_order_relaxed);
    _lastHostFrames = 0;
@@ -1550,16 +1595,19 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
          XOWUEVulkanView *strongSelf = weakSelf;
          if (!strongSelf) return;
          strongSelf->_displayLink.paused = YES;
-         if (strongSelf->_vk.device && strongSelf->_vk.DeviceWaitIdle) {
-            VkResult result = strongSelf->_vk.DeviceWaitIdle(strongSelf->_vk.device);
-            KKLog(@"LIFECYCLE background wait_idle=%d", result);
-         }
+         KKLog(@"LIFECYCLE background display_paused=1 gpu_in_flight=%u",
+               atomic_load_explicit(&g_xowue_render_in_flight, memory_order_acquire) ? 1u : 0u);
       }];
    _foregroundObserver = [notifications addObserverForName:UIApplicationWillEnterForegroundNotification
       object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
          (void)note;
          XOWUEVulkanView *strongSelf = weakSelf;
          if (!strongSelf || !strongSelf.window || !strongSelf->_vk.ready) return;
+         if (atomic_load_explicit(&g_xowue_render_in_flight, memory_order_acquire)) {
+            strongSelf->_displayLink.paused = NO;
+            KKLog(@"LIFECYCLE foreground deferred until submitted GPU work completes");
+            return;
+         }
          CAMetalLayer *layer = (CAMetalLayer *)strongSelf.layer;
          if (!KKCreateSwapchain(&strongSelf->_vk, layer)) {
             [strongSelf failWithMessage:@"Falha ao recriar a swapchain após voltar do background"];
@@ -1598,11 +1646,15 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    [super didMoveToWindow];
    if (!self.window) {
       _displayLink.paused = YES;
-      if (_vk.device && _vk.DeviceWaitIdle)
-         KKLog(@"LIFECYCLE view_detached wait_idle=%d", _vk.DeviceWaitIdle(_vk.device));
+      KKLog(@"LIFECYCLE view_detached gpu_in_flight=%u cleanup=background",
+            atomic_load_explicit(&g_xowue_render_in_flight, memory_order_acquire) ? 1u : 0u);
       return;
    }
    if (_vk.ready) {
+      if (atomic_load_explicit(&g_xowue_render_in_flight, memory_order_acquire)) {
+         _displayLink.paused = NO;
+         return;
+      }
       CAMetalLayer *metalLayer = (CAMetalLayer *)self.layer;
       if (!KKCreateSwapchain(&_vk, metalLayer)) {
          [self failWithMessage:@"Falha ao recriar a swapchain ao anexar a tela"];
@@ -1702,18 +1754,25 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
             gameVdSwapRequestRate, gameVdSwapCallDelta, elapsed);
       KKLog(@"XOWUE_FRAME_TELEMETRY guest_content_updates=%.2f metal_host_presents=%.2f interval=%.3f",
             framebufferContentRate, metalHostPresentRate, elapsed);
-      if (now - _lastStallDiagnostic >= 5.0) {
-         bool expected = false;
-         if (atomic_compare_exchange_strong_explicit(
-                &g_xowue_stall_diagnostic_queued, &expected, true,
-                memory_order_acq_rel, memory_order_relaxed)) {
-            _lastStallDiagnostic = now;
-            dispatch_async(KKDiagnosticQueue(), ^{
-               xowue_log_stall_threads();
-               atomic_store_explicit(&g_xowue_stall_diagnostic_queued, false,
-                                     memory_order_release);
-            });
+      if (gameVdSwapCallsNow > 0u && gameVdSwapCallDelta == 0u) {
+         ++_consecutiveZeroGameVdSwapIntervals;
+         if (_consecutiveZeroGameVdSwapIntervals >= 2u &&
+             (_lastStallDiagnostic == 0.0 || now - _lastStallDiagnostic >= 30.0)) {
+            bool expected = false;
+            if (atomic_compare_exchange_strong_explicit(
+                   &g_xowue_stall_diagnostic_queued, &expected, true,
+                   memory_order_acq_rel, memory_order_relaxed)) {
+               _lastStallDiagnostic = now;
+               dispatch_async(KKDiagnosticQueue(), ^{
+                  xowue_log_stall_threads();
+                  atomic_store_explicit(&g_xowue_stall_diagnostic_queued, false,
+                                        memory_order_release);
+               });
+            }
          }
+      } else if (gameVdSwapCallDelta > 0u) {
+         _consecutiveZeroGameVdSwapIntervals = 0u;
+         _lastStallDiagnostic = 0.0;
       }
       _lastGameVdSwapCalls = gameVdSwapCallsNow;
       _lastDecodedFrames = decodedNow;
@@ -1754,7 +1813,12 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
       [NSNotificationCenter.defaultCenter removeObserver:_backgroundObserver];
    if (_foregroundObserver)
       [NSNotificationCenter.defaultCenter removeObserver:_foregroundObserver];
-   KKDestroyVulkan(&_vk);
+   KKVulkanState cleanupState = _vk;
+   memset(&_vk, 0, sizeof(_vk));
+   dispatch_async(KKGPUCompletionQueue(), ^{
+      KKVulkanState localState = cleanupState;
+      KKDestroyVulkan(&localState);
+   });
 }
 
 @end

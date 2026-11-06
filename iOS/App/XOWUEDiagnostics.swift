@@ -4,6 +4,8 @@ import UIKit
 enum XOWUEDiagnostics {
     private static let lock = NSRecursiveLock()
     private static let inputLogQueue = DispatchQueue(label: "com.joaopedro.xowue.input-diagnostics", qos: .utility)
+    private static let appendLock = NSLock()
+    private static var limitMarkersWritten = Set<String>()
     private static var started = false
     private static var buildNumber: String {
         let value = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
@@ -47,30 +49,47 @@ enum XOWUEDiagnostics {
         }
     }
 
-    /// Exports the complete diagnostic and input sidecars without dropping the middle.
+    /// Exports a bounded diagnostic set while preserving startup, the compact
+    /// transition summary, recent runtime state and actual input transitions.
     static func diagnosticExportURL() -> URL? {
         inputLogQueue.sync {}
         guard let sourceURL = fileURL(named: diagnosticFilename),
               let sourceData = try? Data(contentsOf: sourceURL, options: .mappedIfSafe) else { return nil }
-        var data = sourceData
+        let maxExportBytes = 5 * 1024 * 1024
+        func bounded(_ source: Data, limit: Int, headBytes: Int) -> Data {
+            guard source.count > limit else { return source }
+            let marker = Data("\n[TRUNCATED: bounded diagnostic export; compact evidence follows]\n".utf8)
+            let payload = max(0, limit - marker.count)
+            let head = min(max(0, headBytes), payload)
+            let tail = payload - head
+            var result = Data(source.prefix(head))
+            result.append(marker)
+            if tail > 0 { result.append(source.suffix(tail)) }
+            return result
+        }
+        var data = bounded(sourceData, limit: 4 * 1024 * 1024, headBytes: 2 * 1024 * 1024)
+        if let summaryURL = fileURL(named: summaryFilename),
+           let summaryData = try? Data(contentsOf: summaryURL, options: .mappedIfSafe),
+           !summaryData.isEmpty {
+            data.append(Data("\nCOMPACT_TRANSITION_SUMMARY_BEGIN\n".utf8))
+            data.append(bounded(summaryData, limit: 16 * 1024, headBytes: 8 * 1024))
+            data.append(Data("COMPACT_TRANSITION_SUMMARY_END\n".utf8))
+        }
         if let inputURL = fileURL(named: inputFilename),
            let inputData = try? Data(contentsOf: inputURL, options: .mappedIfSafe),
            !inputData.isEmpty {
             data.append(Data("\nINPUT_EVENTS_BEGIN\n".utf8))
-            data.append(inputData)
+            data.append(bounded(inputData, limit: 128 * 1024, headBytes: 8 * 1024))
             data.append(Data("INPUT_EVENTS_END\n".utf8))
         }
         if let guestInputURL = fileURL(named: guestInputFilename),
            let guestInputData = try? Data(contentsOf: guestInputURL, options: .mappedIfSafe),
            !guestInputData.isEmpty {
             data.append(Data("\nGUEST_INPUT_EVENTS_BEGIN\n".utf8))
-            data.append(guestInputData)
+            data.append(bounded(guestInputData, limit: 256 * 1024, headBytes: 16 * 1024))
             data.append(Data("GUEST_INPUT_EVENTS_END\n".utf8))
         }
-        // The native runtime trace is bounded at 16 MiB. Export it whole:
-        // keeping only the first/last 12 KiB discarded the Bink completion,
-        // APC and PPC wait evidence needed to diagnose the final movie.
-        let exportData = data
+        let exportData = data.count <= maxExportBytes ? data : Data(data.prefix(maxExportBytes))
         let exportURL = sourceURL.deletingLastPathComponent().appendingPathComponent("diagnostico-export-build-\(buildNumber).txt")
         do { try exportData.write(to: exportURL, options: .atomic); return exportURL } catch { return nil }
     }
@@ -106,7 +125,7 @@ enum XOWUEDiagnostics {
         let important = ["scan.", "game.selected", "picker.", "import.", "B83_", "B84_", "B85_", "B86_", "AOT_PROGRESS", "HOT_FN_CODE",
                          "THREAD_DUMP", "XENOS_", "PM4_", "SWAP_", "WAIT_", "VBLANK",
                          "GRAPHICS_INTERRUPT", "B90_STREAM_", "B92_XXX_INTEGRITY",
-                         "B92_BIK_INTEGRITY", "XOWUE_B92_QPC_", "XOWUE_XAUDIO_", "XOWUE_XMA_", "XOWUE_AUDIO_BACKEND_", "XOWUE_VDSWAP_", "XOWUE_PM4_", "XOWUE_NATIVE_GUEST_FRAME", "XOWUE_GPU_SWAP_WAIT", "B95_SYNC_", "B97_", "B98_", "B99_", "B103_ASYNC_NTREADFILE_", "XOWUE_USER_EXIT",
+                         "B92_BIK_INTEGRITY", "XOWUE_B92_QPC_", "XOWUE_XAUDIO_", "XOWUE_XMA_", "XOWUE_AUDIO_BACKEND_", "XOWUE_VDSWAP_", "XOWUE_PM4_", "XOWUE_NATIVE_GUEST_FRAME", "XOWUE_GPU_SWAP_WAIT", "B95_SYNC_", "B97_", "B98_", "B99_", "B103_ASYNC_NTREADFILE_", "XOWUE_USER_EXIT", "XOWUE_B80_SETSTATE", "XOWUE_GAME_FPS",
                          "runtime.stop", "BOOT_", "CRASH ", "runtime.native_return"]
         if important.contains(where: { message.contains($0) }) {
             refreshCompactSummaryLocked(diagnosticURL: url)
@@ -174,6 +193,12 @@ enum XOWUEDiagnostics {
         let movieFlow = Array(lines.filter {
             $0.contains("B97_MOVIE_") || $0.contains("B97_XENOS_SWAP_DECODE")
         }.suffix(48))
+        let setState = Array(lines.filter {
+            $0.contains("XOWUE_B80_SETSTATE") || $0.contains("XOWUE_B90_BINK_STATE") ||
+            $0.contains("XOWUE_B90_CIRCULAR_LIST")
+        }.suffix(24))
+        let stallThreads = Array(lines.filter { $0.contains("XOWUE_STALL_THREADS") }.suffix(12))
+        let gameFps = Array(lines.filter { $0.contains("XOWUE_GAME_FPS") }.suffix(12))
         // Preserve audio-driver lifecycle records in the compact iOS summary.
         let audioDriver = Array(lines.filter {
             $0.contains("XOWUE_XAUDIO_") || $0.contains("XOWUE_XMA_") || $0.contains("XOWUE_AUDIO_BACKEND_")
@@ -197,7 +222,7 @@ enum XOWUEDiagnostics {
             "XOWUE_BUILD_SUMMARY build=\(buildNumber) source=\(diagnosticFilename)",
             "DIAGNOSTIC_BYTES=\(data.count)",
             "CURRENT_BUILD_EVIDENCE_BEGIN"
-        ] + boot + audioDriver + input + eventWaits + eventCompletions + asyncFileIo + movieFlow + progress + qpcCaller + xxxIntegrity + bikIntegrity + cancellation +
+        ] + boot + audioDriver + input + eventWaits + eventCompletions + asyncFileIo + movieFlow + setState + stallThreads + gameFps + progress + qpcCaller + xxxIntegrity + bikIntegrity + cancellation +
             b84 + b83 + b85 + streamState + streamAnomaly + streamObject + streamTable +
             streamRecent + legacyStream + legacyWaits + media + waits + gpu +
             streamTransition + streamWait + streamWaitAnomaly + fileReads +
@@ -252,12 +277,34 @@ enum XOWUEDiagnostics {
     }
 
     private static func appendLocked(_ message: String, to url: URL) {
+        appendLock.lock()
+        defer { appendLock.unlock() }
         ensureFile(url)
-        if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-           let size = attributes[.size] as? NSNumber, size.intValue >= 16 * 1024 * 1024 { return }
+        let filename = url.lastPathComponent
+        let maxBytes: Int
+        if filename == diagnosticFilename { maxBytes = 4 * 1024 * 1024 }
+        else if filename == inputFilename { maxBytes = 128 * 1024 }
+        else if filename == guestInputFilename { maxBytes = 256 * 1024 }
+        else if filename == crashFilename { maxBytes = 256 * 1024 }
+        else { maxBytes = 64 * 1024 }
+        let currentSize = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.intValue ?? 0
+        guard currentSize < maxBytes else { return }
         let timestamp = ISO8601DateFormatter().string(from: Date())
         guard let data = "\(timestamp) \(message)\n".data(using: .utf8) else { return }
-
+        let remaining = maxBytes - currentSize
+        guard data.count <= remaining else {
+            if !limitMarkersWritten.contains(url.path) {
+                let marker = Data("LOG_LIMIT_REACHED file=\(filename) max_bytes=\(maxBytes)\n".utf8)
+                if marker.count <= remaining,
+                   let file = try? FileHandle(forWritingTo: url) {
+                    defer { try? file.close() }
+                    _ = try? file.seekToEnd()
+                    try? file.write(contentsOf: marker)
+                    limitMarkersWritten.insert(url.path)
+                }
+            }
+            return
+        }
         guard let file = try? FileHandle(forWritingTo: url) else { return }
         defer { try? file.close() }
         _ = try? file.seekToEnd()

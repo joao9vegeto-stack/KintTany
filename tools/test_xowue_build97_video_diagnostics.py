@@ -1,8 +1,27 @@
 #!/usr/bin/env python3
 """Build 97 source-contract checks for Wolverine movie, wait and Xenos evidence."""
 from pathlib import Path
+import importlib.util
 
 source = Path("Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
+runtime_path = Path("Runtime/generate_runtime_stubs.py")
+spec = importlib.util.spec_from_file_location("xowue_runtime_stubs_test", runtime_path)
+assert spec is not None and spec.loader is not None
+runtime_stubs = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(runtime_stubs)
+assert 0x824ACBF8 in runtime_stubs.HOT_LOOP_CHECKPOINT_FUNCTIONS, (
+    "SetState observed spinning after the movie handoff must be cancellable"
+)
+fixture = """PPC_FUNC_IMPL(__imp__sub_824ACBF8) {
+loc_824AD5D8:
+    ctx.r3.u32 = 0;
+    goto loc_824AD5D8;
+}
+"""
+instrumented, checkpoint_count = runtime_stubs.instrument_hot_loop_labels(fixture)
+assert checkpoint_count == 1 and "xowue_thread_checkpoint(0x824AD5D8u, ctx);" in instrumented, (
+    "SetState loop labels must observe cancellation and yield to the guest scheduler"
+)
 expected_xenia_movie_order = [
     "copyright.bik", "ravenlogo.bik", "atvi_logo.bik",
     "marvel_intro.bik", "fox_logo.bik", "ue3_logo.bik",
@@ -47,7 +66,7 @@ required = {
     "FILE_USE_FILE_POINTER_POSITION (-2) is supported": "requested != std::numeric_limits<uint64_t>::max() - 1u",
     "NtReadFile accepts current-position sentinel -2": "requestedOffset != std::numeric_limits<uint64_t>::max() - 1u",
     "scatter read diagnostics retained": "B95_SCATTER_READ",
-    "runtime trace cap preserves full startup movie sequence": "kMaxRuntimeTraceFileBytes = 16 * 1024 * 1024",
+    "runtime trace cap is bounded after targeted event sampling": "kMaxRuntimeTraceFileBytes = 4 * 1024 * 1024",
     "file object completion starts auto-reset unsignaled": "file->completion->manualReset = false;\n    file->completion->signaled = false;",
     "file completion RAII implementation": "struct GuestFileCompletionSignalOnReturn final",
     "file completion init telemetry": "B99_FILE_COMPLETION_INIT",

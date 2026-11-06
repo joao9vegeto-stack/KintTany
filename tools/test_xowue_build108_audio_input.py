@@ -129,10 +129,15 @@ require("scan." in diagnostics and "XOWUE_MEDIA_ENUM" in diagnostics,
 
 require("static func logInput(_ message: String)" in diagnostics,
         "touch input must have a dedicated asynchronous logging API")
-require("let exportData = data" in diagnostics and "DIAGNOSTIC LOG TRUNCATED IN MIDDLE" not in diagnostics,
-        "shared diagnostic export must preserve the entire log, including its middle")
-require("size.intValue >= 16 * 1024 * 1024" in diagnostics,
-        "iOS diagnostics must retain the complete 16 MiB native trace budget")
+require("let maxExportBytes = 5 * 1024 * 1024" in diagnostics and "let exportData = data.count <= maxExportBytes" in diagnostics,
+        "shared diagnostic export must never exceed the 5 MiB total budget")
+require("filename == diagnosticFilename) { maxBytes = 4 * 1024 * 1024 }" in diagnostics,
+        "main diagnostic log must be bounded at 4 MiB")
+require("filename == inputFilename) { maxBytes = 128 * 1024 }" in diagnostics and
+        "filename == guestInputFilename) { maxBytes = 256 * 1024 }" in diagnostics,
+        "input sidecars must have small independent bounds")
+require("XOWUE_B80_SETSTATE" in diagnostics and "let gameFps" in diagnostics,
+        "compact evidence must preserve SetState, stall and guest FPS transition records")
 require("> 16384" in diagnostics,
         "compact summary must retain its original 16 KiB bound; the full export carries complete movie/APC events")
 require("inputLogQueue.async" in diagnostics,
@@ -146,6 +151,10 @@ require('"XOWUE_INPUT_"' not in important,
         "touch logs must not trigger expensive summary rebuilds")
 require("inputLogQueue.sync {}" in diagnostics,
         "explicit summary/export must drain pending input writes")
+require("rejectedPollCounts" in engine and "pollSequence % 1024u == 0u" in engine,
+        "disconnected XAM user-index polls must be sampled, not written on every call")
+require("kMaxGuestInputTraceFileBytes = 256 * 1024" in engine,
+        "guest input sidecar must have a hard 256 KiB cap")
 require("inputSidecar" in diagnostics and "legacyInput" in diagnostics,
         "compact summary must merge sidecar and legacy input records")
 require("guestInputFilename" in diagnostics and "guestInputSidecar" in diagnostics,

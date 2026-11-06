@@ -124,7 +124,8 @@ print('PASS: guest PM4 depth-only, offscreen EDRAM, native color resolve and cop
 # Native guest GPU memory receives only a completed real color resolve.
 color=Path("iOS/App/XOWUEGuestColor.inc").read_text()
 assert "XENOS_GPU_RESOLVE_READBACK_QUEUED" in color
-assert "XDCommitGuestResolves(state)" in vulkan
+assert "XDCommitGuestResolves(&localState)" in vulkan
+assert "XDCollectPipelines(&localState)" in vulkan
 assert "xowue_xenos_commit_resolved_rgba" in engine
 assert "xowue_xenos_commit_resolved_rgba" in color
 assert "VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL" in color
@@ -239,6 +240,31 @@ for token in (
     assert token in engine, f"Build 58 engine missing {token}"
 assert "XENOS_EDRAM_COLOR_CLEAR_RESOLVE" in color
 assert "XD(CmdBeginRenderPass)(cmd,&begin,VK_SUBPASS_CONTENTS_INLINE)" in color
+
+# Build 112.5 regression: SetState cancellation and UI-safe Vulkan completion.
+backend = Path("iOS/App/XOWUEVulkanBackend.m").read_text()
+assert "KKGPUCompletionQueue()" in backend
+assert "dispatch_async(KKGPUCompletionQueue()" in backend
+render_start = backend.index("KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)")
+render_end = backend.index("\n}\n\n\n@interface XOWUEVulkanView", render_start)
+render_body = backend[render_start:render_end]
+assert "atomic_load_explicit(&g_xowue_render_in_flight" in render_body
+assert "localState.QueueWaitIdle(localState.queue)" in render_body
+assert "dispatch_async(KKGPUCompletionQueue()" in render_body
+detach_start = backend.index("- (void)didMoveToWindow")
+detach_end = backend.index("- (void)startBackend", detach_start)
+assert "DeviceWaitIdle" not in backend[detach_start:detach_end]
+background_start = backend.index("UIApplicationDidEnterBackgroundNotification")
+background_end = backend.index("UIApplicationWillEnterForegroundNotification", background_start)
+assert "DeviceWaitIdle" not in backend[background_start:background_end]
+dealloc_start = backend.index("- (void)dealloc")
+dealloc_end = backend.index("\n@end", dealloc_start)
+dealloc_body = backend[dealloc_start:dealloc_end]
+assert "dispatch_async(KKGPUCompletionQueue()" in dealloc_body
+assert "KKDestroyVulkan(&localState)" in dealloc_body
+assert "kMaxBackendLogBytes = 4 * 1024 * 1024" in backend
+
+print("PASS: Build 112 SetState loop cancellation, bounded diagnostics and asynchronous Vulkan shutdown")
 print("PASS: Build 58 spinlock diagnostics, indexed UE3 VFS, clear-color resolve, callback aliases, watchdog state")
 
 

@@ -19,7 +19,9 @@ for required in ("B86_MEDIA_OPEN", "isStartupMoviePath", "B86_STREAM_ANOMALY",
     assert required in engine, f"missing Build 86 runtime diagnostic: {required}"
 
 assert "fetch_add(1, std::memory_order_relaxed) < 200u" in engine
-assert "16 * 1024 * 1024" in engine
+assert "4 * 1024 * 1024" in engine
+assert "kMaxGuestInputTraceFileBytes = 256 * 1024" in engine
+assert "B94_STREAM_CONTEXT_WORD" in engine and "< 128u" in engine
 assert "max_bytes=16777216" in engine
 assert "object + 0x70u + i * 4u" in engine
 assert "validGuestRange(address, 0xC0u)" in engine

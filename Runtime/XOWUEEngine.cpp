@@ -501,6 +501,7 @@ int g_runtimeTraceFileDescriptor = -1;
 std::mutex g_guestInputTraceFileMutex;
 int g_guestInputTraceFileDescriptor = -1;
 std::atomic<uint64_t> g_guestInputTraceSequence{0};
+std::atomic<bool> g_guestInputTraceFileLimitMarkerWritten{false};
 std::atomic<size_t> g_runtimeTracePersistSequence{0};
 std::atomic<size_t> g_runtimeTracePersistFailures{0};
 std::atomic<size_t> g_runtimeTracePersistMilestones{0};
@@ -643,21 +644,61 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
         return g_runtimeTracePersistB86Stream.fetch_add(1, std::memory_order_relaxed) < 64u;
     if (event.find("B86_MEDIA_OPEN") != std::string::npos)
         return g_runtimeTracePersistB86Media.fetch_add(1, std::memory_order_relaxed) < 128u;
-    if (event.find("B94_CODE_AUDIT") != std::string::npos ||
-        event.find("B94_STREAM_CONTEXT") != std::string::npos)
-        return true;
+    if (event.find("B94_STREAM_CONTEXT_WORD") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 128u;
+    }
+    if (event.find("B94_STREAM_CONTEXT") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 64u;
+    }
+    if (event.find("B94_CODE_AUDIT") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 128u;
+    }
+    if (event.find("THREAD_DUMP") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 64u;
+    }
+    if (event.find("XOWUE_STALL_THREADS") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 24u;
+    }
+    if (event.find("AOT_PROGRESS") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 128u;
+    }
+    if (event.find("XOWUE_AOT_HOTSPOT_STATE") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 16u;
+    }
+    if (event.find("XOWUE_AOT_HOTSPOT") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 128u;
+    }
+    if (event.find("CODE_AUDIT_B69_GUEST_WORD") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 64u;
+    }
+    if (event.find("CODE_AUDIT_B67") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 256u;
+    }
+    if (event.find("CODE_AUDIT_B66") != std::string::npos ||
+        event.find("CODE_AUDIT_83847ABC") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 64u;
+    }
     if (event.find("B92_XXX_INTEGRITY") != std::string::npos ||
         event.find("B92_BIK_INTEGRITY") != std::string::npos ||
         event.find("XOWUE_B92_QPC_") != std::string::npos)
-        return g_runtimeTracePersistB92.fetch_add(1, std::memory_order_relaxed) < 2048u;
+        return g_runtimeTracePersistB92.fetch_add(1, std::memory_order_relaxed) < 256u;
     if (event.find("B87_") != std::string::npos)
         return g_runtimeTracePersistB87.fetch_add(1, std::memory_order_relaxed) < 160u;
     // Build 64 must persist diagnostics that identify stalls and QPC output writes.
-    for (const char *required : {"CODE_AUDIT_B69", "CODE_AUDIT_B69_GUEST_WORD", "APP_LAUNCH", "CODE_AUDIT_B66", "CODE_AUDIT_B67", "CODE_AUDIT_83847ABC", "XOWUE_SYNC_CREATE", "XOWUE_MAIN_WAIT_WATCHDOG", "B85_MULTIWAIT_WATCHDOG_PUMP", "B85_WAIT_WATCHDOG_PUMP", "XOWUE_POOL_ALLOC_82DC2BF0", "AOT_PROGRESS", "THREAD_DUMP", "XOWUE_AOT_HOTSPOT",
-                                 "XOWUE_AOT_HOTSPOT_STATE", "XOWUE_QPC_WRITE",
-                                 "XOWUE_STALL_THREADS", "CODE_AUDIT_QPC_CALLERS",
-                                 "XOWUE_QPC_CALLER_DUMP", "CODE_AUDIT_B65",
-                                 "XOWUE_82DC2390_STATE", "XOWUE_82DC2390_GUARD"}) {
+    for (const char *required : {"CODE_AUDIT_B69", "APP_LAUNCH", "XOWUE_SYNC_CREATE", "XOWUE_MAIN_WAIT_WATCHDOG", "B85_MULTIWAIT_WATCHDOG_PUMP", "B85_WAIT_WATCHDOG_PUMP", "XOWUE_POOL_ALLOC_82DC2BF0", "XOWUE_QPC_WRITE",
+                                 "CODE_AUDIT_QPC_CALLERS", "XOWUE_QPC_CALLER_DUMP", "CODE_AUDIT_B65",
+                                 "XOWUE_82DC2390_GUARD"}) {
         if (event.find(required) != std::string::npos) return true;
     }
     if (sequence < 96u) return true;
@@ -713,11 +754,11 @@ void persistRuntimeTrace(const std::string &tagged, size_t sequence) {
     if (g_runtimeTraceFileDescriptor < 0) return;
     // Movie scatter/APC traces must survive the full six-video startup path.
     // 2 MiB could be exhausted by early Bink reads before ue3_logo.bik ends.
-    constexpr off_t kMaxRuntimeTraceFileBytes = 16 * 1024 * 1024;
+    constexpr off_t kMaxRuntimeTraceFileBytes = 4 * 1024 * 1024;
     const off_t currentSize = ::lseek(g_runtimeTraceFileDescriptor, 0, SEEK_END);
     if (currentSize < 0 || currentSize >= kMaxRuntimeTraceFileBytes) return;
     if (currentSize + static_cast<off_t>(line.size()) > kMaxRuntimeTraceFileBytes) {
-        static constexpr char marker[] = "RUNTIME TRACE_LIMIT_REACHED max_bytes=16777216; remaining events suppressed\n";
+        static constexpr char marker[] = "RUNTIME TRACE_LIMIT_REACHED max_bytes=4194304; remaining events suppressed\n";
         if (!g_runtimeTraceFileLimitMarkerWritten.exchange(true, std::memory_order_acq_rel) &&
             currentSize + static_cast<off_t>(sizeof(marker) - 1u) <= kMaxRuntimeTraceFileBytes)
             (void)::write(g_runtimeTraceFileDescriptor, marker, sizeof(marker) - 1u);
@@ -742,6 +783,16 @@ void persistGuestInputTrace(const std::string &event) {
         "XOWUE_INPUT_GUEST seq=" + std::to_string(sequence) + " " + event + "\n";
     std::lock_guard<std::mutex> lock(g_guestInputTraceFileMutex);
     if (g_guestInputTraceFileDescriptor < 0) return;
+    constexpr off_t kMaxGuestInputTraceFileBytes = 256 * 1024;
+    const off_t currentSize = ::lseek(g_guestInputTraceFileDescriptor, 0, SEEK_END);
+    if (currentSize < 0 || currentSize >= kMaxGuestInputTraceFileBytes) return;
+    if (currentSize + static_cast<off_t>(line.size()) > kMaxGuestInputTraceFileBytes) {
+        static constexpr char marker[] = "XOWUE_INPUT_GUEST_LIMIT_REACHED max_bytes=262144; state transitions retained\n";
+        if (!g_guestInputTraceFileLimitMarkerWritten.exchange(true, std::memory_order_acq_rel) &&
+            currentSize + static_cast<off_t>(sizeof(marker) - 1u) <= kMaxGuestInputTraceFileBytes)
+            (void)::write(g_guestInputTraceFileDescriptor, marker, sizeof(marker) - 1u);
+        return;
+    }
     const char *cursor = line.data();
     size_t remaining = line.size();
     while (remaining > 0u) {
@@ -4089,6 +4140,7 @@ extern "C" int xowue_set_runtime_trace_path(const char *path) {
             g_guestInputTraceFileDescriptor = -1;
         }
         g_guestInputTraceSequence.store(0u, std::memory_order_relaxed);
+        g_guestInputTraceFileLimitMarkerWritten.store(false, std::memory_order_relaxed);
         if (path && path[0] != '\0') {
             std::string inputPath(path);
             const std::string diagnosticName = "diagnostico-build-";
@@ -7858,12 +7910,18 @@ static uint32_t writeTouchGamepadState(uint8_t *base, uint32_t userIndex,
     // Only port 0 is connected. XAM's ANY/ANY_USER forms are normalized by
     // the XAM wrappers below, while plain XInput keeps its 0..3 contract.
     if (userIndex != 0u) {
-        char rejected[320];
-        std::snprintf(rejected, sizeof(rejected),
-            "api=%s poll=%u requested_user=%u normalized_user=%u flags=0x%08X output=0x%08X status=0x%08X reason=user_not_connected",
-            apiName, pollSequence, requestedUserIndex, userIndex, flags, address,
-            kXInputErrorDeviceNotConnected);
-        persistGuestInputTrace(rejected);
+        static std::array<std::atomic<uint32_t>, 4> rejectedPollCounts{};
+        const uint32_t bucket = std::min<uint32_t>(userIndex, 3u);
+        const uint32_t rejectedCount =
+            rejectedPollCounts[bucket].fetch_add(1u, std::memory_order_relaxed) + 1u;
+        if (rejectedCount <= 4u || pollSequence % 1024u == 0u) {
+            char rejected[320];
+            std::snprintf(rejected, sizeof(rejected),
+                "api=%s poll=%u requested_user=%u normalized_user=%u flags=0x%08X output=0x%08X status=0x%08X reason=user_not_connected rejected_count=%u",
+                apiName, pollSequence, requestedUserIndex, userIndex, flags, address,
+                kXInputErrorDeviceNotConnected, rejectedCount);
+            persistGuestInputTrace(rejected);
+        }
         return kXInputErrorDeviceNotConnected;
     }
     if (address == 0u) {
