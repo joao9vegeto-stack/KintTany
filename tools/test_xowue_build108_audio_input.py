@@ -133,8 +133,8 @@ require("let maxExportBytes = 5 * 1024 * 1024" in diagnostics and "let exportDat
         "shared diagnostic export must never exceed the 5 MiB total budget")
 require("if filename == diagnosticFilename { maxBytes = 4 * 1024 * 1024 }" in diagnostics,
         "main diagnostic log must be bounded at 4 MiB")
-require("filename == inputFilename) { maxBytes = 128 * 1024 }" in diagnostics and
-        "filename == guestInputFilename) { maxBytes = 256 * 1024 }" in diagnostics,
+require("else if filename == inputFilename { maxBytes = 128 * 1024 }" in diagnostics and
+        "else if filename == guestInputFilename { maxBytes = 256 * 1024 }" in diagnostics,
         "input sidecars must have small independent bounds")
 require("XOWUE_B80_SETSTATE" in diagnostics and "let gameFps" in diagnostics,
         "compact evidence must preserve SetState, stall and guest FPS transition records")
