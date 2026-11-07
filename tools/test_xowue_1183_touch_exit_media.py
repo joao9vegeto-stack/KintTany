@@ -50,13 +50,21 @@ require("directory_iterator" not in inventory and 'extension != ".xxx"' not in i
 require("playback_order=not_observed" in inventory,
         "inventory must never be presented as actual playback order")
 
-read_trace = body(ENGINE, "const bool isVerifiedBootBink", "writeGuestIoStatus(base, ioStatus, readStatus, bytesRead);")
+read_trace = body(ENGINE, "const bool isVerifiedBootBink",
+                  'if (readExtension == ".xxx" || readExtension == ".bik")')
 require('readExtension == ".bik"' in read_trace and 'mediaParentLower == "movies"' in read_trace,
         "file-read sequence must be limited to startup Bink videos")
 require("XOWUE_BINK_FILE_READ_ORDER" in read_trace and "playback_order_not_inferred=1" in read_trace,
         "Bink file reads must be distinguished from actual playback")
 require('readExtension == ".xxx" || readExtension == ".bik"' not in read_trace,
         "the media read-order trace must not include cooked Unreal .xxx assets")
+
+integrity_trace = body(ENGINE, 'if (readExtension == ".xxx" || readExtension == ".bik")',
+                       "writeGuestIoStatus(base, ioStatus, readStatus, bytesRead);")
+require("B92_XXX_INTEGRITY" in integrity_trace and "B92_BIK_INTEGRITY" in integrity_trace,
+        "source-vs-guest integrity must cover both cooked .xxx assets and Bink .bik files")
+require("sourceHash" in integrity_trace and "guestHash" in integrity_trace,
+        "integrity verification must compare the on-disk read with guest memory")
 
 thread_trace = body(ENGINE, "if (thread->startAddress == 0x82690DC0u", "entryFunction(childContext, memory->base);")
 require("0x82690DC0u" in thread_trace and "0x83268358u" in thread_trace,

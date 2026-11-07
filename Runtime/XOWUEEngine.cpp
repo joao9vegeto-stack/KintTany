@@ -8839,10 +8839,17 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
                 asyncRead ? 1u : 0u);
             recordRuntimeTrace(mediaEvent);
         }
-        const char *integrityTag = "XOWUE_BOOT_BIK_INTEGRITY";
-        static std::atomic<uint64_t> s_xxxIntegrityLogCount{0u};
+    }
+
+    // Source-vs-guest integrity is deliberately independent of the boot-video
+    // playback trace: cooked Unreal .xxx reads must still be checked, while only
+    // verified startup .bik files participate in Bink file-read diagnostics.
+    if (readExtension == ".xxx" || readExtension == ".bik") {
+        const char *integrityTag =
+            readExtension == ".xxx" ? "B92_XXX_INTEGRITY" : "B92_BIK_INTEGRITY";
+        static std::atomic<uint64_t> s_mediaIntegrityLogCount{0u};
         const uint64_t integrityLogIndex =
-            s_xxxIntegrityLogCount.fetch_add(1u, std::memory_order_relaxed);
+            s_mediaIntegrityLogCount.fetch_add(1u, std::memory_order_relaxed);
         constexpr uint64_t kFnvOffset = 14695981039346656037ull;
         constexpr uint64_t kFnvPrime = 1099511628211ull;
         uint64_t guestHash = kFnvOffset;
