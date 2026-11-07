@@ -6,6 +6,7 @@ import re
 ROOT = Path(__file__).resolve().parents[1]
 APP = (ROOT / "iOS/App/XOWUEApp.swift").read_text(encoding="utf-8")
 BACKEND = (ROOT / "iOS/App/XOWUEVulkanBackend.m").read_text(encoding="utf-8")
+ENGINE = (ROOT / "Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
 
 def require(condition, message):
     if not condition:
@@ -46,3 +47,25 @@ require("dispatch_async(KKGPUCompletionQueue()" in BACKEND and
 assert "DeviceWaitIdle" not in detach
 
 print("XOWUE_EXACT_EXIT_AND_RENDERER_TEARDOWN_OK")
+
+request_stop = ENGINE[ENGINE.index('extern "C" void xowue_request_stop(void) {'):
+                      ENGINE.index("static void rebuildGuestPathIndex();",
+                                   ENGINE.index('extern "C" void xowue_request_stop(void) {'))]
+require(request_stop.index("requestGuestSchedulerStop()") <
+        request_stop.index("g_touchControllerMutex"),
+        "native cancellation must be latched before any touch-controller mutex access")
+require("std::try_to_lock" in request_stop,
+        "exit diagnostics must never block on the touch-controller mutex")
+
+finish = ENGINE[ENGINE.index("void finishGuestThread("):
+                ENGINE.index("void requestGuestSchedulerStop()", ENGINE.index("void finishGuestThread("))]
+require("thread->stateMutex" in finish and "thread->exited.store(true" in finish,
+        "thread exit predicate must be published while holding its wait mutex")
+
+teardown = ENGINE[ENGINE.index("void stopGuestThreads() {"):
+                  ENGINE.index("struct GuestSchedulerSessionGuard", ENGINE.index("void stopGuestThreads() {"))]
+for token in ("XOWUE_SESSION_TEARDOWN", "XOWUE_THREAD_JOINED",
+              "XOWUE_THREAD_ORPHANED", "g_touchController = {}"):
+    require(token in teardown, f"teardown must implement and report {token}")
+
+print("XOWUE_NONBLOCKING_EXIT_AND_THREAD_JOIN_OK")

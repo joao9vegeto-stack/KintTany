@@ -36,11 +36,11 @@ require("userIndex <= 3u" in xam_set,
         "XAM rumble requests must recognize the mirrored virtual ports")
 
 exit_button = body(APP, 'Button {\n                XOWUEDiagnostics.log("navigation.exit tapped', "            } label: {")
-require(exit_button.index("library.requestExit()") < exit_button.index("touchController.releaseAll()"),
-        "SAIR must dispatch native cancellation before touching the bridge mutex")
+require("library.requestExit()" in exit_button and "touchController.releaseAll()" not in exit_button,
+        "SAIR must not synchronously re-enter the touch mutex on the UIKit thread")
 disappear = body(APP, ".onDisappear {", "        .onAppear {")
-require(disappear.index("library.requestExit()") < disappear.index("touchController.releaseAll()"),
-        "surface teardown must request cancellation before releasing input")
+require("library.requestExit()" in disappear and "touchController.releaseAll()" not in disappear,
+        "surface teardown must leave controller reset to the joined native runtime")
 
 inventory = body(ENGINE, "// Inventory is deliberately restricted", "const Image image = parseImage(path);")
 require("loading_screen_final.bik" in inventory and "ATVI_logo.bik" in inventory,
@@ -87,8 +87,15 @@ require("context.r3.u32 = 0u;" in frame_marker,
 require("g_binkFrameMarkerOrder.store(0u" in ENGINE,
         "frame order must reset at the start of each XEX session")
 persist = body(ENGINE, "bool shouldPersistRuntimeTrace(", "void persistRuntimeTrace(")
-require('event.find("XOWUE_BINK_FRAME_MARKER")' in persist,
-        "bounded runtime trace must persist actual video frame markers")
+for token in ("XOWUE_BINK_FRAME_MARKER", "XOWUE_BINK_VIDEO_THREAD_START",
+              "XOWUE_BINK_VIDEO_CONTEXT", "XOWUE_BINK_DECODER_THREAD_START",
+              "XOWUE_BINK_FILE_READ_ORDER", "XOWUE_BINK_READ_PROGRESS"):
+    require(token in persist, f"bounded runtime trace must persist {token}")
+for token in ("XOWUE_USER_EXIT", "XOWUE_INPUT_SUMMARY",
+              "XOWUE_SESSION_TEARDOWN", "XOWUE_THREAD_JOINED",
+              "XOWUE_THREAD_ORPHANED"):
+    require(token in persist, f"bounded runtime trace must persist {token}")
+
 
 flow = body(ENGINE, "// These are media-adjacent PPC routines", "    // Check before diagnostic work")
 require("0x822A0278u" not in flow,
@@ -100,4 +107,6 @@ require("flowSample, guestAddress, hit" in flow,
 
 require("test_xowue_1183_touch_exit_media.py" in WORKFLOW,
         "the workflow must run the Build 118.4 touch/exit/media regression test")
+require("180" in APP and ".milliseconds(180)" in APP,
+        "touch buttons and triggers must remain visible to the guest polling thread for 180 ms")
 print("XOWUE_BUILD1184_TOUCH_EXIT_MEDIA_OK")

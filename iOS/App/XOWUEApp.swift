@@ -278,8 +278,7 @@ private struct XOWUEGameSurfaceScreen: View {
                 XOWUEDiagnostics.log("navigation.exit tapped: dispatching native cancellation")
                 // Latch native stop before entering the C++ touch bridge.
                 library.requestExit()
-                XOWUEDiagnostics.log("navigation.exit requestExit returned; releasing touch state")
-                touchController.releaseAll()
+                XOWUEDiagnostics.log("navigation.exit requestExit returned; native scheduler owns input teardown")
             } label: {
                 Label("SAIR", systemImage: "power")
                     .font(.system(size: 11, weight: .heavy, design: .rounded))
@@ -348,7 +347,6 @@ private struct XOWUEGameSurfaceScreen: View {
         .statusBarHidden(true)
         .onDisappear {
             library.requestExit()
-            touchController.releaseAll()
         }
         .onAppear {
             // The presenter owns orientation; only remove the temporary boot hint here.
@@ -374,8 +372,8 @@ private final class XOWUETouchController: ObservableObject {
     private var activeButtonTouches = Set<UInt32>()
     private var activeTriggerTouches = Set<Bool>()
 
-    // Keep a short pulse long enough for the guest's polling thread, but do
-    // not merge a second physical tap into the first held state. A new touch
+    // Keep a 180 ms minimum pulse: the title polls XAM from worker threads, and
+    // brief UIKit taps must survive scheduling jitter and guest polling cadence. A new touch
     // during the release window forces a real up edge before the next down.
     func setButton(_ mask: UInt32, pressed: Bool) {
         if pressed {
@@ -398,7 +396,7 @@ private final class XOWUETouchController: ObservableObject {
         }
         guard activeButtonTouches.remove(mask) != nil else { return }
         let generation = buttonReleaseGeneration[mask] ?? 0
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(180)) { [weak self] in
             guard let self,
                   self.buttonReleaseGeneration[mask] == generation,
                   !self.activeButtonTouches.contains(mask),
@@ -430,7 +428,7 @@ private final class XOWUETouchController: ObservableObject {
         }
         guard activeTriggerTouches.remove(left) != nil else { return }
         let generation = triggerReleaseGeneration[left] ?? 0
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(180)) { [weak self] in
             guard let self,
                   self.triggerReleaseGeneration[left] == generation,
                   !self.activeTriggerTouches.contains(left) else { return }

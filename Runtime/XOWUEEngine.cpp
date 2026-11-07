@@ -627,7 +627,21 @@ std::vector<std::shared_ptr<GuestThread>> snapshotAllGuestThreads() {
 bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     if (event.find("XOWUE_XAUDIO_") != std::string::npos)
         return g_xaudioTraceLogs.fetch_add(1u, std::memory_order_relaxed) < 256u;
-    if (event.find("XOWUE_BINK_FRAME_MARKER") != std::string::npos) return true;
+    if (event.find("XOWUE_BINK_FRAME_MARKER") != std::string::npos ||
+        event.find("XOWUE_BINK_VIDEO_THREAD_START") != std::string::npos ||
+        event.find("XOWUE_BINK_VIDEO_CONTEXT") != std::string::npos ||
+        event.find("XOWUE_BINK_DECODER_THREAD_START") != std::string::npos ||
+        event.find("XOWUE_BINK_FILE_READ_ORDER") != std::string::npos ||
+        event.find("XOWUE_USER_EXIT") != std::string::npos ||
+        event.find("XOWUE_INPUT_SUMMARY") != std::string::npos ||
+        event.find("XOWUE_SESSION_TEARDOWN") != std::string::npos ||
+        event.find("XOWUE_THREAD_JOINED") != std::string::npos ||
+        event.find("XOWUE_THREAD_ORPHANED") != std::string::npos)
+        return true;
+    if (event.find("XOWUE_BINK_READ_PROGRESS") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 512u;
+    }
     if (event.find("B97_") != std::string::npos) return true;
     if (event.find("B103_ASYNC_NTREADFILE_") != std::string::npos) {
         static std::atomic<uint32_t> count{0u};
@@ -2234,9 +2248,14 @@ void finishGuestThread(const std::shared_ptr<GuestThread> &thread, uint32_t exit
     char event[120];
     std::snprintf(event, sizeof(event), "PPC thread exit id=%u code=0x%08X", thread->id, exitCode);
     recordRuntimeTrace(event);
-    signalGuestWaitable(thread->completion);
-    thread->exited.store(true);
+    {
+        // stopGuestThreads waits on this same mutex. Publish the predicate
+        // while holding it so a waiter cannot miss the final notification.
+        std::lock_guard<std::mutex> stateLock(thread->stateMutex);
+        thread->exited.store(true, std::memory_order_release);
+    }
     thread->exitChanged.notify_all();
+    signalGuestWaitable(thread->completion);
 }
 
 void requestGuestSchedulerStop() {
@@ -2315,26 +2334,57 @@ void stopGuestThreads() {
         std::lock_guard<std::mutex> lock(g_guestThreadMutex);
         threads = g_guestThreads;
     }
+    char begin[128];
+    std::snprintf(begin, sizeof(begin),
+                  "XOWUE_SESSION_TEARDOWN begin threads=%u",
+                  static_cast<unsigned>(threads.size()));
+    recordRuntimeTrace(begin);
+
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    bool orphaned = false;
+    uint32_t joinedCount = 0u;
+    uint32_t orphanedCount = 0u;
     for (const auto &thread : threads) {
         if (!thread->hostThread.joinable()) continue;
+        bool exited = false;
         {
             std::unique_lock<std::mutex> lock(thread->stateMutex);
-            if (!thread->exitChanged.wait_until(lock, deadline, [&] { return thread->exited.load(); })) {
-                orphaned = true;
-                thread->hostThread.detach();
-                char event[120];
-                std::snprintf(event, sizeof(event), "PPC thread id=%u did not stop before session deadline; guest memory retained", thread->id);
-                recordRuntimeTrace(event);
-                continue;
-            }
+            exited = thread->exitChanged.wait_until(
+                lock, deadline, [&] { return thread->exited.load(std::memory_order_acquire); });
+        }
+        if (!exited) {
+            ++orphanedCount;
+            thread->hostThread.detach();
+            char event[192];
+            std::snprintf(event, sizeof(event),
+                "XOWUE_THREAD_ORPHANED id=%u entry=0x%08X startup=0x%08X "
+                "deadline_ms=3000 guest_memory=retained",
+                thread->id, thread->startAddress, thread->startupAddress);
+            recordRuntimeTrace(event);
+            continue;
         }
         thread->hostThread.join();
+        ++joinedCount;
+        char event[128];
+        std::snprintf(event, sizeof(event),
+                      "XOWUE_THREAD_JOINED id=%u exit=0x%08X",
+                      thread->id, thread->exitStatus.load());
+        recordRuntimeTrace(event);
     }
-    if (orphaned) {
+    if (orphanedCount != 0u) {
         g_runtimeSessionPoisoned.store(true);
+        char event[160];
+        std::snprintf(event, sizeof(event),
+            "XOWUE_SESSION_TEARDOWN incomplete joined=%u orphaned=%u guest_memory=retained",
+            joinedCount, orphanedCount);
+        recordRuntimeTrace(event);
         return;
+    }
+
+    // All guest readers have exited: clear the virtual pad only now, never
+    // from the UIKit exit tap while a guest poll may hold the input mutex.
+    {
+        std::lock_guard<std::mutex> inputLock(g_touchControllerMutex);
+        g_touchController = {};
     }
     {
         std::lock_guard<std::mutex> lock(g_guestObjectMutex);
@@ -2355,6 +2405,11 @@ void stopGuestThreads() {
         g_criticalSectionLocks.clear();
     }
     g_activeGuestMemory.reset();
+    char complete[160];
+    std::snprintf(complete, sizeof(complete),
+        "XOWUE_SESSION_TEARDOWN complete joined=%u orphaned=0 guest_memory=released",
+        joinedCount);
+    recordRuntimeTrace(complete);
 }
 
 struct GuestSchedulerSessionGuard final {
@@ -4335,17 +4390,29 @@ static bool translateGuestFilePath(const std::string &guestPath, bool forWrite,
 // Exit must terminate guest PPC execution; dismissing the view alone leaves
 // native guest workers running indefinitely behind the single-game launcher.
 extern "C" void xowue_request_stop(void) {
-    if (!g_xowueInputSummaryLogged.exchange(true, std::memory_order_relaxed)) {
-        TouchControllerState state;
-        { std::lock_guard<std::mutex> lock(g_touchControllerMutex); state=g_touchController; }
-        char line[320];
-        std::snprintf(line,sizeof(line),"XOWUE_INPUT_SUMMARY host_updates=%u guest_polls=%u nonzero_polls=%u packet=%u buttons=0x%04X triggers=%u,%u sticks=%d,%d,%d,%d",
-            g_touchControllerUpdateCount.load(std::memory_order_relaxed),g_xowueInputPollCount.load(std::memory_order_relaxed),g_xowueInputNonzeroPollCount.load(std::memory_order_relaxed),
-            state.packetNumber,state.buttons&0xFFFFu,state.leftTrigger,state.rightTrigger,static_cast<int>(state.leftX),static_cast<int>(state.leftY),static_cast<int>(state.rightX),static_cast<int>(state.rightY));
-        recordRuntimeTrace(line);
-    }
+    // Cancellation is the first operation. Never let a diagnostic snapshot
+    // wait behind the mutex acquired by a guest XamInputGetState poll.
     requestGuestSchedulerStop();
     recordRuntimeTrace("XOWUE_USER_EXIT scheduler cancellation requested");
+
+    if (!g_xowueInputSummaryLogged.exchange(true, std::memory_order_relaxed)) {
+        TouchControllerState state{};
+        std::unique_lock<std::mutex> inputLock(g_touchControllerMutex, std::try_to_lock);
+        const bool snapshotAvailable = inputLock.owns_lock();
+        if (snapshotAvailable) state = g_touchController;
+        char line[384];
+        std::snprintf(line, sizeof(line),
+            "XOWUE_INPUT_SUMMARY host_updates=%u guest_polls=%u nonzero_polls=%u "
+            "snapshot_available=%u packet=%u buttons=0x%04X triggers=%u,%u sticks=%d,%d,%d,%d",
+            g_touchControllerUpdateCount.load(std::memory_order_relaxed),
+            g_xowueInputPollCount.load(std::memory_order_relaxed),
+            g_xowueInputNonzeroPollCount.load(std::memory_order_relaxed),
+            snapshotAvailable ? 1u : 0u, state.packetNumber, state.buttons & 0xFFFFu,
+            state.leftTrigger, state.rightTrigger, static_cast<int>(state.leftX),
+            static_cast<int>(state.leftY), static_cast<int>(state.rightX),
+            static_cast<int>(state.rightY));
+        recordRuntimeTrace(line);
+    }
 }
 
 static void rebuildGuestPathIndex();
@@ -8844,6 +8911,22 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
     // Source-vs-guest integrity is deliberately independent of the boot-video
     // playback trace: cooked Unreal .xxx reads must still be checked, while only
     // verified startup .bik files participate in Bink file-read diagnostics.
+    if (readExtension == ".bik") {
+        static std::atomic<uint32_t> s_binkReadProgressCount{0u};
+        const uint32_t readIndex =
+            s_binkReadProgressCount.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        if (readIndex <= 512u) {
+            char event[1200];
+            std::snprintf(event, sizeof(event),
+                "XOWUE_BINK_READ_PROGRESS index=%u thread=%u handle=0x%08X path=%s "
+                "offset=0x%016llX requested=%u bytes=%u status=0x%08X eof=%u async=%u",
+                readIndex, static_cast<uint32_t>(g_currentGuestThreadId), handle,
+                file->path.string().c_str(), static_cast<unsigned long long>(offset),
+                length, bytesRead, readStatus, readEof ? 1u : 0u, asyncRead ? 1u : 0u);
+            recordRuntimeTrace(event);
+        }
+    }
+
     if (readExtension == ".xxx" || readExtension == ".bik") {
         const char *integrityTag =
             readExtension == ".xxx" ? "B92_XXX_INTEGRITY" : "B92_BIK_INTEGRITY";
