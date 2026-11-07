@@ -69,6 +69,8 @@ require("0x822A0278u" not in flow,
         "the FName/NoneByteProperty helper must not be mislabeled as Bink playback")
 require("XOWUE_MEDIA_PPC_FLOW sample=" in flow,
         "media-adjacent PPC samples must use an independent sample counter")
+require("flowSample, guestAddress, hit" in flow,
+        "the media-flow log must pass its own sample counter to snprintf")
 
 require("test_xowue_1183_touch_exit_media.py" in WORKFLOW,
         "the workflow must run the Build 118.4 touch/exit/media regression test")

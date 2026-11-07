@@ -155,7 +155,7 @@ print("PASS: native UIKit landscape game host, portrait library preserved")
 
 # User-requested single-title launcher must truly cancel guest PPC before
 # dismissing the landscape host (no longer a fake 'back to library').
-assert 'navigation.exit tapped: terminating native PPC' in ui
+assert 'navigation.exit tapped: dispatching native cancellation' in ui
 assert 'library.requestExit()' in ui
 assert 'if exitRequested || outcome.code == 4' in ui
 assert 'gameSurfacePresented = false' in ui
@@ -198,7 +198,7 @@ assert "gameSurfacePresented = false" in request_exit
 assert request_exit.index("if phase != .booting") < request_exit.index("gameSurfacePresented = false") < request_exit.index("xowue_request_stop()")
 assert "Aguardando o retorno do boot e a finalização das threads PPC." in request_exit
 assert '.overlay(alignment: .topLeading)' in ui
-assert 'navigation.exit tapped: terminating native PPC' in ui
+assert 'navigation.exit tapped: dispatching native cancellation' in ui
 assert vulkan.count("UILabel *_fpsLabel;") == 1
 assert "g_xowue_guest_frame_count" in vulkan
 assert "XOWUE_GAME_FPS fps=" in vulkan

@@ -3266,7 +3266,7 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
                     "XOWUE_MEDIA_PPC_FLOW sample=%u entry=0x%08X hit=%u tid=%u lr=0x%08X "
                     "r3=0x%08X r4=0x%08X r5=0x%08X r6=0x%08X r7=0x%08X r8=0x%08X "
                     "r10=0x%08X r30=0x%08X r31=0x%08X",
-                    mediaOrder, guestAddress, hit, g_currentGuestThreadId, static_cast<uint32_t>(ctx.lr),
+                    flowSample, guestAddress, hit, g_currentGuestThreadId, static_cast<uint32_t>(ctx.lr),
                     ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32,
                     ctx.r8.u32, ctx.r10.u32, ctx.r30.u32, ctx.r31.u32);
                 recordRuntimeTrace(flow);

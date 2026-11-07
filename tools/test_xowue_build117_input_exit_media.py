@@ -32,7 +32,7 @@ screen_end = APP.index("@MainActor\nprivate final class XOWUETouchController", s
 screen = APP[screen_start:screen_end]
 require('.overlay(alignment: .topLeading)' in screen,
         "SAIR must be an isolated top-leading overlay")
-require("navigation.exit tapped: terminating native PPC" in screen,
+require("navigation.exit tapped: dispatching native cancellation" in screen,
         "the SAIR tap diagnostic must remain")
 require("VStack(spacing: 0)" not in screen,
         "the transparent full-screen VStack must not return")
