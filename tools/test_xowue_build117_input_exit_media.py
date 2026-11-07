@@ -47,8 +47,9 @@ require("file->lastReadEof" not in ENGINE and "file->lastReadOffset" not in ENGI
         "EOF completion must not read a mutable per-file snapshot that another APC can overwrite")
 require("readEof ? 1u : 0u" in ENGINE and "readReachedEof" not in ENGINE,
         "B105 media ordering must label the current read, not the previous read")
-require("perMediaReadCounts" in ENGINE and "path_read=%u eof=%u" in ENGINE,
-        "each BIK/XXX path must retain early reads and EOF beyond the old global 256-read cap")
+require("perMediaReadCounts" in ENGINE and
+        "XOWUE_BINK_FILE_READ_ORDER order=%u path_read=%u file_read_only=1 playback_order_not_inferred=1 eof=%u" in ENGINE,
+        "each verified boot BIK must retain per-file read sequence and EOF without implying playback order")
 require("B99_MEDIA_EOF_COMPLETION" in ENGINE,
         "both BIK and XXX EOFs must be correlated with guest completion signals")
 require("B99_BIK_EOF_COMPLETION" in ENGINE,
