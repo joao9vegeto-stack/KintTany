@@ -30,6 +30,11 @@ print("Xenia playback oracle: " + " -> ".join(expected_xenia_movie_order))
 
 required = {
     "B97 records bypass legacy sampling": 'event.find("B97_")',
+    "movie read order is explicit": "B105_MEDIA_READ_ORDER",
+    "movie open order is explicit": "B105_MEDIA_OPEN_ORDER",
+    "guest media call flow is chronological": "B105_MOVIE_PPC_FLOW",
+    "directory enumeration is not playback order": "inventory_only=1 playback_order=not_observed",
+    "guest SignalState polling": "adoptGuestEventMemorySignalStateLocked",
     "targeted wait handle 0x115": "B98_WAIT_BEGIN",
     "targeted event creation metadata": "B98_EVENT_CREATE",
     "targeted signal attempt handle 0x115": "B98_EVENT_SIGNAL_ATTEMPT",

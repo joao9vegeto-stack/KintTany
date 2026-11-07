@@ -192,7 +192,8 @@ enum XOWUEDiagnostics {
             $0.contains("STREAM_ANOMALY")
         }.suffix(12))
         let media = Array(lines.filter {
-            $0.contains("B86_MEDIA_OPEN") || $0.contains("XOWUE_MEDIA_INVENTORY") ||
+            $0.contains("B86_MEDIA_OPEN") || $0.contains("B105_MEDIA_OPEN_ORDER") ||
+            $0.contains("B105_MEDIA_READ_ORDER") || $0.contains("XOWUE_MEDIA_INVENTORY") ||
             $0.contains("XOWUE_MEDIA_ENUM") ||
             $0.contains("NtCreateFile path=") || $0.contains("NtOpenFile path=")
         }.suffix(32))
@@ -209,12 +210,14 @@ enum XOWUEDiagnostics {
             $0.contains("AOT_PROGRESS") || $0.contains("HOT_FN_CODE")
         }.suffix(12))
         let eventWaits = Array(lines.filter {
-            $0.contains("B95_SYNC_") || $0.contains("B98_WAIT_") || $0.contains("B98_EVENT_") || $0.contains("B98_TIMER_")
+            $0.contains("B95_SYNC_") || $0.contains("B98_WAIT_") || $0.contains("B98_EVENT_") ||
+            $0.contains("B98_TIMER_") || $0.contains("B105_GUEST_EVENT_STATE_ADOPT")
         }.suffix(96))
         let eventCompletions = Array(lines.filter { $0.contains("B99_EVENT_") || $0.contains("B99_FILE_COMPLETION") }.suffix(48))
         let asyncFileIo = Array(lines.filter { $0.contains("B103_ASYNC_NTREADFILE_") }.suffix(64))
         let movieFlow = Array(lines.filter {
-            $0.contains("B97_MOVIE_") || $0.contains("B97_XENOS_SWAP_DECODE")
+            $0.contains("B97_MOVIE_") || $0.contains("B97_XENOS_SWAP_DECODE") ||
+            $0.contains("B105_MOVIE_PPC_FLOW")
         }.suffix(48))
         let setState = Array(lines.filter {
             $0.contains("XOWUE_B80_SETSTATE") || $0.contains("XOWUE_B90_BINK_STATE") ||

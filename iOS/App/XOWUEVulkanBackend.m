@@ -1538,6 +1538,8 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    BOOL _attempted;
    BOOL _failed;
 }
+- (void)startDisplayLinkIfNeeded;
+
 @end
 
 @implementation XOWUEVulkanView
@@ -1604,7 +1606,7 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
          XOWUEVulkanView *strongSelf = weakSelf;
          if (!strongSelf || !strongSelf.window || !strongSelf->_vk.ready) return;
          if (atomic_load_explicit(&g_xowue_render_in_flight, memory_order_acquire)) {
-            strongSelf->_displayLink.paused = NO;
+            [strongSelf startDisplayLinkIfNeeded];
             KKLog(@"LIFECYCLE foreground deferred until submitted GPU work completes");
             return;
          }
@@ -1613,7 +1615,7 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
             [strongSelf failWithMessage:@"Falha ao recriar a swapchain após voltar do background"];
             return;
          }
-         strongSelf->_displayLink.paused = NO;
+         [strongSelf startDisplayLinkIfNeeded];
          KKLog(@"LIFECYCLE foreground swapchain_ready=1 resident_mib=%.1f", KKResidentMiB());
       }];
 
@@ -1641,18 +1643,33 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
       [self performSelector:@selector(startBackend) withObject:nil afterDelay:0.15];
 }
 
+- (void)startDisplayLinkIfNeeded
+{
+   if (!self.window || !_vk.ready)
+      return;
+   if (!_displayLink) {
+      _displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(displayTick:)];
+      _displayLink.preferredFramesPerSecond = 60;
+      [_displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+      KKLog(@"LIFECYCLE display_link_started=1");
+   }
+   _displayLink.paused = NO;
+}
+
 - (void)didMoveToWindow
 {
    [super didMoveToWindow];
    if (!self.window) {
-      _displayLink.paused = YES;
-      KKLog(@"LIFECYCLE view_detached gpu_in_flight=%u cleanup=background",
+      [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(startBackend) object:nil];
+      [_displayLink invalidate];
+      _displayLink = nil;
+      KKLog(@"LIFECYCLE view_detached gpu_in_flight=%u display_link_invalidated=1 cleanup=deferred",
             atomic_load_explicit(&g_xowue_render_in_flight, memory_order_acquire) ? 1u : 0u);
       return;
    }
    if (_vk.ready) {
       if (atomic_load_explicit(&g_xowue_render_in_flight, memory_order_acquire)) {
-         _displayLink.paused = NO;
+         [self startDisplayLinkIfNeeded];
          return;
       }
       CAMetalLayer *metalLayer = (CAMetalLayer *)self.layer;
@@ -1660,7 +1677,7 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
          [self failWithMessage:@"Falha ao recriar a swapchain ao anexar a tela"];
          return;
       }
-      _displayLink.paused = NO;
+      [self startDisplayLinkIfNeeded];
       return;
    }
    if (self.window && !_attempted)
@@ -1713,9 +1730,7 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    _lastGameVdSwapCalls = atomic_load_explicit(&g_xowue_game_vdswap_request_count, memory_order_relaxed);
    _lastDecodedFrames = atomic_load_explicit(&g_xowue_guest_frame_count, memory_order_relaxed);
    _lastHostFrames = _vk.frame_count;
-   _displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(displayTick:)];
-   _displayLink.preferredFramesPerSecond = 60;
-   [_displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+   [self startDisplayLinkIfNeeded];
 }
 
 - (void)displayTick:(CADisplayLink *)displayLink
@@ -1808,6 +1823,8 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
 
 - (void)dealloc
 {
+   KKLog(@"LIFECYCLE view_dealloc enqueue_gpu_cleanup=1 gpu_in_flight=%u",
+         atomic_load_explicit(&g_xowue_render_in_flight, memory_order_acquire) ? 1u : 0u);
    [_displayLink invalidate];
    if (_backgroundObserver)
       [NSNotificationCenter.defaultCenter removeObserver:_backgroundObserver];
@@ -1818,6 +1835,7 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
    dispatch_async(KKGPUCompletionQueue(), ^{
       KKVulkanState localState = cleanupState;
       KKDestroyVulkan(&localState);
+      KKLog(@"LIFECYCLE backend_cleanup_complete resident_mib=%.1f", KKResidentMiB());
    });
 }
 

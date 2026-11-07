@@ -268,6 +268,16 @@ jobs:
           python3 -m py_compile tools/test_xowue_input_import_dispatch.py
           python3 tools/test_xowue_input_import_dispatch.py
 
+      - name: Verify guest event state adoption and exact surface teardown
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/test_xowue_guest_event_adoption.py
+          python3 tools/test_xowue_guest_event_adoption.py
+          python3 -m py_compile tools/test_xowue_exit_teardown.py
+          python3 tools/test_xowue_exit_teardown.py
+          python3 -m py_compile tools/test_xowue_build97_video_diagnostics.py
+          python3 tools/test_xowue_build97_video_diagnostics.py
+
       - name: Record native source of Wolverine's failing PPC CTR branch
         run: |
           set -euo pipefail

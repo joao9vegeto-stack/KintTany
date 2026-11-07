@@ -536,6 +536,7 @@ thread_local uint32_t g_b90PreviousEntryLr = 0u;
 std::atomic<uint32_t> g_b90StreamTransitionLogs{0u};
 std::atomic<uint32_t> g_b95SyncWaitLogs{0u};
 std::atomic<uint32_t> g_b95SyncSignalLogs{0u};
+static std::atomic<uint32_t> g_b105MediaOrder{0u};
 std::array<std::atomic<bool>, 8> g_b97MoviePpcDumped{};
 std::atomic<uint32_t> g_b98WaitTargetLogs{0u};
 std::atomic<uint32_t> g_b98WaitResultLogs{0u};
@@ -701,7 +702,8 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     // Build 64 must persist diagnostics that identify stalls and QPC output writes.
     for (const char *required : {"CODE_AUDIT_B69", "APP_LAUNCH", "XOWUE_SYNC_CREATE", "XOWUE_MAIN_WAIT_WATCHDOG", "B85_MULTIWAIT_WATCHDOG_PUMP", "B85_WAIT_WATCHDOG_PUMP", "XOWUE_POOL_ALLOC_82DC2BF0", "XOWUE_QPC_WRITE",
                                  "CODE_AUDIT_QPC_CALLERS", "XOWUE_QPC_CALLER_DUMP", "CODE_AUDIT_B65",
-                                 "XOWUE_82DC2390_GUARD"}) {
+                                 "XOWUE_82DC2390_GUARD", "B105_GUEST_EVENT_STATE_ADOPT",
+                                 "B105_MOVIE_PPC_FLOW", "B105_MEDIA_OPEN_ORDER", "B105_MEDIA_READ_ORDER"}) {
         if (event.find(required) != std::string::npos) return true;
     }
     if (sequence < 96u) return true;
@@ -1466,6 +1468,75 @@ struct GuestWaitStateScope {
  GuestThread *thread;
 };
 
+static uint32_t readGuestEventSignalStateLocked(
+    const std::shared_ptr<GuestWaitable> &waitable) {
+    if (!waitable || waitable->kind != GuestWaitable::Kind::Event ||
+        waitable->objectAddress == 0u)
+        return std::numeric_limits<uint32_t>::max();
+    const auto memory = g_activeGuestMemory.lock();
+    uint8_t *base = memory ? memory->base : nullptr;
+    if (!base || !validGuestRange(waitable->objectAddress, 8u))
+        return std::numeric_limits<uint32_t>::max();
+    return loadGuestBe32(base, waitable->objectAddress + 4u);
+}
+
+// Some Xbox 360 titles update a dispatcher object's SignalState directly in
+// guest memory rather than calling KeSetEvent/NtSetEvent. A host-only snapshot
+// leaves an already-blocked host waiter asleep forever. Reconcile Event state
+// while the wait lock is held; the timed wait loops below provide bounded
+// polling even when the guest store cannot notify a host condition variable.
+static bool adoptGuestEventMemorySignalStateLocked(
+    const std::shared_ptr<GuestWaitable> &waitable) {
+    const uint32_t guestSignalState = readGuestEventSignalStateLocked(waitable);
+    if (guestSignalState == std::numeric_limits<uint32_t>::max()) return false;
+
+    const bool guestSignaled = guestSignalState != 0u;
+    const bool hostSignaled = waitable->signaled || waitable->unconsumedSignals != 0u;
+    const bool previousSignaled = waitable->signaled;
+    const uint32_t previousPending = waitable->unconsumedSignals;
+    bool changed = false;
+
+    if (guestSignaled) {
+        if (!waitable->signaled) {
+            waitable->signaled = true;
+            changed = true;
+        }
+        if (!waitable->manualReset && waitable->unconsumedSignals == 0u) {
+            waitable->unconsumedSignals = 1u;
+            changed = true;
+        }
+        if (!hostSignaled) {
+            ++waitable->signalGeneration;
+            waitable->signalCount.fetch_add(1u, std::memory_order_relaxed);
+        }
+    } else if (hostSignaled) {
+        waitable->signaled = false;
+        waitable->unconsumedSignals = 0u;
+        changed = true;
+    }
+
+    if (!changed) return false;
+
+    waitable->changed.notify_all();
+    g_waitSetChanged.notify_all();
+    static std::atomic<uint32_t> adoptionLogs{0u};
+    const uint32_t sequence = adoptionLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
+    if (sequence <= 128u) {
+        char event[384];
+        std::snprintf(event, sizeof(event),
+            "B105_GUEST_EVENT_STATE_ADOPT order=%u object=0x%08X guest_state=0x%08X "
+            "previous_signaled=%u previous_pending=%u signaled=%u pending=%u "
+            "manual=%u tid=%u lr=0x%08X",
+            sequence, waitable->objectAddress, guestSignalState,
+            previousSignaled ? 1u : 0u, previousPending,
+            waitable->signaled ? 1u : 0u, waitable->unconsumedSignals,
+            waitable->manualReset ? 1u : 0u, g_currentGuestThreadId,
+            g_currentGuestThread ? g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed) : 0u);
+        recordRuntimeTrace(event);
+    }
+    return true;
+}
+
 static void markGuestWaitableSignaledLocked(const std::shared_ptr<GuestWaitable> &waitable) {
     if (!waitable) return;
     waitable->signaled = true;
@@ -1512,6 +1583,7 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
     const uint32_t currentLr = isMainThread ? g_mainThreadGuestLr.load(std::memory_order_relaxed)
         : g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed);
     std::unique_lock<std::mutex> lock(waitable->mutex);
+    (void)adoptGuestEventMemorySignalStateLocked(waitable);
     const uint64_t initialPulseGeneration = waitable->pulseGeneration;
     const uint32_t waitSequence = g_b95SyncWaitLogs.fetch_add(1u, std::memory_order_relaxed);
     const uint32_t b98WaitSample = waitable->handle == 0x115u
@@ -1577,16 +1649,18 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
         recordRuntimeTrace(target);
     }
     if (waitSequence < 512u) {
-        char event[320];
+        char event[384];
+        const uint32_t guestSignalState = readGuestEventSignalStateLocked(waitable);
         std::snprintf(event, sizeof(event),
             "B95_SYNC_WAIT_BEGIN seq=%u thread=%u handle=0x%08X object=0x%08X "
-            "target=0x%08X kind=%u signaled=%u pending=%u signal_gen=%llu pulse_gen=%llu lr=0x%08X",
+            "target=0x%08X kind=%u signaled=%u pending=%u signal_gen=%llu pulse_gen=%llu "
+            "guest_signal_state=0x%08X lr=0x%08X",
             waitSequence + 1u, g_currentGuestThreadId, waitable->handle,
             waitable->objectAddress, waitable->handle ? waitable->handle : waitable->objectAddress,
             static_cast<unsigned>(waitable->kind), waitable->signaled ? 1u : 0u,
             waitable->unconsumedSignals,
             static_cast<unsigned long long>(waitable->signalGeneration),
-            static_cast<unsigned long long>(waitable->pulseGeneration), currentLr);
+            static_cast<unsigned long long>(waitable->pulseGeneration), guestSignalState, currentLr);
         recordRuntimeTrace(event);
     }
     const auto logB98WaitResult = [&](uint32_t status, const char *reason) {
@@ -1601,6 +1675,7 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
         }
     };
     const auto ready = [&] {
+        (void)adoptGuestEventMemorySignalStateLocked(waitable);
         const bool available = waitable->kind == GuestWaitable::Kind::Semaphore
             ? waitable->semaphoreCount > 0
             : waitable->kind == GuestWaitable::Kind::Mutant
@@ -1616,6 +1691,7 @@ uint32_t waitGuestObject(const std::shared_ptr<GuestWaitable> &waitable,
     uint64_t lastSwapCount = 0;
     { std::lock_guard<std::mutex> graphicsLock(g_xenosMutex); lastSwapCount = g_xenosFrontend.swaps; }
     for (;;) {
+        (void)adoptGuestEventMemorySignalStateLocked(waitable);
         if (alertable && guestApcCanInterruptWait()) {
             lock.unlock(); const bool delivered = deliverPendingGuestApcs(); lock.lock();
             if (delivered) {
@@ -1729,6 +1805,7 @@ uint32_t waitGuestObjects(const std::vector<std::shared_ptr<GuestWaitable>> &wai
         for (size_t index = 0; index < waitables.size(); ++index) {
             if (!waitables[index]) return -2;
             std::lock_guard<std::mutex> objectLock(waitables[index]->mutex);
+            (void)adoptGuestEventMemorySignalStateLocked(waitables[index]);
             const auto &candidate = *waitables[index];
             const bool signaled = candidate.kind == GuestWaitable::Kind::Semaphore
                 ? candidate.semaphoreCount > 0
@@ -3133,10 +3210,24 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
             0x8236E738u, 0x82C3C5E8u, 0x82C3C4D8u, 0x82C3E928u,
             0x82C4D4A8u, 0x82427940u, 0x82370500u, 0x822A0278u
         };
+        static std::array<std::atomic<uint32_t>, 8> movieFlowHits{};
         for (size_t index = 0; index < kMoviePpcAddresses.size(); ++index) {
-            if (guestAddress != kMoviePpcAddresses[index] ||
-                g_b97MoviePpcDumped[index].exchange(true, std::memory_order_acq_rel))
-                continue;
+            if (guestAddress != kMoviePpcAddresses[index]) continue;
+            const uint32_t hit = movieFlowHits[index].fetch_add(1u, std::memory_order_relaxed) + 1u;
+            if (hit <= 16u) {
+                const uint32_t mediaOrder = g_b105MediaOrder.fetch_add(1u, std::memory_order_relaxed) + 1u;
+                char flow[512];
+                std::snprintf(flow, sizeof(flow),
+                    "B105_MOVIE_PPC_FLOW order=%u entry=0x%08X hit=%u tid=%u lr=0x%08X "
+                    "r3=0x%08X r4=0x%08X r5=0x%08X r6=0x%08X r7=0x%08X r8=0x%08X "
+                    "r10=0x%08X r30=0x%08X r31=0x%08X",
+                    mediaOrder, guestAddress, hit, g_currentGuestThreadId, static_cast<uint32_t>(ctx.lr),
+                    ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32,
+                    ctx.r8.u32, ctx.r10.u32, ctx.r30.u32, ctx.r31.u32);
+                recordRuntimeTrace(flow);
+            }
+            if (g_b97MoviePpcDumped[index].exchange(true, std::memory_order_acq_rel))
+                break;
             char event[512];
             std::snprintf(event, sizeof(event),
                 "B97_MOVIE_PPC pc=0x%08X tid=%u lr=0x%08X sp=0x%08X r3=0x%08X r4=0x%08X r5=0x%08X r6=0x%08X r7=0x%08X r8=0x%08X r9=0x%08X r10=0x%08X r11=0x%08X r12=0x%08X r30=0x%08X r31=0x%08X",
@@ -4303,7 +4394,7 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             const bool mapped = translateGuestFilePath(guestMovie, false, hostMovie);
             std::error_code ioError;
             const bool exists = mapped && std::filesystem::is_regular_file(hostMovie, ioError);
-            recordRuntimeTrace(std::string("XOWUE_MEDIA_INVENTORY guest=") + guestMovie +
+            recordRuntimeTrace(std::string("XOWUE_MEDIA_INVENTORY inventory_only=1 guest=") + guestMovie +
                                " mapped=" + (mapped ? "1" : "0") +
                                " present=" + (exists ? "1" : "0") +
                                " host=" + (mapped ? hostMovie.string() : "<rejected>"));
@@ -4336,7 +4427,7 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
                 if (movieAssetCount < 256u) {
                     char movieEvent[512];
                     std::snprintf(movieEvent, sizeof(movieEvent),
-                        "XOWUE_MEDIA_ENUM name=%s extension=%s bytes=%llu size_valid=%u",
+                        "XOWUE_MEDIA_ENUM inventory_only=1 name=%s extension=%s bytes=%llu size_valid=%u",
                         filename.c_str(), extension.c_str(),
                         static_cast<unsigned long long>(fileError ? 0u : bytes),
                         fileError ? 0u : 1u);
@@ -4345,7 +4436,7 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
                 ++movieAssetCount;
             }
         }
-        recordRuntimeTrace("XOWUE_MEDIA_ENUM_COMPLETE mapped=" +
+        recordRuntimeTrace("XOWUE_MEDIA_ENUM_COMPLETE inventory_only=1 playback_order=not_observed mapped=" +
             std::to_string(movieAnchorMapped ? 1u : 0u) +
             " count=" + std::to_string(movieAssetCount) +
             " loading_screen_final=" + std::to_string(hasFinalLoadingMovie ? 1u : 0u) +
@@ -6463,8 +6554,9 @@ static void writeGuestIoStatus(uint8_t *base, uint32_t address,
 
 static bool isStartupMoviePath(const std::string &guestPath) {
     const std::string lower = lowerGuestPath(guestPath);
-    if (lower.find("wgame/movies/") == std::string::npos) return false;
-    return lower.ends_with(".bik") || lower.ends_with(".xxx");
+    const bool movieDirectory = lower.find("wgame/movies/") != std::string::npos ||
+        lower.find("/movies/") != std::string::npos || lower.starts_with("movies/");
+    return movieDirectory && (lower.ends_with(".bik") || lower.ends_with(".xxx"));
 }
 
 static void logStartupMovieOpen(const char *api, const std::string &guestPath,
@@ -6475,12 +6567,18 @@ static void logStartupMovieOpen(const char *api, const std::string &guestPath,
     std::error_code ec;
     const bool present = mapped && std::filesystem::is_regular_file(hostPath, ec) && !ec;
     const uint64_t bytes = present ? std::filesystem::file_size(hostPath, ec) : 0u;
-    char event[512];
-    std::snprintf(event, sizeof(event),
-        "B86_MEDIA_OPEN api=%s guest=%s status=0x%08X handle=0x%08X mapped=%u present=%u bytes=%llu",
-        api, guestPath.c_str(), status, handle, mapped ? 1u : 0u, present ? 1u : 0u,
-        static_cast<unsigned long long>(ec ? 0u : bytes));
-    recordRuntimeTrace(event);
+    static std::atomic<uint32_t> mediaOpenLogs{0u};
+    const uint32_t mediaOrder = g_b105MediaOrder.fetch_add(1u, std::memory_order_relaxed) + 1u;
+    if (mediaOpenLogs.fetch_add(1u, std::memory_order_relaxed) < 128u) {
+        char event[640];
+        std::snprintf(event, sizeof(event),
+            "B86_MEDIA_OPEN B105_MEDIA_OPEN_ORDER order=%u api=%s guest=%s status=0x%08X "
+            "handle=0x%08X mapped=%u present=%u bytes=%llu",
+            mediaOrder, api, guestPath.c_str(), status, handle,
+            mapped ? 1u : 0u, present ? 1u : 0u,
+            static_cast<unsigned long long>(ec ? 0u : bytes));
+        recordRuntimeTrace(event);
+    }
 }
 
 static uint32_t createGuestFile(uint8_t *base, const std::string &guestPath,
@@ -8511,6 +8609,18 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
     std::transform(readExtension.begin(), readExtension.end(), readExtension.begin(),
         [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     if (readExtension == ".xxx" || readExtension == ".bik") {
+        static std::atomic<uint32_t> mediaReadLogs{0u};
+        const uint32_t mediaOrder = g_b105MediaOrder.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        if (mediaReadLogs.fetch_add(1u, std::memory_order_relaxed) < 256u) {
+            char mediaEvent[1024];
+            std::snprintf(mediaEvent, sizeof(mediaEvent),
+                "B105_MEDIA_READ_ORDER order=%u api=NtReadFile thread=%u handle=0x%08X "
+                "path=%s offset=0x%016llX requested=%u bytes=%u status=0x%08X async=%u",
+                mediaOrder, g_currentGuestThreadId, handle, file->path.string().c_str(),
+                static_cast<unsigned long long>(offset), length, bytesRead, readStatus,
+                asyncRead ? 1u : 0u);
+            recordRuntimeTrace(mediaEvent);
+        }
         const char *integrityTag = readExtension == ".xxx"
             ? "B92_XXX_INTEGRITY" : "B92_BIK_INTEGRITY";
         static std::atomic<uint64_t> s_xxxIntegrityLogCount{0u};
@@ -9071,7 +9181,9 @@ void xowue_NtReadFileScatter(PPCContext &context, uint8_t *base) {
     std::transform(ext.begin(), ext.end(), ext.begin(),
         [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     if (ext == ".bik") {
-        recordRuntimeTrace("B97_MOVIE_SCATTER handle=" + std::to_string(handle) +
+        const uint32_t mediaOrder = g_b105MediaOrder.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        recordRuntimeTrace("B97_MOVIE_SCATTER B105_MEDIA_READ_ORDER order=" + std::to_string(mediaOrder) +
+            " api=NtReadFileScatter handle=" + std::to_string(handle) +
             " path=" + file->path.string() + " offset=" + std::to_string(offset) +
             " requested=" + std::to_string(length) + " segments=" + std::to_string(segmentCount) +
             " segment_stride=4 first_segment=0x" + [&] { char v[9]; std::snprintf(v, sizeof(v), "%08X", firstSegment); return std::string(v); }() +

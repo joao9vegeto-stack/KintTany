@@ -100,6 +100,126 @@ private final class XOWUELandscapeHostingController: UIHostingController<XOWUEGa
 }
 
 @MainActor
+private final class XOWUELandscapePresentationCoordinator {
+    weak var presentedHost: XOWUELandscapeHostingController?
+    weak var presentingController: UIViewController?
+    var presentationPending = false
+
+    private func finishDismissal(of host: XOWUELandscapeHostingController) {
+        if presentedHost === host { presentedHost = nil }
+        presentingController = nil
+        presentationPending = false
+        XOWUEDiagnostics.log("orientation.host dismissal_completed tracked_host_cleared=1")
+    }
+
+    func dismissPresentedHost(fallback: UIViewController?) {
+        guard let host = presentedHost else {
+            XOWUEDiagnostics.log("orientation.host dismiss requested without tracked host pending=\(presentationPending)")
+            return
+        }
+        if let presenter = host.presentingViewController,
+           presenter.presentedViewController === host {
+            XOWUEDiagnostics.log("orientation.host dismiss exact_presenter=\(String(describing: type(of: presenter))) exact_host=1")
+            presenter.dismiss(animated: false) { [weak self, weak host] in
+                guard let self, let host else { return }
+                self.finishDismissal(of: host)
+            }
+            return
+        }
+        if let presenter = presentingController,
+           presenter.presentedViewController === host {
+            XOWUEDiagnostics.log("orientation.host dismiss retained_presenter=1 exact_host=1")
+            presenter.dismiss(animated: false) { [weak self, weak host] in
+                guard let self, let host else { return }
+                self.finishDismissal(of: host)
+            }
+            return
+        }
+        if let root = fallback?.view.window?.rootViewController,
+           root.presentedViewController === host {
+            XOWUEDiagnostics.log("orientation.host dismiss window_root=1 exact_host=1")
+            root.dismiss(animated: false) { [weak self, weak host] in
+                guard let self, let host else { return }
+                self.finishDismissal(of: host)
+            }
+            return
+        }
+        guard host.viewIfLoaded?.window != nil else {
+            XOWUEDiagnostics.log("orientation.host dismiss host_already_detached=1")
+            finishDismissal(of: host)
+            return
+        }
+        XOWUEDiagnostics.log("orientation.host dismiss fallback_on_tracked_host=1 presenter_missing=1")
+        host.dismiss(animated: false) { [weak self, weak host] in
+            guard let self, let host else { return }
+            self.finishDismissal(of: host)
+        }
+    }
+}
+
+@MainActor
+private struct XOWUELandscapePresenter: UIViewControllerRepresentable {
+    @ObservedObject var library: XOWUEGameLibrary
+
+    func makeCoordinator() -> XOWUELandscapePresentationCoordinator {
+        XOWUELandscapePresentationCoordinator()
+    }
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        let anchor = UIViewController()
+        anchor.view.backgroundColor = .clear
+        return anchor
+    }
+
+    func updateUIViewController(_ anchor: UIViewController, context: Context) {
+        let coordinator = context.coordinator
+        if library.gameSurfacePresented {
+            guard coordinator.presentedHost == nil, !coordinator.presentationPending else { return }
+            DispatchQueue.main.async {
+                guard library.gameSurfacePresented,
+                      anchor.view.window != nil,
+                      coordinator.presentedHost == nil,
+                      !coordinator.presentationPending else { return }
+                if anchor.presentedViewController != nil {
+                    XOWUEDiagnostics.log("orientation.host presentation_blocked anchor_presented=\(String(describing: anchor.presentedViewController))")
+                    return
+                }
+                XOWUEOrientationDelegate.effectiveMask = .landscapeRight
+                let host = XOWUELandscapeHostingController(
+                    rootView: XOWUEGameSurfaceScreen(library: library))
+                host.modalPresentationStyle = .fullScreen
+                coordinator.presentedHost = host
+                coordinator.presentingController = anchor
+                coordinator.presentationPending = true
+                XOWUEDiagnostics.log("orientation.host presenting supported=\(host.supportedInterfaceOrientations.rawValue) tracked=1")
+                anchor.present(host, animated: false) {
+                    coordinator.presentationPending = false
+                    XOWUEDiagnostics.log("orientation.host presentation_completed actual_presenter=\(String(describing: host.presentingViewController.map { type(of: $0) }))")
+                    host.setNeedsUpdateOfSupportedInterfaceOrientations()
+                    guard let scene = host.view.window?.windowScene else {
+                        XOWUEDiagnostics.log("orientation.host presented but windowScene unavailable")
+                        if !library.gameSurfacePresented {
+                            coordinator.dismissPresentedHost(fallback: anchor)
+                        }
+                        return
+                    }
+                    XOWUEOrientationDelegate.effectiveMask = .landscapeRight
+                    scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight)) { error in
+                        XOWUEDiagnostics.log("orientation.host geometry request failed: \(error.localizedDescription)")
+                    }
+                    if !library.gameSurfacePresented {
+                        coordinator.dismissPresentedHost(fallback: anchor)
+                    }
+                }
+            }
+        } else {
+            DispatchQueue.main.async {
+                guard !library.gameSurfacePresented else { return }
+                coordinator.dismissPresentedHost(fallback: anchor)
+            }
+        }
+    }
+}
 private struct XOWUELandscapePresenter: UIViewControllerRepresentable {
     @ObservedObject var library: XOWUEGameLibrary
 
@@ -1217,10 +1337,13 @@ private final class XOWUEGameLibrary: ObservableObject {
     }
 
     func requestExit() {
-        // Do not dismiss the game surface merely because cancellation was sent.
-        // runBoot owns the native call and dismisses only after xowue_boot_xex
-        // returns through its session guards (including PPC thread cleanup).
-        guard phase == .booting || gameSurfacePresented || exitRequested else { return }
+        // runBoot owns the native call; UIKit is dismissed only after the
+        // scheduler has returned and the session guard has joined guest threads.
+        guard phase == .booting || gameSurfacePresented else { return }
+        guard !exitRequested else {
+            XOWUEDiagnostics.log("runtime.stop duplicate request ignored")
+            return
+        }
         // A failed/stopped surface has no active boot call left to observe a
         // cancellation. Dismiss that already-finished session directly.
         if phase != .booting {
