@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Regression contract for exact UIKit dismissal and nonblocking Vulkan teardown."""
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = (ROOT / "iOS/App/XOWUEApp.swift").read_text(encoding="utf-8")
@@ -9,6 +10,11 @@ BACKEND = (ROOT / "iOS/App/XOWUEVulkanBackend.m").read_text(encoding="utf-8")
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
+
+require(len(re.findall(r"private struct XOWUELandscapePresenter: UIViewControllerRepresentable", APP)) == 1,
+        "there must be exactly one UIKit landscape presenter implementation")
+require(len(re.findall(r"private final class XOWUELandscapePresentationCoordinator", APP)) == 1,
+        "the exact-host presentation coordinator must have exactly one definition")
 
 require("private final class XOWUELandscapePresentationCoordinator" in APP,
         "the presenter must retain a reference to the exact game host")

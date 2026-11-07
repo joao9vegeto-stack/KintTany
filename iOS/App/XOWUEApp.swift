@@ -220,64 +220,6 @@ private struct XOWUELandscapePresenter: UIViewControllerRepresentable {
         }
     }
 }
-private struct XOWUELandscapePresenter: UIViewControllerRepresentable {
-    @ObservedObject var library: XOWUEGameLibrary
-
-    func makeUIViewController(context: Context) -> UIViewController {
-        let anchor = UIViewController()
-        anchor.view.backgroundColor = .clear
-        return anchor
-    }
-
-    func updateUIViewController(_ anchor: UIViewController, context: Context) {
-        if library.gameSurfacePresented {
-            guard anchor.presentedViewController == nil else { return }
-            DispatchQueue.main.async {
-                guard library.gameSurfacePresented,
-                      anchor.view.window != nil,
-                      anchor.presentedViewController == nil else { return }
-                XOWUEOrientationDelegate.effectiveMask = .landscapeRight
-                let host = XOWUELandscapeHostingController(
-                    rootView: XOWUEGameSurfaceScreen(library: library))
-                host.modalPresentationStyle = .fullScreen
-                XOWUEDiagnostics.log("orientation.host presenting supported=\(host.supportedInterfaceOrientations.rawValue)")
-                anchor.present(host, animated: false) {
-                    // Geometry requests made from SwiftUI onAppear can race the
-                    // UIKit presentation: iOS then validates against the still-
-                    // portrait root controller and rejects landscape. Request it
-                    // only after the real landscape host is attached.
-                    host.setNeedsUpdateOfSupportedInterfaceOrientations()
-                    guard let scene = host.view.window?.windowScene else {
-                        XOWUEDiagnostics.log("orientation.host presented but windowScene unavailable")
-                        return
-                    }
-                    XOWUEOrientationDelegate.effectiveMask = .landscapeRight
-                    scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight)) { error in
-                        XOWUEDiagnostics.log("orientation.host geometry request failed: \(error.localizedDescription)")
-                    }
-                }
-            }
-        } else {
-            // A full-screen controller presented by a UIViewControllerRepresentable
-            // may be forwarded by UIKit to the window root controller. In that case
-            // anchor.presentedViewController is nil, so dismissing only the anchor
-            // silently leaves the game surface on screen even though SwiftUI state
-            // has returned to the launcher.
-            DispatchQueue.main.async {
-                guard !library.gameSurfacePresented else { return }
-                if let root = anchor.view.window?.rootViewController,
-                   root.presentedViewController != nil {
-                    XOWUEDiagnostics.log("orientation.host dismissing root-presented game surface")
-                    root.dismiss(animated: false)
-                } else if anchor.presentedViewController != nil {
-                    XOWUEDiagnostics.log("orientation.host dismissing anchor-presented game surface")
-                    anchor.dismiss(animated: false)
-                }
-            }
-        }
-    }
-}
-
 @MainActor
 private struct XOWUEGameSurfaceScreen: View {
     @ObservedObject var library: XOWUEGameLibrary
