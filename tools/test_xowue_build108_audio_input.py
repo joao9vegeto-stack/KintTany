@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build 110 regression contract: audio, XAM input semantics, independent taps and game FPS."""
 from pathlib import Path
+from math import hypot
 
 engine = Path("Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
 audio = Path("iOS/App/XOWUEAudioBackend.mm").read_text(encoding="utf-8")
@@ -101,10 +102,24 @@ require("buttons &= ~mask" in app and "self.buttons |= mask" in app,
         "a second tap during the minimum hold must force a distinct up/down transition")
 require("triggerReleaseGeneration" in app and "self.leftTrigger = 255" in app,
         "short trigger taps must also preserve separate rapid touch edges")
-require("A/B/X/Y can no longer steal a neighbouring button's touch" in app,
-        "ABXY touch targets must be non-overlapping")
-require("size: 44).offset(y: -34)" in app and ".frame(width: 116, height: 116)" in app,
-        "ABXY geometry must leave disjoint hit areas for all four face buttons")
+face_button_positions = [
+    ".position(x: 58, y: 22)",  # Y
+    ".position(x: 58, y: 94)",  # A
+    ".position(x: 22, y: 58)",  # X
+    ".position(x: 94, y: 58)",  # B
+]
+require(all(position in app for position in face_button_positions) and
+        ".frame(width: 116, height: 116)" in app,
+        "ABXY must use four explicit final hit regions")
+face_button_centres = [(58, 22), (58, 94), (22, 58), (94, 58)]
+for index, first in enumerate(face_button_centres):
+    for second in face_button_centres[index + 1:]:
+        require(hypot(first[0] - second[0], first[1] - second[1]) >= 44,
+                "ABXY circular touch targets must not overlap")
+require("XOWUEButtonTouchSurface" in app and
+        "override func touchesBegan(" in app and
+        "override func touchesEnded(" in app,
+        "ABXY must use explicit UIKit touch lifetimes, not overlapping drag recognizers")
 require("buttonReleaseGeneration[mask, default: 0] &+= 1" in app,
         "repeated taps must invalidate only the same button's pending release")
 require("maximumDepth = 5" in app and "maximumDirectories = 4096" in app and "enumerator.skipDescendants()" in app,

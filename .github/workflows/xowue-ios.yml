@@ -256,11 +256,17 @@ jobs:
           python3 -m py_compile tools/test_xowue_build108_audio_input.py
           python3 tools/test_xowue_build108_audio_input.py
 
-      - name: Verify Build 113-compatible Xbox 360 RTL critical sections
+      - name: Verify cancellable Xbox 360 RTL critical sections
         run: |
           set -euo pipefail
           python3 -m py_compile tools/test_xowue_critical_sections.py
           python3 tools/test_xowue_critical_sections.py
+
+      - name: Verify Build 117 UIKit input, exit and Bink EOF correlation
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/test_xowue_build117_input_exit_media.py
+          python3 tools/test_xowue_build117_input_exit_media.py
 
       - name: Verify XAM input imports reach native touch handlers
         run: |

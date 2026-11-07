@@ -258,8 +258,6 @@ private struct XOWUEGameSurfaceScreen: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            // Keep the actual 1280x720 game aspect. The iPhone's extra-wide
-            // landscape screen must letterbox, never stretch/crop Xbox pixels.
             GeometryReader { canvas in
                 XOWUEVulkanSurface()
                     .frame(
@@ -272,98 +270,86 @@ private struct XOWUEGameSurfaceScreen: View {
             if !showsBootFailure {
                 XOWUETouchControllerHUD(input: touchController)
             }
-
-            VStack(spacing: 0) {
-                HStack {
-                    Button {
-                        XOWUEDiagnostics.log("navigation.exit tapped: terminating native PPC")
-                        touchController.releaseAll()
-                        library.requestExit()
-                    } label: {
-                        Label("SAIR", systemImage: "power")
-                            .font(.system(size: 11, weight: .heavy, design: .rounded))
-                            .tracking(0.6)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(.black.opacity(0.78), in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .contentShape(Capsule())
-                    .zIndex(1000)
-
-                    Spacer()
-
-                    Text("X-MEN ORIGINS · KOSMICKRISP")
-                        .font(.system(size: 9, weight: .heavy, design: .monospaced))
-                        .tracking(0.7)
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 10)
-                        .background(.black.opacity(0.72), in: Capsule())
-                }
-
-                Spacer()
-
-                if showsBootFailure {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(library.status)
-                            .font(.system(size: 16, weight: .bold, design: .rounded))
-                        Text(library.detail)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white.opacity(0.78))
-                        if !bootSummary.isEmpty {
-                            Text(bootSummary)
-                                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.78))
-                                .lineLimit(4)
-                                .textSelection(.enabled)
-                        }
-                        Button("SAIR DO JOGO") {
-                            library.requestExit()
-                        }
-                        .font(.system(size: 11, weight: .heavy, design: .rounded))
-                        .padding(.top, 4)
-                    }
-                    .foregroundStyle(.white)
-                    .padding(16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.black.opacity(0.88), in: RoundedRectangle(cornerRadius: 16))
-                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.12), lineWidth: 1))
-                } else if library.phase == .booting && showBootHint {
-                    Text(library.status)
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.8))
-                        .padding(.horizontal, 13)
-                        .padding(.vertical, 9)
-                        .background(.black.opacity(0.72), in: Capsule())
-                }
+        }
+        // Keep SAIR in a small independent hit-test region. The former full-
+        // screen VStack/Spacer sat above the HUD and intercepted transparent areas.
+        .overlay(alignment: .topLeading) {
+            Button {
+                XOWUEDiagnostics.log("navigation.exit tapped: terminating native PPC")
+                touchController.releaseAll()
+                library.requestExit()
+            } label: {
+                Label("SAIR", systemImage: "power")
+                    .font(.system(size: 11, weight: .heavy, design: .rounded))
+                    .tracking(0.6)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(.black.opacity(0.78), in: Capsule())
             }
-            .padding(.horizontal, 16)
+            .buttonStyle(.plain)
+            .contentShape(Capsule())
+            .padding(.leading, 16)
             .padding(.top, 14)
-            .padding(.bottom, showsBootFailure ? 218 : 22)
+        }
+        .overlay(alignment: .topTrailing) {
+            Text("X-MEN ORIGINS · KOSMICKRISP")
+                .font(.system(size: 9, weight: .heavy, design: .monospaced))
+                .tracking(0.7)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 10)
+                .background(.black.opacity(0.72), in: Capsule())
+                .padding(.trailing, 16)
+                .padding(.top, 14)
+                .allowsHitTesting(false)
+        }
+        .overlay(alignment: .center) {
+            if showsBootFailure {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(library.status)
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                    Text(library.detail)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.78))
+                    if !bootSummary.isEmpty {
+                        Text(bootSummary)
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.78))
+                            .lineLimit(4)
+                            .textSelection(.enabled)
+                    }
+                    Button("SAIR DO JOGO") {
+                        XOWUEDiagnostics.log("navigation.exit.failure-card tapped")
+                        library.requestExit()
+                    }
+                    .font(.system(size: 11, weight: .heavy, design: .rounded))
+                    .padding(.top, 4)
+                }
+                .foregroundStyle(.white)
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.black.opacity(0.88), in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.12), lineWidth: 1))
+                .padding(.horizontal, 16)
+            } else if library.phase == .booting && showBootHint {
+                Text(library.status)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.8))
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 9)
+                    .background(.black.opacity(0.72), in: Capsule())
+                    .allowsHitTesting(false)
+            }
         }
         .background(.black)
-        // Full-screen canvas: safe-area insets must not shrink the guest 16:9 frame.
         .ignoresSafeArea(.all)
         .preferredColorScheme(.dark)
         .statusBarHidden(true)
         .onDisappear {
             touchController.releaseAll()
-            // The UIKit landscape presenter owns orientation transitions.
-            // Requesting portrait here races dismissal and can leave the
-            // window scene advertising portrait while the game host is active.
             library.requestExit()
         }
         .onAppear {
-            // Orientation is requested only by XOWUELandscapePresenter after
-            // the landscape-only controller is attached to the active scene.
-            // A SwiftUI onAppear request is too early on iOS 26 and is rejected
-            // against the portrait root controller. Keep the exact orientation
-            // entry points documented for the source-validation workflow:
-            // requestOrientation(.landscapeRight) is owned by the presenter;
-            // requestOrientation(.portrait) is intentionally not called here,
-            // because dismissal restores the library's portrait host.
-            // setNeedsUpdateOfSupportedInterfaceOrientations is called by the
-            // presenter only after the landscape host has actually been attached.
+            // The presenter owns orientation; only remove the temporary boot hint here.
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
                 withAnimation(.easeOut(duration: 0.2)) { self.showBootHint = false }
             }
@@ -596,6 +582,141 @@ private struct XOWUETouchControllerHUD: View {
     }
 }
 
+private struct XOWUEButtonTouchSurface: UIViewRepresentable {
+    let circular: Bool
+    let onPress: (Bool) -> Void
+
+    func makeUIView(context: Context) -> XOWUEPressSurfaceView {
+        let view = XOWUEPressSurfaceView()
+        view.circularHitTest = circular
+        view.onPress = onPress
+        return view
+    }
+
+    func updateUIView(_ view: XOWUEPressSurfaceView, context: Context) {
+        view.circularHitTest = circular
+        view.onPress = onPress
+    }
+}
+
+private final class XOWUEPressSurfaceView: UIView {
+    var circularHitTest = true
+    var onPress: ((Bool) -> Void)?
+    private var activeTouches = Set<UITouch>()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isOpaque = false
+        isMultipleTouchEnabled = true
+        isExclusiveTouch = false
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        backgroundColor = .clear
+        isOpaque = false
+        isMultipleTouchEnabled = true
+        isExclusiveTouch = false
+    }
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        guard circularHitTest else { return bounds.contains(point) }
+        let radius = min(bounds.width, bounds.height) * 0.5
+        return hypot(point.x - bounds.midX, point.y - bounds.midY) <= radius
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        let wasEmpty = activeTouches.isEmpty
+        for touch in touches { activeTouches.insert(touch) }
+        if wasEmpty && !activeTouches.isEmpty { onPress?(true) }
+    }
+
+    private func finish(_ touches: Set<UITouch>) {
+        for touch in touches { activeTouches.remove(touch) }
+        if activeTouches.isEmpty { onPress?(false) }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        finish(touches)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        finish(touches)
+    }
+}
+
+private struct XOWUEStickTouchSurface: UIViewRepresentable {
+    let onChange: (CGFloat, CGFloat, Bool) -> Void
+
+    func makeUIView(context: Context) -> XOWUEStickSurfaceView {
+        let view = XOWUEStickSurfaceView()
+        view.onChange = onChange
+        return view
+    }
+
+    func updateUIView(_ view: XOWUEStickSurfaceView, context: Context) {
+        view.onChange = onChange
+    }
+}
+
+private final class XOWUEStickSurfaceView: UIView {
+    var onChange: ((CGFloat, CGFloat, Bool) -> Void)?
+    private var activeTouch: UITouch?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isOpaque = false
+        isMultipleTouchEnabled = true
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        backgroundColor = .clear
+        isOpaque = false
+        isMultipleTouchEnabled = true
+    }
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        let radius = min(bounds.width, bounds.height) * 0.5
+        return hypot(point.x - bounds.midX, point.y - bounds.midY) <= radius
+    }
+
+    private func emit(_ touch: UITouch, active: Bool) {
+        let radius = max(1, min(bounds.width, bounds.height) * 0.34)
+        let point = touch.location(in: self)
+        let dx = min(radius, max(-radius, point.x - bounds.midX)) / radius
+        let dy = min(radius, max(-radius, point.y - bounds.midY)) / radius
+        onChange?(dx, -dy, active)
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard activeTouch == nil, let touch = touches.first else { return }
+        activeTouch = touch
+        emit(touch, active: true)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let activeTouch, touches.contains(activeTouch) else { return }
+        emit(activeTouch, active: true)
+    }
+
+    private func finish(_ touches: Set<UITouch>) {
+        guard let activeTouch, touches.contains(activeTouch) else { return }
+        self.activeTouch = nil
+        onChange?(0, 0, false)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        finish(touches)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        finish(touches)
+    }
+}
+
 private struct XOWUETouchButton: View {
     let title: String
     let mask: UInt32
@@ -606,19 +727,25 @@ private struct XOWUETouchButton: View {
     private var isPressed: Bool { input.buttons & mask != 0 }
 
     var body: some View {
-        Text(title)
-            .font(.system(size: compact ? 8 : 13, weight: .black, design: .rounded))
-            .tracking(compact ? 0.2 : 0.4)
-            .foregroundStyle(isPressed ? Color.black : Color.white)
-            .frame(width: size, height: size)
-            .background(isPressed ? XOWUEPalette.yellow : Color.white.opacity(0.2), in: Circle())
-            .overlay(Circle().stroke(.white.opacity(0.58), lineWidth: 1.2))
-            .shadow(color: .black.opacity(0.3), radius: 5, y: 2)
-            .contentShape(Circle())
-            .gesture(DragGesture(minimumDistance: 0)
-                .onChanged { _ in input.setButton(mask, pressed: true) }
-                .onEnded { _ in input.setButton(mask, pressed: false) })
-            .accessibilityLabel(title)
+        ZStack {
+            Circle().fill(isPressed ? XOWUEPalette.yellow : Color.white.opacity(0.2))
+            Circle().stroke(.white.opacity(0.58), lineWidth: 1.2)
+            Text(title)
+                .font(.system(size: compact ? 8 : 13, weight: .black, design: .rounded))
+                .tracking(compact ? 0.2 : 0.4)
+                .foregroundStyle(isPressed ? Color.black : Color.white)
+                .allowsHitTesting(false)
+            XOWUEButtonTouchSurface(circular: true) { pressed in
+                input.setButton(mask, pressed: pressed)
+                XOWUEDiagnostics.logInput(
+                    "XOWUE_TOUCH_EDGE title=\(title) mask=0x\(String(mask, radix: 16)) pressed=\(pressed)"
+                )
+            }
+        }
+        .frame(width: size, height: size)
+        .shadow(color: .black.opacity(0.3), radius: 5, y: 2)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
     }
 }
 
@@ -628,16 +755,20 @@ private struct XOWUETouchTrigger: View {
     @ObservedObject var input: XOWUETouchController
 
     var body: some View {
-        Text(title)
-            .font(.system(size: 10, weight: .black, design: .rounded))
-            .foregroundStyle(.white)
-            .frame(width: 44, height: 34)
-            .background(.white.opacity(0.2), in: RoundedRectangle(cornerRadius: 11))
-            .overlay(RoundedRectangle(cornerRadius: 11).stroke(.white.opacity(0.56), lineWidth: 1))
-            .gesture(DragGesture(minimumDistance: 0)
-                .onChanged { _ in input.setTrigger(left: left, pressed: true) }
-                .onEnded { _ in input.setTrigger(left: left, pressed: false) })
-            .accessibilityLabel(title == "L2" ? "Gatilho esquerdo" : "Gatilho direito")
+        ZStack {
+            RoundedRectangle(cornerRadius: 11).fill(.white.opacity(0.2))
+            RoundedRectangle(cornerRadius: 11).stroke(.white.opacity(0.56), lineWidth: 1)
+            Text(title)
+                .font(.system(size: 10, weight: .black, design: .rounded))
+                .foregroundStyle(.white)
+                .allowsHitTesting(false)
+            XOWUEButtonTouchSurface(circular: false) { pressed in
+                input.setTrigger(left: left, pressed: pressed)
+            }
+        }
+        .frame(width: 44, height: 34)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title == "L2" ? "Gatilho esquerdo" : "Gatilho direito")
     }
 }
 
@@ -657,22 +788,15 @@ private struct XOWUETouchStick: View {
                 .overlay(Circle().stroke(.white.opacity(0.7), lineWidth: 1))
                 .frame(width: size * 0.43, height: size * 0.43)
                 .offset(offset)
+            XOWUEStickTouchSurface { x, y, active in
+                offset = active ? CGSize(width: x * radius, height: -y * radius) : .zero
+                input.setStick(left: left, x: active ? x : 0, y: active ? y : 0)
+            }
         }
         .frame(width: size, height: size)
         .shadow(color: .black.opacity(0.3), radius: 5, y: 2)
-        .contentShape(Circle())
-        .gesture(DragGesture(minimumDistance: 0)
-            .onChanged { value in
-                let dx = min(radius, max(-radius, value.translation.width))
-                let dy = min(radius, max(-radius, value.translation.height))
-                offset = CGSize(width: dx, height: dy)
-                input.setStick(left: left, x: dx / radius, y: -dy / radius)
-            }
-            .onEnded { _ in
-                offset = .zero
-                input.setStick(left: left, x: 0, y: 0)
-            })
-            .accessibilityLabel(left ? "Alavanca esquerda" : "Alavanca direita")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(left ? "Alavanca esquerda" : "Alavanca direita")
     }
 }
 
@@ -682,13 +806,13 @@ private struct XOWUETouchDPad: View {
     var body: some View {
         ZStack {
             XOWUETouchButton(title: "↑", mask: XOWUEGamepadButton.up, input: input, size: 27)
-                .offset(y: -22)
+                .position(x: 38, y: 14)
             XOWUETouchButton(title: "↓", mask: XOWUEGamepadButton.down, input: input, size: 27)
-                .offset(y: 22)
+                .position(x: 38, y: 48)
             XOWUETouchButton(title: "←", mask: XOWUEGamepadButton.left, input: input, size: 27)
-                .offset(x: -22)
+                .position(x: 14, y: 31)
             XOWUETouchButton(title: "→", mask: XOWUEGamepadButton.right, input: input, size: 27)
-                .offset(x: 22)
+                .position(x: 62, y: 31)
         }
         .frame(width: 76, height: 62)
         .accessibilityElement(children: .contain)
@@ -701,12 +825,16 @@ private struct XOWUETouchABXY: View {
 
     var body: some View {
         ZStack {
-            // A/B/X/Y can no longer steal a neighbouring button's touch.
-            // Centre spacing exceeds the hit-circle diameter.
-            XOWUETouchButton(title: "Y", mask: XOWUEGamepadButton.y, input: input, size: 44).offset(y: -34)
-            XOWUETouchButton(title: "A", mask: XOWUEGamepadButton.a, input: input, size: 44).offset(y: 34)
-            XOWUETouchButton(title: "X", mask: XOWUEGamepadButton.x, input: input, size: 44).offset(x: -34)
-            XOWUETouchButton(title: "B", mask: XOWUEGamepadButton.b, input: input, size: 44).offset(x: 34)
+            // Final coordinates define each circle's displayed and hit-tested frame.
+            // Adjacent centres are 50.9pt apart, outside each 44pt hit diameter.
+            XOWUETouchButton(title: "Y", mask: XOWUEGamepadButton.y, input: input, size: 44)
+                .position(x: 58, y: 22)
+            XOWUETouchButton(title: "A", mask: XOWUEGamepadButton.a, input: input, size: 44)
+                .position(x: 58, y: 94)
+            XOWUETouchButton(title: "X", mask: XOWUEGamepadButton.x, input: input, size: 44)
+                .position(x: 22, y: 58)
+            XOWUETouchButton(title: "B", mask: XOWUEGamepadButton.b, input: input, size: 44)
+                .position(x: 94, y: 58)
         }
         .frame(width: 116, height: 116)
         .accessibilityElement(children: .contain)

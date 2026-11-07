@@ -29,14 +29,14 @@ def function_body(name):
     raise AssertionError(f"{name} body has unbalanced braces")
 
 
-# Build 113.7's known-running implementation serialized each guest RTL
+# Build 113.7 guest RTL semantics are retained with cancellation-aware host locking for
 # critical section with a recursive mutex. It did not create an Event object
 # from the same guest address or park a PPC worker in waitGuestObject().
 require("std::mutex g_criticalSectionMapMutex;" in ENGINE,
         "critical-section map mutex must remain present")
-require("std::unordered_map<uint32_t, std::shared_ptr<std::recursive_mutex>> g_criticalSectionLocks;" in ENGINE,
-        "Build 113 recursive-mutex map must remain present")
-require("std::shared_ptr<std::recursive_mutex> criticalSectionLock(uint32_t address)" in ENGINE,
+require("std::unordered_map<uint32_t, std::shared_ptr<std::recursive_timed_mutex>> g_criticalSectionLocks;" in ENGINE,
+        "recursive timed-mutex map must remain present")
+require("std::shared_ptr<std::recursive_timed_mutex> criticalSectionLock(uint32_t address)" in ENGINE,
         "guest RTL critical-section host lock helper must remain present")
 
 # Generic pointer waitables must never reinterpret a known RTL critical
@@ -65,7 +65,7 @@ for name, body in [
     ("RtlLeaveCriticalSection", leave),
 ]:
     require("criticalSectionLock(address)" in body,
-            f"{name} must use the Build 113 per-address recursive mutex")
+            f"{name} must use the per-address recursive timed mutex")
     for forbidden in (
         "waitGuestObject(", "signalGuestWaitable(",
         "atomicCompareExchangeGuestBe32(", "initialiseGuestCriticalSection("
@@ -73,7 +73,11 @@ for name, body in [
         require(forbidden not in body,
                 f"{name} must not route RTL lock semantics through {forbidden}")
 
-require("sectionLock->lock();" in enter and "owner == g_currentGuestThreadId" in enter,
+require("sectionLock->try_lock_for(std::chrono::milliseconds(10))" in enter,
+        "RtlEnter must wait in cancellable 10ms intervals")
+require("g_schedulerStopRequested.load(std::memory_order_acquire)" in enter,
+        "RtlEnter must unwind after native scheduler cancellation")
+require("owner == g_currentGuestThreadId" in enter,
         "RtlEnter must preserve same-thread recursion and host-lock serialization")
 require("sectionLock->try_lock()" in try_enter and "context.r3.u32 = 0u;" in try_enter,
         "RtlTryEnter must return false immediately on contention")

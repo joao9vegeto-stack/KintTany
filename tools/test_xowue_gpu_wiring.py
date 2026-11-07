@@ -72,7 +72,7 @@ critical=engine[engine.index("void xowue_RtlTryEnterCriticalSection"):engine.ind
 assert "criticalSectionLock(address)" in critical
 assert "sectionLock->try_lock()" in critical
 assert "owner == g_currentGuestThreadId" in critical
-assert "std::recursive_mutex" in engine
+assert "std::recursive_timed_mutex" in engine
 assert "atomicCompareExchangeGuestBe32" not in critical
 assert "waitGuestObject(" not in critical
 assert "shouldTraceCriticalSectionContention" in critical
@@ -197,7 +197,8 @@ assert "Task.detached(priority: .userInitiated)" in request_exit
 assert "gameSurfacePresented = false" in request_exit
 assert request_exit.index("if phase != .booting") < request_exit.index("gameSurfacePresented = false") < request_exit.index("xowue_request_stop()")
 assert "Aguardando o retorno do boot e a finalização das threads PPC." in request_exit
-assert ".zIndex(1000)" in ui
+assert '.overlay(alignment: .topLeading)' in ui
+assert 'navigation.exit tapped: terminating native PPC' in ui
 assert vulkan.count("UILabel *_fpsLabel;") == 1
 assert "g_xowue_guest_frame_count" in vulkan
 assert "XOWUE_GAME_FPS fps=" in vulkan

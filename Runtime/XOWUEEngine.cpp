@@ -263,6 +263,12 @@ struct GuestFile {
     std::vector<std::filesystem::path> entries;
     size_t directoryCursor = 0;
     std::shared_ptr<GuestWaitable> completion;
+    // Preserve the last transfer result until its guest completion signal fires.
+    std::atomic<uint64_t> lastReadSequence{0u};
+    std::atomic<uint64_t> lastReadOffset{0u};
+    std::atomic<uint32_t> lastReadBytes{0u};
+    std::atomic<uint32_t> lastReadStatus{0u};
+    std::atomic<bool> lastReadEof{false};
     std::mutex mutex;
 };
 struct GuestApc {
@@ -596,7 +602,7 @@ std::atomic<uint64_t> g_xaudioCallbackAttempts{0u};
 std::atomic<uint64_t> g_xaudioCallbackCount{0u};
 std::atomic<uint64_t> g_xaudioFrameCount{0u};
 std::atomic<uint32_t> g_xaudioTraceLogs{0u};
-std::unordered_map<uint32_t, std::shared_ptr<std::recursive_mutex>> g_criticalSectionLocks;
+std::unordered_map<uint32_t, std::shared_ptr<std::recursive_timed_mutex>> g_criticalSectionLocks;
 XenosFrontendState g_xenosFrontend;
 std::atomic<bool> g_schedulerStopRequested{false};
 std::atomic<bool> g_runtimeSessionPoisoned{false};
@@ -650,10 +656,13 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
         return g_runtimeTracePersistB86Stream.fetch_add(1, std::memory_order_relaxed) < 64u;
     if (event.find("B86_MEDIA_OPEN") != std::string::npos)
         return g_runtimeTracePersistB86Media.fetch_add(1, std::memory_order_relaxed) < 128u;
-    if (event.find("B94_STREAM_CONTEXT_WORD") != std::string::npos) {
+    if (event.find("B94_STREAM_CONTEXT_WORD") != std::string::npos ||
+        event.find("B94_STREAM_R10_WORD") != std::string::npos) {
         static std::atomic<uint32_t> count{0u};
-        return count.fetch_add(1u, std::memory_order_relaxed) < 128u;
+        return count.fetch_add(1u, std::memory_order_relaxed) < 512u;
     }
+    if (event.find("B99_MEDIA_EOF_COMPLETION") != std::string::npos ||
+        event.find("B99_BIK_EOF_COMPLETION") != std::string::npos) return true;
     if (event.find("B94_STREAM_CONTEXT") != std::string::npos) {
         static std::atomic<uint32_t> count{0u};
         return count.fetch_add(1u, std::memory_order_relaxed) < 64u;
@@ -2016,15 +2025,29 @@ struct GuestFileCompletionSignalOnReturn final {
         std::string ext = file->path.extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(),
             [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (ext == ".bik") {
+        if (ext == ".bik" || ext == ".xxx") {
             static std::atomic<uint32_t> logs{0u};
             const uint32_t sample = logs.fetch_add(1u, std::memory_order_relaxed) + 1u;
+            uint64_t generation = 0u;
+            {
+                std::lock_guard<std::mutex> lock(file->completion->mutex);
+                generation = file->completion->signalGeneration;
+            }
+            if (file->lastReadEof.load(std::memory_order_acquire)) {
+                char eofEvent[768];
+                std::snprintf(eofEvent, sizeof(eofEvent),
+                    "B99_MEDIA_EOF_COMPLETION kind=%s handle=0x%08X object=0x%08X generation=%llu read_seq=%llu offset=0x%llX bytes=%u status=0x%08X path=%s",
+                    ext.c_str(), file->completion->handle, file->completion->objectAddress,
+                    static_cast<unsigned long long>(generation),
+                    static_cast<unsigned long long>(file->lastReadSequence.load(std::memory_order_relaxed)),
+                    static_cast<unsigned long long>(file->lastReadOffset.load(std::memory_order_relaxed)),
+                    file->lastReadBytes.load(std::memory_order_relaxed),
+                    file->lastReadStatus.load(std::memory_order_relaxed),
+                    file->path.string().c_str());
+                recordRuntimeTrace(eofEvent);
+                if (ext == ".bik") recordRuntimeTrace("B99_BIK_EOF_COMPLETION emitted after file signal");
+            }
             if (sample <= 24u || (sample % 512u) == 0u) {
-                uint64_t generation = 0u;
-                {
-                    std::lock_guard<std::mutex> lock(file->completion->mutex);
-                    generation = file->completion->signalGeneration;
-                }
                 char event[512];
                 std::snprintf(event, sizeof(event),
                     "B99_FILE_COMPLETION_SIGNAL sample=%u handle=0x%08X object=0x%08X generation=%llu path=%s",
@@ -2041,10 +2064,10 @@ struct GuestFileCompletionSignalOnReturn final {
 };
 
 
-std::shared_ptr<std::recursive_mutex> criticalSectionLock(uint32_t address) {
+std::shared_ptr<std::recursive_timed_mutex> criticalSectionLock(uint32_t address) {
     std::lock_guard<std::mutex> lock(g_criticalSectionMapMutex);
     auto &entry = g_criticalSectionLocks[address];
-    if (!entry) entry = std::make_shared<std::recursive_mutex>();
+    if (!entry) entry = std::make_shared<std::recursive_timed_mutex>();
     return entry;
 }
 
@@ -3476,21 +3499,37 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
             validGuestRange(ctx.r31.u32, 0xC0u)) {
             static std::atomic<uint32_t> b94ContextSamples{0u};
             const uint32_t sample = b94ContextSamples.fetch_add(1u, std::memory_order_relaxed);
-            if (sample == 0u || (calls & 0xFFFFu) == 0u) {
-                char contextEvent[320];
+            static thread_local bool threadContextDumped = false;
+            if (!threadContextDumped || (calls & 0x3FFFFu) == 0u) {
+                threadContextDumped = true;
+                char contextEvent[384];
                 std::snprintf(contextEvent, sizeof(contextEvent),
                     "B94_STREAM_CONTEXT sample=%u thread=%u lr=0x%08X r3=0x%08X r4=0x%08X r5=0x%08X "
-                    "r6=0x%08X r7=0x%08X r8=0x%08X r9=0x%08X r10=0x%08X r31=0x%08X valid=1",
+                    "r6=0x%08X r7=0x%08X r8=0x%08X r9=0x%08X r10=0x%08X r31=0x%08X object=0x%08X",
                     sample, static_cast<uint32_t>(g_currentGuestThreadId),
                     static_cast<uint32_t>(ctx.lr), ctx.r3.u32, ctx.r4.u32, ctx.r5.u32,
-                    ctx.r6.u32, ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32, ctx.r31.u32);
+                    ctx.r6.u32, ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32, ctx.r31.u32,
+                    ctx.r31.u32);
                 recordRuntimeTrace(contextEvent);
                 for (uint32_t i = 0; i < 48u; ++i) {
                     char wordEvent[128];
                     std::snprintf(wordEvent, sizeof(wordEvent),
-                        "B94_STREAM_CONTEXT_WORD offset=0x%02X value=0x%08X",
-                        i * 4u, loadGuestBe32(guestBase, ctx.r31.u32 + i * 4u));
+                        "B94_STREAM_CONTEXT_WORD thread=%u offset=0x%02X value=0x%08X",
+                        static_cast<uint32_t>(g_currentGuestThreadId), i * 4u,
+                        loadGuestBe32(guestBase, ctx.r31.u32 + i * 4u));
                     recordRuntimeTrace(wordEvent);
+                }
+                // r10 becomes 0x403709E0 on the stuck thread-11 stream path.
+                if (ctx.r10.u32 >= 0x10000000u && (ctx.r10.u32 & 3u) == 0u &&
+                    validGuestRange(ctx.r10.u32, 0x40u)) {
+                    for (uint32_t i = 0; i < 16u; ++i) {
+                        char targetEvent[144];
+                        std::snprintf(targetEvent, sizeof(targetEvent),
+                            "B94_STREAM_R10_WORD thread=%u base=0x%08X offset=0x%02X value=0x%08X",
+                            static_cast<uint32_t>(g_currentGuestThreadId), ctx.r10.u32, i * 4u,
+                            loadGuestBe32(guestBase, ctx.r10.u32 + i * 4u));
+                        recordRuntimeTrace(targetEvent);
+                    }
                 }
             }
         }
@@ -8627,14 +8666,27 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
     std::transform(readExtension.begin(), readExtension.end(), readExtension.begin(),
         [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     if (readExtension == ".xxx" || readExtension == ".bik") {
-        static std::atomic<uint32_t> mediaReadLogs{0u};
         const uint32_t mediaOrder = g_b105MediaOrder.fetch_add(1u, std::memory_order_relaxed) + 1u;
-        if (mediaReadLogs.fetch_add(1u, std::memory_order_relaxed) < 256u) {
-            char mediaEvent[1024];
+        static std::mutex perMediaReadMutex;
+        static std::unordered_map<std::string, uint32_t> perMediaReadCounts;
+        const std::string mediaPath = file->path.string();
+        uint32_t pathReadIndex = 0u;
+        {
+            std::lock_guard<std::mutex> lock(perMediaReadMutex);
+            pathReadIndex = ++perMediaReadCounts[mediaPath];
+        }
+        const bool readReachedEof = file->lastReadEof.load(std::memory_order_acquire);
+        // The old global cap of 256 chunks was consumed by ravenlogo.bik
+        // before later title logos were reached. Sample each media path on its
+        // own and always preserve EOF, short-read and failure transitions.
+        if (pathReadIndex <= 2u || readReachedEof ||
+            readStatus != kNtStatusSuccess || bytesRead < length) {
+            char mediaEvent[1152];
             std::snprintf(mediaEvent, sizeof(mediaEvent),
-                "B105_MEDIA_READ_ORDER order=%u api=NtReadFile thread=%u handle=0x%08X "
+                "B105_MEDIA_READ_ORDER order=%u path_read=%u eof=%u api=NtReadFile thread=%u handle=0x%08X "
                 "path=%s offset=0x%016llX requested=%u bytes=%u status=0x%08X async=%u",
-                mediaOrder, g_currentGuestThreadId, handle, file->path.string().c_str(),
+                mediaOrder, pathReadIndex, readReachedEof ? 1u : 0u,
+                g_currentGuestThreadId, handle, mediaPath.c_str(),
                 static_cast<unsigned long long>(offset), length, bytesRead, readStatus,
                 asyncRead ? 1u : 0u);
             recordRuntimeTrace(mediaEvent);
@@ -8735,6 +8787,11 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
                 readStatus, readEof ? 1u : 0u, readFailed ? 1u : 0u, readBad ? 1u : 0u);
             recordRuntimeTrace(event);
         }
+        file->lastReadSequence.fetch_add(1u, std::memory_order_relaxed);
+        file->lastReadOffset.store(offset, std::memory_order_relaxed);
+        file->lastReadBytes.store(bytesRead, std::memory_order_relaxed);
+        file->lastReadStatus.store(readStatus, std::memory_order_relaxed);
+        file->lastReadEof.store(readEof, std::memory_order_release);
         result.status = readStatus;
         result.bytesRead = bytesRead;
         result.offset = offset;
@@ -9585,7 +9642,7 @@ void xowue_RtlInitializeCriticalSection(PPCContext &context, uint8_t *base) {
         throw std::runtime_error("RtlInitializeCriticalSection recebeu endereço fora da memória convidada");
     }
     auto sectionLock = criticalSectionLock(address);
-    std::lock_guard<std::recursive_mutex> held(*sectionLock);
+    std::lock_guard<std::recursive_timed_mutex> held(*sectionLock);
     std::memset(base + address, 0, kXboxCriticalSectionSize);
     base[address] = 1; // X_DISPATCH_HEADER.type = EventSynchronizationObject.
     PPC_STORE_U32(address + 0x10, 0xFFFFFFFFu); // lock_count = -1.
@@ -9605,7 +9662,7 @@ void xowue_RtlInitializeCriticalSectionAndSpinCount(PPCContext &context, uint8_t
     }
     const uint32_t packedSpinCount = std::min<uint32_t>((spinCount + 255u) >> 8, 255u);
     auto sectionLock = criticalSectionLock(address);
-    std::lock_guard<std::recursive_mutex> held(*sectionLock);
+    std::lock_guard<std::recursive_timed_mutex> held(*sectionLock);
     std::memset(base + address, 0, kXboxCriticalSectionSize);
     base[address] = 1;
     base[address + 1] = static_cast<uint8_t>(packedSpinCount);
@@ -9626,7 +9683,14 @@ void xowue_RtlEnterCriticalSection(PPCContext &context, uint8_t *base) {
         throw std::runtime_error("RtlEnterCriticalSection recebeu endereço inválido");
     }
     auto sectionLock = criticalSectionLock(address);
-    sectionLock->lock();
+    // A blocked PPC guest worker must observe SAIR instead of parking forever
+    // in an uninterruptible host mutex acquisition.
+    while (!sectionLock->try_lock_for(std::chrono::milliseconds(10))) {
+        if (g_schedulerStopRequested.load(std::memory_order_acquire))
+            throw GuestThreadStopRequested{};
+    }
+    // Once acquired, keep the guest lock consistent and let the next PPC
+    // dispatch/timebase checkpoint unwind the worker through its normal path.
     const uint32_t owner = PPC_LOAD_U32(address + 0x18);
     int32_t lockCount = static_cast<int32_t>(PPC_LOAD_U32(address + 0x10));
     uint32_t recursion = PPC_LOAD_U32(address + 0x14);
@@ -9657,6 +9721,8 @@ void xowue_RtlTryEnterCriticalSection(PPCContext &context, uint8_t *base) {
     if (!base || address > kGuestAddressSpaceSize - kXboxCriticalSectionSize) {
         throw std::runtime_error("RtlTryEnterCriticalSection recebeu endereço inválido");
     }
+    if (g_schedulerStopRequested.load(std::memory_order_acquire))
+        throw GuestThreadStopRequested{};
     auto sectionLock = criticalSectionLock(address);
     if (!sectionLock->try_lock()) {
         context.r3.u32 = 0u;
