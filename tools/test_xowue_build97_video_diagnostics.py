@@ -25,6 +25,7 @@ assert checkpoint_count == 1 and "xowue_thread_checkpoint(0x824AD5D8u, ctx);" in
 expected_xenia_movie_order = [
     "copyright.bik", "ravenlogo.bik", "atvi_logo.bik",
     "marvel_intro.bik", "fox_logo.bik", "ue3_logo.bik",
+    "loading_screen_final.bik",
 ]
 print("Xenia playback oracle: " + " -> ".join(expected_xenia_movie_order))
 

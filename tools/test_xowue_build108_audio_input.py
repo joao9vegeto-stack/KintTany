@@ -64,7 +64,7 @@ require("(userIndex & 0xFFu) == 0xFFu" in engine,
         "XUSER_INDEX_ANY must be recognized on the XAM input path")
 require("xowueXamFlagsAllowGamepad(flags)" in engine,
         "XAM state/capability queries must reject non-gamepad device requests")
-require("xowueNormalizeXamUserIndex(context.r3.u32, flags)" in engine,
+require("xowueNormalizeXamUserIndex(requestedUserIndex, flags)" in engine,
         "XamInputGetState must normalize ANY_USER and XUSER_INDEX_ANY")
 require("xowueNormalizeXamUserIndex(context.r4.u32, flags)" in engine,
         "XamInputGetCapabilitiesEx must use its real user/flags argument positions")
@@ -215,6 +215,21 @@ require("sampled_nonblack" in workflow and "full_nonblack" not in workflow,
 
 require("xowue_XInputGetState" in stubs and "XInputGetState" in stubs,
         "XInputGetState must remain in the generated import dispatcher")
+xmsg_start = engine.index('if (api == "XMsgStartIORequest"')
+xmsg_end = engine.index('if (api == "XexGetModuleHandle")', xmsg_start)
+xmsg = engine[xmsg_start:xmsg_end]
+require("app = context.r3.u32" in xmsg and "message = context.r4.u32" in xmsg and
+        "overlapped = context.r5.u32" in xmsg and "buffer = context.r6.u32" in xmsg and
+        "length = context.r7.u32" in xmsg,
+        "XMsgStartIORequest must use the Xbox ABI argument registers")
+require("xowueCompleteXamProfileOverlapped(base, overlapped, result, 0u)" in xmsg and
+        "context.r3.u32 = 997u" in xmsg,
+        "XMsgStartIORequest must complete XOVERLAPPED and return ERROR_IO_PENDING")
+require("message == 0x000B0006u" in xmsg and "validGuestRange(buffer, 24u)" in xmsg,
+        "XGIUserSetContext must validate its six-DWORD guest payload")
+require("XOWUE_XAM_IO" in xmsg and "XOWUE_XAM_MESSAGE" in xmsg,
+        "XAM message dispatch and overlapped completion must be traceable")
+
 require("xowue_XamInputGetState" in stubs and "XamInputGetState" in stubs,
         "XamInputGetState must remain in the generated import dispatcher")
 require("test_xowue_build108_audio_input.py" in workflow,

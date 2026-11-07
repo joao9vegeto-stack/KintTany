@@ -5988,8 +5988,70 @@ void xowue_compat_import(const char *name, PPCContext &context, uint8_t *base) {
     if (api == "XamWriteGamerTile") { context.r3.u32 = kNtStatusSuccess; return; }
     if (api == "XMsgStartIORequest" || api == "XMsgStartIORequestEx" ||
         api == "XMsgInProcessCall" || api == "XMsgCancelIORequest") {
-        recordRuntimeTrace(std::string(api) + " completed as an offline XAM service request");
-        context.r3.u32 = kNtStatusSuccess;
+        // Xenia and MW2 Recompiled both implement XMsgStartIORequest as an
+        // overlapped XAM request: even an inline/offline completion must write
+        // the XOVERLAPPED result and return ERROR_IO_PENDING when a block was
+        // supplied. Returning SUCCESS without touching that block strands the
+        // title's completion path during its logo -> loading -> menu handoff.
+        uint32_t result = kNtStatusSuccess;
+        uint32_t app = 0u, message = 0u, buffer = 0u, length = 0u, overlapped = 0u;
+        if (api == "XMsgStartIORequest" || api == "XMsgStartIORequestEx") {
+            app = context.r3.u32;
+            message = context.r4.u32;
+            overlapped = context.r5.u32;
+            buffer = context.r6.u32;
+            length = context.r7.u32;
+        } else if (api == "XMsgInProcessCall") {
+            app = context.r3.u32;
+            message = context.r4.u32;
+            buffer = context.r5.u32;
+            length = context.r6.u32;
+        } else {
+            // All XOWUE XAM messages complete inline, so there is no queued
+            // request left to cancel. XMsgCancelIORequest returns success.
+            context.r3.u32 = kNtStatusSuccess;
+            return;
+        }
+
+        // XGIUserSetContext (XGI app 0xFB, message 0x000B0006) consumes
+        // six big-endian DWORDs: user, reserved, XUID, context id and value.
+        // The offline port has no Live presence service, but it must validate
+        // the payload and complete the message instead of silently skipping
+        // the XAM request contract.
+        if (app == 0x000000FBu && message == 0x000B0006u) {
+            if (!base || !validGuestRange(buffer, 24u)) {
+                result = 0x80070057u; // X_ERROR_INVALID_PARAMETER
+            } else {
+                const uint32_t user = PPC_LOAD_U32(buffer);
+                const uint64_t xuid = PPC_LOAD_U64(buffer + 8u);
+                const uint32_t contextId = PPC_LOAD_U32(buffer + 16u);
+                const uint32_t value = PPC_LOAD_U32(buffer + 20u);
+                char event[256];
+                std::snprintf(event, sizeof(event),
+                    "XOWUE_XAM_MESSAGE app=0x%02X id=0x%08X user=%u xuid=0x%016llX context=0x%08X value=0x%08X result=0x%08X",
+                    app, message, user, static_cast<unsigned long long>(xuid),
+                    contextId, value, result);
+                recordRuntimeTrace(event);
+            }
+        }
+
+        if ((api == "XMsgStartIORequest" || api == "XMsgStartIORequestEx") &&
+            overlapped != 0u) {
+            if (!base || !validGuestRange(overlapped, 16u)) {
+                context.r3.u32 = 0x80070057u;
+                return;
+            }
+            xowueCompleteXamProfileOverlapped(base, overlapped, result, 0u);
+            context.r3.u32 = 997u; // X_ERROR_IO_PENDING after inline completion.
+        } else {
+            context.r3.u32 = result;
+        }
+        char event[224];
+        std::snprintf(event, sizeof(event),
+            "XOWUE_XAM_IO api=%.*s app=0x%02X message=0x%08X buffer=0x%08X length=%u overlapped=0x%08X result=0x%08X return=0x%08X",
+            static_cast<int>(api.size()), api.data(), app, message, buffer,
+            length, overlapped, result, context.r3.u32);
+        recordRuntimeTrace(event);
         return;
     }
     if (api == "XexGetModuleHandle") {
