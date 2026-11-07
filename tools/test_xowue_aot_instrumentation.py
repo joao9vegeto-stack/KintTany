@@ -197,7 +197,9 @@ exit_start = swift.index("func requestExit()")
 exit_end = swift.index("\n    func runBoot()", exit_start)
 exit_body = swift[exit_start:exit_end]
 assert "Task.detached(priority: .userInitiated)" in exit_body
-assert "guard phase == .booting || gameSurfacePresented || exitRequested else { return }" in exit_body
+assert "guard phase == .booting || gameSurfacePresented else { return }" in exit_body
+assert "guard !exitRequested else {" in exit_body
+assert 'runtime.stop duplicate request ignored' in exit_body
 assert "if phase != .booting" in exit_body and "native call already returned" in exit_body
 assert exit_body.index("if phase != .booting") < exit_body.index("gameSurfacePresented = false")
 assert exit_body.index("exitRequested = true") < exit_body.index("xowue_request_stop()")
