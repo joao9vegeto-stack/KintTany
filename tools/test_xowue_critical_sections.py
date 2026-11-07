@@ -1,33 +1,85 @@
 #!/usr/bin/env python3
-"""Regression checks for Xbox 360 RTL critical-section semantics."""
+"""Prevent the Build 114 guest-dispatcher critical-section regression."""
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ENGINE = (ROOT / "Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
 
+
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
 
-require("std::atomic_ref<uint32_t> word(raw);" in ENGINE,
-        "guest lock words must be updated atomically")
-require("__builtin_bswap32(oldRaw)" in ENGINE and
-        "__builtin_bswap32(static_cast<uint32_t>(newValue))" in ENGINE,
-        "atomic guest lock words must preserve Xbox big-endian encoding")
-require("atomicCompareExchangeGuestBe32(base, address + 0x10u, 0xFFFFFFFFu, 0u)" in ENGINE,
-        "critical-section acquisition must use the guest lock_count CAS")
-require("currentGuestThreadObjectAddress()" in ENGINE and
-        "PPC_STORE_U32(address + 0x18u, currentThread)" in ENGINE,
-        "owning_thread must contain the guest KTHREAD address, not the host thread id")
-require("waitGuestObject(waitable, GuestTimeout{}, false)" in ENGINE,
-        "contended critical sections must sleep on their embedded dispatcher event")
-require("signalGuestWaitable(waitable);" in ENGINE,
-        "the final owner release must wake a guest waiter")
-require("PPC_STORE_U32(address + 0x08u, address + 0x08u)" in ENGINE and
-        "PPC_STORE_U32(address + 0x0Cu, address + 0x08u)" in ENGINE,
-        "critical-section dispatcher wait-list links must be initialized")
-require("std::recursive_mutex" not in ENGINE and
-        "criticalSectionLock(" not in ENGINE and
-        "g_criticalSectionLocks" not in ENGINE,
-        "host recursive mutexes must not replace the guest RTL critical section")
-print("XOWUE_XBOX_CRITICAL_SECTIONS_OK")
+
+def function_body(name):
+    match = re.search(r"\bvoid\s+" + re.escape(name) +
+                      r"\s*\(PPCContext\s*&context,\s*uint8_t\s*\*base\)\s*\{",
+                      ENGINE)
+    require(match is not None, f"{name} definition must exist")
+    start = match.end()
+    depth = 1
+    for index in range(start, len(ENGINE)):
+        if ENGINE[index] == "{":
+            depth += 1
+        elif ENGINE[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return ENGINE[start:index]
+    raise AssertionError(f"{name} body has unbalanced braces")
+
+
+# Build 113.7's known-running implementation serialized each guest RTL
+# critical section with a recursive mutex. It did not create an Event object
+# from the same guest address or park a PPC worker in waitGuestObject().
+require("std::mutex g_criticalSectionMapMutex;" in ENGINE,
+        "critical-section map mutex must remain present")
+require("std::unordered_map<uint32_t, std::shared_ptr<std::recursive_mutex>> g_criticalSectionLocks;" in ENGINE,
+        "Build 113 recursive-mutex map must remain present")
+require("std::shared_ptr<std::recursive_mutex> criticalSectionLock(uint32_t address)" in ENGINE,
+        "guest RTL critical-section host lock helper must remain present")
+
+# Generic pointer waitables must never reinterpret a known RTL critical
+# section as an Xbox dispatcher event.
+pointer_start = ENGINE.index("std::shared_ptr<GuestWaitable> ensurePointerWaitable")
+pointer_end = ENGINE.index("bool readGuestTimeout", pointer_start)
+pointer_body = ENGINE[pointer_start:pointer_end]
+require("g_criticalSectionLocks.find(address) != g_criticalSectionLocks.end()" in pointer_body,
+        "pointer waitable resolver must identify RTL critical-section addresses")
+require("if (isCriticalSection || (objectType != 0u && objectType != 1u))" in pointer_body,
+        "RTL critical sections must be rejected as dispatcher events")
+require("critical_section=%u" in pointer_body,
+        "sync rejection log must expose critical-section classification")
+
+initialise = function_body("xowue_RtlInitializeCriticalSection")
+initialise_spin = function_body("xowue_RtlInitializeCriticalSectionAndSpinCount")
+enter = function_body("xowue_RtlEnterCriticalSection")
+try_enter = function_body("xowue_RtlTryEnterCriticalSection")
+leave = function_body("xowue_RtlLeaveCriticalSection")
+
+for name, body in [
+    ("RtlInitializeCriticalSection", initialise),
+    ("RtlInitializeCriticalSectionAndSpinCount", initialise_spin),
+    ("RtlEnterCriticalSection", enter),
+    ("RtlTryEnterCriticalSection", try_enter),
+    ("RtlLeaveCriticalSection", leave),
+]:
+    require("criticalSectionLock(address)" in body,
+            f"{name} must use the Build 113 per-address recursive mutex")
+    for forbidden in (
+        "waitGuestObject(", "signalGuestWaitable(",
+        "atomicCompareExchangeGuestBe32(", "initialiseGuestCriticalSection("
+    ):
+        require(forbidden not in body,
+                f"{name} must not route RTL lock semantics through {forbidden}")
+
+require("sectionLock->lock();" in enter and "owner == g_currentGuestThreadId" in enter,
+        "RtlEnter must preserve same-thread recursion and host-lock serialization")
+require("sectionLock->try_lock()" in try_enter and "context.r3.u32 = 0u;" in try_enter,
+        "RtlTryEnter must return false immediately on contention")
+require("sectionLock->unlock();" in leave and "owner != g_currentGuestThreadId" in leave,
+        "RtlLeave must validate owner and release the matching host lock")
+require("g_criticalSectionLocks.clear();" in ENGINE,
+        "session teardown must clear per-session RTL lock objects")
+
+print("XOWUE_BUILD113_CRITICAL_SECTION_COMPATIBILITY_OK")

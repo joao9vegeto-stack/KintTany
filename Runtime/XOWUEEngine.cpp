@@ -569,6 +569,7 @@ std::unordered_map<std::string, std::filesystem::path> g_guestPathIndex;
 thread_local uint32_t g_guestIrql = 0u;
 std::mutex g_guestThreadMutex;
 std::mutex g_guestStackMutex;
+std::mutex g_criticalSectionMapMutex;
 std::mutex g_waitSetMutex;
 std::mutex g_xenosMutex;
 std::mutex g_xenosPumpMutex;
@@ -595,6 +596,7 @@ std::atomic<uint64_t> g_xaudioCallbackAttempts{0u};
 std::atomic<uint64_t> g_xaudioCallbackCount{0u};
 std::atomic<uint64_t> g_xaudioFrameCount{0u};
 std::atomic<uint32_t> g_xaudioTraceLogs{0u};
+std::unordered_map<uint32_t, std::shared_ptr<std::recursive_mutex>> g_criticalSectionLocks;
 XenosFrontendState g_xenosFrontend;
 std::atomic<bool> g_schedulerStopRequested{false};
 std::atomic<bool> g_runtimeSessionPoisoned{false};
@@ -1398,14 +1400,19 @@ std::shared_ptr<GuestWaitable> ensurePointerWaitable(uint32_t address, uint8_t *
     if (auto thread = lookupGuestThread(address); thread && thread->completion)
         return thread->completion;
 
+    bool isCriticalSection = false;
+    {
+        std::lock_guard<std::mutex> lock(g_criticalSectionMapMutex);
+        isCriticalSection = g_criticalSectionLocks.find(address) != g_criticalSectionLocks.end();
+    }
     const uint8_t objectType = base[address];
-    if (objectType != 0u && objectType != 1u) {
+    if (isCriticalSection || (objectType != 0u && objectType != 1u)) {
         const uint32_t sample = g_syncObjectRejectLogs.fetch_add(1u, std::memory_order_relaxed);
         if (sample < 64u || address == 0x40270000u) {
             char event[256];
             std::snprintf(event, sizeof(event),
-                "XOWUE_SYNC_REJECT object=0x%08X type=0x%02X signal_state=0x%08X tid=%u lr=0x%08X",
-                address, objectType, PPC_LOAD_U32(address + 4u), g_currentGuestThreadId,
+                "XOWUE_SYNC_REJECT object=0x%08X type=0x%02X signal_state=0x%08X critical_section=%u tid=%u lr=0x%08X",
+                address, objectType, PPC_LOAD_U32(address + 4u), isCriticalSection ? 1u : 0u, g_currentGuestThreadId,
                 g_currentGuestThread ? g_currentGuestThread->lastGuestLr.load(std::memory_order_relaxed) : 0u);
             recordRuntimeTrace(event);
         }
@@ -2034,6 +2041,13 @@ struct GuestFileCompletionSignalOnReturn final {
 };
 
 
+std::shared_ptr<std::recursive_mutex> criticalSectionLock(uint32_t address) {
+    std::lock_guard<std::mutex> lock(g_criticalSectionMapMutex);
+    auto &entry = g_criticalSectionLocks[address];
+    if (!entry) entry = std::make_shared<std::recursive_mutex>();
+    return entry;
+}
+
 bool shouldTraceCriticalSection() {
     const size_t count = g_criticalSectionTraceCount.fetch_add(1u, std::memory_order_relaxed) + 1u;
     return count <= 12u || (count % 2048u) == 0u;
@@ -2309,6 +2323,10 @@ void stopGuestThreads() {
     g_mainGuestThread.reset();
     resetGraphicsInterruptState();
     resetXowueAudioRuntime();
+    {
+        std::lock_guard<std::mutex> lock(g_criticalSectionMapMutex);
+        g_criticalSectionLocks.clear();
+    }
     g_activeGuestMemory.reset();
 }
 
@@ -9560,243 +9578,144 @@ void xowue_KiApcNormalRoutineNop(PPCContext &context) {
     recordRuntimeTrace("KiApcNormalRoutineNop -> 0 (Xenia-compatible stub)");
 }
 
-static uint32_t currentGuestThreadObjectAddress() {
-    if (g_currentGuestThread) return g_currentGuestThread->objectAddress;
-    if (g_mainGuestThread) return g_mainGuestThread->objectAddress;
-    return 0u;
-}
-
-// Guest words are big-endian. Atomic operations convert the encoded memory
-// value around host compare/exchange, following the MW2 Recompiled/Xenia model.
-static int32_t atomicAddGuestBe32(uint8_t *base, uint32_t address, int32_t delta) {
-    if (!base || !validGuestRange(address, sizeof(uint32_t)) ||
-        (reinterpret_cast<uintptr_t>(base + address) % alignof(uint32_t)) != 0u) {
-        throw std::runtime_error("critical section atomic word is invalid or unaligned");
-    }
-    auto &raw = *reinterpret_cast<uint32_t *>(base + address);
-    std::atomic_ref<uint32_t> word(raw);
-    uint32_t oldRaw = word.load(std::memory_order_acquire);
-    for (;;) {
-        const int32_t oldValue = static_cast<int32_t>(__builtin_bswap32(oldRaw));
-        const int32_t newValue = oldValue + delta;
-        const uint32_t newRaw = __builtin_bswap32(static_cast<uint32_t>(newValue));
-        if (word.compare_exchange_weak(oldRaw, newRaw,
-                                       std::memory_order_acq_rel,
-                                       std::memory_order_acquire)) {
-            return newValue;
-        }
-    }
-}
-
-static bool atomicCompareExchangeGuestBe32(uint8_t *base, uint32_t address,
-                                           uint32_t expected, uint32_t desired) {
-    if (!base || !validGuestRange(address, sizeof(uint32_t)) ||
-        (reinterpret_cast<uintptr_t>(base + address) % alignof(uint32_t)) != 0u) {
-        throw std::runtime_error("critical section compare/exchange word is invalid or unaligned");
-    }
-    auto &raw = *reinterpret_cast<uint32_t *>(base + address);
-    std::atomic_ref<uint32_t> word(raw);
-    uint32_t expectedRaw = __builtin_bswap32(expected);
-    return word.compare_exchange_strong(expectedRaw, __builtin_bswap32(desired),
-                                        std::memory_order_acq_rel,
-                                        std::memory_order_acquire);
-}
-
-static void initialiseGuestCriticalSection(uint8_t *base, uint32_t address,
-                                           uint32_t packedSpinCount) {
-    constexpr uint32_t kXboxCriticalSectionSize = 28u;
-    if (!base || !validGuestRange(address, kXboxCriticalSectionSize)) {
-        throw std::runtime_error("critical section initialization address is invalid");
-    }
-    std::memset(base + address, 0, kXboxCriticalSectionSize);
-    base[address] = 1u; // EventSynchronizationObject (auto-reset dispatcher event).
-    base[address + 1u] = static_cast<uint8_t>(std::min<uint32_t>(packedSpinCount, 255u));
-    PPC_STORE_U32(address + 0x04u, 0u); // dispatcher signal_state
-    PPC_STORE_U32(address + 0x08u, address + 0x08u); // empty wait-list Flink
-    PPC_STORE_U32(address + 0x0Cu, address + 0x08u); // empty wait-list Blink
-    PPC_STORE_U32(address + 0x10u, 0xFFFFFFFFu); // lock_count = -1 (unowned)
-    PPC_STORE_U32(address + 0x14u, 0u); // recursion_count
-    PPC_STORE_U32(address + 0x18u, 0u); // owning KTHREAD pointer
-}
-
 void xowue_RtlInitializeCriticalSection(PPCContext &context, uint8_t *base) {
     const uint32_t address = context.r3.u32;
-    initialiseGuestCriticalSection(base, address, 0u);
-    if (shouldTraceCriticalSection()) {
-        char event[128];
-        std::snprintf(event, sizeof(event),
-                      "XOWUE_CRITICAL_SECTION_INIT address=0x%08X spin_count=0",
-                      address);
-        recordRuntimeTrace(event);
+    constexpr uint32_t kXboxCriticalSectionSize = 28;
+    if (!base || address > kGuestAddressSpaceSize - kXboxCriticalSectionSize) {
+        throw std::runtime_error("RtlInitializeCriticalSection recebeu endereço fora da memória convidada");
     }
+    auto sectionLock = criticalSectionLock(address);
+    std::lock_guard<std::recursive_mutex> held(*sectionLock);
+    std::memset(base + address, 0, kXboxCriticalSectionSize);
+    base[address] = 1; // X_DISPATCH_HEADER.type = EventSynchronizationObject.
+    PPC_STORE_U32(address + 0x10, 0xFFFFFFFFu); // lock_count = -1.
+    PPC_STORE_U32(address + 0x14, 0);            // recursion_count = 0.
+    PPC_STORE_U32(address + 0x18, 0);            // owning_thread = nullptr.
+    char event[100];
+    std::snprintf(event, sizeof(event), "RtlInitializeCriticalSection guest=0x%08X size=28", address);
+    recordRuntimeTrace(event);
 }
 
 void xowue_RtlInitializeCriticalSectionAndSpinCount(PPCContext &context, uint8_t *base) {
     const uint32_t address = context.r3.u32;
     const uint32_t spinCount = context.r4.u32;
-    const uint32_t packedSpinCount = static_cast<uint32_t>(
-        std::min<uint64_t>((static_cast<uint64_t>(spinCount) + 255u) >> 8u, 255u));
-    initialiseGuestCriticalSection(base, address, packedSpinCount);
+    constexpr uint32_t kXboxCriticalSectionSize = 28;
+    if (!base || address > kGuestAddressSpaceSize - kXboxCriticalSectionSize) {
+        throw std::runtime_error("RtlInitializeCriticalSectionAndSpinCount recebeu endereço inválido");
+    }
+    const uint32_t packedSpinCount = std::min<uint32_t>((spinCount + 255u) >> 8, 255u);
+    auto sectionLock = criticalSectionLock(address);
+    std::lock_guard<std::recursive_mutex> held(*sectionLock);
+    std::memset(base + address, 0, kXboxCriticalSectionSize);
+    base[address] = 1;
+    base[address + 1] = static_cast<uint8_t>(packedSpinCount);
+    PPC_STORE_U32(address + 0x10, 0xFFFFFFFFu);
+    PPC_STORE_U32(address + 0x14, 0);
+    PPC_STORE_U32(address + 0x18, 0);
     context.r3.u32 = kNtStatusSuccess;
     const size_t initialized = g_criticalSectionInitCount.fetch_add(1u) + 1u;
-    if (initialized <= 8u) {
-        char event[128];
-        std::snprintf(event, sizeof(event),
-                      "XOWUE_CRITICAL_SECTION_INIT address=0x%08X spin_count=%u packed=%u",
-                      address, spinCount, packedSpinCount);
-        recordRuntimeTrace(event);
+    if (initialized <= 2u) {
+        recordRuntimeTrace("RtlInitializeCriticalSectionAndSpinCount inicializada");
     }
 }
 
 void xowue_RtlEnterCriticalSection(PPCContext &context, uint8_t *base) {
     const uint32_t address = context.r3.u32;
-    constexpr uint32_t kXboxCriticalSectionSize = 28u;
-    if (!base || !validGuestRange(address, kXboxCriticalSectionSize)) {
+    constexpr uint32_t kXboxCriticalSectionSize = 28;
+    if (!base || address > kGuestAddressSpaceSize - kXboxCriticalSectionSize) {
         throw std::runtime_error("RtlEnterCriticalSection recebeu endereço inválido");
     }
-    const uint32_t currentThread = currentGuestThreadObjectAddress();
-    if (currentThread == 0u) {
-        throw std::runtime_error("RtlEnterCriticalSection sem KTHREAD guest ativo");
-    }
-    const uint32_t owner = PPC_LOAD_U32(address + 0x18u);
-    if (owner == currentThread) {
-        const int32_t lockCount = atomicAddGuestBe32(base, address + 0x10u, 1);
-        const uint32_t recursion = PPC_LOAD_U32(address + 0x14u) + 1u;
-        PPC_STORE_U32(address + 0x14u, recursion);
-        if (shouldTraceCriticalSection()) {
-            char event[192];
-            std::snprintf(event, sizeof(event),
-                          "XOWUE_CRITICAL_SECTION_RECURSE address=0x%08X kthread=0x%08X recursion=%u lock_count=%d",
-                          address, currentThread, recursion, lockCount);
-            recordRuntimeTrace(event);
+    auto sectionLock = criticalSectionLock(address);
+    sectionLock->lock();
+    const uint32_t owner = PPC_LOAD_U32(address + 0x18);
+    int32_t lockCount = static_cast<int32_t>(PPC_LOAD_U32(address + 0x10));
+    uint32_t recursion = PPC_LOAD_U32(address + 0x14);
+    if (owner == g_currentGuestThreadId) {
+        ++lockCount;
+        ++recursion;
+    } else {
+        if (lockCount < -1) {
+            sectionLock->unlock();
+            throw std::runtime_error("critical section lock_count inválido");
         }
-        return;
+        ++lockCount;
+        recursion = 1;
+        PPC_STORE_U32(address + 0x18, g_currentGuestThreadId);
     }
-
-    const uint32_t spinCount = static_cast<uint32_t>(base[address + 1u]) * 256u;
-    for (uint32_t spin = 0u; spin < spinCount; ++spin) {
-        if (atomicCompareExchangeGuestBe32(base, address + 0x10u, 0xFFFFFFFFu, 0u)) {
-            PPC_STORE_U32(address + 0x18u, currentThread);
-            PPC_STORE_U32(address + 0x14u, 1u);
-            if (shouldTraceCriticalSection()) {
-                char event[192];
-                std::snprintf(event, sizeof(event),
-                              "XOWUE_CRITICAL_SECTION_ACQUIRE address=0x%08X kthread=0x%08X lock_count=0 spin=%u waited=0",
-                              address, currentThread, spin);
-                recordRuntimeTrace(event);
-            }
-            return;
-        }
-        if ((spin & 0xFFu) == 0xFFu) std::this_thread::yield();
-    }
-
-    const int32_t newLockCount = atomicAddGuestBe32(base, address + 0x10u, 1);
-    uint32_t waitStatus = kNtStatusSuccess;
-    if (newLockCount != 0) {
-        auto waitable = ensurePointerWaitable(address, base);
-        if (!waitable || waitable->kind != GuestWaitable::Kind::Event) {
-            throw std::runtime_error("RtlEnterCriticalSection could not create its guest dispatcher event");
-        }
-        waitStatus = waitGuestObject(waitable, GuestTimeout{}, false);
-        if (waitStatus == kNtStatusCancelled) throw GuestThreadStopRequested{};
-        if (waitStatus != kNtStatusSuccess) {
-            char error[192];
-            std::snprintf(error, sizeof(error),
-                          "RtlEnterCriticalSection wait failed address=0x%08X status=0x%08X",
-                          address, waitStatus);
-            throw std::runtime_error(error);
-        }
-    }
-
-    PPC_STORE_U32(address + 0x18u, currentThread);
-    PPC_STORE_U32(address + 0x14u, 1u);
-    if (shouldTraceCriticalSectionContention()) {
-        char event[224];
-        std::snprintf(event, sizeof(event),
-                      "XOWUE_CRITICAL_SECTION_ACQUIRE address=0x%08X kthread=0x%08X lock_count=%d spin_count=%u waited=%u status=0x%08X",
-                      address, currentThread, newLockCount, spinCount,
-                      newLockCount != 0 ? 1u : 0u, waitStatus);
+    PPC_STORE_U32(address + 0x10, static_cast<uint32_t>(lockCount));
+    PPC_STORE_U32(address + 0x14, recursion);
+    if (shouldTraceCriticalSection()) {
+        char event[128];
+        std::snprintf(event, sizeof(event), "RtlEnterCriticalSection guest=0x%08X recursion=%u", address, recursion);
         recordRuntimeTrace(event);
     }
 }
 
 void xowue_RtlTryEnterCriticalSection(PPCContext &context, uint8_t *base) {
     const uint32_t address = context.r3.u32;
-    constexpr uint32_t kXboxCriticalSectionSize = 28u;
-    if (!base || !validGuestRange(address, kXboxCriticalSectionSize)) {
+    constexpr uint32_t kXboxCriticalSectionSize = 28;
+    if (!base || address > kGuestAddressSpaceSize - kXboxCriticalSectionSize) {
         throw std::runtime_error("RtlTryEnterCriticalSection recebeu endereço inválido");
     }
-    const uint32_t currentThread = currentGuestThreadObjectAddress();
-    if (currentThread == 0u) {
-        throw std::runtime_error("RtlTryEnterCriticalSection sem KTHREAD guest ativo");
-    }
-    if (atomicCompareExchangeGuestBe32(base, address + 0x10u, 0xFFFFFFFFu, 0u)) {
-        PPC_STORE_U32(address + 0x18u, currentThread);
-        PPC_STORE_U32(address + 0x14u, 1u);
-        context.r3.u32 = 1u;
+    auto sectionLock = criticalSectionLock(address);
+    if (!sectionLock->try_lock()) {
+        context.r3.u32 = 0u;
+        if (shouldTraceCriticalSectionContention()) {
+            char event[128];
+            std::snprintf(event, sizeof(event), "RtlTryEnterCriticalSection guest=0x%08X contention owner=%u", address, PPC_LOAD_U32(address + 0x18));
+            recordRuntimeTrace(event);
+        }
         return;
     }
-    if (PPC_LOAD_U32(address + 0x18u) == currentThread) {
-        atomicAddGuestBe32(base, address + 0x10u, 1);
-        PPC_STORE_U32(address + 0x14u, PPC_LOAD_U32(address + 0x14u) + 1u);
-        context.r3.u32 = 1u;
-        return;
+    const uint32_t owner = PPC_LOAD_U32(address + 0x18);
+    int32_t lockCount = static_cast<int32_t>(PPC_LOAD_U32(address + 0x10));
+    uint32_t recursion = PPC_LOAD_U32(address + 0x14);
+    if (owner == g_currentGuestThreadId) {
+        ++lockCount;
+        ++recursion;
+    } else {
+        if (lockCount < -1) {
+            sectionLock->unlock();
+            throw std::runtime_error("critical section lock_count inválido em TryEnter");
+        }
+        ++lockCount;
+        recursion = 1u;
+        PPC_STORE_U32(address + 0x18, g_currentGuestThreadId);
     }
-    context.r3.u32 = 0u;
-    if (shouldTraceCriticalSectionContention()) {
-        char event[160];
+    PPC_STORE_U32(address + 0x10, static_cast<uint32_t>(lockCount));
+    PPC_STORE_U32(address + 0x14, recursion);
+    context.r3.u32 = 1;
+    if (shouldTraceCriticalSection()) {
+        char event[128];
         std::snprintf(event, sizeof(event),
-                      "XOWUE_CRITICAL_SECTION_TRY_CONTENTION address=0x%08X owner=0x%08X current=0x%08X lock_count=%d",
-                      address, PPC_LOAD_U32(address + 0x18u), currentThread,
-                      static_cast<int32_t>(PPC_LOAD_U32(address + 0x10u)));
+                      "RtlTryEnterCriticalSection guest=0x%08X owner=%u recursion=%u lockCount=%d acquired",
+                      address, g_currentGuestThreadId, recursion, lockCount);
         recordRuntimeTrace(event);
     }
 }
 
 void xowue_RtlLeaveCriticalSection(PPCContext &context, uint8_t *base) {
     const uint32_t address = context.r3.u32;
-    constexpr uint32_t kXboxCriticalSectionSize = 28u;
-    if (!base || !validGuestRange(address, kXboxCriticalSectionSize)) {
+    constexpr uint32_t kXboxCriticalSectionSize = 28;
+    if (!base || address > kGuestAddressSpaceSize - kXboxCriticalSectionSize) {
         throw std::runtime_error("RtlLeaveCriticalSection recebeu endereço inválido");
     }
-    const uint32_t currentThread = currentGuestThreadObjectAddress();
-    const uint32_t owner = PPC_LOAD_U32(address + 0x18u);
-    uint32_t recursion = PPC_LOAD_U32(address + 0x14u);
-    if (currentThread == 0u || owner != currentThread || recursion == 0u) {
-        char error[224];
-        std::snprintf(error, sizeof(error),
-                      "RtlLeaveCriticalSection ownership mismatch address=0x%08X owner=0x%08X current=0x%08X recursion=%u",
-                      address, owner, currentThread, recursion);
-        throw std::runtime_error(error);
+    auto sectionLock = criticalSectionLock(address);
+    const uint32_t owner = PPC_LOAD_U32(address + 0x18);
+    int32_t lockCount = static_cast<int32_t>(PPC_LOAD_U32(address + 0x10));
+    uint32_t recursion = PPC_LOAD_U32(address + 0x14);
+    if (owner != g_currentGuestThreadId || recursion == 0) {
+        throw std::runtime_error("RtlLeaveCriticalSection sem proprietário na thread PPC ativa");
     }
     --recursion;
-    PPC_STORE_U32(address + 0x14u, recursion);
-    if (recursion != 0u) {
-        const int32_t lockCount = atomicAddGuestBe32(base, address + 0x10u, -1);
-        if (shouldTraceCriticalSection()) {
-            char event[192];
-            std::snprintf(event, sizeof(event),
-                          "XOWUE_CRITICAL_SECTION_RECURSIVE_RELEASE address=0x%08X recursion=%u lock_count=%d",
-                          address, recursion, lockCount);
-            recordRuntimeTrace(event);
-        }
-        return;
-    }
-
-    PPC_STORE_U32(address + 0x18u, 0u);
-    const int32_t newLockCount = atomicAddGuestBe32(base, address + 0x10u, -1);
-    if (newLockCount != -1) {
-        auto waitable = ensurePointerWaitable(address, base);
-        if (!waitable || waitable->kind != GuestWaitable::Kind::Event) {
-            throw std::runtime_error("RtlLeaveCriticalSection could not resolve its guest dispatcher event");
-        }
-        signalGuestWaitable(waitable);
-    }
+    --lockCount;
+    PPC_STORE_U32(address + 0x10, static_cast<uint32_t>(lockCount));
+    PPC_STORE_U32(address + 0x14, recursion);
+    if (recursion == 0) PPC_STORE_U32(address + 0x18, 0);
+    sectionLock->unlock();
     if (shouldTraceCriticalSection()) {
-        char event[192];
-        std::snprintf(event, sizeof(event),
-                      "XOWUE_CRITICAL_SECTION_RELEASE address=0x%08X kthread=0x%08X lock_count=%d woke_waiter=%u",
-                      address, currentThread, newLockCount, newLockCount != -1 ? 1u : 0u);
+        char event[128];
+        std::snprintf(event, sizeof(event), "RtlLeaveCriticalSection guest=0x%08X recursion=%u", address, recursion);
         recordRuntimeTrace(event);
     }
 }
