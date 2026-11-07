@@ -45,7 +45,8 @@ for token in (
     "result = performRead(true);",
     "GuestFileCompletionSignalOnReturn completionSignal(file);",
     "GuestEventSignalOnReturn eventSignal(eventHandle);",
-    "queueGuestApc(apcThread, apcRoutine, apcContext, ioStatus, 0u, std::move(completion));",
+    "completionSignal.signalNow(result.sequence, result.offset, result.bytesRead,",
+    "queueGuestApc(apcThread, apcRoutine, ioStatus, 0u, std::move(completion));",
     "context.r3.u32 = kNtStatusPending;",
     "B103_ASYNC_NTREADFILE_SUBMIT",
     "B103_ASYNC_NTREADFILE_COMPLETE",
@@ -65,7 +66,7 @@ require(async_read.index("writeGuestIoStatus(base, ioStatus, kNtStatusPending, 0
 require("result = performRead(true);" in completion_body,
         "file transfer must be owned by the deferred APC completion")
 require(completion_body.index("result = performRead(true);") <
-        completion_body.index("completionSignal.signalNow();") <
+        completion_body.index("completionSignal.signalNow(result.sequence") <
         completion_body.index("eventSignal.signalNow();"),
         "final IOSB and guest buffer must be published before completion signals")
 require(completion_end < async_read.index("queueGuestApc("),
