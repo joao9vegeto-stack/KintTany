@@ -114,8 +114,11 @@ require("scan.root path=" in app and "top_level_count=" in app,
 exit_start = app.index("func requestExit()")
 exit_end = app.index("\n    func runBoot()", exit_start)
 exit_body = app[exit_start:exit_end]
-require("guard phase == .booting || gameSurfacePresented || exitRequested else { return }" in exit_body,
+require("guard phase == .booting || gameSurfacePresented else { return }" in exit_body,
         "SAIR must accept exit while the native boot is active")
+require("guard !exitRequested else {" in exit_body and
+        'runtime.stop duplicate request ignored' in exit_body,
+        "SAIR must ignore duplicate stop requests while a native boot is already stopping")
 require("if phase != .booting" in exit_body and "native call already returned" in exit_body,
         "SAIR may dismiss only after the native call has already returned")
 require(exit_body.index("if phase != .booting") < exit_body.index("gameSurfacePresented = false"),

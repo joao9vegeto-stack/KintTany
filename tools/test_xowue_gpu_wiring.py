@@ -183,9 +183,7 @@ assert 'XOWUE_USER_EXIT scheduler cancellation requested' in stop_body
 ui = Path("iOS/App/XOWUEApp.swift").read_text()
 request_start = ui.index("    func requestExit() {")
 request_exit = ui[request_start:ui.index("\n    func runBoot()", request_start)]
-assert "guard phase == .booting || gameSurfacePresented else { return }" in request_exit
-assert "guard !exitRequested else {" in request_exit
-assert 'runtime.stop duplicate request ignored' in request_exit
+assert "guard phase == .booting || gameSurfacePresented || exitRequested else { return }" in request_exit
 assert "if phase != .booting" in request_exit
 assert "native call already returned" in request_exit
 assert "xowue_request_stop()" in request_exit
@@ -218,8 +216,7 @@ assert "isSplashBikMovie" not in engine
 assert "isKnownOptionalStartupMovie" not in engine
 assert "XOWUE_OPTIONAL_STARTUP_MOVIE_EOF" not in engine
 assert '".XOWUEVirtualMedia"' not in engine
-assert 'lower.find("/movies/")' in engine
-assert 'lower.starts_with("movies/")' in engine
+assert 'lower.find("wgame/movies/")' in engine
 assert 'lower.ends_with(".bik") || lower.ends_with(".xxx")' in engine
 assert "logStartupMovieOpen" in engine
 assert "resolveCaseInsensitivePath(root, rel)" in engine
