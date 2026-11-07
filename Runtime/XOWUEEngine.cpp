@@ -3247,19 +3247,23 @@ static void xowue_trace_hot_guest_entry(uint32_t guestAddress, PPCContext &ctx);
 void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
     // Build 97: observe media-related PPC entries and raw guest instruction words.
     {
-        static constexpr std::array<uint32_t, 8> kMoviePpcAddresses{
+        // These are media-adjacent PPC routines, not proof that a movie
+        // began playback. 0x822A0278 is excluded: Build 118.3 captured it
+        // parsing the ASCII FName "NoneByteProperty".
+        static constexpr std::array<uint32_t, 7> kMoviePpcAddresses{
             0x8236E738u, 0x82C3C5E8u, 0x82C3C4D8u, 0x82C3E928u,
-            0x82C4D4A8u, 0x82427940u, 0x82370500u, 0x822A0278u
+            0x82C4D4A8u, 0x82427940u, 0x82370500u
         };
-        static std::array<std::atomic<uint32_t>, 8> movieFlowHits{};
+        static std::array<std::atomic<uint32_t>, 7> movieFlowHits{};
         for (size_t index = 0; index < kMoviePpcAddresses.size(); ++index) {
             if (guestAddress != kMoviePpcAddresses[index]) continue;
             const uint32_t hit = movieFlowHits[index].fetch_add(1u, std::memory_order_relaxed) + 1u;
             if (hit <= 16u) {
-                const uint32_t mediaOrder = g_b105MediaOrder.fetch_add(1u, std::memory_order_relaxed) + 1u;
+                static std::atomic<uint32_t> mediaFlowSamples{0u};
+                const uint32_t flowSample = mediaFlowSamples.fetch_add(1u, std::memory_order_relaxed) + 1u;
                 char flow[512];
                 std::snprintf(flow, sizeof(flow),
-                    "B105_MOVIE_PPC_FLOW order=%u entry=0x%08X hit=%u tid=%u lr=0x%08X "
+                    "XOWUE_MEDIA_PPC_FLOW sample=%u entry=0x%08X hit=%u tid=%u lr=0x%08X "
                     "r3=0x%08X r4=0x%08X r5=0x%08X r6=0x%08X r7=0x%08X r8=0x%08X "
                     "r10=0x%08X r30=0x%08X r31=0x%08X",
                     mediaOrder, guestAddress, hit, g_currentGuestThreadId, static_cast<uint32_t>(ctx.lr),
@@ -4430,23 +4434,23 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         else recordRuntimeTrace("XOWUE_CACHE_ROOT path=" + g_guestCacheRoot.string());
         recordRuntimeTrace("Xbox filesystem roots game=" + g_guestGameRoot.string() +
                            " saves=" + g_guestSaveRoot.string());
-        // Log *actual host filesystem* inventory instead of fabricating
-        // successful UE3/Bink movie opens (or skipping guest video calls).
-        // A missing file is often a wrong game extraction rather than PPC AOT.
+        // Inventory is deliberately restricted to the Xenia-verified boot
+        // sequence; never dump every .bik/.xxx asset in the entire Movies folder.
+        // This is availability only, not evidence of playback order.
         for (const char *guestMovie : {
-                 "D:\\WGame\\Movies\\ravenlogo.xxx",
-                 "D:\\WGame\\Movies\\ravenlogo.bik",
-                 "D:\\WGame\\Movies\\blank.bik",
-                 "D:\\WGame\\Movies\\UE3_logo.xxx",
-                 "D:\\WGame\\Movies\\UE3_logo.bik",
-                 "D:\\WGame\\Movies\\FOX_LOGO.xxx",
-                 "D:\\WGame\\Movies\\FOX_LOGO.bik",
-                 "D:\\WGame\\Movies\\MARVEL_INTRO.xxx",
-                 "D:\\WGame\\Movies\\MARVEL_INTRO.bik",
                  "D:\\WGame\\Movies\\Copyright.xxx",
                  "D:\\WGame\\Movies\\Copyright.bik",
+                 "D:\\WGame\\Movies\\ravenlogo.xxx",
+                 "D:\\WGame\\Movies\\ravenlogo.bik",
                  "D:\\WGame\\Movies\\ATVI_logo.xxx",
-                 "D:\\WGame\\Movies\\ATVI_logo.bik"}) {
+                 "D:\\WGame\\Movies\\ATVI_logo.bik",
+                 "D:\\WGame\\Movies\\MARVEL_INTRO.xxx",
+                 "D:\\WGame\\Movies\\MARVEL_INTRO.bik",
+                 "D:\\WGame\\Movies\\FOX_LOGO.xxx",
+                 "D:\\WGame\\Movies\\FOX_LOGO.bik",
+                 "D:\\WGame\\Movies\\UE3_logo.xxx",
+                 "D:\\WGame\\Movies\\UE3_logo.bik",
+                 "D:\\WGame\\Movies\\loading_screen_final.bik"}) {
             std::filesystem::path hostMovie;
             const bool mapped = translateGuestFilePath(guestMovie, false, hostMovie);
             std::error_code ioError;
@@ -4456,48 +4460,15 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
                                " present=" + (exists ? "1" : "0") +
                                " host=" + (mapped ? hostMovie.string() : "<rejected>"));
         }
-        // Enumerate the exact Xbox dump directory: a fixed PC/console movie
-        // list cannot establish which post-logo loading assets this disc has.
-        std::filesystem::path movieAnchor;
-        const bool movieAnchorMapped = translateGuestFilePath(
-            "D:\\WGame\\Movies\\Copyright.bik", false, movieAnchor);
-        uint32_t movieAssetCount = 0u;
-        bool hasFinalLoadingMovie = false;
-        std::error_code movieDirectoryError;
-        if (movieAnchorMapped &&
-            std::filesystem::is_directory(movieAnchor.parent_path(), movieDirectoryError)) {
-            for (std::filesystem::directory_iterator it(movieAnchor.parent_path(), movieDirectoryError), end;
-                 !movieDirectoryError && it != end; it.increment(movieDirectoryError)) {
-                const auto &entry = *it;
-                std::string extension = entry.path().extension().string();
-                std::transform(extension.begin(), extension.end(), extension.begin(),
-                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                if (extension != ".bik" && extension != ".xxx") continue;
-                std::error_code fileError;
-                if (!entry.is_regular_file(fileError) || fileError) continue;
-                const auto bytes = entry.file_size(fileError);
-                const std::string filename = entry.path().filename().string();
-                std::string lowerFilename = filename;
-                std::transform(lowerFilename.begin(), lowerFilename.end(), lowerFilename.begin(),
-                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                if (lowerFilename == "loading_screen_final.bik") hasFinalLoadingMovie = true;
-                if (movieAssetCount < 256u) {
-                    char movieEvent[512];
-                    std::snprintf(movieEvent, sizeof(movieEvent),
-                        "XOWUE_MEDIA_ENUM inventory_only=1 name=%s extension=%s bytes=%llu size_valid=%u",
-                        filename.c_str(), extension.c_str(),
-                        static_cast<unsigned long long>(fileError ? 0u : bytes),
-                        fileError ? 0u : 1u);
-                    recordRuntimeTrace(movieEvent);
-                }
-                ++movieAssetCount;
-            }
-        }
-        recordRuntimeTrace("XOWUE_MEDIA_ENUM_COMPLETE inventory_only=1 playback_order=not_observed mapped=" +
-            std::to_string(movieAnchorMapped ? 1u : 0u) +
-            " count=" + std::to_string(movieAssetCount) +
-            " loading_screen_final=" + std::to_string(hasFinalLoadingMovie ? 1u : 0u) +
-            " iterator_error=" + std::to_string(movieDirectoryError.value()));
+        std::filesystem::path loadingMovie;
+        const bool loadingMovieMapped = translateGuestFilePath(
+            "D:\\WGame\\Movies\\loading_screen_final.bik", false, loadingMovie);
+        std::error_code loadingMovieError;
+        const bool hasFinalLoadingMovie = loadingMovieMapped &&
+            std::filesystem::is_regular_file(loadingMovie, loadingMovieError);
+        recordRuntimeTrace("XOWUE_MEDIA_ENUM_COMPLETE inventory_only=1 scope=verified_boot_sequence_only count=13 loading_screen_final=" +
+            std::to_string(hasFinalLoadingMovie ? 1u : 0u) +
+            " playback_order=not_observed");
         const Image image = parseImage(path);
         g_activeImageBase = static_cast<uint32_t>(image.base);
         g_activeEntryPoint = static_cast<uint32_t>(image.entry_point);
@@ -6344,6 +6315,35 @@ void xowue_ExCreateThread(PPCContext &context, uint8_t *base) {
                               thread->id, thread->startupAddress, thread->startAddress,
                               thread->startContext, thread->stackBase, thread->stackSize);
                 recordRuntimeTrace(started);
+                if (thread->startAddress == 0x82690DC0u ||
+                    thread->startupAddress == 0x82690DC0u) {
+                    static std::atomic<uint32_t> videoThreadOrder{0u};
+                    const uint32_t order = videoThreadOrder.fetch_add(1u, std::memory_order_relaxed) + 1u;
+                    char event[192];
+                    std::snprintf(event, sizeof(event),
+                        "XOWUE_BINK_VIDEO_THREAD_START order=%u tid=%u entry=0x%08X context=0x%08X",
+                        order, thread->id, thread->startAddress, thread->startContext);
+                    recordRuntimeTrace(event);
+                    if (validGuestRange(thread->startContext, 0x40u)) {
+                        for (uint32_t offset = 0u; offset < 0x40u; offset += 4u) {
+                            char word[128];
+                            std::snprintf(word, sizeof(word),
+                                "XOWUE_BINK_VIDEO_CONTEXT order=%u tid=%u offset=0x%02X value=0x%08X",
+                                order, thread->id, offset,
+                                loadGuestBe32(memory->base, thread->startContext + offset));
+                            recordRuntimeTrace(word);
+                        }
+                    }
+                } else if (thread->startAddress == 0x83268358u ||
+                           thread->startupAddress == 0x83268358u) {
+                    static std::atomic<uint32_t> decoderThreadOrder{0u};
+                    const uint32_t order = decoderThreadOrder.fetch_add(1u, std::memory_order_relaxed) + 1u;
+                    char event[160];
+                    std::snprintf(event, sizeof(event),
+                        "XOWUE_BINK_DECODER_THREAD_START order=%u tid=%u entry=0x%08X context=0x%08X",
+                        order, thread->id, thread->startAddress, thread->startContext);
+                    recordRuntimeTrace(event);
+                }
                 entryFunction(childContext, memory->base);
                 exitCode = thread->startupAddress == 0u ? childContext.r3.u32 : 0u;
             } catch (const GuestThreadExit &exit) {
@@ -8150,17 +8150,18 @@ static uint32_t writeTouchGamepadState(uint8_t *base, uint32_t userIndex,
                                        uint32_t requestedUserIndex, uint32_t flags) {
     const uint32_t pollSequence =
         g_xowueInputPollCount.fetch_add(1u, std::memory_order_relaxed) + 1u;
-    // Only port 0 is connected. XAM's ANY/ANY_USER forms are normalized by
-    // the XAM wrappers below, while plain XInput keeps its 0..3 contract.
-    if (userIndex != 0u) {
+    // One virtual touch controller is mirrored into all four Xbox user ports.
+    // Build 118.3 proves this title polls XamInputGetState(user=3, GAMEPAD),
+    // while the UIKit bridge was only exposing port 0; rejecting port 3 made
+    // every real game poll return ERROR_DEVICE_NOT_CONNECTED.
+    if (userIndex > 3u) {
         static std::array<std::atomic<uint32_t>, 4> rejectedPollCounts{};
-        const uint32_t bucket = std::min<uint32_t>(userIndex, 3u);
         const uint32_t rejectedCount =
-            rejectedPollCounts[bucket].fetch_add(1u, std::memory_order_relaxed) + 1u;
+            rejectedPollCounts[3].fetch_add(1u, std::memory_order_relaxed) + 1u;
         if (rejectedCount <= 4u || pollSequence % 1024u == 0u) {
             char rejected[320];
             std::snprintf(rejected, sizeof(rejected),
-                "api=%s poll=%u requested_user=%u normalized_user=%u flags=0x%08X output=0x%08X status=0x%08X reason=user_not_connected rejected_count=%u",
+                "api=%s poll=%u requested_user=%u normalized_user=%u flags=0x%08X output=0x%08X status=0x%08X reason=invalid_user_port rejected_count=%u",
                 apiName, pollSequence, requestedUserIndex, userIndex, flags, address,
                 kXInputErrorDeviceNotConnected, rejectedCount);
             persistGuestInputTrace(rejected);
@@ -8241,9 +8242,8 @@ static uint32_t writeTouchGamepadState(uint8_t *base, uint32_t userIndex,
 
 static uint32_t writeTouchGamepadCapabilities(uint8_t *base, uint32_t userIndex,
                                               uint32_t address) {
-    if (userIndex != 0u) {
-        return kXInputErrorDeviceNotConnected;
-    }
+    // Report the same virtual controller at every valid Xbox user port.
+    if (userIndex > 3u) return kXInputErrorDeviceNotConnected;
     if (address == 0u || !base || !validGuestRange(address, 20u))
         return kXInputErrorBadArguments;
     std::memset(base + address, 0, 20u);
@@ -8350,7 +8350,7 @@ void xowue_XInputSetState(PPCContext &context, uint8_t *base) {
     const uint32_t vibration = context.r4.u32;
     const uint32_t status = vibration == 0u || !validGuestRange(vibration, 4u)
         ? kXInputErrorBadArguments
-        : (userIndex == 0u ? kNtStatusSuccess : kXInputErrorDeviceNotConnected);
+        : (userIndex <= 3u ? kNtStatusSuccess : kXInputErrorDeviceNotConnected);
     context.r3.u32 = status;
     traceXowueInputImport(5u, "XInputSetState", userIndex, vibration,
                           0u, 0u, status, context);
@@ -8364,7 +8364,7 @@ void xowue_XamInputSetState(PPCContext &context, uint8_t *base) {
     const uint32_t vibration = context.r5.u32;
     const uint32_t status = vibration == 0u || !base || !validGuestRange(vibration, 4u)
         ? kXInputErrorBadArguments
-        : (userIndex == 0u ? kNtStatusSuccess : kXInputErrorDeviceNotConnected);
+        : (userIndex <= 3u ? kNtStatusSuccess : kXInputErrorDeviceNotConnected);
     context.r3.u32 = status;
     traceXowueInputImport(6u, "XamInputSetState", requestedUserIndex, reserved,
                           vibration, 0u, status, context);
@@ -8773,7 +8773,20 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
     std::string readExtension = file->path.extension().string();
     std::transform(readExtension.begin(), readExtension.end(), readExtension.begin(),
         [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    if (readExtension == ".xxx" || readExtension == ".bik") {
+    std::string mediaFilename = file->path.filename().string();
+    std::transform(mediaFilename.begin(), mediaFilename.end(), mediaFilename.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const std::string mediaParent = file->path.parent_path().filename().string();
+    std::string mediaParentLower = mediaParent;
+    std::transform(mediaParentLower.begin(), mediaParentLower.end(), mediaParentLower.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const bool isVerifiedBootBink = readExtension == ".bik" &&
+        mediaParentLower == "movies" &&
+        (mediaFilename == "copyright.bik" || mediaFilename == "ravenlogo.bik" ||
+         mediaFilename == "atvi_logo.bik" || mediaFilename == "marvel_intro.bik" ||
+         mediaFilename == "fox_logo.bik" || mediaFilename == "ue3_logo.bik" ||
+         mediaFilename == "loading_screen_final.bik");
+    if (isVerifiedBootBink) {
         const uint32_t mediaOrder = g_b105MediaOrder.fetch_add(1u, std::memory_order_relaxed) + 1u;
         static std::mutex perMediaReadMutex;
         static std::unordered_map<std::string, uint32_t> perMediaReadCounts;
@@ -8789,7 +8802,7 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
             readStatus != kNtStatusSuccess || bytesRead < length) {
             char mediaEvent[1152];
             std::snprintf(mediaEvent, sizeof(mediaEvent),
-                "B105_MEDIA_READ_ORDER order=%u path_read=%u eof=%u api=NtReadFile thread=%u handle=0x%08X "
+                "XOWUE_BINK_FILE_READ_ORDER order=%u path_read=%u file_read_only=1 playback_order_not_inferred=1 eof=%u api=NtReadFile thread=%u handle=0x%08X "
                 "path=%s offset=0x%016llX requested=%u bytes=%u status=0x%08X async=%u",
                 mediaOrder, pathReadIndex, readEof ? 1u : 0u,
                 g_currentGuestThreadId, handle, mediaPath.c_str(),
@@ -8797,8 +8810,7 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
                 asyncRead ? 1u : 0u);
             recordRuntimeTrace(mediaEvent);
         }
-        const char *integrityTag = readExtension == ".xxx"
-            ? "B92_XXX_INTEGRITY" : "B92_BIK_INTEGRITY";
+        const char *integrityTag = "XOWUE_BOOT_BIK_INTEGRITY";
         static std::atomic<uint64_t> s_xxxIntegrityLogCount{0u};
         const uint64_t integrityLogIndex =
             s_xxxIntegrityLogCount.fetch_add(1u, std::memory_order_relaxed);

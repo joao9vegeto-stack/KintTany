@@ -275,9 +275,11 @@ private struct XOWUEGameSurfaceScreen: View {
         // screen VStack/Spacer sat above the HUD and intercepted transparent areas.
         .overlay(alignment: .topLeading) {
             Button {
-                XOWUEDiagnostics.log("navigation.exit tapped: terminating native PPC")
-                touchController.releaseAll()
+                XOWUEDiagnostics.log("navigation.exit tapped: dispatching native cancellation")
+                // Latch native stop before entering the C++ touch bridge.
                 library.requestExit()
+                XOWUEDiagnostics.log("navigation.exit requestExit returned; releasing touch state")
+                touchController.releaseAll()
             } label: {
                 Label("SAIR", systemImage: "power")
                     .font(.system(size: 11, weight: .heavy, design: .rounded))
@@ -345,8 +347,8 @@ private struct XOWUEGameSurfaceScreen: View {
         .preferredColorScheme(.dark)
         .statusBarHidden(true)
         .onDisappear {
-            touchController.releaseAll()
             library.requestExit()
+            touchController.releaseAll()
         }
         .onAppear {
             // The presenter owns orientation; only remove the temporary boot hint here.

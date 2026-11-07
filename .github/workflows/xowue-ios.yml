@@ -274,6 +274,12 @@ jobs:
           python3 -m py_compile tools/test_xowue_input_import_dispatch.py
           python3 tools/test_xowue_input_import_dispatch.py
 
+      - name: Verify Build 118.4 touch ports, exit dispatch and boot media tracing
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/test_xowue_1183_touch_exit_media.py
+          python3 tools/test_xowue_1183_touch_exit_media.py
+
       - name: Verify guest event state adoption and exact surface teardown
         run: |
           set -euo pipefail
