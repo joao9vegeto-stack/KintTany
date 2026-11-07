@@ -41,15 +41,36 @@ require(".allowsHitTesting(false)" in screen,
 require("library.requestExit()" in screen and "xowue_request_stop()" in APP,
         "the UI must reach the native scheduler stop entry point")
 
-require("lastReadEof.store(readEof" in ENGINE,
-        "NtReadFile must retain the real EOF result")
+require("result.eof = readEof" in ENGINE and "result.sequence = file->lastReadSequence.fetch_add" in ENGINE,
+        "NtReadFile must retain EOF and sequence on the exact transfer result")
+require("file->lastReadEof" not in ENGINE and "file->lastReadOffset" not in ENGINE,
+        "EOF completion must not read a mutable per-file snapshot that another APC can overwrite")
+require("readEof ? 1u : 0u" in ENGINE and "readReachedEof" not in ENGINE,
+        "B105 media ordering must label the current read, not the previous read")
 require("perMediaReadCounts" in ENGINE and "path_read=%u eof=%u" in ENGINE,
         "each BIK/XXX path must retain early reads and EOF beyond the old global 256-read cap")
 require("B99_MEDIA_EOF_COMPLETION" in ENGINE,
         "both BIK and XXX EOFs must be correlated with guest completion signals")
 require("B99_BIK_EOF_COMPLETION" in ENGINE,
         "the Bink EOF record must be emitted after the guest completion signal")
+require("completionSignal.signalNow(result.sequence, result.offset, result.bytesRead" in ENGINE,
+        "sync and APC-backed reads must signal with the exact transfer metadata")
+require("readCompleted && readEof" in ENGINE,
+        "a failed or early-return read must not inherit an older transfer's EOF")
 require("B94_STREAM_R10_WORD" in ENGINE,
         "the thread-11 stream object's r10 data must be captured")
+
+for api, slot in [
+    ("XInputGetState", 0), ("XamInputGetState", 1),
+    ("XInputGetCapabilities", 2), ("XamInputGetCapabilities", 3),
+    ("XamInputGetCapabilitiesEx", 4), ("XInputSetState", 5),
+    ("XamInputSetState", 6),
+]:
+    require(f'traceXowueInputImport({slot}u, "{api}"' in ENGINE,
+            f"{api} must expose its actual guest import call count and ABI arguments")
+require("XOWUE_INPUT_API api=%s call=%u" in ENGINE,
+        "input import tracing must be bounded and correlated to the PPC caller")
+require("constexpr off_t kMaxGuestInputTraceFileBytes = 256 * 1024" in ENGINE,
+        "expanded input diagnostics must retain the existing bounded sidecar size")
 
 print("XOWUE_BUILD117_INPUT_EXIT_MEDIA_GUARDS_OK")

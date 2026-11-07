@@ -264,11 +264,9 @@ struct GuestFile {
     size_t directoryCursor = 0;
     std::shared_ptr<GuestWaitable> completion;
     // Preserve the last transfer result until its guest completion signal fires.
+    // Monotonic per-file sequence used to correlate each transfer with its exact
+    // completion signal, including overlapping APC-backed reads.
     std::atomic<uint64_t> lastReadSequence{0u};
-    std::atomic<uint64_t> lastReadOffset{0u};
-    std::atomic<uint32_t> lastReadBytes{0u};
-    std::atomic<uint32_t> lastReadStatus{0u};
-    std::atomic<bool> lastReadEof{false};
     std::mutex mutex;
 };
 struct GuestApc {
@@ -2017,7 +2015,9 @@ struct GuestEventSignalOnReturn final {
 struct GuestFileCompletionSignalOnReturn final {
     explicit GuestFileCompletionSignalOnReturn(std::shared_ptr<GuestFile> value)
         : file(std::move(value)) {}
-    void signalNow() {
+    void signalNow(uint64_t readSequence = 0u, uint64_t readOffset = 0u,
+                   uint32_t readBytes = 0u, uint32_t readStatus = 0u,
+                   bool readEof = false, bool readCompleted = false) {
         if (signaled) return;
         signaled = true;
         if (!file || !file->completion) return;
@@ -2033,16 +2033,16 @@ struct GuestFileCompletionSignalOnReturn final {
                 std::lock_guard<std::mutex> lock(file->completion->mutex);
                 generation = file->completion->signalGeneration;
             }
-            if (file->lastReadEof.load(std::memory_order_acquire)) {
+            // Correlate EOF with this exact transfer, not a mutable "last read"
+            // snapshot that another APC-backed read on the same file can replace.
+            if (readCompleted && readEof) {
                 char eofEvent[768];
                 std::snprintf(eofEvent, sizeof(eofEvent),
                     "B99_MEDIA_EOF_COMPLETION kind=%s handle=0x%08X object=0x%08X generation=%llu read_seq=%llu offset=0x%llX bytes=%u status=0x%08X path=%s",
                     ext.c_str(), file->completion->handle, file->completion->objectAddress,
                     static_cast<unsigned long long>(generation),
-                    static_cast<unsigned long long>(file->lastReadSequence.load(std::memory_order_relaxed)),
-                    static_cast<unsigned long long>(file->lastReadOffset.load(std::memory_order_relaxed)),
-                    file->lastReadBytes.load(std::memory_order_relaxed),
-                    file->lastReadStatus.load(std::memory_order_relaxed),
+                    static_cast<unsigned long long>(readSequence),
+                    static_cast<unsigned long long>(readOffset), readBytes, readStatus,
                     file->path.string().c_str());
                 recordRuntimeTrace(eofEvent);
                 if (ext == ".bik") recordRuntimeTrace("B99_BIK_EOF_COMPLETION emitted after file signal");
@@ -8195,11 +8195,32 @@ static uint32_t writeTouchGamepadCapabilities(uint8_t *base, uint32_t userIndex,
     return kNtStatusSuccess;
 }
 
+static void traceXowueInputImport(uint32_t slot, const char *api,
+                                     uint32_t arg3, uint32_t arg4,
+                                     uint32_t arg5, uint32_t arg6,
+                                     uint32_t status, const PPCContext &context) {
+    static std::array<std::atomic<uint32_t>, 7> calls{};
+    if (slot >= calls.size()) return;
+    const uint32_t sequence = calls[slot].fetch_add(1u, std::memory_order_relaxed) + 1u;
+    // Enough samples to identify the active API and arguments, then one sample
+    // every 120 calls. This keeps the input sidecar below its existing 256 KiB cap.
+    if (sequence > 32u && (sequence % 120u) != 0u) return;
+    char event[384];
+    std::snprintf(event, sizeof(event),
+        "XOWUE_INPUT_API api=%s call=%u thread=%u lr=0x%08X r3=0x%08X r4=0x%08X r5=0x%08X r6=0x%08X status=0x%08X",
+        api, sequence, static_cast<uint32_t>(g_currentGuestThreadId),
+        static_cast<uint32_t>(context.lr), arg3, arg4, arg5, arg6, status);
+    persistGuestInputTrace(event);
+}
+
 void xowue_XInputGetState(PPCContext &context, uint8_t *base) {
     const uint32_t requestedUserIndex = context.r3.u32;
     const uint32_t stateAddress = context.r4.u32;
-    context.r3.u32 = writeTouchGamepadState(
+    const uint32_t status = writeTouchGamepadState(
         base, requestedUserIndex, stateAddress, "XInputGetState", requestedUserIndex, 0u);
+    context.r3.u32 = status;
+    traceXowueInputImport(0u, "XInputGetState", requestedUserIndex, stateAddress,
+                          0u, 0u, status, context);
 }
 
 void xowue_XamInputGetState(PPCContext &context, uint8_t *base) {
@@ -8216,52 +8237,75 @@ void xowue_XamInputGetState(PPCContext &context, uint8_t *base) {
         context.r3.u32 = kXInputErrorDeviceNotConnected;
         return;
     }
-    context.r3.u32 = writeTouchGamepadState(
+    const uint32_t status = writeTouchGamepadState(
         base, userIndex, stateAddress, "XamInputGetState", requestedUserIndex, flags);
+    context.r3.u32 = status;
+    traceXowueInputImport(1u, "XamInputGetState", requestedUserIndex, flags,
+                          stateAddress, 0u, status, context);
 }
 
 void xowue_XInputGetCapabilities(PPCContext &context, uint8_t *base) {
     const uint32_t userIndex = context.r3.u32;
     const uint32_t flags = context.r4.u32;
     const uint32_t capabilities = context.r5.u32;
-    context.r3.u32 = !xowueXamFlagsAllowGamepad(flags)
+    const uint32_t status = !xowueXamFlagsAllowGamepad(flags)
         ? kXInputErrorDeviceNotConnected
         : writeTouchGamepadCapabilities(base, userIndex, capabilities);
+    context.r3.u32 = status;
+    traceXowueInputImport(2u, "XInputGetCapabilities", userIndex, flags,
+                          capabilities, 0u, status, context);
 }
 
 void xowue_XamInputGetCapabilities(PPCContext &context, uint8_t *base) {
+    const uint32_t requestedUserIndex = context.r3.u32;
     const uint32_t flags = context.r4.u32;
-    const uint32_t userIndex = xowueNormalizeXamUserIndex(context.r3.u32, flags);
+    const uint32_t userIndex = xowueNormalizeXamUserIndex(requestedUserIndex, flags);
     const uint32_t capabilities = context.r5.u32;
-    context.r3.u32 = !xowueXamFlagsAllowGamepad(flags)
+    const uint32_t status = !xowueXamFlagsAllowGamepad(flags)
         ? kXInputErrorDeviceNotConnected
         : writeTouchGamepadCapabilities(base, userIndex, capabilities);
+    context.r3.u32 = status;
+    traceXowueInputImport(3u, "XamInputGetCapabilities", requestedUserIndex, flags,
+                          capabilities, 0u, status, context);
 }
 
 void xowue_XamInputGetCapabilitiesEx(PPCContext &context, uint8_t *base) {
+    const uint32_t reserved = context.r3.u32;
+    const uint32_t requestedUserIndex = context.r4.u32;
     const uint32_t flags = context.r5.u32;
-    const uint32_t userIndex = xowueNormalizeXamUserIndex(context.r4.u32, flags);
+    const uint32_t userIndex = xowueNormalizeXamUserIndex(requestedUserIndex, flags);
     const uint32_t capabilities = context.r6.u32;
-    context.r3.u32 = !xowueXamFlagsAllowGamepad(flags)
+    const uint32_t status = !xowueXamFlagsAllowGamepad(flags)
         ? kXInputErrorDeviceNotConnected
         : writeTouchGamepadCapabilities(base, userIndex, capabilities);
+    context.r3.u32 = status;
+    traceXowueInputImport(4u, "XamInputGetCapabilitiesEx", reserved, requestedUserIndex,
+                          flags, capabilities, status, context);
 }
 
 void xowue_XInputSetState(PPCContext &context, uint8_t *base) {
     const uint32_t userIndex = context.r3.u32;
     const uint32_t vibration = context.r4.u32;
-    context.r3.u32 = vibration == 0u || !validGuestRange(vibration, 4u)
+    const uint32_t status = vibration == 0u || !validGuestRange(vibration, 4u)
         ? kXInputErrorBadArguments
         : (userIndex == 0u ? kNtStatusSuccess : kXInputErrorDeviceNotConnected);
+    context.r3.u32 = status;
+    traceXowueInputImport(5u, "XInputSetState", userIndex, vibration,
+                          0u, 0u, status, context);
     (void)base;
 }
 
 void xowue_XamInputSetState(PPCContext &context, uint8_t *base) {
-    const uint32_t userIndex = (context.r3.u32 & 0xFFu) == 0xFFu ? 0u : context.r3.u32;
+    const uint32_t requestedUserIndex = context.r3.u32;
+    const uint32_t reserved = context.r4.u32;
+    const uint32_t userIndex = (requestedUserIndex & 0xFFu) == 0xFFu ? 0u : requestedUserIndex;
     const uint32_t vibration = context.r5.u32;
-    context.r3.u32 = vibration == 0u || !base || !validGuestRange(vibration, 4u)
+    const uint32_t status = vibration == 0u || !base || !validGuestRange(vibration, 4u)
         ? kXInputErrorBadArguments
         : (userIndex == 0u ? kNtStatusSuccess : kXInputErrorDeviceNotConnected);
+    context.r3.u32 = status;
+    traceXowueInputImport(6u, "XamInputSetState", requestedUserIndex, reserved,
+                          vibration, 0u, status, context);
 }
 
 void xowue_VdQueryVideoFlags(PPCContext &context) { context.r3.u32 = 3u; }
@@ -8589,6 +8633,8 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
         uint32_t status = kNtStatusUnsuccessful;
         uint32_t bytesRead = 0u;
         uint64_t offset = 0u;
+        uint64_t sequence = 0u;
+        bool eof = false;
     };
     const auto performRead = [file, base, buffer, length, hasExplicitOffset,
                               explicitOffset, ioStatus, handle, eventHandle,
@@ -8675,17 +8721,15 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
             std::lock_guard<std::mutex> lock(perMediaReadMutex);
             pathReadIndex = ++perMediaReadCounts[mediaPath];
         }
-        const bool readReachedEof = file->lastReadEof.load(std::memory_order_acquire);
-        // The old global cap of 256 chunks was consumed by ravenlogo.bik
-        // before later title logos were reached. Sample each media path on its
-        // own and always preserve EOF, short-read and failure transitions.
-        if (pathReadIndex <= 2u || readReachedEof ||
+        // Report the EOF bit from this transfer. A previous read's EOF state
+        // must never be mistaken for the current Bink/XXX chunk.
+        if (pathReadIndex <= 2u || readEof ||
             readStatus != kNtStatusSuccess || bytesRead < length) {
             char mediaEvent[1152];
             std::snprintf(mediaEvent, sizeof(mediaEvent),
                 "B105_MEDIA_READ_ORDER order=%u path_read=%u eof=%u api=NtReadFile thread=%u handle=0x%08X "
                 "path=%s offset=0x%016llX requested=%u bytes=%u status=0x%08X async=%u",
-                mediaOrder, pathReadIndex, readReachedEof ? 1u : 0u,
+                mediaOrder, pathReadIndex, readEof ? 1u : 0u,
                 g_currentGuestThreadId, handle, mediaPath.c_str(),
                 static_cast<unsigned long long>(offset), length, bytesRead, readStatus,
                 asyncRead ? 1u : 0u);
@@ -8787,14 +8831,11 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
                 readStatus, readEof ? 1u : 0u, readFailed ? 1u : 0u, readBad ? 1u : 0u);
             recordRuntimeTrace(event);
         }
-        file->lastReadSequence.fetch_add(1u, std::memory_order_relaxed);
-        file->lastReadOffset.store(offset, std::memory_order_relaxed);
-        file->lastReadBytes.store(bytesRead, std::memory_order_relaxed);
-        file->lastReadStatus.store(readStatus, std::memory_order_relaxed);
-        file->lastReadEof.store(readEof, std::memory_order_release);
+        result.sequence = file->lastReadSequence.fetch_add(1u, std::memory_order_relaxed) + 1u;
         result.status = readStatus;
         result.bytesRead = bytesRead;
         result.offset = offset;
+        result.eof = readEof;
         return result;
     };
 
@@ -8834,7 +8875,8 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
             // The transfer writes the final IOSB before either completion
             // object is signalled; then the APC normal routine receives IOSB
             // as arg1 and may safely consume the newly filled buffer.
-            completionSignal.signalNow();
+            completionSignal.signalNow(result.sequence, result.offset, result.bytesRead,
+                                       result.status, result.eof, result.sequence != 0u);
             eventSignal.signalNow();
 
             char completeEvent[512];
@@ -8865,7 +8907,8 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
         result.status = kNtStatusUnsuccessful;
         writeGuestIoStatus(base, ioStatus, result.status, 0u);
     }
-    completionSignal.signalNow();
+    completionSignal.signalNow(result.sequence, result.offset, result.bytesRead,
+                               result.status, result.eof, result.sequence != 0u);
     signal.signalNow();
     // Preserve the Xbox asynchronous-handle contract even when this fallback
     // path completes the host read inline; the final status remains in IOSB.
