@@ -381,6 +381,8 @@ struct GuestThread {
     std::atomic<uint32_t> exitStatus{kNtStatusSuccess};
     std::atomic<bool> exited{false};
     std::atomic<uint32_t> lastGuestPc{0u};
+    // Number of VdRetrainEDRAM frame markers observed on this guest thread.
+    std::atomic<uint32_t> videoFrameCount{0u};
     std::atomic<uint32_t> lastCallerFn{0u};
     std::array<std::atomic<uint32_t>, 16> recentAotFns{};
     std::atomic<uint32_t> recentAotIdx{0u};
@@ -541,6 +543,7 @@ std::atomic<uint32_t> g_b90StreamTransitionLogs{0u};
 std::atomic<uint32_t> g_b95SyncWaitLogs{0u};
 std::atomic<uint32_t> g_b95SyncSignalLogs{0u};
 static std::atomic<uint32_t> g_b105MediaOrder{0u};
+static std::atomic<uint32_t> g_binkFrameMarkerOrder{0u};
 std::array<std::atomic<bool>, 8> g_b97MoviePpcDumped{};
 std::atomic<uint32_t> g_b98WaitTargetLogs{0u};
 std::atomic<uint32_t> g_b98WaitResultLogs{0u};
@@ -624,6 +627,7 @@ std::vector<std::shared_ptr<GuestThread>> snapshotAllGuestThreads() {
 bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     if (event.find("XOWUE_XAUDIO_") != std::string::npos)
         return g_xaudioTraceLogs.fetch_add(1u, std::memory_order_relaxed) < 256u;
+    if (event.find("XOWUE_BINK_FRAME_MARKER") != std::string::npos) return true;
     if (event.find("B97_") != std::string::npos) return true;
     if (event.find("B103_ASYNC_NTREADFILE_") != std::string::npos) {
         static std::atomic<uint32_t> count{0u};
@@ -4362,6 +4366,7 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             g_runtimeTrace.clear();
         }
         g_runtimeTracePersistSequence.store(0, std::memory_order_relaxed);
+        g_binkFrameMarkerOrder.store(0u, std::memory_order_relaxed);
         g_touchControllerUpdateCount.store(0u, std::memory_order_relaxed);
         g_xowueInputPollCount.store(0u, std::memory_order_relaxed);
         g_xowueInputNonzeroPollCount.store(0u, std::memory_order_relaxed);
@@ -8423,7 +8428,31 @@ void xowue_VdSetDisplayModeOverride(PPCContext &context) { context.r3.u32 = 0u; 
 void xowue_VdIsHSIOTrainingSucceeded(PPCContext &context) { context.r3.u32 = 1u; }
 void xowue_VdEnableDisableClockGating(PPCContext &context) { context.r3.u32 = 0u; }
 void xowue_VdPersistDisplay(PPCContext &context) { context.r3.u32 = 1u; }
-void xowue_VdRetrainEDRAM(PPCContext &context) { context.r3.u32 = 0u; }
+void xowue_VdRetrainEDRAM(PPCContext &context) {
+    GuestThread *thread = g_currentGuestThread;
+    if (thread && (thread->startAddress == 0x82690DC0u ||
+                   thread->startupAddress == 0x82690DC0u)) {
+        const uint32_t order =
+            g_binkFrameMarkerOrder.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        const uint32_t frame =
+            thread->videoFrameCount.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        // The boot sequence needs fewer than 1,000 markers. Keep a generous
+        // cap for the second loading screen while avoiding unbounded gameplay logs.
+        if (order <= 2048u) {
+            char event[320];
+            std::snprintf(event, sizeof(event),
+                "XOWUE_BINK_FRAME_MARKER order=%u tid=%u frame=%u entry=0x%08X "
+                "startup=0x%08X context=0x%08X pc=0x%08X lr=0x%08X guest_r3=0x%08X",
+                order, thread->id, frame, thread->startAddress,
+                thread->startupAddress, thread->startContext,
+                thread->lastGuestPc.load(std::memory_order_relaxed),
+                thread->lastGuestLr.load(std::memory_order_relaxed), context.r3.u32);
+            recordRuntimeTrace(event);
+        }
+    }
+    // Preserve the Xbox export's existing success return; this is observation only.
+    context.r3.u32 = 0u;
+}
 void xowue_VdRetrainEDRAMWorker(PPCContext &context) { context.r3.u32 = 0u; }
 void xowue_VdCallGraphicsNotificationRoutines(PPCContext &context) { context.r3.u32 = 0u; }
 

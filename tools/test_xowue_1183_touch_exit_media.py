@@ -64,6 +64,24 @@ require("0x82690DC0u" in thread_trace and "0x83268358u" in thread_trace,
 require("XOWUE_BINK_VIDEO_CONTEXT" in thread_trace,
         "video-thread context words must be retained to map playback to the opened Bink file")
 
+guest_thread = body(ENGINE, "struct GuestThread {", "struct GuestAudioClient {")
+require("videoFrameCount" in guest_thread,
+        "each guest video thread must maintain its own observed frame count")
+frame_marker = body(ENGINE, "void xowue_VdRetrainEDRAM(PPCContext &context) {",
+                    "void xowue_VdRetrainEDRAMWorker(")
+for token in ("XOWUE_BINK_FRAME_MARKER", "g_binkFrameMarkerOrder", "videoFrameCount",
+              "thread->startAddress", "thread->startupAddress", "thread->startContext",
+              "lastGuestPc", "lastGuestLr"):
+    require(token in frame_marker,
+            f"VdRetrainEDRAM frame marker must retain {token}")
+require("context.r3.u32 = 0u;" in frame_marker,
+        "frame observation must preserve VdRetrainEDRAM's existing success return")
+require("g_binkFrameMarkerOrder.store(0u" in ENGINE,
+        "frame order must reset at the start of each XEX session")
+persist = body(ENGINE, "bool shouldPersistRuntimeTrace(", "void persistRuntimeTrace(")
+require('event.find("XOWUE_BINK_FRAME_MARKER")' in persist,
+        "bounded runtime trace must persist actual video frame markers")
+
 flow = body(ENGINE, "// These are media-adjacent PPC routines", "    // Check before diagnostic work")
 require("0x822A0278u" not in flow,
         "the FName/NoneByteProperty helper must not be mislabeled as Bink playback")

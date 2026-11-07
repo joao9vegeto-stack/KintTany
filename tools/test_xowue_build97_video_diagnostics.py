@@ -34,7 +34,7 @@ required = {
     "movie read order is explicit": "B105_MEDIA_READ_ORDER",
     "movie open order is explicit": "B105_MEDIA_OPEN_ORDER",
     "guest media call flow is chronological": "B105_MOVIE_PPC_FLOW",
-    "directory enumeration is not playback order": "inventory_only=1 playback_order=not_observed",
+    "directory enumeration is inventory-only": "XOWUE_MEDIA_ENUM_COMPLETE inventory_only=1",
     "guest SignalState polling": "adoptGuestEventMemorySignalStateLocked",
     "targeted wait handle 0x115": "B98_WAIT_BEGIN",
     "targeted event creation metadata": "B98_EVENT_CREATE",
@@ -80,6 +80,15 @@ required = {
     "last-alias close wakes file waiters": "B99_FILE_COMPLETION_CLOSE",
 }
 failed = []
+inventory_start = source.index('recordRuntimeTrace("XOWUE_MEDIA_ENUM_COMPLETE')
+inventory_end = source.index(");", inventory_start)
+inventory_completion = source[inventory_start:inventory_end]
+if "playback_order=not_observed" not in inventory_completion:
+    failed.append("media inventory must explicitly avoid claiming playback order")
+    print("FAIL: media inventory must explicitly avoid claiming playback order")
+else:
+    print("PASS: media inventory explicitly avoids claiming playback order")
+
 for label, token in required.items():
     ok = token in source
     print(f"{'PASS' if ok else 'FAIL'}: {label}")
