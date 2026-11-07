@@ -46,7 +46,7 @@ for token in (
     "GuestFileCompletionSignalOnReturn completionSignal(file);",
     "GuestEventSignalOnReturn eventSignal(eventHandle);",
     "completionSignal.signalNow(result.sequence, result.offset, result.bytesRead,",
-    "queueGuestApc(apcThread, apcRoutine, ioStatus, 0u, std::move(completion));",
+    "queueGuestApc(apcThread, apcRoutine, apcContext, ioStatus, 0u, std::move(completion));",
     "context.r3.u32 = kNtStatusPending;",
     "B103_ASYNC_NTREADFILE_SUBMIT",
     "B103_ASYNC_NTREADFILE_COMPLETE",
