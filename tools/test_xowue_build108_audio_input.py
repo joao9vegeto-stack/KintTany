@@ -66,8 +66,14 @@ require("xowueXamFlagsAllowGamepad(flags)" in engine,
         "XAM state/capability queries must reject non-gamepad device requests")
 require("xowueNormalizeXamUserIndex(requestedUserIndex, flags)" in engine,
         "XamInputGetState must normalize ANY_USER and XUSER_INDEX_ANY")
-require("xowueNormalizeXamUserIndex(context.r4.u32, flags)" in engine,
-        "XamInputGetCapabilitiesEx must use its real user/flags argument positions")
+caps_ex_start = engine.index("void xowue_XamInputGetCapabilitiesEx")
+caps_ex_end = engine.index("void xowue_XInputSetState", caps_ex_start)
+caps_ex = engine[caps_ex_start:caps_ex_end]
+require("const uint32_t requestedUserIndex = context.r4.u32;" in caps_ex and
+        "const uint32_t flags = context.r5.u32;" in caps_ex and
+        "const uint32_t capabilities = context.r6.u32;" in caps_ex and
+        "xowueNormalizeXamUserIndex(requestedUserIndex, flags)" in caps_ex,
+        "XamInputGetCapabilitiesEx must use its real user/flags/output argument positions")
 require("if (userIndex != 0u)" in engine,
         "only the single connected touch gamepad at index zero may report connected")
 
