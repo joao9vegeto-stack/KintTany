@@ -58,7 +58,7 @@ require("XOWUE_BINK_FILE_READ_ORDER" in read_trace and "playback_order_not_infer
 require('readExtension == ".xxx" || readExtension == ".bik"' not in read_trace,
         "the media read-order trace must not include cooked Unreal .xxx assets")
 
-thread_trace = body(ENGINE, "XOWUE_BINK_VIDEO_THREAD_START", "entryFunction(childContext, memory->base);")
+thread_trace = body(ENGINE, "if (thread->startAddress == 0x82690DC0u", "entryFunction(childContext, memory->base);")
 require("0x82690DC0u" in thread_trace and "0x83268358u" in thread_trace,
         "actual video and Bink decoder thread entries must be traced separately")
 require("XOWUE_BINK_VIDEO_CONTEXT" in thread_trace,
