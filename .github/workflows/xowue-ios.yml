@@ -42,6 +42,24 @@ jobs:
       - name: Checkout XOWUE branch
         uses: actions/checkout@v4
 
+      - name: Preflight all Python tools and test inventory
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import py_compile
+
+          workflow = Path(".github/workflows/xowue-ios.yml").read_text(encoding="utf-8")
+          tools = sorted(Path("tools").glob("*.py"))
+          tests = sorted(Path("tools").glob("test_*.py"))
+          missing = [str(path) for path in tests if path.name not in workflow]
+          if missing:
+              raise SystemExit("Python test files not wired into XOWUE workflow: " + ", ".join(missing))
+          for path in tools:
+              py_compile.compile(str(path), doraise=True)
+          print(f"PYTHON_PREFLIGHT_OK: compiled {len(tools)} tools; all {len(tests)} test files are wired into CI")
+          PY
+
       - name: Assign app build number
         id: version
         uses: actions/github-script@v7

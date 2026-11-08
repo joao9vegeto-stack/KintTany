@@ -109,7 +109,7 @@ for declaration in (
     "static void acquireGuestSpinLock(uint8_t *base, uint32_t address, uint32_t owner);",
     "static void releaseGuestSpinLock(uint8_t *base, uint32_t address);",
 ):
-    require(ENGINE.index(declaration) < ENGINE.index("if (api == \\"KfAcquireSpinLock\\")"),
+    require(ENGINE.index(declaration) < ENGINE.index('if (api == "KfAcquireSpinLock")'),
             f"spinlock helper must be declared before the import dispatcher: {declaration}")
 
 require("static bool tryAcquireGuestSpinLock(" in ENGINE and
