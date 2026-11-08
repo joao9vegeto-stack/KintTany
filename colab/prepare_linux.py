@@ -36,7 +36,10 @@ def inspect_nup(engine, nup_path):
     require(profile is not None,
             f"no registered NXNative profile for {title_id:016X}; Linux preparation refuses to guess a profile")
     version = f"v{max(updates)}" if updates else "v0"
-    print(f"[Kleo2iOS] Game: {title_id:016X}; package: {version}; DLC packages: {len(dlc)}")
+    base_present = bool(base)
+    print(f"[Kleo2iOS] NUP contents: base={'YES' if base_present else 'NO'}; updates={len(updates)}; DLC={len(dlc)}")
+    require(base_present, "NUP does not contain the base game; include the base game together with its update and DLC before creating the handoff")
+    print(f"[Kleo2iOS] Game: {title_id:016X}; package: {version}")
     print(f"[Kleo2iOS] Registered profile: {getattr(profile, 'id', title_id)}")
     return f"{title_id:016X}", version
 
