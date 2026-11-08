@@ -102,7 +102,7 @@ private final class XOWUELandscapeHostingController: UIHostingController<XOWUEGa
 
 @MainActor
 private final class XOWUELandscapePresentationCoordinator {
-    weak var presentedHost: XOWUELandscapeHostingController?
+    var presentedHost: XOWUELandscapeHostingController?
     weak var presentingController: UIViewController?
     var presentationPending = false
 
@@ -120,10 +120,20 @@ private final class XOWUELandscapePresentationCoordinator {
     }
 
     func dismissPresentedHost(fallback: UIViewController?) {
-        guard let host = presentedHost else {
-            XOWUEDiagnostics.log("orientation.host dismiss requested without tracked host pending=\(presentationPending)")
+        guard let host = presentedHost ?? (fallback?.presentedViewController as? XOWUELandscapeHostingController) else {
+            // SwiftUI may remove the presenter during the dismissal handoff.
+            // In that case, still clear the pending state and restore portrait.
+            presentationPending = false
+            XOWUEOrientationDelegate.effectiveMask = .portrait
+            if let scene = fallback?.view.window?.windowScene {
+                scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { error in
+                    XOWUEDiagnostics.log("orientation.host no-host portrait restore failed: \(error.localizedDescription)")
+                }
+            }
+            XOWUEDiagnostics.log("orientation.host dismiss recovered without tracked host pending=0 portrait_requested=1")
             return
         }
+        if presentedHost == nil { presentedHost = host }
         if let presenter = host.presentingViewController,
            presenter.presentedViewController === host {
             XOWUEDiagnostics.log("orientation.host dismiss exact_presenter=\(String(describing: type(of: presenter))) exact_host=1")
@@ -135,9 +145,8 @@ private final class XOWUELandscapePresentationCoordinator {
         if let presenter = presentingController,
            presenter.presentedViewController === host {
             XOWUEDiagnostics.log("orientation.host dismiss retained_presenter=1 exact_host=1")
-            presenter.dismiss(animated: false) { [weak self, weak host] in
-                guard let self, let host else { return }
-                self.finishDismissal(of: host)
+            presenter.dismiss(animated: false) { [self, host] in
+                finishDismissal(of: host)
             }
             return
         }
@@ -180,10 +189,6 @@ private struct XOWUELandscapePresenter: UIViewControllerRepresentable {
         // Native boot completion dismisses this exact tracked UIKit host
         // directly, rather than depending solely on a later SwiftUI diff.
         library.installGameSurfaceDismissHandler { [coordinator, weak anchor] in
-            guard let coordinator else {
-                XOWUEDiagnostics.log("orientation.host dismiss coordinator unavailable")
-                return
-            }
             coordinator.dismissPresentedHost(fallback: anchor)
         }
         if library.gameSurfacePresented {

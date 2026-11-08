@@ -20,15 +20,23 @@ require(len(re.findall(r"private final class XOWUELandscapePresentationCoordinat
 
 require("private final class XOWUELandscapePresentationCoordinator" in APP,
         "the presenter must retain a reference to the exact game host")
-require("weak var presentedHost: XOWUELandscapeHostingController?" in APP and
+require("var presentedHost: XOWUELandscapeHostingController?" in APP and
         "weak var presentingController: UIViewController?" in APP,
-        "controller tracking must not create a retain cycle")
+        "the presented host must remain retained until UIKit confirms dismissal without retaining its presenter")
 require("host.presentingViewController" in APP and
         "presenter.presentedViewController === host" in APP and
         "presenter.dismiss(animated: false)" in APP,
         "dismissal must target the actual controller that presented the tracked host")
 require("func makeCoordinator() -> XOWUELandscapePresentationCoordinator" in APP,
         "UIViewControllerRepresentable must persist the presentation coordinator")
+require("presenter.dismiss(animated: false) { [self, host] in" in APP and
+        "presenter.dismiss(animated: false) { [weak self, weak host] in" not in APP,
+        "all exact-presenter dismissal paths must retain the coordinator and host until completion")
+require("library.installGameSurfaceDismissHandler { [coordinator, weak anchor] in\n            coordinator.dismissPresentedHost(fallback: anchor)" in APP,
+        "the library must retain a non-optional coordinator for the complete dismiss handoff")
+require("orientation.host dismiss recovered without tracked host pending=0 portrait_requested=1" in APP,
+        "a missing tracked host must clear the pending presentation and request portrait restoration")
+
 
 require("library.installGameSurfaceDismissHandler { [coordinator, weak anchor] in" in APP,
         "the library must retain the UIKit presentation coordinator until dismissal completes")
