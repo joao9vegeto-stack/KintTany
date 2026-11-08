@@ -8,12 +8,14 @@ def run(cmd, cwd=None, env=None):
     print("+", " ".join(map(str, cmd)), flush=True)
     subprocess.run(list(map(str, cmd)), cwd=cwd, env=env, check=True)
 
-def make_zstd_tar(source_root, archive_path, top_level):
-    tar = subprocess.Popen(["tar", "-cf", "-", "-C", str(source_root), top_level], stdout=subprocess.PIPE)
-    zstd = subprocess.run(["zstd", "-1", "-o", str(archive_path)], stdin=tar.stdout, check=False)
-    tar.stdout.close()
-    if tar.wait() != 0 or zstd.returncode != 0:
-        raise SystemExit("Could not create the separate game-data archive.")
+def make_zip(source_root, archive_path, top_level):
+    # ZIP_STORED + ZIP64 keeps the large RomFS uncompressed and makes the archive
+    # directly extractable in the iOS Files app. The shell can then bookmark romfs.img.
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as zf:
+        root = source_root / top_level
+        for path in sorted(root.rglob("*")):
+            if path.is_file():
+                zf.write(path, path.relative_to(source_root).as_posix())
 
 def main():
     ap = argparse.ArgumentParser()
@@ -71,8 +73,8 @@ def main():
     aoc_src = work / "aoc"
     if aoc_src.is_dir() and any(aoc_src.iterdir()):
         shutil.copytree(aoc_src, data_root / "aoc", dirs_exist_ok=True)
-    data_archive = out / "game-data.tar.zst"
-    make_zstd_tar(out / "game-data", data_archive, "games")
+    data_archive = out / "game-data.zip"
+    make_zip(out / "game-data", data_archive, "games")
 
     shell_dir = out / "shell-project"
     shutil.rmtree(shell_dir, ignore_errors=True)
