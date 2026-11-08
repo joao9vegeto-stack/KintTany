@@ -9,3 +9,19 @@ The macOS finalizer runs build_ipa_from_nsp.py --shell-framework <folder> --gpu 
 The handoff archive contains game.nup, work/ (extraction, rewritten modules, shader package/tables, logs and prep manifest) and manifest.json (title ID, package version and pinned engine identity).
 
 No game dump, NUP, RomFS, keys or other proprietary game data is stored in Git.
+
+
+## iPhone game-data import
+
+The Shared shell already includes the upstream iOS game-data picker and bookmark support. It resolves a game's RomFS from the per-game app folder (`Documents/games/<title ID>/`) or from a location selected in the game details screen. A selected `romfs.img` or RomFS folder is kept through a security-scoped bookmark; a re-signed sideload may require selecting it again.
+
+The build exports `game-data.zip` (ZIP64, stored/no recompression) with this layout:
+
+```
+games/<title ID>/romfs.img
+games/<title ID>/aoc/   (when present)
+```
+
+On iPhone, extract `game-data.zip` in Files, open NX2Apple, open the Bananza game details, choose **Game data → Choose game data…**, and select the extracted `romfs.img` (or its containing RomFS folder if offered). The shell's existing data resolver then supplies `DM_ROMFS` to the game at launch. The archive itself is not read by the game engine and is not embedded in the IPA.
+
+This import path is user-driven; the build does not silently copy a multi-gigabyte image into the app sandbox at first launch.
