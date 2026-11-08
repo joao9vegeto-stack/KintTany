@@ -162,7 +162,13 @@ def instrument_aot_entries(contents: str) -> tuple[str, int]:
     return PPC_FUNCTION_RE.sub(add_checkpoint, contents), instrumented
 
 
-HOT_LOOP_CHECKPOINT_FUNCTIONS = {0x822A0278, 0x82C25840, 0x82C259C8, 0x824E6F10, 0x82B3DE00, 0x82C4BE30, 0x824ACBF8}
+HOT_LOOP_CHECKPOINT_FUNCTIONS = {
+    0x822A0278, 0x82C25840, 0x82C259C8, 0x824E6F10, 0x82B3DE00,
+    0x82C4BE30, 0x824ACBF8,
+    # Bink movie worker, decoder worker, and the repeated video-frame helper
+    # observed in build 120.7; ensure SAIR can interrupt their inner loops.
+    0x82690DC0, 0x83268358, 0x82B53788,
+}
 
 
 def instrument_hot_loop_labels(contents: str) -> tuple[str, int]:

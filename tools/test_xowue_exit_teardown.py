@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 APP = (ROOT / "iOS/App/XOWUEApp.swift").read_text(encoding="utf-8")
 BACKEND = (ROOT / "iOS/App/XOWUEVulkanBackend.m").read_text(encoding="utf-8")
 ENGINE = (ROOT / "Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
+GENERATOR = (ROOT / "Runtime/generate_runtime_stubs.py").read_text(encoding="utf-8")
 
 def require(condition, message):
     if not condition:
@@ -76,6 +77,32 @@ for token in ("XOWUE_SESSION_TEARDOWN", "XOWUE_THREAD_JOINED",
     require(token in teardown, f"teardown must implement and report {token}")
 
 print("XOWUE_NONBLOCKING_EXIT_AND_THREAD_JOIN_OK")
+
+require("std::atomic<bool> g_hostStopRequested{false};" in ENGINE,
+        "host stop request must survive until the native PPC session begins")
+begin_session = ENGINE[ENGINE.index('extern "C" void xowue_begin_session(void) {'):
+                      ENGINE.index('extern "C" void xowue_request_stop(void) {')]
+require("g_hostStopRequested.store(false" in begin_session and
+        "g_schedulerStopRequested.store(false" in begin_session,
+        "a new run must explicitly clear the previous session stop latch")
+require("g_hostStopRequested.store(true" in request_stop and
+        request_stop.index("g_hostStopRequested.store(true") <
+        request_stop.index("requestGuestSchedulerStop()"),
+        "host cancellation must be latched before scheduler notification")
+boot_start = ENGINE.index('extern "C" int xowue_boot_xex(')
+boot_end = ENGINE.index('\nextern "C" ', boot_start + 1)
+boot_body = ENGINE[boot_start:boot_end]
+require("if (g_hostStopRequested.load(std::memory_order_acquire))" in boot_body and
+        "g_schedulerStopRequested.store(g_hostStopRequested.load" in boot_body,
+        "boot initialization must not erase an exit request received before session setup")
+run_boot = APP[APP.index("func runBoot()"):]
+require("xowue_begin_session()" in run_boot and
+        run_boot.index("xowue_begin_session()") < run_boot.index("Task { @MainActor in"),
+        "the launcher must begin the new cancellation generation before detached boot")
+for address in ("0x82690DC0", "0x83268358", "0x82B53788"):
+    require(address in GENERATOR[GENERATOR.index("HOT_LOOP_CHECKPOINT_FUNCTIONS"):],
+            f"Bink worker loop {address} must receive cooperative cancellation checkpoints")
+
 
 ctx_checkpoint_start = ENGINE.index("void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){")
 ctx_checkpoint_head = ENGINE[ctx_checkpoint_start:ctx_checkpoint_start + 240]

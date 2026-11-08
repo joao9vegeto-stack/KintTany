@@ -622,6 +622,8 @@ std::atomic<uint32_t> g_xaudioTraceLogs{0u};
 std::unordered_map<uint32_t, std::shared_ptr<std::recursive_timed_mutex>> g_criticalSectionLocks;
 XenosFrontendState g_xenosFrontend;
 std::atomic<bool> g_schedulerStopRequested{false};
+// Host-side latch survives the interval before xowue_boot_xex creates its session.
+std::atomic<bool> g_hostStopRequested{false};
 std::atomic<bool> g_runtimeSessionPoisoned{false};
 thread_local GuestThread *g_currentGuestThread = nullptr;
 std::unique_ptr<std::atomic<uint64_t>[]> g_aotExecutionBitmap;
@@ -4511,7 +4513,16 @@ static bool translateGuestFilePath(const std::string &guestPath, bool forWrite,
 
 // Exit must terminate guest PPC execution; dismissing the view alone leaves
 // native guest workers running indefinitely behind the single-game launcher.
+extern "C" void xowue_begin_session(void) {
+    // Called synchronously by the launcher before starting the detached boot task.
+    // A later stop request must survive all native boot initialization.
+    g_hostStopRequested.store(false, std::memory_order_release);
+    g_schedulerStopRequested.store(false, std::memory_order_release);
+}
+
 extern "C" void xowue_request_stop(void) {
+    // Latch at the host boundary first: xowue_boot_xex may not have started yet.
+    g_hostStopRequested.store(true, std::memory_order_release);
     // Cancellation is the first operation. Never let a diagnostic snapshot
     // wait behind the mutex acquired by a guest XamInputGetState poll.
     requestGuestSchedulerStop();
@@ -4540,6 +4551,13 @@ extern "C" void xowue_request_stop(void) {
 static void rebuildGuestPathIndex();
 
 extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capacity) {
+    // Do not initialize a session if SAIR was pressed during XEX inspection or
+    // before this detached native call began.
+    if (g_hostStopRequested.load(std::memory_order_acquire)) {
+        if (output && output_capacity != 0u)
+            std::snprintf(output, output_capacity, "Boot cancelado antes do início da sessão PPC.");
+        return 4;
+    }
     try {
         g_aotExecutionTelemetryActive.store(false, std::memory_order_relaxed);
         xowue::xenos::Reset();
@@ -4592,7 +4610,8 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         g_tlsValues.fill(0);
         g_tlsValueGenerations.fill(0);
         g_criticalSectionInitCount.store(0);
-        g_schedulerStopRequested.store(false);
+        g_schedulerStopRequested.store(g_hostStopRequested.load(std::memory_order_acquire),
+                                       std::memory_order_release);
         g_nextGuestThreadId = 2u;
         g_nextGuestThreadStackTop = kFirstGuestThreadStackTop;
         g_nextGuestThreadObjectAddress = kFirstGuestThreadObjectAddress;

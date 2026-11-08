@@ -8,6 +8,8 @@ extern "C" {
 /* Returns 0 on success and writes a human-readable result to output. */
 int xowue_inspect_xex(const char *path, char *output, size_t output_capacity);
 int xowue_boot_xex(const char *path, char *output, size_t output_capacity);
+/* Start a fresh launcher session and clear a previous session's stop latch. */
+void xowue_begin_session(void);
 /* Request cooperative cancellation of all guest PPC threads and the Xenos pump. */
 void xowue_request_stop(void);
 /* Monotonic Xbox guest timebase at 50 MHz, shared with recompiled mftb. */

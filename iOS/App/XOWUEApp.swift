@@ -1467,6 +1467,10 @@ private final class XOWUEGameLibrary: ObservableObject {
         bootOutput = "O jogo está sendo iniciado."
         let executablePath = game.appendingPathComponent(XOWUEFileStore.executableName).path
         XOWUEDiagnostics.bootStarted(path: executablePath, build: XOWUEBuild.number)
+        // Clear only for this new run, before the detached inspect/boot task starts.
+        // requestExit() can then latch cancellation without racing boot initialization.
+        xowue_begin_session()
+        XOWUEDiagnostics.log("runtime.session.begin cancellation latch cleared")
         Task { @MainActor in
             do {
                 let executable = game.appendingPathComponent(XOWUEFileStore.executableName)
