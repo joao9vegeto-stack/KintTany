@@ -49,6 +49,9 @@ require("kXInputErrorEmpty = 0x000010D2u" in ENGINE and
         "XAM keystroke APIs must return X_ERROR_EMPTY and both export variants must be generated")
 require("XOWUE_INPUT_CALLSITE" in ENGINE and "loadGuestBe32(base, start + index * 4u)" in ENGINE,
         "input diagnostics must capture PPC instructions around the real XamInputGetState caller")
+require("const uint32_t returnAddress = static_cast<uint32_t>(context.lr);" in ENGINE and
+        "context.lr.u32" not in ENGINE,
+        "PPCContext LR is a scalar 64-bit register and must be narrowed explicitly for guest addresses")
 require("XOWUE_INPUT_POLL" in ENGINE and "XOWUE_INPUT_POLLED" in ENGINE,
         "guest polling and consumed state must remain observable")
 require("XOWUE_INPUT_SUMMARY" in ENGINE,

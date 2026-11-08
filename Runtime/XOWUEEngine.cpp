@@ -8465,7 +8465,7 @@ void xowue_XInputGetState(PPCContext &context, uint8_t *base) {
 static void traceXowueInputCallsite(PPCContext &context, uint8_t *base,
                                      uint32_t userIndex, uint32_t flags,
                                      uint32_t outputAddress) {
-    const uint32_t returnAddress = context.lr.u32;
+    const uint32_t returnAddress = static_cast<uint32_t>(context.lr);
     if (!base || returnAddress < 32u ||
         !validGuestRange(returnAddress - 32u, 96u)) return;
     static std::atomic<uint32_t> logged{0u};
