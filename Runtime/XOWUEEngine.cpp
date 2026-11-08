@@ -6300,7 +6300,7 @@ void xowue_compat_import(const char *name, PPCContext &context, uint8_t *base) {
                 context.r3.u32 = 0x80070057u;
                 return;
             }
-            xowueCompleteXamProfileOverlapped(base, overlapped, result, 0u);
+            xowueCompleteXamOverlappedImmediate(base, overlapped, result);
             context.r3.u32 = 997u; // X_ERROR_IO_PENDING after inline completion.
         } else {
             context.r3.u32 = result;
