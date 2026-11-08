@@ -145,7 +145,8 @@ require("xowue_begin_session()" in run_boot and
         run_boot.index("xowue_begin_session()") < run_boot.index("DispatchQueue.global(qos: .userInitiated).async"),
         "the launcher must begin the new cancellation generation before detached native boot")
 require("DispatchQueue.main.async" in run_boot and
-        "self.completeBoot(result)" in run_boot,
+        "completeBoot(result)" in run_boot and
+        "self.completeBoot(result)" not in run_boot,
         "native boot result must complete through an explicit main-queue callback")
 for address in ("0x82690DC0", "0x83268358", "0x82B53788"):
     require(address in GENERATOR[GENERATOR.index("HOT_LOOP_CHECKPOINT_FUNCTIONS"):],
