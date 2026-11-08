@@ -110,6 +110,8 @@ require("g_xowueTouchAHostDownCount" in touch_set and "g_xowueTouchAHostUpCount"
         "host bridge must count A/CROSS press and release edges")
 require("0x1000u" in touch_set and "fetch_add(1u, std::memory_order_relaxed)" in touch_set,
         "A/CROSS XInput mask must update atomic host-edge counters without synchronous file I/O")
+require("recordRuntimeTrace(" not in touch_set and "persistGuestInputTrace(" not in touch_set,
+        "UIKit touch setter must stay nonblocking and must not synchronously write diagnostic files")
 input_state = body(ENGINE, "static uint32_t writeTouchGamepadState(", "static uint32_t writeTouchGamepadCapabilities(")
 require("g_xowueTouchAGuestPollCount" in input_state and "state.buttons & 0x1000u" in input_state,
         "guest poll path must count polls that actually carry A/CROSS down")
