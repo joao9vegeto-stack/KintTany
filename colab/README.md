@@ -1,13 +1,14 @@
-# Colab preparation stage
+# Google Colab preparation
 
-The notebook for this stage will be added after the Linux/Apple boundary is verified against the pinned upstream revision.
+Open Kleo2iOS_Colab.ipynb in Google Colab and run the cells from top to bottom.
 
-Expected responsibilities:
-- accept a user-supplied NSP/XCI/NUP or supported extracted dump;
-- keep prod.keys/title.keys in the Colab runtime only;
-- run only preparation and AOT steps that do not require macOS, Xcode, iOS SDK or Apple's Metal compiler;
-- preserve all generated modules, metadata, shader inputs and game-data identity required by the macOS finalizer;
-- create a manifest with upstream revision, game title ID/version, input hashes, output file hashes and required next-stage commands;
-- upload the private handoff archive to the user's Google Drive.
+The notebook pins NX2Apple v1.3.0-rc10, syncs the exact NXNative pin and Route C patches, and runs the repository's own NUP extraction, module rewriter and offline shader splitter. It stops before Metal/Xcode. The Apple-only build is performed by the macOS Actions runner.
 
-The notebook must never commit game data or keys to GitHub.
+Requirements:
+- Python 3.12+ Colab runtime;
+- a Google Drive folder shared with the Actions service account (Viewer);
+- GitHub secret GOOGLE_SERVICE_ACCOUNT_JSON;
+- a fine-grained GitHub token with Contents read/write for joao9vegeto-stack/KintTany;
+- enough Colab disk and Drive quota for the NUP plus extracted RomFS and build intermediates.
+
+The notebook does not ask for console keys: a NUP container does not need prod.keys.

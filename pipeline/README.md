@@ -1,12 +1,11 @@
-# Pipeline handoff contract
+# Pipeline contract
 
-The handoff format is intentionally not frozen yet. It must be derived from an execution trace of the pinned NX2Apple/NXNative builder, not guessed from directory names.
+Colab runs the pinned NXNative builder through NUP scan/validation, extraction to work/extract/vN, AArch64 module rewriting into work/patched_vN, and offline NVN shader splitting/profile-table validation into work/shader/pkg.
 
-Before enabling the macOS job, establish:
-1. the exact Linux-safe commands and their output paths;
-2. the complete list of files consumed by the Apple-only stage;
-3. whether each game's shader path requires runtime capture or Apple Metal compilation;
-4. the RomFS identity and separate-data packaging requirements;
-5. a manifest and checksum validation performed before any compilation.
+The Linux adapter intercepts the builder immediately before dm/ios/tools/build_ipa.sh. It deliberately skips iOS Metal compilation, pipeline-archive compilation and Xcode. The macOS job resumes the same NUP and work directory; upstream fingerprints decide which preparation stages can be reused.
 
-The finalizer must fail closed on missing, stale, mismatched or unsupported artifacts. It must not silently rebuild Linux-only stages on macOS or package an incomplete game framework.
+The macOS finalizer runs build_ipa_from_nsp.py --framework --romfs separate --gpu g18p. The patched Xcode project builds DmGame<TITLE_ID>.framework; the Shared shell exporter embeds that framework in DmShell.app and packs NX2Apple.ipa.
+
+The handoff archive contains game.nup, work/ (extraction, rewritten modules, shader package/tables, logs and prep manifest) and manifest.json (title ID, package version and pinned engine identity).
+
+No game dump, NUP, RomFS, keys or other proprietary game data is stored in Git.

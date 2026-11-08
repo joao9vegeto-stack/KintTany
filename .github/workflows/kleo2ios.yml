@@ -4,28 +4,116 @@ on:
   push:
     branches:
       - Kleo2iOS
-  workflow_dispatch:
+    paths:
+      - handoff.json
 
 permissions:
   contents: read
 
 concurrency:
-  group: kleo2ios-${{ github.ref }}
+  group: kleo2ios-\${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  branch-isolation:
-    if: github.ref == 'refs/heads/Kleo2iOS'
-    runs-on: ubuntu-latest
+  build-shared:
+    if: github.ref == 'refs/heads/Kleo2iOS' && github.event_name == 'push'
+    runs-on: xcode-27
+    timeout-minutes: 360
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     steps:
       - name: Checkout Kleo2iOS only
         uses: actions/checkout@v4
         with:
           ref: Kleo2iOS
-      - name: Verify branch isolation
+          persist-credentials: false
+
+      - name: Verify branch and handoff request
+        id: request
         shell: bash
         run: |
-          test "${GITHUB_REF}" = "refs/heads/Kleo2iOS"
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/Kleo2iOS"
           test "$(git branch --show-current)" = "Kleo2iOS"
-          echo "Kleo2iOS branch isolation verified."
-          echo "Linux preparation and macOS Shared-App finalization are not enabled until their handoff contract is implemented and tested."
+          python3 - <<'PY'
+          import json, os, re
+          d=json.load(open("handoff.json", encoding="utf-8"))
+          assert d.get("format") == 1
+          assert re.fullmatch(r"[A-Za-z0-9_-]{10,}", d.get("drive_file_id", ""))
+          assert re.fullmatch(r"[0-9a-f]{64}", d.get("archive_sha256", ""))
+          assert int(d.get("archive_size", 0)) > 0
+          assert d.get("engine_pin")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("file_id="+d["drive_file_id"]+"\n")
+              f.write("sha256="+d["archive_sha256"]+"\n")
+              f.write("size="+str(d["archive_size"])+"\n")
+          PY
+
+      - name: Select Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Apple build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "$DEVELOPER_DIR" || { echo "::error::Xcode 27.2 is missing on the xcode-27 runner"; exit 1; }
+          xcodebuild -version
+          brew install xcodegen zstd glslang
+          brew list --cask dotnet-sdk >/dev/null 2>&1 || brew install --cask dotnet-sdk
+          xcrun --sdk iphoneos --show-sdk-version >/dev/null 2>&1 || xcodebuild -downloadPlatform iOS
+          xcrun --sdk iphoneos metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+          python -m pip install --upgrade pip
+          python -m pip install lz4 "capstone>=5,<6" fonttools zbic backports.zstd google-api-python-client google-auth
+
+      - name: Sync exact NX2Apple engine and framework patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v1.3.0-rc10 https://github.com/LNPANDY/NX2Apple.git "$RUNNER_TEMP/NX2Apple"
+          cd "$RUNNER_TEMP/NX2Apple"
+          python tools/engine.py sync
+          EXPECTED_PIN=$(python -c 'import json,os; print(json.load(open(os.path.join(os.environ["GITHUB_WORKSPACE"],"handoff.json")))["engine_pin"])')
+          test "$(cat .upstream-ref)" = "$EXPECTED_PIN"
+
+      - name: Download private Colab handoff from Google Drive
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: \${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          DRIVE_FILE_ID: \${{ steps.request.outputs.file_id }}
+          EXPECTED_SIZE: \${{ steps.request.outputs.size }}
+          EXPECTED_SHA256: \${{ steps.request.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          python scripts/download_drive.py --file-id "$DRIVE_FILE_ID" \
+            --output "$RUNNER_TEMP/handoff.tar.zst" \
+            --expected-size "$EXPECTED_SIZE" --expected-sha256 "$EXPECTED_SHA256"
+
+      - name: Verify and extract handoff
+        run: |
+          set -euo pipefail
+          python scripts/verify_handoff.py --archive "$RUNNER_TEMP/handoff.tar.zst" \
+            --destination "$RUNNER_TEMP/handoff" --sha256 "\${{ steps.request.outputs.sha256 }}"
+
+      - name: Build game framework and export Shared IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          NX="$RUNNER_TEMP/NX2Apple"
+          python scripts/build_shared.py \
+            --nx2apple-root "$NX" \
+            --engine-root "$NX/engine" \
+            --nup "$RUNNER_TEMP/handoff/game.nup" \
+            --work-dir "$RUNNER_TEMP/handoff/work" \
+            --output "$RUNNER_TEMP/kleo-output"
+
+      - name: Upload installable Shared IPA and separate game data
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kleo2iOS-\${{ github.run_number }}
+          path: |
+            \${{ runner.temp }}/kleo-output/NX2Apple.ipa
+            \${{ runner.temp }}/kleo-output/game-data.tar.zst
+            \${{ runner.temp }}/kleo-output/build-report.json
+          if-no-files-found: error
+          retention-days: 7
