@@ -206,7 +206,8 @@ boot_end = ui.index("\n    private func fail(", boot_start)
 boot_body = ui[boot_start:boot_end]
 assert "DispatchQueue.global(qos: .userInitiated).async" in boot_body
 assert "DispatchQueue.main.async" in boot_body
-assert "self.completeBoot(result)" in boot_body
+assert "completeBoot(result)" in boot_body
+assert "self.completeBoot(result)" not in boot_body
 assert "gameSurfacePresented = false" in request_exit
 assert request_exit.index("if phase != .booting") < request_exit.index("gameSurfacePresented = false") < request_exit.index("xowue_request_stop()")
 assert "Aguardando o retorno do boot e a finalização das threads PPC." in request_exit
