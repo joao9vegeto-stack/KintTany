@@ -37,7 +37,7 @@ def inspect_nup(engine, nup_path):
             f"no registered NXNative profile for {title_id:016X}; Linux preparation refuses to guess a profile")
     version = f"v{max(updates)}" if updates else "v0"
     print(f"[Kleo2iOS] Game: {title_id:016X}; package: {version}; DLC packages: {len(dlc)}")
-    print(f"[Kleo2iOS] Registered profile: {profile.dir}")
+    print(f"[Kleo2iOS] Registered profile: {getattr(profile, 'id', title_id)}")
     return f"{title_id:016X}", version
 
 def linux_prerequisites(module, env, xlate, mac=False):

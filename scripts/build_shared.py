@@ -8,6 +8,14 @@ def run(cmd, cwd=None, env=None):
     print("+", " ".join(map(str, cmd)), flush=True)
     subprocess.run(list(map(str, cmd)), cwd=cwd, env=env, check=True)
 
+def make_zstd_tar(source_root, archive_path, top_level):
+    with archive_path.open("wb") as out:
+        tar = subprocess.Popen(["tar", "-cf", "-", "-C", str(source_root), top_level], stdout=subprocess.PIPE)
+        zstd = subprocess.run(["zstd", "-1", "-o", str(archive_path)], stdin=tar.stdout, check=False)
+        tar.stdout.close()
+        if tar.wait() != 0 or zstd.returncode != 0:
+            raise SystemExit("Could not create the separate game-data archive.")
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--nx2apple-root", type=Path, required=True)
@@ -57,7 +65,6 @@ def main():
     if not romfs.is_file():
         raise SystemExit(f"Separate RomFS image not found: {romfs}")
 
-    # The shell's Documents/games/<title ID>/ folder contains RomFS and optional DLC data.
     data_root = out / "game-data" / "games" / title_id
     shutil.rmtree(data_root, ignore_errors=True)
     data_root.mkdir(parents=True)
@@ -66,10 +73,8 @@ def main():
     if aoc_src.is_dir() and any(aoc_src.iterdir()):
         shutil.copytree(aoc_src, data_root / "aoc", dirs_exist_ok=True)
     data_archive = out / "game-data.tar.zst"
-    run(["tar", "--zstd", "-1", "-cf", str(data_archive), "-C", str(out / "game-data"), "games"])
+    make_zstd_tar(out / "game-data", data_archive, "games")
 
-    # Route C M2: build the real shell project around this game's framework, then sign nested code
-    # ad-hoc (frameworks without entitlements first, shell executable with Increased Memory Limit).
     shell_dir = out / "shell-project"
     shutil.rmtree(shell_dir, ignore_errors=True)
     shell_dir.mkdir(parents=True)
