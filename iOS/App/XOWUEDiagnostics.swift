@@ -62,14 +62,83 @@ enum XOWUEDiagnostics {
         diagnosticLogQueue.sync {}
         inputLogQueue.sync {}
         lock.lock()
-        if let diagnosticURL = fileURL(named: diagnosticFilename) { refreshCompactSummaryLocked(diagnosticURL: diagnosticURL) }
+        if let diagnosticURL = fileURL(named: diagnosticFilename) {
+            refreshCompactSummaryLocked(diagnosticURL: diagnosticURL)
+        }
         lock.unlock()
         guard let sourceURL = fileURL(named: diagnosticFilename),
               let sourceData = try? Data(contentsOf: sourceURL, options: .mappedIfSafe) else { return nil }
-        let maxExportBytes = 5 * 1024 * 1024
+
+        let sourceLines = String(decoding: sourceData, as: UTF8.self)
+            .split(whereSeparator: \.isNewline).map(String.init)
+        func sampled(_ lines: [String], first: Int, last: Int) -> [String] {
+            guard lines.count > first + last else { return lines }
+            return Array(lines.prefix(first)) + Array(lines.suffix(last))
+        }
+
+        var selected = Set<String>()
+        for line in sourceLines.prefix(80) { selected.insert(line) }
+        let criticalMarkers = [
+            "CRASH ", "FAIL ", "exception", "Exception", "failed", "FAILED",
+            "ERROR", "FATAL", "rejected", "untranslated", "navigation.exit",
+            "runtime.stop", "runtime.native_return", "XOWUE_USER_EXIT",
+            "XOWUE_SESSION_TEARDOWN", "XOWUE_THREAD_ORPHANED",
+            "XOWUE_THREAD_JOINED", "XOWUE_VIDEO_THREAD_EXIT",
+            "XOWUE_BACKEND_LOG_LIMIT_REACHED"
+        ]
+        for line in sourceLines where criticalMarkers.contains(where: { line.contains($0) }) {
+            selected.insert(line)
+        }
+
+        let families: [(String, Int, Int)] = [
+            ("XOWUE_BINK_VIDEO_THREAD_START", 8, 8),
+            ("XOWUE_BINK_VIDEO_CONTEXT", 12, 12),
+            ("XOWUE_BINK_DECODER_THREAD_START", 8, 8),
+            ("XOWUE_BINK_FILE_READ_ORDER", 20, 20),
+            ("XOWUE_BINK_READ_PROGRESS", 8, 12),
+            ("XOWUE_VD_RETRAINEDRAM_CALL", 4, 8),
+            ("XOWUE_MEDIA_PPC_FLOW", 12, 12),
+            ("B97_MOVIE_PPC_WORD", 12, 12),
+            ("B97_MOVIE_PPC", 12, 12),
+            ("B99_MEDIA_EOF_COMPLETION", 16, 16),
+            ("B87_STREAM_", 12, 12),
+            ("B94_STREAM_CONTEXT_WORD", 8, 8),
+            ("B94_STREAM_CONTEXT", 8, 8),
+            ("B95_SYNC_", 8, 8),
+            ("B98_", 8, 8),
+            ("B103_ASYNC_NTREADFILE_", 8, 8),
+            ("XOWUE_STALL_THREADS", 6, 6),
+            ("XOWUE_AOT_HOT_FUNCTION", 4, 4),
+            ("XOWUE_AOT_HOT_CALLER", 4, 4),
+            ("XOWUE_XAUDIO_", 8, 8),
+            ("XOWUE_XMA_", 8, 8),
+            ("XOWUE_AUDIO_BACKEND_", 8, 8),
+            ("XOWUE_INPUT_KEYSTROKE", 8, 16),
+            ("XOWUE_INPUT_CALLSITE", 4, 4),
+            ("XOWUE_GAME_FPS", 8, 12),
+            ("XOWUE_FRAME_TELEMETRY", 8, 12),
+            ("XOWUE_NATIVE_GUEST_FRAME", 4, 8),
+            ("XOWUE_VDSWAP_", 8, 8),
+            ("XOWUE_PM4_", 12, 12),
+            ("XOWUE_GPU_SWAP_WAIT", 8, 8),
+            ("XENOS_GUEST_SWAP_RGBA", 4, 4),
+            ("XENOS_GUEST_FRAME_UNCHANGED", 2, 2),
+            ("PPC thread exit", 12, 12)
+        ]
+        for (token, first, last) in families {
+            let matches = sourceLines.filter { $0.contains(token) && !$0.contains("XENOS_NATIVE_TARGET_STATE") }
+            for line in sampled(matches, first: first, last: last) { selected.insert(line) }
+        }
+        let exportLines = sourceLines.filter {
+            selected.contains($0) && !$0.contains("XENOS_NATIVE_TARGET_STATE") &&
+            !$0.contains("XOWUE_BINK_FRAME_MARKER")
+        }
+        var data = Data(("FILTERED_DIAGNOSTIC source_lines=\(sourceLines.count) exported_lines=\(exportLines.count) dropped_lines=\(sourceLines.count - exportLines.count)\n" +
+                         exportLines.joined(separator: "\n") + "\n").utf8)
+
         func bounded(_ source: Data, limit: Int, headBytes: Int) -> Data {
             guard source.count > limit else { return source }
-            let marker = Data("\n[TRUNCATED: bounded diagnostic export; compact evidence follows]\n".utf8)
+            let marker = Data("\n[TRUNCATED: sampled diagnostic sidecar]\n".utf8)
             let payload = max(0, limit - marker.count)
             let head = min(max(0, headBytes), payload)
             let tail = payload - head
@@ -78,7 +147,7 @@ enum XOWUEDiagnostics {
             if tail > 0 { result.append(source.suffix(tail)) }
             return result
         }
-        var data = bounded(sourceData, limit: 4 * 1024 * 1024, headBytes: 2 * 1024 * 1024)
+
         if let summaryURL = fileURL(named: summaryFilename),
            let summaryData = try? Data(contentsOf: summaryURL, options: .mappedIfSafe),
            !summaryData.isEmpty {
@@ -89,20 +158,35 @@ enum XOWUEDiagnostics {
         if let inputURL = fileURL(named: inputFilename),
            let inputData = try? Data(contentsOf: inputURL, options: .mappedIfSafe),
            !inputData.isEmpty {
+            let lines = String(decoding: inputData, as: UTF8.self).split(whereSeparator: \.isNewline).map(String.init)
+            let edges = lines.filter { $0.contains("XOWUE_TOUCH_EDGE") || $0.contains("XOWUE_INPUT_HOST") }
             data.append(Data("\nINPUT_EVENTS_BEGIN\n".utf8))
-            data.append(bounded(inputData, limit: 128 * 1024, headBytes: 8 * 1024))
-            data.append(Data("INPUT_EVENTS_END\n".utf8))
+            data.append(Data(sampled(edges, first: 24, last: 48).joined(separator: "\n").utf8))
+            data.append(Data("\nINPUT_EVENTS_END\n".utf8))
         }
         if let guestInputURL = fileURL(named: guestInputFilename),
            let guestInputData = try? Data(contentsOf: guestInputURL, options: .mappedIfSafe),
            !guestInputData.isEmpty {
+            let lines = String(decoding: guestInputData, as: UTF8.self).split(whereSeparator: \.isNewline).map(String.init)
+            let events = lines.filter {
+                $0.contains("XOWUE_INPUT_API") || $0.contains("XOWUE_INPUT_GUEST") ||
+                $0.contains("XOWUE_INPUT_KEYSTROKE") || $0.contains("XOWUE_INPUT_CALLSITE") || $0.contains("reason=")
+            }
             data.append(Data("\nGUEST_INPUT_EVENTS_BEGIN\n".utf8))
-            data.append(bounded(guestInputData, limit: 256 * 1024, headBytes: 16 * 1024))
-            data.append(Data("GUEST_INPUT_EVENTS_END\n".utf8))
+            data.append(bounded(Data(sampled(events, first: 16, last: 48).joined(separator: "\n").utf8),
+                                limit: 64 * 1024, headBytes: 16 * 1024))
+            data.append(Data("\nGUEST_INPUT_EVENTS_END\n".utf8))
         }
+        let maxExportBytes = 5 * 1024 * 1024
         let exportData = data.count <= maxExportBytes ? data : Data(data.prefix(maxExportBytes))
-        let exportURL = sourceURL.deletingLastPathComponent().appendingPathComponent("diagnostico-export-build-\(buildNumber).txt")
-        do { try exportData.write(to: exportURL, options: .atomic); return exportURL } catch { return nil }
+        let exportURL = sourceURL.deletingLastPathComponent()
+            .appendingPathComponent("diagnostico-export-build-\(buildNumber).txt")
+        do {
+            try exportData.write(to: exportURL, options: .atomic)
+            return exportURL
+        } catch {
+            return nil
+        }
     }
 
     static func fileURL(named name: String) -> URL? {
@@ -129,11 +213,13 @@ enum XOWUEDiagnostics {
     }
 
     static func log(_ message: String) {
-        let important = ["scan.", "game.selected", "picker.", "import.", "B83_", "B84_", "B85_", "B86_", "AOT_PROGRESS", "HOT_FN_CODE",
-                         "THREAD_DUMP", "XENOS_", "PM4_", "SWAP_", "WAIT_", "VBLANK",
-                         "GRAPHICS_INTERRUPT", "B90_STREAM_", "B92_XXX_INTEGRITY",
-                         "B92_BIK_INTEGRITY", "XOWUE_B92_QPC_", "XOWUE_XAUDIO_", "XOWUE_XMA_", "XOWUE_AUDIO_BACKEND_", "XOWUE_VDSWAP_", "XOWUE_PM4_", "XOWUE_NATIVE_GUEST_FRAME", "XOWUE_GPU_SWAP_WAIT", "B95_SYNC_", "B97_", "B98_", "B99_", "B103_ASYNC_NTREADFILE_", "XOWUE_USER_EXIT", "XOWUE_XAM_PROFILE_", "XOWUE_B80_SETSTATE", "XOWUE_GAME_FPS",
-                         "runtime.stop", "BOOT_", "CRASH ", "runtime.native_return"]
+        let important = [
+            "scan.", "game.selected", "picker.", "import.",
+            "BOOT_", "CRASH ", "runtime.stop", "runtime.native_return",
+            "navigation.exit", "XOWUE_USER_EXIT", "XOWUE_INPUT_SUMMARY",
+            "XOWUE_SESSION_TEARDOWN", "XOWUE_THREAD_ORPHANED",
+            "XOWUE_THREAD_JOINED", "XOWUE_VIDEO_THREAD_EXIT"
+        ]
         let shouldRefresh = important.contains(where: { message.contains($0) })
         diagnosticLogQueue.async {
             lock.lock()

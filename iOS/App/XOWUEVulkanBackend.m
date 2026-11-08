@@ -74,6 +74,8 @@ static uint32_t g_xowue_guest_frame_address = 0;
 static uint32_t g_xowue_guest_frame_format = 0;
 static _Atomic uint64_t g_xowue_guest_nonblack = 0;
 static _Atomic uint64_t g_xowue_guest_checksum = 0;
+static _Atomic uint64_t g_xowue_guest_frame_log_count = 0;
+static _Atomic uint64_t g_xowue_guest_unchanged_log_count = 0;
 
 static bool KKWaitForGuestSwapCompletion(uint32_t target, uint32_t timeoutMs)
 {
@@ -156,8 +158,11 @@ void xowue_vulkan_backend_guest_frame_rgba(uint32_t frontbuffer,
        memcmp(g_xowue_guest_frame, copy, required) == 0) {
       pthread_mutex_unlock(&g_xowue_guest_frame_mutex);
       free(copy);
-      KKLog(@"XENOS_GUEST_FRAME_UNCHANGED checksum=%016llX address=%08X format=%u",
-            (unsigned long long)digest,frontbuffer,format);
+      const uint64_t unchangedLog = atomic_fetch_add_explicit(
+          &g_xowue_guest_unchanged_log_count, 1u, memory_order_relaxed) + 1u;
+      if (unchangedLog <= 4u || unchangedLog % 120u == 0u)
+         KKLog(@"XENOS_GUEST_FRAME_UNCHANGED count=%llu checksum=%016llX address=%08X format=%u",
+               (unsigned long long)unchangedLog,(unsigned long long)digest,frontbuffer,format);
       return;
    }
    uint8_t *previous = g_xowue_guest_frame;
@@ -169,8 +174,11 @@ void xowue_vulkan_backend_guest_frame_rgba(uint32_t frontbuffer,
    g_xowue_guest_frame_format = format;
    atomic_fetch_add_explicit(&g_xowue_guest_frame_count, 1, memory_order_relaxed);
    pthread_mutex_unlock(&g_xowue_guest_frame_mutex);
-   KKLog(@"XENOS_GUEST_SWAP_RGBA nonblack=%zu total=%zu checksum=%016llX address=%08X format=%u",
-         nonblack,pixelCount,(unsigned long long)digest,frontbuffer,format);
+   const uint64_t frameLog = atomic_fetch_add_explicit(
+       &g_xowue_guest_frame_log_count, 1u, memory_order_relaxed) + 1u;
+   if (frameLog <= 4u || frameLog % 60u == 0u)
+      KKLog(@"XENOS_GUEST_SWAP_RGBA count=%llu nonblack=%zu total=%zu checksum=%016llX address=%08X format=%u",
+            (unsigned long long)frameLog,nonblack,pixelCount,(unsigned long long)digest,frontbuffer,format);
    free(previous);
 }
 
@@ -187,6 +195,8 @@ void xowue_vulkan_backend_guest_frame_reset(void)
    atomic_store_explicit(&g_xowue_guest_frame_count, 0, memory_order_relaxed);
    atomic_store_explicit(&g_xowue_guest_nonblack,0,memory_order_relaxed);
    atomic_store_explicit(&g_xowue_guest_checksum,0,memory_order_relaxed);
+   atomic_store_explicit(&g_xowue_guest_frame_log_count,0,memory_order_relaxed);
+   atomic_store_explicit(&g_xowue_guest_unchanged_log_count,0,memory_order_relaxed);
    pthread_mutex_unlock(&g_xowue_guest_frame_mutex);
    free(previous);
 }

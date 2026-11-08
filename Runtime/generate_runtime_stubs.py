@@ -329,6 +329,8 @@ def main() -> int:
             'void xowue_ExGetXConfigSetting(PPCContext &, uint8_t *);',
             'void xowue_XInputGetState(PPCContext &, uint8_t *);',
             'void xowue_XamInputGetState(PPCContext &, uint8_t *);',
+            'void xowue_XamInputGetKeystroke(PPCContext &, uint8_t *);',
+            'void xowue_XamInputGetKeystrokeEx(PPCContext &, uint8_t *);',
             'void xowue_XInputGetCapabilities(PPCContext &, uint8_t *);',
             'void xowue_XamInputGetCapabilities(PPCContext &, uint8_t *);',
             'void xowue_XamInputGetCapabilitiesEx(PPCContext &, uint8_t *);',
@@ -629,6 +631,10 @@ def main() -> int:
             code.append("\txowue_XInputGetState(ctx, base);")
         elif name == "XamInputGetState":
             code.append("\txowue_XamInputGetState(ctx, base);")
+        elif name == "XamInputGetKeystroke":
+            code.append("\txowue_XamInputGetKeystroke(ctx, base);")
+        elif name == "XamInputGetKeystrokeEx":
+            code.append("\txowue_XamInputGetKeystrokeEx(ctx, base);")
         elif name == "XInputGetCapabilities":
             code.append("\txowue_XInputGetCapabilities(ctx, base);")
         elif name == "XamInputGetCapabilities":
@@ -711,7 +717,7 @@ def main() -> int:
         "RtlEnterCriticalSection", "RtlTryEnterCriticalSection", "RtlLeaveCriticalSection",
         "XexCheckExecutablePrivilege",
         "XGetAVPack", "XGetGameRegion", "XGetVideoMode", "ExGetXConfigSetting",
-        "XInputGetState", "XamInputGetState", "XInputGetCapabilities",
+        "XInputGetState", "XamInputGetState", "XamInputGetKeystroke", "XamInputGetKeystrokeEx", "XInputGetCapabilities",
         "XamInputGetCapabilities", "XamInputGetCapabilitiesEx",
         "XInputSetState", "XamInputSetState",
         "KeTlsAlloc", "KeTlsFree", "KeTlsGetValue", "KeTlsSetValue",

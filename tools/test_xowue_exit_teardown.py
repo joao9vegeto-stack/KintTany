@@ -76,3 +76,21 @@ for token in ("XOWUE_SESSION_TEARDOWN", "XOWUE_THREAD_JOINED",
     require(token in teardown, f"teardown must implement and report {token}")
 
 print("XOWUE_NONBLOCKING_EXIT_AND_THREAD_JOIN_OK")
+
+ctx_checkpoint_start = ENGINE.index("void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){")
+ctx_checkpoint_head = ENGINE[ctx_checkpoint_start:ctx_checkpoint_start + 240]
+require("g_schedulerStopRequested.load(std::memory_order_acquire)" in ctx_checkpoint_head and
+        "throw GuestThreadStopRequested{}" in ctx_checkpoint_head,
+        "AOT function and loop checkpoints must throw on scheduler cancellation before diagnostic work")
+plain_checkpoint_start = ENGINE.index("void xowue_thread_checkpoint(uint32_t guestAddress) {")
+plain_checkpoint_head = ENGINE[plain_checkpoint_start:plain_checkpoint_start + 240]
+require("g_schedulerStopRequested.load(std::memory_order_acquire)" in plain_checkpoint_head and
+        "throw GuestThreadStopRequested{}" in plain_checkpoint_head,
+        "plain AOT entry checkpoints must observe scheduler cancellation")
+pump_start = ENGINE.index("struct GuestXenosPumpSessionGuard final")
+pump_end = ENGINE.index("struct GuestThreadBinding final", pump_start)
+pump_body = ENGINE[pump_start:pump_end]
+require("!g_schedulerStopRequested.load(std::memory_order_acquire)" in pump_body,
+        "Xenos pump worker must leave its loop when the guest scheduler is stopped")
+require("XOWUE_VIDEO_THREAD_EXIT" in ENGINE,
+        "video worker completion must be logged separately from VdRetrainEDRAM calls")

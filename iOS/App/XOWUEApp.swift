@@ -518,6 +518,7 @@ private enum XOWUEGamepadButton {
 private struct XOWUETouchControllerHUD: View {
     @ObservedObject var input: XOWUETouchController
     @State private var controlsVisible = true
+    @State private var playStationLayout = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -543,7 +544,7 @@ private struct XOWUETouchControllerHUD: View {
                                 XOWUETouchButton(title: "R1", mask: XOWUEGamepadButton.rightShoulder, input: input, size: 37)
                             }
                             HStack(alignment: .bottom, spacing: 9) {
-                                XOWUETouchABXY(input: input)
+                                XOWUETouchABXY(input: input, playStationLayout: playStationLayout)
                                 XOWUETouchStick(left: false, input: input, size: 90)
                             }
                             XOWUETouchButton(title: "R3", mask: XOWUEGamepadButton.rightThumb, input: input, size: 30)
@@ -563,6 +564,17 @@ private struct XOWUETouchControllerHUD: View {
                                          input: input, size: 39, compact: true)
                     }
                     Button {
+                        playStationLayout.toggle()
+                    } label: {
+                        Text(playStationLayout ? "PS" : "XBOX")
+                            .font(.system(size: 10, weight: .black, design: .rounded))
+                            .foregroundStyle(XOWUEPalette.yellow)
+                            .frame(width: 42, height: 36)
+                            .background(.black.opacity(0.72), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Alternar layout Xbox/PlayStation")
+                    Button {
                         controlsVisible.toggle()
                         if !controlsVisible { input.releaseAll() }
                     } label: {
@@ -581,6 +593,7 @@ private struct XOWUETouchControllerHUD: View {
         }
         .ignoresSafeArea()
         .animation(.easeOut(duration: 0.18), value: controlsVisible)
+        .animation(.easeOut(duration: 0.18), value: playStationLayout)
     }
 }
 
@@ -824,23 +837,27 @@ private struct XOWUETouchDPad: View {
 
 private struct XOWUETouchABXY: View {
     @ObservedObject var input: XOWUETouchController
+    let playStationLayout: Bool
 
     var body: some View {
         ZStack {
-            // Final coordinates define each circle's displayed and hit-tested frame.
-            // Adjacent centres are 50.9pt apart, outside each 44pt hit diameter.
-            XOWUETouchButton(title: "Y", mask: XOWUEGamepadButton.y, input: input, size: 44)
+            // The bottom PS cross is the Xbox A action, not the physical X bit.
+            XOWUETouchButton(title: playStationLayout ? "△" : "Y",
+                             mask: XOWUEGamepadButton.y, input: input, size: 44)
                 .position(x: 58, y: 22)
-            XOWUETouchButton(title: "A", mask: XOWUEGamepadButton.a, input: input, size: 44)
+            XOWUETouchButton(title: playStationLayout ? "×" : "A",
+                             mask: XOWUEGamepadButton.a, input: input, size: 44)
                 .position(x: 58, y: 94)
-            XOWUETouchButton(title: "X", mask: XOWUEGamepadButton.x, input: input, size: 44)
+            XOWUETouchButton(title: playStationLayout ? "□" : "X",
+                             mask: XOWUEGamepadButton.x, input: input, size: 44)
                 .position(x: 22, y: 58)
-            XOWUETouchButton(title: "B", mask: XOWUEGamepadButton.b, input: input, size: 44)
+            XOWUETouchButton(title: playStationLayout ? "○" : "B",
+                             mask: XOWUEGamepadButton.b, input: input, size: 44)
                 .position(x: 94, y: 58)
         }
         .frame(width: 116, height: 116)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Botões A B X Y")
+        .accessibilityLabel(playStationLayout ? "Botões triângulo, cruz, quadrado e círculo" : "Botões A B X Y")
     }
 }
 

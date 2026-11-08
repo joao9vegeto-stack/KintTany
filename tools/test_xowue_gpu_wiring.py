@@ -63,7 +63,11 @@ assert "XENOS_PM4_CP_INTERRUPT_AFTER_KICK" not in engine
 assert "XENOS_GRAPHICS_INTERRUPT skipped source=1 invalid SCRATCH_REG4 target=0x%08X" in engine
 assert "XOWUE_GUEST_PROGRESS_WATCHDOG fresh_guest_frames=0 duration_ms=" in engine
 assert "XOWUE_GUEST_THREAD_STATE id=%u entry=0x%08X lastGuest=0x%08X LR=0x%08X waitReason=%s" in engine
-assert "g_runtimeTracePersistMilestones.fetch_add(1, std::memory_order_relaxed) < 100000u" in engine
+# High-frequency AOT execution traces are diagnostic noise, not a progress signal.
+# Keep a small bounded sample and do not let this family consume the milestone budget.
+assert 'if (event.find("AOT execution") != std::string::npos)' in engine
+assert 'return count.fetch_add(1u, std::memory_order_relaxed) < 64u;' in engine
+assert "g_runtimeTracePersistMilestones.fetch_add(1, std::memory_order_relaxed) < 100000u" not in engine
 assert "colorTarget?fminf(720.0f,(float)colorTarget->extent.height)" in renderer
 assert "scissor.extent.height=(uint32_t)fminf(720.0f" in renderer
 color=Path("iOS/App/XOWUEGuestColor.inc").read_text()

@@ -73,25 +73,27 @@ require("XOWUE_BINK_VIDEO_CONTEXT" in thread_trace,
         "video-thread context words must be retained to map playback to the opened Bink file")
 
 guest_thread = body(ENGINE, "struct GuestThread {", "struct GuestAudioClient {")
-require("videoFrameCount" in guest_thread,
-        "each guest video thread must maintain its own observed frame count")
+require("vdRetrainCallCount" in guest_thread,
+        "each guest video thread must maintain its own VdRetrainEDRAM call counter, not a decoded-frame count")
 frame_marker = body(ENGINE, "void xowue_VdRetrainEDRAM(PPCContext &context) {",
                     "void xowue_VdRetrainEDRAMWorker(")
-for token in ("XOWUE_BINK_FRAME_MARKER", "g_binkFrameMarkerOrder", "videoFrameCount",
+for token in ("XOWUE_VD_RETRAINEDRAM_CALL", "g_vdRetrainCallOrder", "vdRetrainCallCount",
               "thread->startAddress", "thread->startupAddress", "thread->startContext",
               "lastGuestPc", "lastGuestLr"):
     require(token in frame_marker,
-            f"VdRetrainEDRAM frame marker must retain {token}")
+            f"VdRetrainEDRAM call sample must retain {token}")
+require("order <= 4u" in frame_marker and "order % 120u" in frame_marker,
+        "VdRetrainEDRAM calls must be sampled, not mislabeled as decoded Bink frames")
 require("context.r3.u32 = 0u;" in frame_marker,
         "frame observation must preserve VdRetrainEDRAM's existing success return")
-require("g_binkFrameMarkerOrder.store(0u" in ENGINE,
-        "frame order must reset at the start of each XEX session")
+require("g_vdRetrainCallOrder.store(0u" in ENGINE,
+        "VdRetrainEDRAM call order must reset at the start of each XEX session")
 persist = body(ENGINE, "bool shouldPersistRuntimeTrace(", "void persistRuntimeTrace(")
-for token in ("XOWUE_BINK_FRAME_MARKER", "XOWUE_BINK_VIDEO_THREAD_START",
+for token in ("XOWUE_VD_RETRAINEDRAM_CALL", "XOWUE_BINK_VIDEO_THREAD_START",
               "XOWUE_BINK_VIDEO_CONTEXT", "XOWUE_BINK_DECODER_THREAD_START",
               "XOWUE_BINK_FILE_READ_ORDER", "XOWUE_BINK_READ_PROGRESS"):
     require(token in persist, f"bounded runtime trace must persist {token}")
-for token in ("XOWUE_USER_EXIT", "XOWUE_INPUT_SUMMARY",
+for token in ("XOWUE_VIDEO_THREAD_EXIT", "XOWUE_USER_EXIT", "XOWUE_INPUT_SUMMARY",
               "XOWUE_SESSION_TEARDOWN", "XOWUE_THREAD_JOINED",
               "XOWUE_THREAD_ORPHANED"):
     require(token in persist, f"bounded runtime trace must persist {token}")

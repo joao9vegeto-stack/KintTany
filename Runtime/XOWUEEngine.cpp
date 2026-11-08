@@ -202,6 +202,9 @@ constexpr uint32_t kXInputButtonX = 0x4000u;
 constexpr uint32_t kXInputButtonY = 0x8000u;
 constexpr uint32_t kXInputErrorDeviceNotConnected = 1167u;
 constexpr uint32_t kXInputErrorBadArguments = 160u;
+constexpr uint32_t kXInputErrorEmpty = 0x000010D2u;
+constexpr uint16_t kXInputKeystrokeKeyDown = 0x0001u;
+constexpr uint16_t kXInputKeystrokeKeyUp = 0x0002u;
 
 thread_local uint32_t g_currentGuestThreadId = 1;
 std::atomic<uint32_t> g_mainThreadGuestLr{0u},g_mainThreadLastPc{0u},g_mainThreadPrevFn{0u},g_mainThreadLastR3{0u},g_mainThreadLastR4{0u},g_mainThreadLastR11{0u},g_mainThreadLastR30{0u},g_mainThreadLastR31{0u},g_mainThreadWaitTarget{0u};
@@ -387,7 +390,7 @@ struct GuestThread {
     std::atomic<bool> exited{false};
     std::atomic<uint32_t> lastGuestPc{0u};
     // Number of VdRetrainEDRAM frame markers observed on this guest thread.
-    std::atomic<uint32_t> videoFrameCount{0u};
+    std::atomic<uint32_t> vdRetrainCallCount{0u};
     std::atomic<uint32_t> lastCallerFn{0u};
     std::array<std::atomic<uint32_t>, 16> recentAotFns{};
     std::atomic<uint32_t> recentAotIdx{0u};
@@ -460,6 +463,14 @@ struct TouchControllerState {
     int16_t rightX = 0;
     int16_t rightY = 0;
     uint32_t packetNumber = 0;
+};
+
+struct GuestInputKeystroke {
+    uint16_t virtualKey = 0;
+    uint16_t unicode = 0;
+    uint16_t flags = 0;
+    uint8_t userIndex = 0;
+    uint8_t hidCode = 0;
 };
 
 uint32_t g_nextVirtualAllocation = kFirstVirtualAllocation;
@@ -548,7 +559,7 @@ std::atomic<uint32_t> g_b90StreamTransitionLogs{0u};
 std::atomic<uint32_t> g_b95SyncWaitLogs{0u};
 std::atomic<uint32_t> g_b95SyncSignalLogs{0u};
 static std::atomic<uint32_t> g_b105MediaOrder{0u};
-static std::atomic<uint32_t> g_binkFrameMarkerOrder{0u};
+static std::atomic<uint32_t> g_vdRetrainCallOrder{0u};
 std::array<std::atomic<bool>, 8> g_b97MoviePpcDumped{};
 std::atomic<uint32_t> g_b98WaitTargetLogs{0u};
 std::atomic<uint32_t> g_b98WaitResultLogs{0u};
@@ -585,6 +596,8 @@ std::mutex g_xenosMutex;
 std::mutex g_xenosPumpMutex;
 std::mutex g_touchControllerMutex;
 TouchControllerState g_touchController;
+std::mutex g_guestInputKeystrokeMutex;
+std::array<std::deque<GuestInputKeystroke>, 4> g_guestInputKeystrokeQueues;
 std::atomic<uint32_t> g_touchControllerUpdateCount{0u};
 std::atomic<uint32_t> g_xowueInputPollCount{0u};
 std::atomic<uint32_t> g_xowueInputNonzeroPollCount{0u};
@@ -629,74 +642,84 @@ std::vector<std::shared_ptr<GuestThread>> snapshotAllGuestThreads() {
 
 bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     if (event.find("XOWUE_XAUDIO_") != std::string::npos)
-        return g_xaudioTraceLogs.fetch_add(1u, std::memory_order_relaxed) < 256u;
+        return g_xaudioTraceLogs.fetch_add(1u, std::memory_order_relaxed) < 96u;
     if (event.find("XOWUE_AOT_HOT_FUNCTION") != std::string::npos) {
-        static std::atomic<uint32_t> count{0u};
-        return count.fetch_add(1u, std::memory_order_relaxed) < 128u;
-    }
-    if (event.find("XOWUE_AOT_HOT_CALLER") != std::string::npos) {
         static std::atomic<uint32_t> count{0u};
         return count.fetch_add(1u, std::memory_order_relaxed) < 32u;
     }
-    if (event.find("XOWUE_BINK_FRAME_MARKER") != std::string::npos ||
-        event.find("XOWUE_BINK_VIDEO_THREAD_START") != std::string::npos ||
+    if (event.find("XOWUE_AOT_HOT_CALLER") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 16u;
+    }
+    if (event.find("XOWUE_VD_RETRAINEDRAM_CALL") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 32u;
+    }
+    if (event.find("XOWUE_BINK_VIDEO_THREAD_START") != std::string::npos ||
         event.find("XOWUE_BINK_VIDEO_CONTEXT") != std::string::npos ||
         event.find("XOWUE_BINK_DECODER_THREAD_START") != std::string::npos ||
-        event.find("XOWUE_BINK_FILE_READ_ORDER") != std::string::npos ||
         event.find("XOWUE_USER_EXIT") != std::string::npos ||
         event.find("XOWUE_INPUT_SUMMARY") != std::string::npos ||
         event.find("XOWUE_SESSION_TEARDOWN") != std::string::npos ||
         event.find("XOWUE_THREAD_JOINED") != std::string::npos ||
-        event.find("XOWUE_THREAD_ORPHANED") != std::string::npos)
+        event.find("XOWUE_THREAD_ORPHANED") != std::string::npos ||
+        event.find("XOWUE_VIDEO_THREAD_EXIT") != std::string::npos)
         return true;
+    if (event.find("XOWUE_BINK_FILE_READ_ORDER") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 64u;
+    }
     if (event.find("XOWUE_BINK_READ_PROGRESS") != std::string::npos) {
         static std::atomic<uint32_t> count{0u};
-        return count.fetch_add(1u, std::memory_order_relaxed) < 512u;
+        return count.fetch_add(1u, std::memory_order_relaxed) < 96u;
     }
-    if (event.find("B97_") != std::string::npos) return true;
+    if (event.find("B97_") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 128u;
+    }
     if (event.find("B103_ASYNC_NTREADFILE_") != std::string::npos) {
         static std::atomic<uint32_t> count{0u};
-        return count.fetch_add(1u, std::memory_order_relaxed) < 512u;
+        return count.fetch_add(1u, std::memory_order_relaxed) < 64u;
     }
     // Keep the exact event lifetime and wait transitions that decide whether
     // asynchronous movie/file work can unblock its guest consumer.
     if (event.find("B98_") != std::string::npos) {
         static std::atomic<uint32_t> count{0u};
-        return count.fetch_add(1u, std::memory_order_relaxed) < 256u;
+        return count.fetch_add(1u, std::memory_order_relaxed) < 96u;
     }
     if (event.find("B99_") != std::string::npos) {
         static std::atomic<uint32_t> count{0u};
-        return count.fetch_add(1u, std::memory_order_relaxed) < 256u;
+        return count.fetch_add(1u, std::memory_order_relaxed) < 96u;
     }
     if (event.find("B95_SYNC_") != std::string::npos) {
         static std::atomic<uint32_t> count{0u};
-        return count.fetch_add(1u, std::memory_order_relaxed) < 1024u;
+        return count.fetch_add(1u, std::memory_order_relaxed) < 128u;
     }
     // Preserve only the first 200 records from each legacy high-volume family.
     if (event.find("B83_") != std::string::npos)
-        return g_runtimeTracePersistB83.fetch_add(1, std::memory_order_relaxed) < 200u;
+        return g_runtimeTracePersistB83.fetch_add(1, std::memory_order_relaxed) < 64u;
     if (event.find("B84_") != std::string::npos)
-        return g_runtimeTracePersistB84.fetch_add(1, std::memory_order_relaxed) < 200u;
+        return g_runtimeTracePersistB84.fetch_add(1, std::memory_order_relaxed) < 64u;
     if (event.find("B85_") != std::string::npos)
-        return g_runtimeTracePersistB85.fetch_add(1, std::memory_order_relaxed) < 200u;
+        return g_runtimeTracePersistB85.fetch_add(1, std::memory_order_relaxed) < 64u;
     if (event.find("B86_STREAM_") != std::string::npos)
-        return g_runtimeTracePersistB86Stream.fetch_add(1, std::memory_order_relaxed) < 64u;
+        return g_runtimeTracePersistB86Stream.fetch_add(1, std::memory_order_relaxed) < 32u;
     if (event.find("B86_MEDIA_OPEN") != std::string::npos)
-        return g_runtimeTracePersistB86Media.fetch_add(1, std::memory_order_relaxed) < 128u;
+        return g_runtimeTracePersistB86Media.fetch_add(1, std::memory_order_relaxed) < 64u;
     if (event.find("B94_STREAM_CONTEXT_WORD") != std::string::npos ||
         event.find("B94_STREAM_R10_WORD") != std::string::npos) {
         static std::atomic<uint32_t> count{0u};
-        return count.fetch_add(1u, std::memory_order_relaxed) < 512u;
+        return count.fetch_add(1u, std::memory_order_relaxed) < 64u;
     }
     if (event.find("B99_MEDIA_EOF_COMPLETION") != std::string::npos ||
         event.find("B99_BIK_EOF_COMPLETION") != std::string::npos) return true;
     if (event.find("B94_STREAM_CONTEXT") != std::string::npos) {
         static std::atomic<uint32_t> count{0u};
-        return count.fetch_add(1u, std::memory_order_relaxed) < 64u;
+        return count.fetch_add(1u, std::memory_order_relaxed) < 16u;
     }
     if (event.find("B94_CODE_AUDIT") != std::string::npos) {
         static std::atomic<uint32_t> count{0u};
-        return count.fetch_add(1u, std::memory_order_relaxed) < 128u;
+        return count.fetch_add(1u, std::memory_order_relaxed) < 64u;
     }
     if (event.find("THREAD_DUMP") != std::string::npos) {
         static std::atomic<uint32_t> count{0u};
@@ -716,7 +739,7 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     }
     if (event.find("XOWUE_AOT_HOTSPOT") != std::string::npos) {
         static std::atomic<uint32_t> count{0u};
-        return count.fetch_add(1u, std::memory_order_relaxed) < 128u;
+        return count.fetch_add(1u, std::memory_order_relaxed) < 32u;
     }
     if (event.find("CODE_AUDIT_B69_GUEST_WORD") != std::string::npos) {
         static std::atomic<uint32_t> count{0u};
@@ -724,7 +747,7 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     }
     if (event.find("CODE_AUDIT_B67") != std::string::npos) {
         static std::atomic<uint32_t> count{0u};
-        return count.fetch_add(1u, std::memory_order_relaxed) < 256u;
+        return count.fetch_add(1u, std::memory_order_relaxed) < 64u;
     }
     if (event.find("CODE_AUDIT_B66") != std::string::npos ||
         event.find("CODE_AUDIT_83847ABC") != std::string::npos) {
@@ -734,9 +757,9 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     if (event.find("B92_XXX_INTEGRITY") != std::string::npos ||
         event.find("B92_BIK_INTEGRITY") != std::string::npos ||
         event.find("XOWUE_B92_QPC_") != std::string::npos)
-        return g_runtimeTracePersistB92.fetch_add(1, std::memory_order_relaxed) < 256u;
+        return g_runtimeTracePersistB92.fetch_add(1, std::memory_order_relaxed) < 64u;
     if (event.find("B87_") != std::string::npos)
-        return g_runtimeTracePersistB87.fetch_add(1, std::memory_order_relaxed) < 160u;
+        return g_runtimeTracePersistB87.fetch_add(1, std::memory_order_relaxed) < 64u;
     // Build 64 must persist diagnostics that identify stalls and QPC output writes.
     for (const char *required : {"CODE_AUDIT_B69", "APP_LAUNCH", "XOWUE_SYNC_CREATE", "XOWUE_MAIN_WAIT_WATCHDOG", "B85_MULTIWAIT_WATCHDOG_PUMP", "B85_WAIT_WATCHDOG_PUMP", "XOWUE_POOL_ALLOC_82DC2BF0", "XOWUE_QPC_WRITE",
                                  "CODE_AUDIT_QPC_CALLERS", "XOWUE_QPC_CALLER_DUMP", "CODE_AUDIT_B65",
@@ -745,15 +768,15 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
         if (event.find(required) != std::string::npos) return true;
     }
     if (sequence < 96u) return true;
-    if (sequence < 32768u && sequence % 64u == 0u) return true;
+    if (sequence < 32768u && sequence % 256u == 0u) return true;
 
     const bool failure = event.find("exception") != std::string::npos ||
                          event.find("failed") != std::string::npos ||
                          event.find("rejected") != std::string::npos ||
                          event.find("untranslated") != std::string::npos;
-    if (event.find("AOT execution") != std::string::npos &&
-        g_runtimeTracePersistMilestones.fetch_add(1, std::memory_order_relaxed) < 100000u) {
-        return true;
+    if (event.find("AOT execution") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 64u;
     }
 
     if (failure && g_runtimeTracePersistFailures.fetch_add(1, std::memory_order_relaxed) < 128u) {
@@ -775,7 +798,7 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
                               event.find("XENOS_GRAPHICS_INTERRUPT") != std::string::npos ||
                               event.find("XENOS_PM4_") != std::string::npos;
     if (graphicsSync &&
-        g_runtimeTracePersistGraphics.fetch_add(1, std::memory_order_relaxed) < 384u) {
+        g_runtimeTracePersistGraphics.fetch_add(1, std::memory_order_relaxed) < 96u) {
         return true;
     }
     if (event.find("Xenos ring kick") != std::string::npos &&
@@ -2270,6 +2293,14 @@ void checkpointGuestThread() {
 
 void finishGuestThread(const std::shared_ptr<GuestThread> &thread, uint32_t exitCode) {
     thread->exitStatus.store(exitCode);
+    if (thread->startAddress == 0x82690DC0u || thread->startupAddress == 0x82690DC0u) {
+        char videoExit[192];
+        std::snprintf(videoExit, sizeof(videoExit),
+            "XOWUE_VIDEO_THREAD_EXIT id=%u entry=0x%08X startup=0x%08X vd_retrain_calls=%u code=0x%08X",
+            thread->id, thread->startAddress, thread->startupAddress,
+            thread->vdRetrainCallCount.load(std::memory_order_relaxed), exitCode);
+        recordRuntimeTrace(videoExit);
+    }
     char event[120];
     std::snprintf(event, sizeof(event), "PPC thread exit id=%u code=0x%08X", thread->id, exitCode);
     recordRuntimeTrace(event);
@@ -2416,6 +2447,10 @@ void stopGuestThreads() {
         g_touchController = {};
     }
     {
+        std::lock_guard<std::mutex> inputLock(g_guestInputKeystrokeMutex);
+        for (auto &queue : g_guestInputKeystrokeQueues) queue.clear();
+    }
+    {
         std::lock_guard<std::mutex> lock(g_guestObjectMutex);
         g_guestWaitables.clear();
         g_guestPointerWaitables.clear();
@@ -2459,7 +2494,8 @@ struct GuestXenosPumpSessionGuard final {
     GuestXenosPumpSessionGuard()
         : worker([this] {
               g_nextGraphicsVblank = std::chrono::steady_clock::now() + kGraphicsVblankPeriod;
-              while (!stopRequested.load(std::memory_order_relaxed)) {
+              while (!stopRequested.load(std::memory_order_relaxed) &&
+                     !g_schedulerStopRequested.load(std::memory_order_acquire)) {
                   try {
                       pumpGuestXenosRingBuffer();
                   } catch (const std::exception &error) {
@@ -3333,6 +3369,8 @@ extern "C" bool xowue_82dc2390_observe(PPCContext &context,uint8_t *base) {
 void xowue_thread_checkpoint(uint32_t guestAddress);
 static void xowue_trace_hot_guest_entry(uint32_t guestAddress, PPCContext &ctx);
 void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
+    if (g_schedulerStopRequested.load(std::memory_order_acquire))
+        throw GuestThreadStopRequested{};
     // Build 97: observe media-related PPC entries and raw guest instruction words.
     {
         // These are media-adjacent PPC routines, not proof that a movie
@@ -3682,6 +3720,8 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
     }
 uint32_t lr=static_cast<uint32_t>(ctx.lr);if(g_currentGuestThread){g_currentGuestThread->lastGuestLr.store(lr,std::memory_order_relaxed);g_currentGuestThread->lastR3.store(ctx.r3.u32,std::memory_order_relaxed);g_currentGuestThread->lastR4.store(ctx.r4.u32,std::memory_order_relaxed);g_currentGuestThread->lastR11.store(ctx.r11.u32,std::memory_order_relaxed);g_currentGuestThread->lastR30.store(ctx.r30.u32,std::memory_order_relaxed);g_currentGuestThread->lastR31.store(ctx.r31.u32,std::memory_order_relaxed);}else{uint32_t prev=g_mainThreadLastPc.exchange(guestAddress);if(prev!=guestAddress)g_mainThreadPrevFn.store(prev);g_mainThreadGuestLr.store(lr);g_mainThreadLastR3.store(ctx.r3.u32);g_mainThreadLastR4.store(ctx.r4.u32);g_mainThreadLastR11.store(ctx.r11.u32);g_mainThreadLastR30.store(ctx.r30.u32);g_mainThreadLastR31.store(ctx.r31.u32);uint32_t i=g_mainThreadRecentAotIdx.fetch_add(1);g_mainThreadRecentAotFns[i&15u].store(guestAddress);}xowue_thread_checkpoint(guestAddress);}
 void xowue_thread_checkpoint(uint32_t guestAddress) {
+    if (g_schedulerStopRequested.load(std::memory_order_acquire))
+        throw GuestThreadStopRequested{};
     if (g_currentGuestThread && g_currentGuestThread->handle == 0xF8000014u &&
         (guestAddress == 0x82DC1FA0u || guestAddress == 0x82DC2390u)) {
         static thread_local uint32_t audioLoopCalls = 0u;
@@ -4337,17 +4377,52 @@ extern "C" bool xowue_xenos_commit_resolved_rgba(
     return true;
 }
 
+static void queueTouchKeystrokeTransitions(const TouchControllerState &previous,
+                                                const TouchControllerState &next) {
+    struct ButtonKey { uint32_t mask; uint16_t virtualKey; };
+    static constexpr ButtonKey keys[] = {
+        {0x1000u, 0x5800u}, {0x2000u, 0x5801u},
+        {0x4000u, 0x5802u}, {0x8000u, 0x5803u},
+        {0x0100u, 0x5805u}, {0x0200u, 0x5804u},
+        {0x0020u, 0x5815u}, {0x0010u, 0x5814u},
+        {0x0040u, 0x5816u}, {0x0080u, 0x5817u},
+        {0x0001u, 0x5810u}, {0x0002u, 0x5811u},
+        {0x0004u, 0x5812u}, {0x0008u, 0x5813u},
+    };
+    std::lock_guard<std::mutex> lock(g_guestInputKeystrokeMutex);
+    auto enqueue = [](uint16_t virtualKey, uint16_t flags) {
+        for (uint8_t user = 0; user < 4u; ++user) {
+            auto &queue = g_guestInputKeystrokeQueues[user];
+            if (queue.size() >= 64u) queue.pop_front();
+            queue.push_back({virtualKey, 0u, flags, user, 0u});
+        }
+    };
+    for (const auto &key : keys) {
+        const bool wasDown = (previous.buttons & key.mask) != 0u;
+        const bool isDown = (next.buttons & key.mask) != 0u;
+        if (wasDown != isDown)
+            enqueue(key.virtualKey, isDown ? kXInputKeystrokeKeyDown : kXInputKeystrokeKeyUp);
+    }
+    if ((previous.leftTrigger == 0u) != (next.leftTrigger == 0u))
+        enqueue(0x5806u, next.leftTrigger ? kXInputKeystrokeKeyDown : kXInputKeystrokeKeyUp);
+    if ((previous.rightTrigger == 0u) != (next.rightTrigger == 0u))
+        enqueue(0x5807u, next.rightTrigger ? kXInputKeystrokeKeyDown : kXInputKeystrokeKeyUp);
+}
+
 extern "C" void xowue_set_touch_controller_state(
     uint32_t buttons, uint8_t left_trigger, uint8_t right_trigger,
     int16_t left_x, int16_t left_y, int16_t right_x, int16_t right_y) {
     bool changed = false;
+    TouchControllerState previous{};
+    TouchControllerState current{};
     {
         std::lock_guard<std::mutex> lock(g_touchControllerMutex);
-        changed = g_touchController.buttons != buttons ||
-            g_touchController.leftTrigger != left_trigger ||
-            g_touchController.rightTrigger != right_trigger ||
-            g_touchController.leftX != left_x || g_touchController.leftY != left_y ||
-            g_touchController.rightX != right_x || g_touchController.rightY != right_y;
+        previous = g_touchController;
+        changed = previous.buttons != buttons ||
+            previous.leftTrigger != left_trigger ||
+            previous.rightTrigger != right_trigger ||
+            previous.leftX != left_x || previous.leftY != left_y ||
+            previous.rightX != right_x || previous.rightY != right_y;
         g_touchController.buttons = buttons;
         g_touchController.leftTrigger = left_trigger;
         g_touchController.rightTrigger = right_trigger;
@@ -4357,7 +4432,9 @@ extern "C" void xowue_set_touch_controller_state(
         g_touchController.rightY = right_y;
         if (changed) ++g_touchController.packetNumber;
         if (changed) g_touchControllerUpdateCount.fetch_add(1u, std::memory_order_relaxed);
+        current = g_touchController;
     }
+    if (changed) queueTouchKeystrokeTransitions(previous, current);
 }
 
 extern "C" int xowue_set_runtime_trace_path(const char *path) {
@@ -4478,7 +4555,7 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             g_runtimeTrace.clear();
         }
         g_runtimeTracePersistSequence.store(0, std::memory_order_relaxed);
-        g_binkFrameMarkerOrder.store(0u, std::memory_order_relaxed);
+        g_vdRetrainCallOrder.store(0u, std::memory_order_relaxed);
         g_touchControllerUpdateCount.store(0u, std::memory_order_relaxed);
         g_xowueInputPollCount.store(0u, std::memory_order_relaxed);
         g_xowueInputNonzeroPollCount.store(0u, std::memory_order_relaxed);
@@ -8303,7 +8380,7 @@ static uint32_t writeTouchGamepadState(uint8_t *base, uint32_t userIndex,
         state.packetNumber, std::memory_order_relaxed);
     const bool packetChanged = state.packetNumber != 0u &&
                                state.packetNumber != previouslyObserved;
-    if (pollSequence <= 64u || pollSequence % 120u == 0u || packetChanged) {
+    if (pollSequence <= 8u || pollSequence % 1024u == 0u || packetChanged) {
         char inputEvent[512];
         std::snprintf(inputEvent, sizeof(inputEvent),
             "api=%s poll=%u thread=%u requested_user=%u normalized_user=%u flags=0x%08X output=0x%08X status=0x%08X packet=%u buttons=0x%04X triggers=%u,%u sticks=%d,%d,%d,%d",
@@ -8361,12 +8438,12 @@ static void traceXowueInputImport(uint32_t slot, const char *api,
                                      uint32_t arg3, uint32_t arg4,
                                      uint32_t arg5, uint32_t arg6,
                                      uint32_t status, const PPCContext &context) {
-    static std::array<std::atomic<uint32_t>, 7> calls{};
+    static std::array<std::atomic<uint32_t>, 8> calls{};
     if (slot >= calls.size()) return;
     const uint32_t sequence = calls[slot].fetch_add(1u, std::memory_order_relaxed) + 1u;
     // Enough samples to identify the active API and arguments, then one sample
     // every 120 calls. This keeps the input sidecar below its existing 256 KiB cap.
-    if (sequence > 32u && (sequence % 120u) != 0u) return;
+    if (sequence > 8u && (sequence % 1024u) != 0u) return;
     char event[384];
     std::snprintf(event, sizeof(event),
         "XOWUE_INPUT_API api=%s call=%u thread=%u lr=0x%08X r3=0x%08X r4=0x%08X r5=0x%08X r6=0x%08X status=0x%08X",
@@ -8385,11 +8462,37 @@ void xowue_XInputGetState(PPCContext &context, uint8_t *base) {
                           0u, 0u, status, context);
 }
 
+static void traceXowueInputCallsite(PPCContext &context, uint8_t *base,
+                                     uint32_t userIndex, uint32_t flags,
+                                     uint32_t outputAddress) {
+    const uint32_t returnAddress = context.lr.u32;
+    if (!base || returnAddress < 32u ||
+        !validGuestRange(returnAddress - 32u, 96u)) return;
+    static std::atomic<uint32_t> logged{0u};
+    if (logged.fetch_add(1u, std::memory_order_relaxed) >= 4u) return;
+    const uint32_t start = returnAddress - 32u;
+    char event[640];
+    const uint32_t threadId = g_currentGuestThread
+        ? g_currentGuestThread->id : g_currentGuestThreadId;
+    int used = std::snprintf(event, sizeof(event),
+        "XOWUE_INPUT_CALLSITE thread=%u user=%u flags=0x%08X output=0x%08X "
+        "lr=0x%08X start=0x%08X words=",
+        threadId, userIndex, flags, outputAddress, returnAddress, start);
+    for (uint32_t index = 0; index < 24u && used > 0 &&
+         static_cast<size_t>(used) < sizeof(event); ++index) {
+        const uint32_t word = loadGuestBe32(base, start + index * 4u);
+        used += std::snprintf(event + used, sizeof(event) - static_cast<size_t>(used),
+                              "%s%08X", index == 0u ? "" : ",", word);
+    }
+    persistGuestInputTrace(event);
+}
+
 void xowue_XamInputGetState(PPCContext &context, uint8_t *base) {
     const uint32_t requestedUserIndex = context.r3.u32;
     const uint32_t flags = context.r4.u32;
     const uint32_t userIndex = xowueNormalizeXamUserIndex(requestedUserIndex, flags);
     const uint32_t stateAddress = context.r5.u32;
+    traceXowueInputCallsite(context, base, userIndex, flags, stateAddress);
     if (!xowueXamFlagsAllowGamepad(flags)) {
         char rejected[320];
         std::snprintf(rejected, sizeof(rejected),
@@ -8404,6 +8507,64 @@ void xowue_XamInputGetState(PPCContext &context, uint8_t *base) {
     context.r3.u32 = status;
     traceXowueInputImport(1u, "XamInputGetState", requestedUserIndex, flags,
                           stateAddress, 0u, status, context);
+}
+
+static void xowue_XamInputGetKeystrokeImpl(PPCContext &context, uint8_t *base, const char *apiName) {
+    const uint32_t requestedUserIndex = context.r3.u32;
+    const uint32_t flags = context.r4.u32;
+    const uint32_t outputAddress = context.r5.u32;
+    if (!base || outputAddress == 0u || !validGuestRange(outputAddress, 8u)) {
+        context.r3.u32 = kXInputErrorBadArguments;
+        return;
+    }
+    const bool anyUser = (requestedUserIndex & 0xFFu) == 0xFFu ||
+                         (flags & kXInputFlagAnyUser) != 0u;
+    if (!anyUser && requestedUserIndex > 3u) {
+        context.r3.u32 = kXInputErrorBadArguments;
+        return;
+    }
+    GuestInputKeystroke keystroke{};
+    bool found = false;
+    {
+        std::lock_guard<std::mutex> lock(g_guestInputKeystrokeMutex);
+        const uint32_t firstUser = anyUser ? 0u : requestedUserIndex;
+        const uint32_t endUser = anyUser ? 4u : requestedUserIndex + 1u;
+        for (uint32_t user = firstUser; user < endUser; ++user) {
+            auto &queue = g_guestInputKeystrokeQueues[user];
+            if (queue.empty()) continue;
+            keystroke = queue.front();
+            queue.pop_front();
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        context.r3.u32 = kXInputErrorEmpty;
+        traceXowueInputImport(7u, apiName, requestedUserIndex, flags,
+                              outputAddress, 0u, kXInputErrorEmpty, context);
+        return;
+    }
+    PPC_STORE_U16(outputAddress + 0u, keystroke.virtualKey);
+    PPC_STORE_U16(outputAddress + 2u, keystroke.unicode);
+    PPC_STORE_U16(outputAddress + 4u, keystroke.flags);
+    base[outputAddress + 6u] = keystroke.userIndex;
+    base[outputAddress + 7u] = keystroke.hidCode;
+    context.r3.u32 = kNtStatusSuccess;
+    char event[192];
+    std::snprintf(event, sizeof(event),
+        "XOWUE_INPUT_KEYSTROKE event=1 api=%s user=%u vk=0x%04X flags=0x%04X",
+        apiName, keystroke.userIndex, keystroke.virtualKey, keystroke.flags);
+    persistGuestInputTrace(event);
+    traceXowueInputImport(7u, apiName, requestedUserIndex, flags,
+                          outputAddress, keystroke.virtualKey, kNtStatusSuccess, context);
+}
+
+void xowue_XamInputGetKeystroke(PPCContext &context, uint8_t *base) {
+    xowue_XamInputGetKeystrokeImpl(context, base, "XamInputGetKeystroke");
+}
+
+void xowue_XamInputGetKeystrokeEx(PPCContext &context, uint8_t *base) {
+    xowue_XamInputGetKeystrokeImpl(context, base, "XamInputGetKeystrokeEx");
 }
 
 void xowue_XInputGetCapabilities(PPCContext &context, uint8_t *base) {
@@ -8528,17 +8689,16 @@ void xowue_VdRetrainEDRAM(PPCContext &context) {
     if (thread && (thread->startAddress == 0x82690DC0u ||
                    thread->startupAddress == 0x82690DC0u)) {
         const uint32_t order =
-            g_binkFrameMarkerOrder.fetch_add(1u, std::memory_order_relaxed) + 1u;
-        const uint32_t frame =
-            thread->videoFrameCount.fetch_add(1u, std::memory_order_relaxed) + 1u;
-        // The boot sequence needs fewer than 1,000 markers. Keep a generous
-        // cap for the second loading screen while avoiding unbounded gameplay logs.
-        if (order <= 2048u) {
+            g_vdRetrainCallOrder.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        const uint32_t retrainCallCount =
+            thread->vdRetrainCallCount.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        // VdRetrainEDRAM is not a decoded-frame callback; retain sparse call samples only.
+        if (order <= 4u || (order % 120u) == 0u) {
             char event[320];
             std::snprintf(event, sizeof(event),
-                "XOWUE_BINK_FRAME_MARKER order=%u tid=%u frame=%u entry=0x%08X "
+                "XOWUE_VD_RETRAINEDRAM_CALL order=%u tid=%u vd_retrain_calls=%u entry=0x%08X "
                 "startup=0x%08X context=0x%08X pc=0x%08X lr=0x%08X guest_r3=0x%08X",
-                order, thread->id, frame, thread->startAddress,
+                order, thread->id, retrainCallCount, thread->startAddress,
                 thread->startupAddress, thread->startContext,
                 thread->lastGuestPc.load(std::memory_order_relaxed),
                 thread->lastGuestLr.load(std::memory_order_relaxed), context.r3.u32);

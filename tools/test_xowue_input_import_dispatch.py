@@ -5,10 +5,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ENGINE = (ROOT / "Runtime/XOWUEEngine.cpp").read_text(encoding="utf-8")
 GENERATOR = (ROOT / "Runtime/generate_runtime_stubs.py").read_text(encoding="utf-8")
+APP = (ROOT / "iOS/App/XOWUEApp.swift").read_text(encoding="utf-8")
 
 MAPPINGS = {
     "XInputGetState": "xowue_XInputGetState",
     "XamInputGetState": "xowue_XamInputGetState",
+    "XamInputGetKeystroke": "xowue_XamInputGetKeystroke",
+    "XamInputGetKeystrokeEx": "xowue_XamInputGetKeystrokeEx",
     "XInputGetCapabilities": "xowue_XInputGetCapabilities",
     "XamInputGetCapabilities": "xowue_XamInputGetCapabilities",
     "XamInputGetCapabilitiesEx": "xowue_XamInputGetCapabilitiesEx",
@@ -32,10 +35,28 @@ for api, handler in MAPPINGS.items():
     require(f"void {handler}(PPCContext &context, uint8_t *base)" in ENGINE,
             f"{handler} must be implemented by the native runtime")
 
+require("GuestInputKeystroke" in ENGINE and "g_guestInputKeystrokeQueues" in ENGINE,
+        "touch button edges must also be queued for XAM keystroke consumers")
+require("queueTouchKeystrokeTransitions(previous, current)" in ENGINE and
+        "XOWUE_INPUT_KEYSTROKE event=1" in ENGINE,
+        "press and release edges must be delivered through XamInputGetKeystroke")
+require('void xowue_XamInputGetKeystroke(PPCContext &, uint8_t *);' in GENERATOR and
+        'void xowue_XamInputGetKeystrokeEx(PPCContext &, uint8_t *);' in GENERATOR and
+        '"XamInputGetKeystroke", "XamInputGetKeystrokeEx"' in GENERATOR,
+        "both XAM keystroke exports must be declared and classified as implemented")
+require("kXInputErrorEmpty = 0x000010D2u" in ENGINE and
+        "XamInputGetKeystrokeEx" in GENERATOR,
+        "XAM keystroke APIs must return X_ERROR_EMPTY and both export variants must be generated")
+require("XOWUE_INPUT_CALLSITE" in ENGINE and "loadGuestBe32(base, start + index * 4u)" in ENGINE,
+        "input diagnostics must capture PPC instructions around the real XamInputGetState caller")
 require("XOWUE_INPUT_POLL" in ENGINE and "XOWUE_INPUT_POLLED" in ENGINE,
         "guest polling and consumed state must remain observable")
 require("XOWUE_INPUT_SUMMARY" in ENGINE,
         "exit diagnostics must preserve host updates and guest poll totals")
 require("installXowueXamInputImports" not in ENGINE,
         "do not bypass the generated PPC import stub or its cancellation checkpoint")
+require('title: playStationLayout ? "×" : "A"' in APP and
+        "mask: XOWUEGamepadButton.a" in APP and
+        'Text(playStationLayout ? "PS" : "XBOX")' in APP,
+        "PlayStation cross must map to Xbox A and the layout must be selectable")
 print("XOWUE_GENERATED_INPUT_IMPORTS_OK")
