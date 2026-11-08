@@ -242,9 +242,10 @@ require("app = context.r3.u32" in xmsg and "message = context.r4.u32" in xmsg an
         "overlapped = context.r5.u32" in xmsg and "buffer = context.r6.u32" in xmsg and
         "length = context.r7.u32" in xmsg,
         "XMsgStartIORequest must use the Xbox ABI argument registers")
-require("xowueCompleteXamProfileOverlapped(base, overlapped, result, 0u)" in xmsg and
+require("validGuestRange(overlapped, 0x1Cu)" in xmsg and
+        "xowueCompleteXamOverlappedImmediate(base, overlapped, result)" in xmsg and
         "context.r3.u32 = 997u" in xmsg,
-        "XMsgStartIORequest must complete XOVERLAPPED and return ERROR_IO_PENDING")
+        "XMsgStartIORequest must complete the full XOVERLAPPED ABI and return ERROR_IO_PENDING")
 require("message == 0x000B0006u" in xmsg and "validGuestRange(buffer, 24u)" in xmsg,
         "XGIUserSetContext must validate its six-DWORD guest payload")
 require("XOWUE_XAM_IO" in xmsg and "XOWUE_XAM_MESSAGE" in xmsg,
