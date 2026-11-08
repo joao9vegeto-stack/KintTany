@@ -330,6 +330,8 @@ jobs:
           clang++ -std=c++23 -Wall -Wextra -Werror -pedantic Runtime/PathContainmentSmoke.cpp -o "$RUNNER_TEMP/xowue-path-containment-smoke"
           "$RUNNER_TEMP/xowue-path-containment-smoke"
           python3 tools/test_xowue_aot_instrumentation.py
+          clang++ -std=c++23 -Wall -Wextra -Werror -pedantic Runtime/ListCycleRepairSmoke.cpp -o "$RUNNER_TEMP/xowue-list-cycle-repair-smoke"
+          "$RUNNER_TEMP/xowue-list-cycle-repair-smoke"
           python3 -m py_compile tools/generate_aot.py
           python3 tools/generate_aot.py --self-test
           python3 -m py_compile tools/test_xowue_build86_diagnostics.py

@@ -3,6 +3,7 @@
 #include "image.h"
 #include "ppc_recomp_shared.h"
 #include "XOWUEDispatchGuard.h"
+#include "XOWUEListCycleRepair.hpp"
 #include "Graphics/Xenos/XOWUEGpuBridge.h"
 #include "Graphics/Xenos/XOWUEGuestDraw.h"
 #include "Graphics/Xenos/XOWUEDxt.h"
@@ -3767,6 +3768,55 @@ void xowue_thread_checkpoint(uint32_t guestAddress) {
     const uint32_t previousGuestLr = g_b90PreviousEntryLr;
     recordAotFunctionExecution(guestAddress);
     g_b90LastAotEntry = guestAddress;
+
+    // Retail PPC at 0x824ACC1C walks a NULL-terminated singly-linked chain:
+    // lwz r11,0x28(r31); compare with zero; branch back while nonzero.
+    // If a guest-side mutation leaves a cycle, the title spins here forever
+    // after the final movie. Break only the cycle edge (last unique node -> 0);
+    // acyclic lists and every node's callback are left untouched.
+    if (guestAddress == 0x824ACC1Cu && g_currentGuestThread &&
+        g_currentGuestThread->id == 1u && auditMemory && auditMemory->base) {
+        const uint32_t root = g_currentGuestThread->lastR30.load(std::memory_order_relaxed);
+        const uint32_t current = g_currentGuestThread->lastR31.load(std::memory_order_relaxed);
+        static thread_local uint32_t lastInspectedRoot = 0u;
+        static thread_local uint64_t loopCheckpointCount = 0u;
+        ++loopCheckpointCount;
+        const bool firstVisitToRoot = root != lastInspectedRoot;
+        const bool periodicRescan = (loopCheckpointCount & 0xFFFu) == 0u;
+        if ((firstVisitToRoot || periodicRescan) &&
+            root >= 0x40000000u && root < 0x70000000u &&
+            current >= 0x40000000u && current < 0x70000000u) {
+            lastInspectedRoot = root;
+            const auto repair = xowue::repairNullTerminatedGuestListCycle(
+                root, 0x28u, 0xA0u, 8192u,
+                [base = auditMemory->base](uint32_t address) {
+                    return loadGuestBe32(base, address);
+                },
+                [base = auditMemory->base](uint32_t address, uint32_t value) {
+                    storeGuestBe32(base, address, value);
+                },
+                [](uint32_t address, uint32_t size) {
+                    return address >= 0x40000000u && address < 0x70000000u &&
+                           validGuestRange(address, size);
+                });
+            if (repair.repaired) {
+                char event[256];
+                std::snprintf(event, sizeof(event),
+                    "XOWUE_MAIN_LIST_CYCLE_REPAIRED root=0x%08X from=0x%08X to=0x%08X "
+                    "steps=%u link_offset=0x28 termination=null",
+                    root, repair.cycleFrom, repair.cycleTo, repair.steps);
+                recordRuntimeTrace(event);
+            } else if (repair.invalidNext || repair.truncated) {
+                char event[224];
+                std::snprintf(event, sizeof(event),
+                    "XOWUE_MAIN_LIST_REPAIR_SKIPPED root=0x%08X steps=%u invalid=%u "
+                    "bad=0x%08X truncated=%u",
+                    root, repair.steps, repair.invalidNext ? 1u : 0u,
+                    repair.badAddress, repair.truncated ? 1u : 0u);
+                recordRuntimeTrace(event);
+            }
+        }
+    }
     // Build 90: thread-local read-only transition observer. It reports the
     // previous AOT entry as a candidate context, never as a proven store PC.
     if (auditMemory && auditMemory->base) {
