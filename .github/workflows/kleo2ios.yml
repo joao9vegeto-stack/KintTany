@@ -95,6 +95,18 @@ jobs:
           python scripts/verify_handoff.py --archive "$RUNNER_TEMP/handoff.tar.zst" \
             --destination "$RUNNER_TEMP/handoff" --sha256 "${{ steps.request.outputs.sha256 }}"
 
+      - name: Release compressed handoff archive and report disk space
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$RUNNER_TEMP/handoff/game.nup"
+          # The extracted handoff is now verified; retaining its 18+ GB compressed
+          # archive during Metal shader compilation needlessly consumes runner disk.
+          rm -f "$RUNNER_TEMP/handoff.tar.zst"
+          echo "Disk space after releasing verified archive:"
+          df -h "$RUNNER_TEMP"
+          du -sh "$RUNNER_TEMP/handoff" "$RUNNER_TEMP/NX2Apple" || true
+
       - name: Build game framework and export Shared IPA
         shell: bash
         run: |
