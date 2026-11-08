@@ -151,6 +151,24 @@ if "lastFileAlias && closedFileCompletion" not in close_body or "signalGuestWait
 else:
     print("PASS: last file alias close signals completion")
 
+
+trace_filter_start = source.index("for (const char *required : {")
+trace_filter_end = source.index("}) {", trace_filter_start)
+trace_filter = source[trace_filter_start:trace_filter_end]
+for event_name in (
+    "B105_MOVIE_PPC_FLOW",
+    "XOWUE_B90_BINK_STATE",
+    "XOWUE_B80_SETSTATE",
+    "XOWUE_B90_CIRCULAR_LIST_PRESERVED",
+    "B102_TIMER_WAIT_BEGIN",
+    "B102_TIMER_WAIT_RESULT",
+):
+    if f'"{event_name}"' not in trace_filter or source.count(event_name) < 2:
+        failed.append(f"{event_name} must be both emitted and preserved by the bounded trace filter")
+        print(f"FAIL: {event_name} must be both emitted and preserved by the bounded trace filter")
+    else:
+        print(f"PASS: {event_name} is emitted and preserved by the bounded trace filter")
+
 if failed:
     raise SystemExit("XOWUE Build 97 diagnostic contract failed: " + "; ".join(failed))
 print("XOWUE_BUILD97_VIDEO_DIAGNOSTICS source contract OK")

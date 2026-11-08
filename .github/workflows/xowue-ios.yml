@@ -265,6 +265,8 @@ jobs:
           python3 tools/test_xowue_build100_event_lifetime.py
           python3 -m py_compile tools/test_xowue_async_file_apc.py
           python3 tools/test_xowue_async_file_apc.py
+          python3 -m py_compile tools/test_xowue_wait_dispatch_semantics.py
+          python3 tools/test_xowue_wait_dispatch_semantics.py
           python3 -m py_compile tools/test_xowue_kernel_data_exports.py
           python3 tools/test_xowue_kernel_data_exports.py
           python3 -m py_compile tools/test_xowue_build100_timer_apc.py

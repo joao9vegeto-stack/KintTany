@@ -775,7 +775,7 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     for (const char *required : {"CODE_AUDIT_B69", "APP_LAUNCH", "XOWUE_SYNC_CREATE", "XOWUE_MAIN_WAIT_WATCHDOG", "B85_MULTIWAIT_WATCHDOG_PUMP", "B85_WAIT_WATCHDOG_PUMP", "XOWUE_POOL_ALLOC_82DC2BF0", "XOWUE_QPC_WRITE",
                                  "CODE_AUDIT_QPC_CALLERS", "XOWUE_QPC_CALLER_DUMP", "CODE_AUDIT_B65",
                                  "XOWUE_82DC2390_GUARD", "B105_GUEST_EVENT_STATE_ADOPT",
-                                 "B105_MOVIE_PPC_FLOW", "B105_MEDIA_OPEN_ORDER", "B105_MEDIA_READ_ORDER"}) {
+                                 "B105_MOVIE_PPC_FLOW", "B105_MEDIA_OPEN_ORDER", "B105_MEDIA_READ_ORDER", "XOWUE_B90_BINK_STATE", "XOWUE_B80_SETSTATE", "XOWUE_B90_CIRCULAR_LIST_PRESERVED", "B102_TIMER_WAIT_BEGIN", "B102_TIMER_WAIT_RESULT"}) {
         if (event.find(required) != std::string::npos) return true;
     }
     if (sequence < 96u) return true;
@@ -1895,21 +1895,48 @@ uint32_t waitGuestObjects(const std::vector<std::shared_ptr<GuestWaitable>> &wai
     if (waitables.empty() || waitables.size() > 64u || waitType > 1u) {
         return kNtStatusInvalidParameter;
     }
-    std::vector<uint64_t> initialPulseGenerations;
-    initialPulseGenerations.reserve(waitables.size());
     for (const auto &waitable : waitables) {
         if (!waitable) return kNtStatusInvalidHandle;
-        std::lock_guard<std::mutex> objectLock(waitable->mutex);
-        initialPulseGenerations.push_back(waitable->pulseGeneration);
     }
-    const auto readyIndex = [&]() -> int32_t {
+
+    const uint32_t waitTarget = waitables.front()->handle
+        ? waitables.front()->handle : waitables.front()->objectAddress;
+    GuestWaitStateScope waitState(waitTarget);
+
+    // NT dispatcher waits must evaluate and consume a multi-object set atomically.
+    // Acquire every unique dispatcher object in one stable address order so a
+    // competing single-object waiter cannot consume a signal between readiness
+    // evaluation and the WaitAny/WaitAll state transition.
+    const auto lockAllWaitables = [&]() {
+        std::vector<GuestWaitable *> lockOrder;
+        lockOrder.reserve(waitables.size());
+        for (const auto &waitable : waitables) lockOrder.push_back(waitable.get());
+        std::sort(lockOrder.begin(), lockOrder.end(), std::less<GuestWaitable *>{});
+        lockOrder.erase(std::unique(lockOrder.begin(), lockOrder.end()), lockOrder.end());
+
+        std::vector<std::unique_lock<std::mutex>> locks;
+        locks.reserve(lockOrder.size());
+        for (GuestWaitable *waitable : lockOrder) {
+            locks.emplace_back(waitable->mutex);
+        }
+        return locks;
+    };
+
+    std::vector<uint64_t> initialPulseGenerations;
+    initialPulseGenerations.reserve(waitables.size());
+    {
+        [[maybe_unused]] auto objectLocks = lockAllWaitables();
+        for (const auto &waitable : waitables) {
+            initialPulseGenerations.push_back(waitable->pulseGeneration);
+        }
+    }
+
+    const auto readyIndexLocked = [&]() -> int32_t {
         int32_t firstReady = -1;
         bool allReady = true;
         for (size_t index = 0; index < waitables.size(); ++index) {
-            if (!waitables[index]) return -2;
-            std::lock_guard<std::mutex> objectLock(waitables[index]->mutex);
-            (void)adoptGuestEventMemorySignalStateLocked(waitables[index]);
             const auto &candidate = *waitables[index];
+            (void)adoptGuestEventMemorySignalStateLocked(waitables[index]);
             const bool signaled = candidate.kind == GuestWaitable::Kind::Semaphore
                 ? candidate.semaphoreCount > 0
                 : candidate.kind == GuestWaitable::Kind::Mutant
@@ -1921,6 +1948,25 @@ uint32_t waitGuestObjects(const std::vector<std::shared_ptr<GuestWaitable>> &wai
         }
         if (waitType == 0u) return allReady ? 0 : -1; // WaitAll.
         return firstReady; // WaitAny.
+    };
+    const auto readyIndex = [&]() -> int32_t {
+        [[maybe_unused]] auto objectLocks = lockAllWaitables();
+        return readyIndexLocked();
+    };
+    const auto consumeWaitableLocked = [](const std::shared_ptr<GuestWaitable> &waitable) {
+        // Caller owns waitable->mutex as part of the complete dispatcher lock set.
+        if (waitable->kind == GuestWaitable::Kind::Semaphore) {
+            --waitable->semaphoreCount;
+            waitable->signaled = waitable->semaphoreCount > 0;
+        } else if (waitable->kind == GuestWaitable::Kind::Mutant) {
+            waitable->ownerThread = g_currentGuestThreadId;
+            ++waitable->recursion;
+            waitable->signaled = false;
+        } else {
+            if (waitable->unconsumedSignals != 0u) --waitable->unconsumedSignals;
+            if (!waitable->manualReset) waitable->signaled = false;
+        }
+        syncGuestDispatcherSignalState(waitable);
     };
 
     const bool isMainThread = (g_currentGuestThread == nullptr);
@@ -1938,46 +1984,25 @@ uint32_t waitGuestObjects(const std::vector<std::shared_ptr<GuestWaitable>> &wai
         int32_t selected = -1;
         {
             std::unique_lock<std::mutex> waitLock(g_waitSetMutex);
-            selected = readyIndex();
-            if (selected == -2) return kNtStatusInvalidHandle;
+            {
+                [[maybe_unused]] auto objectLocks = lockAllWaitables();
+                selected = readyIndexLocked();
+                if (selected == -2) return kNtStatusInvalidHandle;
+                if (selected >= 0) {
+                    if (waitType == 0u) {
+                        for (const auto &waitable : waitables) {
+                            consumeWaitableLocked(waitable);
+                        }
+                        return kNtStatusWait0;
+                    }
+                    auto &waitable = waitables[static_cast<size_t>(selected)];
+                    consumeWaitableLocked(waitable);
+                    return kNtStatusWait0 + static_cast<uint32_t>(selected);
+                }
+            }
             if (selected < 0 && g_schedulerStopRequested.load()) {
                 if (g_currentGuestThreadId != 1u) throw GuestThreadStopRequested{};
                 return kNtStatusCancelled;
-            }
-            if (selected >= 0) {
-                if (waitType == 0u) {
-                    for (const auto &waitable : waitables) {
-                        std::lock_guard<std::mutex> objectLock(waitable->mutex);
-                        if (waitable->kind == GuestWaitable::Kind::Semaphore) {
-                            --waitable->semaphoreCount;
-                            waitable->signaled = waitable->semaphoreCount > 0;
-                        } else if (waitable->kind == GuestWaitable::Kind::Mutant) {
-                            waitable->ownerThread = g_currentGuestThreadId;
-                            ++waitable->recursion;
-                            waitable->signaled = false;
-                        } else {
-                            if (waitable->unconsumedSignals != 0u) --waitable->unconsumedSignals;
-                            if (!waitable->manualReset) waitable->signaled = false;
-                        }
-                        syncGuestDispatcherSignalState(waitable);
-                    }
-                    return kNtStatusWait0;
-                }
-                auto &waitable = waitables[static_cast<size_t>(selected)];
-                std::lock_guard<std::mutex> objectLock(waitable->mutex);
-                if (waitable->kind == GuestWaitable::Kind::Semaphore) {
-                    --waitable->semaphoreCount;
-                    waitable->signaled = waitable->semaphoreCount > 0;
-                } else if (waitable->kind == GuestWaitable::Kind::Mutant) {
-                    waitable->ownerThread = g_currentGuestThreadId;
-                    ++waitable->recursion;
-                    waitable->signaled = false;
-                } else {
-                    if (waitable->unconsumedSignals != 0u) --waitable->unconsumedSignals;
-                    if (!waitable->manualReset) waitable->signaled = false;
-                }
-                syncGuestDispatcherSignalState(waitable);
-                return kNtStatusWait0 + static_cast<uint32_t>(selected);
             }
             const auto nowBeforeWait = std::chrono::steady_clock::now();
             if (deadline && nowBeforeWait >= *deadline) return kNtStatusTimeout;
@@ -2025,7 +2050,6 @@ uint32_t waitGuestObjects(const std::vector<std::shared_ptr<GuestWaitable>> &wai
         }
     }
 }
-
 void signalGuestWaitable(const std::shared_ptr<GuestWaitable> &waitable) {
     if (!waitable) return;
     {
@@ -3426,7 +3450,7 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
                 const uint32_t flowSample = mediaFlowSamples.fetch_add(1u, std::memory_order_relaxed) + 1u;
                 char flow[512];
                 std::snprintf(flow, sizeof(flow),
-                    "XOWUE_MEDIA_PPC_FLOW sample=%u entry=0x%08X hit=%u tid=%u lr=0x%08X "
+                    "B105_MOVIE_PPC_FLOW sample=%u entry=0x%08X hit=%u tid=%u lr=0x%08X "
                     "r3=0x%08X r4=0x%08X r5=0x%08X r6=0x%08X r7=0x%08X r8=0x%08X "
                     "r10=0x%08X r30=0x%08X r31=0x%08X",
                     flowSample, guestAddress, hit, g_currentGuestThreadId, static_cast<uint32_t>(ctx.lr),
