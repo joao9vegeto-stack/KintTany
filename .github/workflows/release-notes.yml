@@ -27,17 +27,6 @@ on:
     secrets:
       COPILOT_TOKEN:
         required: false
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "A final tag such as v1.0.0 (Use workflow from: the branch that holds the changelog row, usually main)"
-        required: true
-        type: string
-      publish:
-        description: "false (the default): the result goes to the job summary and an artifact only. true: also put a checked text into the existing release of the tag"
-        required: false
-        default: false
-        type: boolean
 
 permissions: {}
 
@@ -57,6 +46,7 @@ defaults:
 # Actions are pinned to commit SHAs (the tag in the comment), as in issue-triage.yml.
 jobs:
   gather:
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') }}
     name: Gather (read only)
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -86,7 +76,7 @@ jobs:
   write:
     name: Write (model, no write token)
     needs: gather
-    if: needs.gather.result == 'success'
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') && (needs.gather.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     continue-on-error: true
@@ -139,7 +129,7 @@ jobs:
   check:
     name: Check (no model token)
     needs: [gather, write]
-    if: ${{ !cancelled() }}
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') && (!cancelled()) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -210,7 +200,7 @@ jobs:
   publish:
     name: Publish (manual run with publish true)
     needs: check
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') && (github.event_name == 'workflow_dispatch' && inputs.publish) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

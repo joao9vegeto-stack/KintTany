@@ -11,10 +11,10 @@ on:
   # Explicit types: the default three plus ready_for_review. Not `edited` or `labeled`: GitHub sends `edited` when it retargets a stack, and a
   # second run for the same head only cancels the first (2026-11-02, two runs of this workflow started in the same second).
   pull_request:
+    branches: [Fried2iOS]
     types: [opened, synchronize, reopened, ready_for_review]
   push:
-    branches: [main]
-  workflow_dispatch:
+    branches: [Fried2iOS]
 
 permissions:
   contents: read
@@ -42,6 +42,7 @@ jobs:
   # the tip report these jobs as skipped by a job-level if, which counts as passed. Never skip a workflow as a whole: its required checks
   # would never report and the merge of the stack would wait for them. A failed lookup counts as the tip.
   stack:
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') }}
     name: Stack (is this the tip?)
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -74,6 +75,7 @@ jobs:
   # The diff is taken against the default branch, not the PR's base: the tip of a stack then counts the changes of every PR below it,
   # whose own heavy jobs were skipped.
   changes:
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') }}
     name: Changed areas
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -134,7 +136,7 @@ jobs:
     name: Tool tests
     runs-on: xcode-27
     needs: [stack, changes]
-    if: ${{ !cancelled() && (needs.stack.result != 'success' || needs.stack.outputs.is_tip == 'true') && (needs.changes.result != 'success' || needs.changes.outputs.engine == 'true') }}
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') && (!cancelled() && (needs.stack.result != 'success' || needs.stack.outputs.is_tip == 'true') && (needs.changes.result != 'success' || needs.changes.outputs.engine == 'true')) }}
     timeout-minutes: 15
     defaults:
       run:
@@ -197,6 +199,7 @@ jobs:
   # The notes of a final release live in release-notes/vX.Y.Z.md and are merged before the tag (RELEASING.md, "Release notes"). A pull request that changes
   # one is linted here: no emojis or symbols, no semicolons or dashes, English then Chinese, no template leftovers. Nothing runs when no notes file changed.
   release-notes:
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') }}
     name: Release notes lint (release-notes/*.md)
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -219,6 +222,7 @@ jobs:
           echo "$files" | xargs python3 tools/release_notes.py check
 
   patch-queue:
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') }}
     name: Patch queue (series applies to the pin, tool tests, dry bump against seedds main, issues #123 and #214)
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -253,7 +257,7 @@ jobs:
     name: Build check (Mac host, gfx tests, iOS sources)
     runs-on: xcode-27
     needs: [stack, changes]
-    if: ${{ !cancelled() && (needs.stack.result != 'success' || needs.stack.outputs.is_tip == 'true') && (needs.changes.result != 'success' || needs.changes.outputs.engine == 'true') }}
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') && (!cancelled() && (needs.stack.result != 'success' || needs.stack.outputs.is_tip == 'true') && (needs.changes.result != 'success' || needs.changes.outputs.engine == 'true')) }}
     timeout-minutes: 40
     defaults:
       run:
@@ -307,7 +311,7 @@ jobs:
   launcher:
     name: Mac launcher (frontend, swift test)
     needs: [stack, changes]
-    if: ${{ !cancelled() && (needs.stack.result != 'success' || needs.stack.outputs.is_tip == 'true') && (needs.changes.result != 'success' || needs.changes.outputs.launcher == 'true') }}
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') && (!cancelled() && (needs.stack.result != 'success' || needs.stack.outputs.is_tip == 'true') && (needs.changes.result != 'success' || needs.changes.outputs.launcher == 'true')) }}
     runs-on: xcode-27
     timeout-minutes: 20
     steps:
@@ -343,6 +347,7 @@ jobs:
   # Runs on Linux, not xcode-27: the tests mock the system calls and nothing here needs macOS, so the job does not take one of the 5 macOS slots
   # the account has. The tests that need clang find the one GitHub installs on ubuntu-latest.
   launcher-qt:
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') }}
     name: Qt front end (frontend-qt tests)
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -360,6 +365,7 @@ jobs:
         run: python -m unittest discover -s frontend-qt/tests -v
 
   triage-scripts:
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') }}
     name: Triage script tests (.github/scripts)
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -383,7 +389,7 @@ jobs:
     name: Host tests, iOS shell package and unsigned iOS app
     runs-on: xcode-27
     needs: [stack, changes]
-    if: ${{ !cancelled() && (needs.stack.result != 'success' || needs.stack.outputs.is_tip == 'true') && (needs.changes.result != 'success' || needs.changes.outputs.engine == 'true') }}
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') && (!cancelled() && (needs.stack.result != 'success' || needs.stack.outputs.is_tip == 'true') && (needs.changes.result != 'success' || needs.changes.outputs.engine == 'true')) }}
     timeout-minutes: 60
     defaults:
       run:

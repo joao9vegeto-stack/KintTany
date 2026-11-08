@@ -11,6 +11,7 @@ name: PR scope (sync safety)
 
 on:
   pull_request:
+    branches: [Fried2iOS]
     types: [opened, synchronize, reopened, ready_for_review]
     paths: ['dm/**', 'scripts/**', 'docs/**', 'ref/**', 'patches/**', '.upstream-ref', 'tools/**']
 
@@ -19,6 +20,7 @@ permissions:
 
 jobs:
   check:
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

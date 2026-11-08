@@ -31,21 +31,15 @@ name: Build the NX2Apple app (macOS)
 
 on:
   push:
-    branches: [main]
-    tags: ['v*']
-    # GitHub does not evaluate path filters for tag pushes: every v* tag builds. On main only a change to these paths builds.
+    branches: [Fried2iOS]
+    # On Fried2iOS, only changes to these paths start a branch build.
     paths: ['frontend/**', 'tools/engine.py', 'tools/release_manifest.py', 'tools/requirements-release.txt', 'patches/**', '.upstream-ref', '.github/workflows/build-mac-app.yml']
   # No paths filter here: a workflow that does not start reports nothing. The `stack` job decides per job whether a pull request builds the app
   # (it is the tip of its stack, and it changes a packaging file or has the label full-build), see .github/scripts/build_wanted.py.
   # Explicit types: not `edited` or `labeled` (GitHub sends `edited` when it retargets a stack, and the second run only cancels the first).
   pull_request:
+    branches: [Fried2iOS]
     types: [opened, synchronize, reopened, ready_for_review]
-  workflow_dispatch:
-    inputs:
-      release_without_rc:
-        description: 'Run on a final tag only (Use workflow from: the tag). Publish it although its commit has no release candidate. An emergency exit, see RELEASING.md.'
-        type: boolean
-        default: false
 
 permissions:
   contents: write
@@ -61,6 +55,7 @@ jobs:
   # changes what goes into the packaging or has the label full-build (build_wanted.py). `swift test` (tests.yml) runs on every tip.
   # Push to main, a tag and workflow_dispatch always build. A skipped job still reports, and a failed lookup builds (fail open).
   stack:
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') }}
     name: Stack (tip, packaging)
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -103,7 +98,7 @@ jobs:
   # queues in seconds, and the icon job (the scarce xcode-27 runner) runs only on a miss. A tag (rc or final) always compiles the icon.
   icon-cache:
     needs: stack
-    if: ${{ !cancelled() && (needs.stack.result != 'success' || (needs.stack.outputs.is_tip == 'true' && needs.stack.outputs.build == 'true')) }}
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') && (!cancelled() && (needs.stack.result != 'success' || (needs.stack.outputs.is_tip == 'true' && needs.stack.outputs.build == 'true'))) }}
     runs-on: ubuntu-latest
     outputs:
       hit: ${{ steps.lookup.outputs.cache-hit }}
@@ -122,7 +117,7 @@ jobs:
 
   icon:
     needs: icon-cache
-    if: ${{ startsWith(github.ref, 'refs/tags/') || needs.icon-cache.outputs.hit != 'true' }}
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') && (startsWith(github.ref, 'refs/tags/') || needs.icon-cache.outputs.hit != 'true') }}
     runs-on: xcode-27
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
@@ -162,7 +157,7 @@ jobs:
   # A problem with the notes never stops the build: the called workflow cannot fail the run, and the build job below does not read its result.
   # contents: write is the most a job of the called workflow asks for (its manual publish job), the model job has no permissions at all.
   notes:
-    if: ${{ github.ref_type == 'tag' && !contains(github.ref_name, '-rc') }}
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') && (github.ref_type == 'tag' && !contains(github.ref_name, '-rc')) }}
     permissions:
       contents: write
       pull-requests: read
@@ -177,7 +172,7 @@ jobs:
     needs: [stack, icon-cache, icon, notes]
     # icon is skipped on a pull request with a cache hit, and that must not skip the build. icon-cache and icon are skipped with the stack
     # decision (not the tip, or no packaging change), so the build is skipped then too, and reports as skipped.
-    if: ${{ !cancelled() && (needs.stack.result != 'success' || (needs.stack.outputs.is_tip == 'true' && needs.stack.outputs.build == 'true')) && needs.icon-cache.result == 'success' && (needs.icon.result == 'success' || needs.icon.result == 'skipped') }}
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') && (!cancelled() && (needs.stack.result != 'success' || (needs.stack.outputs.is_tip == 'true' && needs.stack.outputs.build == 'true')) && needs.icon-cache.result == 'success' && (needs.icon.result == 'success' || needs.icon.result == 'skipped')) }}
     # The same runner and compiler as tests.yml: the app that is shipped is compiled by the Xcode that the tests ran with. On macos-latest (Xcode 26.6)
     # a closure that Xcode 27.2 accepts failed only here, in #467, after the tests had passed.
     runs-on: xcode-27

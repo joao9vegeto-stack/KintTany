@@ -8,19 +8,19 @@
 # tag so the artifact is always available under Actions, and it becomes a release download only
 # once the reports from real hardware are clean.
 #
-#   - push a tag vX.Y.Z / workflow_dispatch → build, upload as a workflow artifact and attach to the release
+#   - push to Fried2iOS → build and upload as a workflow artifact
 name: Build NX2Apple (Qt, Windows)
 
 on:
   push:
-    tags: ['v*']
-  workflow_dispatch:
+    branches: [Fried2iOS]
 
 permissions:
   contents: write
 
 jobs:
   shell-template:
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') }}
     name: Build DmShell.app template (macOS)
     runs-on: xcode-27
     env:
@@ -46,6 +46,7 @@ jobs:
           if-no-files-found: error
 
   build:
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') }}
     needs: shell-template
     runs-on: windows-latest
     steps:

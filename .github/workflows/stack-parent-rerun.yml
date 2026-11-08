@@ -11,6 +11,7 @@ name: Stack parent re-run
 
 on:
   pull_request_target:
+    branches: [Fried2iOS]
     types: [opened, reopened, closed, edited]
 
 permissions: {}
@@ -23,7 +24,7 @@ jobs:
   rerun:
     name: Re-run the parent of an opened, closed or retargeted PR
     # A title or body edit has no `changes.base`.
-    if: ${{ github.event.action != 'edited' || github.event.changes.base != null }}
+    if: ${{ (github.ref == 'refs/heads/Fried2iOS' || github.event.pull_request.base.ref == 'Fried2iOS') && (github.event.action != 'edited' || github.event.changes.base != null) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
