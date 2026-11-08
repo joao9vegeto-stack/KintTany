@@ -113,7 +113,7 @@ jobs:
           name: Kleo2iOS-${{ github.run_number }}
           path: |
             ${{ runner.temp }}/kleo-output/NX2Apple.ipa
-            ${{ runner.temp }}/kleo-output/game-data.tar.zst
+            ${{ runner.temp }}/kleo-output/game-data.zip
             ${{ runner.temp }}/kleo-output/build-report.json
           if-no-files-found: error
           retention-days: 7
