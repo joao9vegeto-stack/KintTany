@@ -199,7 +199,14 @@ assert 'runtime.stop duplicate request ignored' in request_exit
 assert "if phase != .booting" in request_exit
 assert "native call already returned" in request_exit
 assert "xowue_request_stop()" in request_exit
-assert "Task.detached(priority: .userInitiated)" in request_exit
+assert "xowue_request_stop()" in request_exit
+assert "Task.detached(priority: .userInitiated)" not in request_exit
+boot_start = ui.index("    func runBoot() {")
+boot_end = ui.index("\n    private func fail(", boot_start)
+boot_body = ui[boot_start:boot_end]
+assert "DispatchQueue.global(qos: .userInitiated).async" in boot_body
+assert "DispatchQueue.main.async" in boot_body
+assert "self.completeBoot(result)" in boot_body
 assert "gameSurfacePresented = false" in request_exit
 assert request_exit.index("if phase != .booting") < request_exit.index("gameSurfacePresented = false") < request_exit.index("xowue_request_stop()")
 assert "Aguardando o retorno do boot e a finalização das threads PPC." in request_exit
