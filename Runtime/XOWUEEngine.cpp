@@ -268,6 +268,10 @@ struct GuestFile {
     // NT file objects are synchronous only when either FILE_SYNCHRONOUS_IO_* flag is set.
     bool synchronous = false;
     bool directory = false;
+    // Xbox NtQueryDirectoryFile retains its wildcard rule between calls that
+    // pass a null FileName argument.
+    std::string directoryPattern = "*";
+    bool directoryEnumerated = false;
     std::vector<std::filesystem::path> entries;
     size_t directoryCursor = 0;
     std::shared_ptr<GuestWaitable> completion;
@@ -9597,60 +9601,106 @@ void xowue_NtQueryDirectoryFile(PPCContext &context, uint8_t *base) {
     const uint32_t ioStatus = context.r7.u32;
     const uint32_t output = context.r8.u32;
     const uint32_t length = context.r9.u32;
-    const uint32_t namePointer = guestStackArgument(context, base, 9u);
-    const uint32_t restart = guestStackArgument(context, base, 10u);
-    std::string pattern = "*";
+
+    // Xbox 360 ABI (Xenia xboxkrnl_io.cc):
+    // r3=file, r4=event, r5=APC routine, r6=APC context,
+    // r7=IO_STATUS_BLOCK, r8=FILE_DIRECTORY_INFORMATION,
+    // r9=buffer length, r10=ANSI_STRING* FileName, stack arg 9=RestartScan.
+    const uint32_t namePointer = context.r10.u32;
+    const uint32_t restart = guestStackArgument(context, base, 9u);
+    std::string pattern;
     if (namePointer != 0u && !readGuestAnsiString(base, namePointer, pattern)) {
         context.r3.u32 = kNtStatusInvalidParameter;
         writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
         return;
     }
-    if (!base || !file || !file->directory || length < 72u || length > 1u * 1024u * 1024u ||
-        !validGuestRange(output, length)) {
+    if (!base || !file || !file->directory || length < 72u ||
+        length > 1u * 1024u * 1024u || !validGuestRange(output, length)) {
         context.r3.u32 = file ? kNtStatusInvalidParameter : kNtStatusInvalidHandle;
         writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
         return;
     }
+
     std::lock_guard<std::mutex> lock(file->mutex);
-    if (restart != 0u) {
-        file->entries.clear();
+
+    // Match XFile::QueryDirectory: a non-empty FileName installs a new
+    // wildcard rule and starts a new search. A null/empty FileName continues
+    // the current rule; RestartScan resets that existing search.
+    const bool hasSearchPattern = !pattern.empty();
+    if (hasSearchPattern) {
+        file->directoryPattern = pattern;
         file->directoryCursor = 0u;
+    } else if (restart != 0u) {
+        file->directoryCursor = 0u;
+    }
+
+    if (!file->directoryEnumerated || restart != 0u) {
+        file->entries.clear();
         std::error_code ec;
         for (std::filesystem::directory_iterator it(file->path, ec), end;
-             !ec && it != end; it.increment(ec)) file->entries.push_back(it->path());
+             !ec && it != end; it.increment(ec)) {
+            file->entries.push_back(it->path());
+        }
         std::sort(file->entries.begin(), file->entries.end(), [](const auto &a, const auto &b) {
             return lowerGuestPath(a.filename().string()) < lowerGuestPath(b.filename().string());
         });
+        file->directoryEnumerated = true;
     }
+
+    static std::atomic<uint32_t> directoryQuerySequence{0u};
+    const uint32_t querySequence =
+        directoryQuerySequence.fetch_add(1u, std::memory_order_relaxed) + 1u;
+    if (querySequence <= 24u) {
+        char event[384];
+        std::snprintf(event, sizeof(event),
+            "XOWUE_DIRECTORY_QUERY seq=%u thread=%u lr=0x%08X file=0x%08X "
+            "name_ptr=0x%08X pattern=%.*s restart=%u cursor=%zu entries=%zu",
+            querySequence, g_currentGuestThreadId, static_cast<uint32_t>(context.lr),
+            context.r3.u32, namePointer, static_cast<int>(file->directoryPattern.size()),
+            file->directoryPattern.c_str(), restart, file->directoryCursor,
+            file->entries.size());
+        recordRuntimeTrace(event);
+    }
+
     while (file->directoryCursor < file->entries.size() &&
-           !guestWildcardMatch(pattern, file->entries[file->directoryCursor].filename().string()))
+           !guestWildcardMatch(file->directoryPattern,
+                               file->entries[file->directoryCursor].filename().string())) {
         ++file->directoryCursor;
+    }
     if (file->directoryCursor >= file->entries.size()) {
-        context.r3.u32 = 0x80000006u; // STATUS_NO_MORE_FILES
-        writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
+        const uint32_t status = hasSearchPattern
+            ? 0xC000000Fu   // STATUS_NO_SUCH_FILE for a new pattern with no match.
+            : 0x80000006u;  // STATUS_NO_MORE_FILES while continuing a search.
+        context.r3.u32 = status;
+        writeGuestIoStatus(base, ioStatus, status, 0u);
         return;
     }
+
     const auto entry = file->entries[file->directoryCursor++];
     const std::string leaf = entry.filename().string();
-    const uint32_t utf16Bytes = static_cast<uint32_t>(leaf.size() * 2u);
-    if (64u + utf16Bytes > length) {
+    // X_FILE_DIRECTORY_INFORMATION uses an ANSI/byte filename at +0x40;
+    // FileNameLength and IO_STATUS_BLOCK.Information are byte counts.
+    const uint32_t fileNameBytes = static_cast<uint32_t>(leaf.size());
+    if (64u + fileNameBytes > length) {
         context.r3.u32 = kNtStatusBufferTooSmall;
         writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
         return;
     }
+
     std::memset(base + output, 0, length);
     std::error_code ec;
     const bool isDirectory = std::filesystem::is_directory(entry, ec);
     const uint64_t size = isDirectory ? 0u : std::filesystem::file_size(entry, ec);
+    PPC_STORE_U32(output + 4u, static_cast<uint32_t>(file->directoryCursor));
     PPC_STORE_U64(output + 40u, size);
     PPC_STORE_U64(output + 48u, (size + 0xFFFu) & ~uint64_t{0xFFFu});
-    PPC_STORE_U32(output + 56u, isDirectory ? 0x10u : 0x20u);
-    PPC_STORE_U32(output + 60u, utf16Bytes);
-    for (size_t index = 0; index < leaf.size(); ++index)
-        storeGuestBe16(base, output + 64u + static_cast<uint32_t>(index * 2u),
-                       static_cast<uint8_t>(leaf[index]));
+    PPC_STORE_U32(output + 56u, isDirectory ? 0x10u : 0x80u);
+    PPC_STORE_U32(output + 60u, fileNameBytes);
+    if (fileNameBytes != 0u)
+        std::memcpy(base + output + 64u, leaf.data(), fileNameBytes);
+
     context.r3.u32 = kNtStatusSuccess;
-    writeGuestIoStatus(base, ioStatus, kNtStatusSuccess, 64u + utf16Bytes);
+    writeGuestIoStatus(base, ioStatus, kNtStatusSuccess, 64u + fileNameBytes);
 }
 
 void xowue_NtQueryVolumeInformationFile(PPCContext &context, uint8_t *base) {
