@@ -89,6 +89,15 @@ require("portrait_requested=1" in APP and "interfaceOrientations: .portrait" in 
         "returning to launcher must restore portrait orientation")
 print("XOWUE_NONBLOCKING_EXIT_AND_THREAD_JOIN_OK")
 
+require("DispatchQueue.global(qos: .userInitiated).async" in APP and
+        "DispatchQueue.main.async" in APP and
+        "runtime.boot completion delivered to main queue" in APP,
+        "native boot completion must return through an explicit main-queue callback")
+require("xowue_request_stop()" in APP and
+        APP.index("xowue_request_stop()") < APP.index("private func completeBoot"),
+        "SAIR must latch native cancellation synchronously before waiting for boot completion")
+
+
 require("std::atomic<bool> g_hostStopRequested{false};" in ENGINE,
         "host stop request must survive until the native PPC session begins")
 begin_session = ENGINE[ENGINE.index('extern "C" void xowue_begin_session(void) {'):

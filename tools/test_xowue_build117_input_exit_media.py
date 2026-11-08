@@ -78,3 +78,15 @@ require("constexpr off_t kMaxGuestInputTraceFileBytes = 256 * 1024" in ENGINE,
         "expanded input diagnostics must retain the existing bounded sidecar size")
 
 print("XOWUE_BUILD117_INPUT_EXIT_MEDIA_GUARDS_OK")
+
+require("import GameController" in APP and
+        "GCControllerDidConnect" in APP and "GCControllerDidDisconnect" in APP,
+        "iOS game controllers must be discovered and tracked across connection changes")
+require("extendedGamepad?.valueChangedHandler" in APP and
+        "microGamepad?.valueChangedHandler" in APP,
+        "extended and micro gamepad input profiles must deliver live button/axis changes")
+require("physicalButtons" in APP and "buttons | physicalButtons" in APP,
+        "physical gamepad state must be merged with the on-screen touch controller")
+require("XOWUEGamepadButton.a" in APP and "pad.buttonA.isPressed" in APP,
+        "physical Cross/A must map to the guest XInput A button")
+

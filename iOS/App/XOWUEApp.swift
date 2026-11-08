@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 import Foundation
 import Combine
 import UIKit
+import GameController
 
 @MainActor
 final class XOWUEOrientationDelegate: NSObject, UIApplicationDelegate {
@@ -363,6 +364,7 @@ private struct XOWUEGameSurfaceScreen: View {
         .preferredColorScheme(.dark)
         .statusBarHidden(true)
         .onDisappear {
+            touchController.stopObservingGameControllers()
             library.requestExit()
         }
         .onAppear {
@@ -375,7 +377,7 @@ private struct XOWUEGameSurfaceScreen: View {
 }
 
 @MainActor
-private final class XOWUETouchController: ObservableObject {
+private final class XOWUETouchController: NSObject, ObservableObject {
     @Published private(set) var buttons: UInt32 = 0
     private var leftTrigger: UInt8 = 0
     private var rightTrigger: UInt8 = 0
@@ -388,6 +390,150 @@ private final class XOWUETouchController: ObservableObject {
     private var triggerReleaseGeneration: [Bool: UInt64] = [:]
     private var activeButtonTouches = Set<UInt32>()
     private var activeTriggerTouches = Set<Bool>()
+    private var physicalController: GCController?
+    private var physicalButtons: UInt32 = 0
+    private var physicalLeftTrigger: UInt8 = 0
+    private var physicalRightTrigger: UInt8 = 0
+    private var physicalLeftX: Int16 = 0
+    private var physicalLeftY: Int16 = 0
+    private var physicalRightX: Int16 = 0
+    private var physicalRightY: Int16 = 0
+    private var controllerObservers: [NSObjectProtocol] = []
+
+    override init() {
+        super.init()
+        observeGameControllers()
+        if let current = GCController.current ?? GCController.controllers().first {
+            attachGameController(current)
+        }
+        GCController.startWirelessControllerDiscovery(completionHandler: nil)
+    }
+
+    private func observeGameControllers() {
+        let center = NotificationCenter.default
+        controllerObservers.append(center.addObserver(
+            forName: .GCControllerDidConnect, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let controller = notification.object as? GCController else { return }
+            self?.attachGameController(controller)
+        })
+        controllerObservers.append(center.addObserver(
+            forName: .GCControllerDidBecomeCurrent, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let controller = notification.object as? GCController else { return }
+            self?.attachGameController(controller)
+        })
+        controllerObservers.append(center.addObserver(
+            forName: .GCControllerDidDisconnect, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let controller = notification.object as? GCController,
+                  self?.physicalController === controller else { return }
+            self?.detachGameController()
+        })
+    }
+
+    private func attachGameController(_ controller: GCController) {
+        guard physicalController == nil || GCController.current === controller else { return }
+        physicalController?.extendedGamepad?.valueChangedHandler = nil
+        physicalController?.microGamepad?.valueChangedHandler = nil
+        physicalController = controller
+        controller.extendedGamepad?.valueChangedHandler = { [weak self] _, _ in
+            DispatchQueue.main.async { [weak self] in self?.refreshPhysicalControllerState() }
+        }
+        controller.microGamepad?.valueChangedHandler = { [weak self] _, _ in
+            DispatchQueue.main.async { [weak self] in self?.refreshPhysicalControllerState() }
+        }
+        GCController.stopWirelessControllerDiscovery()
+        refreshPhysicalControllerState()
+        XOWUEDiagnostics.logInput("XOWUE_GAMECONTROLLER connected vendor=\(controller.vendorName ?? "unknown")")
+    }
+
+    private func detachGameController() {
+        physicalController?.extendedGamepad?.valueChangedHandler = nil
+        physicalController?.microGamepad?.valueChangedHandler = nil
+        physicalController = nil
+        physicalButtons = 0
+        physicalLeftTrigger = 0
+        physicalRightTrigger = 0
+        physicalLeftX = 0
+        physicalLeftY = 0
+        physicalRightX = 0
+        physicalRightY = 0
+        send()
+        if let next = GCController.current ?? GCController.controllers().first {
+            attachGameController(next)
+        }
+    }
+
+    func stopObservingGameControllers() {
+        for observer in controllerObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        controllerObservers.removeAll()
+        physicalController?.extendedGamepad?.valueChangedHandler = nil
+        physicalController?.microGamepad?.valueChangedHandler = nil
+        physicalController = nil
+        physicalButtons = 0
+        physicalLeftTrigger = 0
+        physicalRightTrigger = 0
+        physicalLeftX = 0
+        physicalLeftY = 0
+        physicalRightX = 0
+        physicalRightY = 0
+        send()
+    }
+
+    private func refreshPhysicalControllerState() {
+        guard let controller = physicalController else { return }
+        var nextButtons: UInt32 = 0
+        var nextLeftTrigger: UInt8 = 0
+        var nextRightTrigger: UInt8 = 0
+        var nextLeftX: Int16 = 0
+        var nextLeftY: Int16 = 0
+        var nextRightX: Int16 = 0
+        var nextRightY: Int16 = 0
+        if let pad = controller.extendedGamepad {
+            if pad.buttonA.isPressed { nextButtons |= XOWUEGamepadButton.a }
+            if pad.buttonB.isPressed { nextButtons |= XOWUEGamepadButton.b }
+            if pad.buttonX.isPressed { nextButtons |= XOWUEGamepadButton.x }
+            if pad.buttonY.isPressed { nextButtons |= XOWUEGamepadButton.y }
+            if pad.leftShoulder.isPressed { nextButtons |= XOWUEGamepadButton.leftShoulder }
+            if pad.rightShoulder.isPressed { nextButtons |= XOWUEGamepadButton.rightShoulder }
+            if pad.buttonMenu.isPressed { nextButtons |= XOWUEGamepadButton.start }
+            if pad.buttonOptions?.isPressed == true { nextButtons |= XOWUEGamepadButton.back }
+            if pad.leftThumbstickButton?.isPressed == true { nextButtons |= XOWUEGamepadButton.leftThumb }
+            if pad.rightThumbstickButton?.isPressed == true { nextButtons |= XOWUEGamepadButton.rightThumb }
+            if pad.dpad.up.isPressed || pad.dpad.yAxis.value > 0.5 { nextButtons |= XOWUEGamepadButton.up }
+            if pad.dpad.down.isPressed || pad.dpad.yAxis.value < -0.5 { nextButtons |= XOWUEGamepadButton.down }
+            if pad.dpad.left.isPressed || pad.dpad.xAxis.value < -0.5 { nextButtons |= XOWUEGamepadButton.left }
+            if pad.dpad.right.isPressed || pad.dpad.xAxis.value > 0.5 { nextButtons |= XOWUEGamepadButton.right }
+            nextLeftTrigger = UInt8((min(1, max(0, pad.leftTrigger.value)) * 255).rounded())
+            nextRightTrigger = UInt8((min(1, max(0, pad.rightTrigger.value)) * 255).rounded())
+            nextLeftX = Self.xinputAxis(pad.leftThumbstick.xAxis.value)
+            nextLeftY = Self.xinputAxis(pad.leftThumbstick.yAxis.value)
+            nextRightX = Self.xinputAxis(pad.rightThumbstick.xAxis.value)
+            nextRightY = Self.xinputAxis(pad.rightThumbstick.yAxis.value)
+        } else if let pad = controller.microGamepad {
+            if pad.buttonA.isPressed { nextButtons |= XOWUEGamepadButton.a }
+            if pad.buttonX.isPressed { nextButtons |= XOWUEGamepadButton.x }
+            if pad.dpad.up.isPressed || pad.dpad.yAxis.value > 0.5 { nextButtons |= XOWUEGamepadButton.up }
+            if pad.dpad.down.isPressed || pad.dpad.yAxis.value < -0.5 { nextButtons |= XOWUEGamepadButton.down }
+            if pad.dpad.left.isPressed || pad.dpad.xAxis.value < -0.5 { nextButtons |= XOWUEGamepadButton.left }
+            if pad.dpad.right.isPressed || pad.dpad.xAxis.value > 0.5 { nextButtons |= XOWUEGamepadButton.right }
+        }
+        physicalButtons = nextButtons
+        physicalLeftTrigger = nextLeftTrigger
+        physicalRightTrigger = nextRightTrigger
+        physicalLeftX = nextLeftX
+        physicalLeftY = nextLeftY
+        physicalRightX = nextRightX
+        physicalRightY = nextRightY
+        send()
+    }
+
+    private static func xinputAxis(_ value: Float) -> Int16 {
+        Int16((min(1, max(-1, value)) * 32767).rounded())
+    }
 
     // Keep a 180 ms minimum pulse: the title polls XAM from worker threads, and
     // brief UIKit taps must survive scheduling jitter and guest polling cadence. A new touch
@@ -492,20 +638,28 @@ private final class XOWUETouchController: ObservableObject {
     }
 
     private func send() {
+        let outputButtons = buttons | physicalButtons
+        let outputLeftTrigger = max(leftTrigger, physicalLeftTrigger)
+        let outputRightTrigger = max(rightTrigger, physicalRightTrigger)
+        let outputLeftX = abs(physicalLeftX) > 1200 ? physicalLeftX : leftX
+        let outputLeftY = abs(physicalLeftY) > 1200 ? physicalLeftY : leftY
+        let outputRightX = abs(physicalRightX) > 1200 ? physicalRightX : rightX
+        let outputRightY = abs(physicalRightY) > 1200 ? physicalRightY : rightY
         xowue_set_touch_controller_state(
-            buttons,
-            leftTrigger,
-            rightTrigger,
-            leftX,
-            leftY,
-            rightX,
-            rightY
+            outputButtons,
+            outputLeftTrigger,
+            outputRightTrigger,
+            outputLeftX,
+            outputLeftY,
+            outputRightX,
+            outputRightY
         )
         diagnosticSendCount &+= 1
         if diagnosticSendCount <= 32 || diagnosticSendCount % 64 == 0 {
             XOWUEDiagnostics.logInput(
-                "XOWUE_INPUT_HOST seq=\(diagnosticSendCount) buttons=0x\(String(buttons, radix: 16)) " +
-                "triggers=\(leftTrigger),\(rightTrigger) sticks=\(leftX),\(leftY),\(rightX),\(rightY)"
+                "XOWUE_INPUT_HOST seq=\(diagnosticSendCount) buttons=0x\(String(outputButtons, radix: 16)) " +
+                "triggers=\(outputLeftTrigger),\(outputRightTrigger) sticks=\(outputLeftX),\(outputLeftY),\(outputRightX),\(outputRightY) " +
+                "physical=\(physicalController != nil)"
             )
         }
     }
@@ -1245,9 +1399,13 @@ private enum XOWUEFileStore {
 }
 
 private enum XOWUERuntime {
-    struct Outcome {
+    struct Outcome: Sendable {
         let code: Int32
         let text: String
+    }
+
+    struct BootFailure: Error, Sendable {
+        let message: String
     }
 
     enum RuntimeError: LocalizedError {
@@ -1455,15 +1613,14 @@ private final class XOWUEGameLibrary: ObservableObject {
     }
 
     func requestExit() {
-        // runBoot owns the native call; UIKit is dismissed only after the
-        // scheduler has returned and the session guard has joined guest threads.
+        // The C entry point only latches cancellation and wakes kernel waiters.
+        // Call it synchronously so the stop request cannot sit behind another
+        // detached task while the PPC boot call is still running.
         guard phase == .booting || gameSurfacePresented else { return }
         guard !exitRequested else {
             XOWUEDiagnostics.log("runtime.stop duplicate request ignored")
             return
         }
-        // A failed/stopped surface has no active boot call left to observe a
-        // cancellation. Dismiss that already-finished session directly.
         if phase != .booting {
             exitRequested = false
             gameSurfacePresented = false
@@ -1475,8 +1632,56 @@ private final class XOWUEGameLibrary: ObservableObject {
         XOWUEDiagnostics.log("runtime.stop requested by user phase=\(phase) surface=\(gameSurfacePresented) latched=\(exitRequested)")
         status = "Encerrando o runtime nativo…"
         detail = "Aguardando o retorno do boot e a finalização das threads PPC."
-        Task.detached(priority: .userInitiated) {
-            xowue_request_stop()
+        xowue_request_stop()
+        XOWUEDiagnostics.log("runtime.stop native cancellation call returned")
+    }
+
+    private func completeBoot(_ result: Result<XOWUERuntime.Outcome, XOWUERuntime.BootFailure>) {
+        isBusy = false
+        progress = 1
+        switch result {
+        case .success(let outcome):
+            bootOutput = outcome.text
+            XOWUEDiagnostics.bootFinished(code: outcome.code, text: outcome.text)
+            if exitRequested || outcome.code == 4 {
+                exitRequested = false
+                phase = .ready
+                status = "Sessão do jogo encerrada."
+                detail = "Threads PPC finalizadas; pronto para iniciar novamente."
+                gameSurfacePresented = false
+                XOWUEDiagnostics.log("runtime.stop completed code=\(outcome.code)")
+                dismissGameSurface(reason: "native-stop-complete")
+                return
+            }
+            if outcome.code == 3 {
+                phase = .stopped
+                status = "O runtime parou em um pedido de firmware."
+                detail = "O menu e o primeiro frame ainda não foram alcançados."
+            } else if outcome.code == 0 {
+                phase = .stopped
+                status = "O entry point retornou; o jogo não concluiu o boot."
+                detail = "O teste confirma somente o retorno do entry point."
+            } else {
+                phase = .failed
+                status = "A tentativa de boot encontrou um bloqueio."
+                detail = "O diagnóstico abaixo identifica o ponto observado."
+            }
+        case .failure(let failure):
+            let message = failure.message
+            if exitRequested {
+                exitRequested = false
+                phase = .ready
+                gameSurfacePresented = false
+                status = "Sessão encerrada."
+                XOWUEDiagnostics.log("runtime.stop completed after error: \(message)")
+                dismissGameSurface(reason: "native-stop-error-return")
+                return
+            }
+            phase = .failed
+            status = "Não foi possível validar ou executar o XEX."
+            detail = message
+            bootOutput = message
+            XOWUEDiagnostics.bootFailed(message)
         }
     }
 
@@ -1495,61 +1700,25 @@ private final class XOWUEGameLibrary: ObservableObject {
         status = "Abrindo X-MEN ORIGINS: WOLVERINE…"
         detail = "Inicializando o runtime PPC, a fila Xenos e o caminho de frames no KosmicKrisp."
         bootOutput = "O jogo está sendo iniciado."
-        let executablePath = game.appendingPathComponent(XOWUEFileStore.executableName).path
-        XOWUEDiagnostics.bootStarted(path: executablePath, build: XOWUEBuild.number)
-        // Clear only for this new run, before the detached inspect/boot task starts.
-        // requestExit() can then latch cancellation without racing boot initialization.
+        let executable = game.appendingPathComponent(XOWUEFileStore.executableName)
+        XOWUEDiagnostics.bootStarted(path: executable.path, build: XOWUEBuild.number)
         xowue_begin_session()
         XOWUEDiagnostics.log("runtime.session.begin cancellation latch cleared")
-        Task { @MainActor in
+
+        // Keep the native call on a worker queue, then perform the completion
+        // as an explicit main-queue callback. This avoids making launcher exit
+        // depend on resuming a Swift Task awaiting a detached task's value.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result: Result<XOWUERuntime.Outcome, XOWUERuntime.BootFailure>
             do {
-                let executable = game.appendingPathComponent(XOWUEFileStore.executableName)
-                let outcome = try await Task.detached(priority: .userInitiated) {
-                    try XOWUERuntime.inspectAndBoot(executable)
-                }.value
-                isBusy = false
-                progress = 1
-                bootOutput = outcome.text
-                XOWUEDiagnostics.bootFinished(code: outcome.code, text: outcome.text)
-                if exitRequested || outcome.code == 4 {
-                    exitRequested = false
-                    phase = .ready
-                    status = "Sessão do jogo encerrada."
-                    detail = "Threads PPC finalizadas; pronto para iniciar novamente."
-                    gameSurfacePresented = false
-                    XOWUEDiagnostics.log("runtime.stop completed code=\(outcome.code)")
-                    dismissGameSurface(reason: "native-stop-complete")
-                    return
-                }
-                if outcome.code == 3 {
-                    phase = .stopped
-                    status = "O runtime parou em um pedido de firmware."
-                    detail = "O menu e o primeiro frame ainda não foram alcançados."
-                } else if outcome.code == 0 {
-                    phase = .stopped
-                    status = "O entry point retornou; o jogo não concluiu o boot."
-                    detail = "O teste confirma somente o retorno do entry point."
-                } else {
-                    phase = .failed
-                    status = "A tentativa de boot encontrou um bloqueio."
-                    detail = "O diagnóstico abaixo identifica o ponto observado."
-                }
+                result = .success(try XOWUERuntime.inspectAndBoot(executable))
             } catch {
-                isBusy = false
-                if exitRequested {
-                    exitRequested = false
-                    phase = .ready
-                    gameSurfacePresented = false
-                    status = "Sessão encerrada."
-                    XOWUEDiagnostics.log("runtime.stop completed after error: \(error.localizedDescription)")
-                    dismissGameSurface(reason: "native-stop-error-return")
-                    return
-                }
-                phase = .failed
-                status = "Não foi possível validar ou executar o XEX."
-                detail = error.localizedDescription
-                bootOutput = error.localizedDescription
-                XOWUEDiagnostics.bootFailed(error.localizedDescription)
+                result = .failure(XOWUERuntime.BootFailure(message: error.localizedDescription))
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                XOWUEDiagnostics.log("runtime.boot completion delivered to main queue")
+                self.completeBoot(result)
             }
         }
     }
