@@ -1,0 +1,67 @@
+name: Fried2iOS - Build iOS shell IPA
+
+on:
+  push:
+    branches:
+      - Fried2iOS
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fried2ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ipa:
+    name: Build unsigned DmShell IPA
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - name: Checkout Fried2iOS
+        uses: actions/checkout@v4
+        with:
+          ref: Fried2iOS
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Sync pinned nxnative engine
+        run: python3 tools/engine.py sync
+
+      - name: Build the iOS shell app
+        run: |
+          set -euo pipefail
+          python3 tools/build_shell_template.py --out "$RUNNER_TEMP/DmShell.app"
+
+      - name: Package universal shell IPA
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/DmShell.app"
+          STAGE="$RUNNER_TEMP/ipa-stage"
+          OUT="$RUNNER_TEMP/NX2Apple.ipa"
+          test -d "$APP"
+          test -f "$APP/Info.plist"
+          test -x "$APP/DmShell"
+          rm -rf "$STAGE" "$OUT"
+          mkdir -p "$STAGE/Payload"
+          ditto "$APP" "$STAGE/Payload/DmShell.app"
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$STAGE/Payload" "$OUT"
+          unzip -t "$OUT"
+          unzip -Z1 "$OUT" | grep -q '^Payload/DmShell.app/Info.plist$'
+          unzip -Z1 "$OUT" | grep -q '^Payload/DmShell.app/DmShell$'
+          echo "IPA_PATH=$OUT" >> "$GITHUB_ENV"
+
+      - name: Upload installable shell IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fried2iOS-NX2Apple-shell-IPA
+          path: ${{ env.IPA_PATH }}
+          if-no-files-found: error
+          retention-days: 14
