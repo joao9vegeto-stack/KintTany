@@ -36,7 +36,7 @@ require("file->directoryPattern = pattern;" in query and
         "a null FileName continuation must retain the previous wildcard rule")
 require("if (!file->directoryEnumerated || restart != 0u)" in query,
         "the directory must be enumerated initially and restart must reset it")
-require("? 0xC000000Fu" in query and "? 0x80000006u" in query,
+require("? 0xC000000Fu" in query and ": 0x80000006u" in query,
         "a missing new pattern and an exhausted continuation have distinct NT statuses")
 require("const uint32_t fileNameBytes = static_cast<uint32_t>(leaf.size());" in query,
         "Xbox directory entry filename length is a byte count")
