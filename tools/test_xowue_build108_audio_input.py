@@ -80,12 +80,13 @@ state_helper = engine[state_start:state_end]
 caps_start = state_end
 caps_end = engine.index("static void traceXowueInputImport(", caps_start)
 caps_helper = engine[caps_start:caps_end]
-require("if (userIndex > 3u)" in state_helper,
-        "the single touch controller must accept the title's observed Xbox port 3")
-require("if (userIndex > 3u)" in caps_helper,
-        "capabilities must accept valid Xbox ports 0 through 3 and reject out-of-range ports")
-require("same virtual controller at every valid Xbox user port" in caps_helper,
-        "the single UIKit controller must be consistently exposed to all valid guest ports")
+require("constexpr uint32_t kXowueTouchControllerUserIndex = 0u;" in engine and
+        "if (userIndex != kXowueTouchControllerUserIndex)" in state_helper,
+        "the single touch controller must be exposed only at the default Xbox user slot 0")
+require("if (userIndex != kXowueTouchControllerUserIndex)" in caps_helper,
+        "GetCapabilities must match GetState and report unused slots as disconnected")
+require("controller_not_connected" in state_helper,
+        "valid but unoccupied Xbox controller slots must return DEVICE_NOT_CONNECTED")
 
 poll_start = engine.index("static uint32_t writeTouchGamepadState(")
 poll_end = engine.index("static uint32_t writeTouchGamepadCapabilities(", poll_start)

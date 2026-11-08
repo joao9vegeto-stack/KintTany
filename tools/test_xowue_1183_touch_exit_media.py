@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build 118.4 regression checks: live touch ports, exit dispatch and boot-media trace."""
+"""Build 118.4 regression checks: single touch port, exit dispatch and boot-media trace."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,20 +20,21 @@ def body(source, start, end):
 
 
 state = body(ENGINE, "static uint32_t writeTouchGamepadState(", "static uint32_t writeTouchGamepadCapabilities(")
-require("if (userIndex > 3u)" in state,
-        "touch input must be readable from every valid Xbox port, including the title's port 3")
+require("constexpr uint32_t kXowueTouchControllerUserIndex = 0u;" in ENGINE and
+        "if (userIndex != kXowueTouchControllerUserIndex)" in state,
+        "the one UIKit controller must occupy Xbox user 0 rather than impersonating four independent pads")
 require("state = g_touchController" in state and "PPC_STORE_U16(address + 4u" in state,
-        "touch input must reach the guest XINPUT_STATE, not only the HUD")
-require("reason=invalid_user_port" in state,
-        "only out-of-range user indices may be rejected")
+        "touch input must reach user 0's guest XINPUT_STATE, not only the HUD")
+require("reason=controller_not_connected" in state,
+        "unused Xbox controller slots must return DEVICE_NOT_CONNECTED")
 
 caps = body(ENGINE, "static uint32_t writeTouchGamepadCapabilities(", "static void traceXowueInputImport(")
-require("if (userIndex > 3u)" in caps,
-        "the same virtual controller must report capabilities on port 3")
+require("if (userIndex != kXowueTouchControllerUserIndex)" in caps,
+        "XAM capabilities must expose exactly the same single attached controller as GetState")
 
 xam_set = body(ENGINE, "void xowue_XamInputSetState(", "void xowue_VdQueryVideoFlags(")
-require("userIndex <= 3u" in xam_set,
-        "XAM rumble requests must recognize the mirrored virtual ports")
+require("userIndex == kXowueTouchControllerUserIndex" in xam_set,
+        "XAM rumble must address the one connected virtual controller only")
 
 exit_button = body(APP, 'Button {\n                XOWUEDiagnostics.log("navigation.exit tapped', "            } label: {")
 require("library.requestExit()" in exit_button and "touchController.releaseAll()" not in exit_button,

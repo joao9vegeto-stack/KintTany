@@ -106,6 +106,19 @@ boot_body = ENGINE[boot_start:boot_end]
 require("if (g_hostStopRequested.load(std::memory_order_acquire))" in boot_body and
         "g_schedulerStopRequested.store(g_hostStopRequested.load" in boot_body,
         "boot initialization must not erase an exit request received before session setup")
+exit_catch_start = ENGINE.index(
+    "} catch (const GuestThreadStopRequested &) {",
+    ENGINE.index('extern "C" int xowue_boot_xex('))
+exit_catch_end = ENGINE.index(
+    "} catch (const GuestFirmwareReturn", exit_catch_start)
+user_exit_catch = ENGINE[exit_catch_start:exit_catch_end]
+require("runtimeTraceText()" not in user_exit_catch and
+        "xowue::xenos::Diagnostics()" not in user_exit_catch,
+        "the user-exit catch must not acquire the runtime/Xenos diagnostic snapshot locks after teardown")
+require('writeMessage(output, output_capacity, "Sessão PPC encerrada por SAIR.");' in user_exit_catch and
+        "return 4;" in user_exit_catch,
+        "the user-exit catch must return a compact success code directly to the Swift caller")
+
 run_boot = APP[APP.index("func runBoot()"):]
 require("xowue_begin_session()" in run_boot and
         run_boot.index("xowue_begin_session()") < run_boot.index("Task { @MainActor in"),

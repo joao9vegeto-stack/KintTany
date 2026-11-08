@@ -4947,8 +4947,10 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         recordAotExecutionSummary("user-exit");
         g_aotExecutionTelemetryActive.store(false, std::memory_order_release);
         recordRuntimeTrace("XOWUE_USER_EXIT PPC stopped; scheduler guard joining guest threads");
-        writeMessage(output, output_capacity, "Sessão PPC encerrada por SAIR.%s",
-                     runtimeTraceText().c_str());
+        // The complete trace was persisted incrementally. Do not assemble a
+        // cross-subsystem snapshot after joining guest threads: it takes the
+        // Xenos and GPU diagnostic mutexes and can prevent native return to UIKit.
+        writeMessage(output, output_capacity, "Sessão PPC encerrada por SAIR.");
         return 4;
     } catch (const GuestFirmwareReturn &request) {
         recordAotExecutionSummary("firmware-return");
@@ -8396,23 +8398,27 @@ static uint32_t xowueNormalizeXamUserIndex(uint32_t userIndex, uint32_t flags) {
     return userIndex;
 }
 
+constexpr uint32_t kXowueTouchControllerUserIndex = 0u;
+
 static uint32_t writeTouchGamepadState(uint8_t *base, uint32_t userIndex,
                                        uint32_t address, const char *apiName,
                                        uint32_t requestedUserIndex, uint32_t flags) {
     const uint32_t pollSequence =
         g_xowueInputPollCount.fetch_add(1u, std::memory_order_relaxed) + 1u;
-    // One virtual touch controller is mirrored into all four Xbox user ports.
-    // Build 118.3 proves this title polls XamInputGetState(user=3, GAMEPAD),
-    // while the UIKit bridge was only exposing port 0; rejecting port 3 made
-    // every real game poll return ERROR_DEVICE_NOT_CONNECTED.
-    if (userIndex > 3u) {
+    // A single UIKit virtual pad is one Xbox controller, assigned to user 0.
+    // Xenia, MW2 Recompiled and ReXGlue expose each user index as an independent
+    // controller slot; a query for an unattached slot must report disconnected.
+    // The title's Bink worker enumerates all four slots (0..3), so seeing a
+    // user=3 query is not evidence that the sole controller belongs to slot 3.
+    if (userIndex != kXowueTouchControllerUserIndex) {
         static std::array<std::atomic<uint32_t>, 4> rejectedPollCounts{};
+        const uint32_t rejectedSlot = std::min(userIndex, 3u);
         const uint32_t rejectedCount =
-            rejectedPollCounts[3].fetch_add(1u, std::memory_order_relaxed) + 1u;
+            rejectedPollCounts[rejectedSlot].fetch_add(1u, std::memory_order_relaxed) + 1u;
         if (rejectedCount <= 4u || pollSequence % 1024u == 0u) {
             char rejected[320];
             std::snprintf(rejected, sizeof(rejected),
-                "api=%s poll=%u requested_user=%u normalized_user=%u flags=0x%08X output=0x%08X status=0x%08X reason=invalid_user_port rejected_count=%u",
+                "api=%s poll=%u requested_user=%u normalized_user=%u flags=0x%08X output=0x%08X status=0x%08X reason=controller_not_connected rejected_count=%u",
                 apiName, pollSequence, requestedUserIndex, userIndex, flags, address,
                 kXInputErrorDeviceNotConnected, rejectedCount);
             persistGuestInputTrace(rejected);
@@ -8495,8 +8501,9 @@ static uint32_t writeTouchGamepadState(uint8_t *base, uint32_t userIndex,
 
 static uint32_t writeTouchGamepadCapabilities(uint8_t *base, uint32_t userIndex,
                                               uint32_t address) {
-    // Report the same virtual controller at every valid Xbox user port.
-    if (userIndex > 3u) return kXInputErrorDeviceNotConnected;
+    // Capabilities and GetState must agree: the only attached pad is user 0.
+    if (userIndex != kXowueTouchControllerUserIndex)
+        return kXInputErrorDeviceNotConnected;
     if (address == 0u || !base || !validGuestRange(address, 20u))
         return kXInputErrorBadArguments;
     std::memset(base + address, 0, 20u);
@@ -8687,7 +8694,8 @@ void xowue_XInputSetState(PPCContext &context, uint8_t *base) {
     const uint32_t vibration = context.r4.u32;
     const uint32_t status = vibration == 0u || !validGuestRange(vibration, 4u)
         ? kXInputErrorBadArguments
-        : (userIndex <= 3u ? kNtStatusSuccess : kXInputErrorDeviceNotConnected);
+        : (userIndex == kXowueTouchControllerUserIndex
+            ? kNtStatusSuccess : kXInputErrorDeviceNotConnected);
     context.r3.u32 = status;
     traceXowueInputImport(5u, "XInputSetState", userIndex, vibration,
                           0u, 0u, status, context);
@@ -8701,7 +8709,8 @@ void xowue_XamInputSetState(PPCContext &context, uint8_t *base) {
     const uint32_t vibration = context.r5.u32;
     const uint32_t status = vibration == 0u || !base || !validGuestRange(vibration, 4u)
         ? kXInputErrorBadArguments
-        : (userIndex <= 3u ? kNtStatusSuccess : kXInputErrorDeviceNotConnected);
+        : (userIndex == kXowueTouchControllerUserIndex
+            ? kNtStatusSuccess : kXInputErrorDeviceNotConnected);
     context.r3.u32 = status;
     traceXowueInputImport(6u, "XamInputSetState", requestedUserIndex, reserved,
                           vibration, 0u, status, context);

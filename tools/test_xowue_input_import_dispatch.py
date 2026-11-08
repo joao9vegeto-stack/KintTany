@@ -62,4 +62,25 @@ require('title: playStationLayout ? "×" : "A"' in APP and
         "mask: XOWUEGamepadButton.a" in APP and
         'Text(playStationLayout ? "PS" : "XBOX")' in APP,
         "PlayStation cross must map to Xbox A and the layout must be selectable")
+
+require("kXowueTouchControllerUserIndex = 0u" in ENGINE and
+        "userIndex != kXowueTouchControllerUserIndex" in ENGINE,
+        "one touch pad must map to exactly one Xbox user index")
+require("reason=controller_not_connected" in ENGINE,
+        "XAM/XInput must report unoccupied user slots as disconnected instead of mirroring one pad")
+xinput_set = ENGINE[ENGINE.index("void xowue_XInputSetState("):
+                    ENGINE.index("void xowue_XamInputSetState(")]
+xam_set = ENGINE[ENGINE.index("void xowue_XamInputSetState("):
+                  ENGINE.index("void xowue_VdQueryVideoFlags(")]
+require("userIndex == kXowueTouchControllerUserIndex" in xinput_set and
+        "userIndex == kXowueTouchControllerUserIndex" in xam_set,
+        "XInput and XAM rumble must use the same connected-controller slot as GetState")
+
 print("XOWUE_GENERATED_INPUT_IMPORTS_OK")
+
+
+require("kXowueTouchControllerUserIndex = 0u" in ENGINE and
+        "userIndex != kXowueTouchControllerUserIndex" in ENGINE,
+        "one touch pad must map to exactly one Xbox user index")
+require("reason=controller_not_connected" in ENGINE,
+        "XAM/XInput must report unoccupied user slots as disconnected instead of mirroring one pad")
