@@ -76,6 +76,17 @@ for token in ("XOWUE_SESSION_TEARDOWN", "XOWUE_THREAD_JOINED",
               "XOWUE_THREAD_ORPHANED", "g_touchController = {}"):
     require(token in teardown, f"teardown must implement and report {token}")
 
+video_exit = ENGINE[ENGINE.index("void xowue_VdRetrainEDRAM(PPCContext &context)"):
+                    ENGINE.index("void xowue_VdRetrainEDRAMWorker", ENGINE.index("void xowue_VdRetrainEDRAM(PPCContext &context)"))]
+require("g_schedulerStopRequested.load(std::memory_order_acquire)" in video_exit and
+        "throw GuestThreadStopRequested{}" in video_exit,
+        "video worker must cooperatively unwind from VdRetrainEDRAM loop on exit")
+require("installGameSurfaceDismissHandler" in APP and
+        "dismissGameSurface(reason: \"native-stop-complete\")" in APP and
+        "coordinator.dismissPresentedHost(fallback: anchor)" in APP,
+        "native completion must dismiss exact UIKit landscape host directly")
+require("portrait_requested=1" in APP and "interfaceOrientations: .portrait" in APP,
+        "returning to launcher must restore portrait orientation")
 print("XOWUE_NONBLOCKING_EXIT_AND_THREAD_JOIN_OK")
 
 require("std::atomic<bool> g_hostStopRequested{false};" in ENGINE,

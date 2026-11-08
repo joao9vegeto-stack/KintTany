@@ -99,6 +99,25 @@ for token in ("XOWUE_VIDEO_THREAD_EXIT", "XOWUE_USER_EXIT", "XOWUE_INPUT_SUMMARY
     require(token in persist, f"bounded runtime trace must persist {token}")
 
 
+swap_decode = body(ENGINE, "static bool decodeXenosSwapTexture(", "static bool decodeXenosBCTexture(")
+require("fetchFormat==26u" in swap_decode and "component * 255u + 32767u" in swap_decode,
+        "Xenos TextureFormat 26 must decode four 16-bit UNORM channels")
+require("(fetchFormat==26u || fetchFormat==32u) ? 8u" in swap_decode,
+        "TextureFormat 26 and RGBA16_FLOAT must use eight bytes per pixel with separate conversions")
+
+touch_set = body(ENGINE, 'extern "C" void xowue_set_touch_controller_state(', 'extern "C" int xowue_set_runtime_trace_path')
+require("g_xowueTouchAHostDownCount" in touch_set and "g_xowueTouchAHostUpCount" in touch_set,
+        "host bridge must count A/CROSS press and release edges")
+require("0x1000u" in touch_set and "fetch_add(1u, std::memory_order_relaxed)" in touch_set,
+        "A/CROSS XInput mask must update atomic host-edge counters without synchronous file I/O")
+input_state = body(ENGINE, "static uint32_t writeTouchGamepadState(", "static uint32_t writeTouchGamepadCapabilities(")
+require("g_xowueTouchAGuestPollCount" in input_state and "state.buttons & 0x1000u" in input_state,
+        "guest poll path must count polls that actually carry A/CROSS down")
+require("host_a_down=%u host_a_up=%u guest_a_polls=%u" in ENGINE,
+        "final input summary must distinguish host edges from guest-observed A state")
+require("compactReverse" in ENGINE and "seenAotKeys" in ENGINE,
+        "compact runtime diagnostic must remove repeated AOT hot-function/caller lines")
+
 flow = body(ENGINE, "// These are media-adjacent PPC routines", "    // Check before diagnostic work")
 require("0x822A0278u" not in flow,
         "the FName/NoneByteProperty helper must not be mislabeled as Bink playback")

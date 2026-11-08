@@ -599,6 +599,11 @@ TouchControllerState g_touchController;
 std::mutex g_guestInputKeystrokeMutex;
 std::array<std::deque<GuestInputKeystroke>, 4> g_guestInputKeystrokeQueues;
 std::atomic<uint32_t> g_touchControllerUpdateCount{0u};
+// XInput A (also the PlayStation cross mapping) is tracked on both sides;
+// the final state snapshot is normally released before the user exits.
+std::atomic<uint32_t> g_xowueTouchAHostDownCount{0u};
+std::atomic<uint32_t> g_xowueTouchAHostUpCount{0u};
+std::atomic<uint32_t> g_xowueTouchAGuestPollCount{0u};
 std::atomic<uint32_t> g_xowueInputPollCount{0u};
 std::atomic<uint32_t> g_xowueInputNonzeroPollCount{0u};
 std::atomic<bool> g_xowueInputSummaryLogged{false};
@@ -890,6 +895,32 @@ std::string runtimeTraceText() {
         std::lock_guard<std::mutex> lock(g_runtimeTraceMutex);
         events = g_runtimeTrace;
     }
+    // AOT hot helpers can dominate the 128-event ring with repeated samples.
+    // Keep the newest record per hot-function/caller identity while preserving
+    // all gameplay, video, input, synchronization, failure and lifecycle events.
+    std::vector<std::string> compactReverse;
+    std::vector<std::string> seenAotKeys;
+    compactReverse.reserve(events.size());
+    for (auto it = events.rbegin(); it != events.rend(); ++it) {
+        const std::string &event = *it;
+        auto identity = [&](const char *marker, const char *endMarker) {
+            const size_t start = event.find(marker);
+            if (start == std::string::npos) return std::string{};
+            const size_t end = event.find(endMarker, start);
+            return event.substr(start, end == std::string::npos
+                ? std::string::npos : end - start);
+        };
+        std::string key = identity("XOWUE_AOT_HOT_FUNCTION", " calls=");
+        if (key.empty()) key = identity("XOWUE_AOT_HOT_CALLER", " words=");
+        if (key.empty()) key = identity("XOWUE_AOT_HOTSPOT", " calls=");
+        if (!key.empty()) {
+            if (std::find(seenAotKeys.begin(), seenAotKeys.end(), key) != seenAotKeys.end())
+                continue;
+            seenAotKeys.push_back(std::move(key));
+        }
+        compactReverse.push_back(event);
+    }
+    events.assign(compactReverse.rbegin(), compactReverse.rend());
     std::string result = "\n\nEVENTOS PPC RECENTES:";
     result += "\n- RtlInitializeCriticalSection calls=" + std::to_string(g_criticalSectionInitCount.load());
     for (const auto &event : events) {
@@ -4436,6 +4467,13 @@ extern "C" void xowue_set_touch_controller_state(
         if (changed) g_touchControllerUpdateCount.fetch_add(1u, std::memory_order_relaxed);
         current = g_touchController;
     }
+    constexpr uint32_t kXInputGamepadA = 0x1000u;
+    const uint32_t aEdge = (previous.buttons ^ current.buttons) & kXInputGamepadA;
+    if (aEdge != 0u) {
+        const bool pressed = (current.buttons & kXInputGamepadA) != 0u;
+        (pressed ? g_xowueTouchAHostDownCount : g_xowueTouchAHostUpCount)
+            .fetch_add(1u, std::memory_order_relaxed);
+    }
     if (changed) queueTouchKeystrokeTransitions(previous, current);
 }
 
@@ -4533,13 +4571,17 @@ extern "C" void xowue_request_stop(void) {
         std::unique_lock<std::mutex> inputLock(g_touchControllerMutex, std::try_to_lock);
         const bool snapshotAvailable = inputLock.owns_lock();
         if (snapshotAvailable) state = g_touchController;
-        char line[384];
+        char line[512];
         std::snprintf(line, sizeof(line),
             "XOWUE_INPUT_SUMMARY host_updates=%u guest_polls=%u nonzero_polls=%u "
+            "host_a_down=%u host_a_up=%u guest_a_polls=%u "
             "snapshot_available=%u packet=%u buttons=0x%04X triggers=%u,%u sticks=%d,%d,%d,%d",
             g_touchControllerUpdateCount.load(std::memory_order_relaxed),
             g_xowueInputPollCount.load(std::memory_order_relaxed),
             g_xowueInputNonzeroPollCount.load(std::memory_order_relaxed),
+            g_xowueTouchAHostDownCount.load(std::memory_order_relaxed),
+            g_xowueTouchAHostUpCount.load(std::memory_order_relaxed),
+            g_xowueTouchAGuestPollCount.load(std::memory_order_relaxed),
             snapshotAvailable ? 1u : 0u, state.packetNumber, state.buttons & 0xFFFFu,
             state.leftTrigger, state.rightTrigger, static_cast<int>(state.leftX),
             static_cast<int>(state.leftY), static_cast<int>(state.rightX),
@@ -4575,6 +4617,9 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         g_runtimeTracePersistSequence.store(0, std::memory_order_relaxed);
         g_vdRetrainCallOrder.store(0u, std::memory_order_relaxed);
         g_touchControllerUpdateCount.store(0u, std::memory_order_relaxed);
+        g_xowueTouchAHostDownCount.store(0u, std::memory_order_relaxed);
+        g_xowueTouchAHostUpCount.store(0u, std::memory_order_relaxed);
+        g_xowueTouchAGuestPollCount.store(0u, std::memory_order_relaxed);
         g_xowueInputPollCount.store(0u, std::memory_order_relaxed);
         g_xowueInputNonzeroPollCount.store(0u, std::memory_order_relaxed);
         g_xowueInputSummaryLogged.store(false, std::memory_order_relaxed);
@@ -7177,7 +7222,7 @@ static bool decodeXenosSwapTexture(uint8_t *base, const uint32_t fetchWords[6],
         (fetchFormat==10u) ? 2u :
         (fetchFormat==6u || fetchFormat==7u ||
          fetchFormat==25u || fetchFormat==54u) ? 4u :
-        (fetchFormat==32u) ? 8u : 0u;
+        (fetchFormat==26u || fetchFormat==32u) ? 8u : 0u;
     if (formatBytes==0u || textureFormat!=fetchFormat) return false;
 
     const uint32_t fetchWidth = (fetchWords[2] & 0x1FFFu) + 1u;
@@ -7232,6 +7277,16 @@ static bool decodeXenosSwapTexture(uint8_t *base, const uint32_t fetchWords[6],
                 sourceChannels[0]=static_cast<uint8_t>((a*255u+32767u)/65535u);
                 sourceChannels[1]=static_cast<uint8_t>((b*255u+32767u)/65535u);
                 sourceChannels[2]=0u;sourceChannels[3]=255u;
+            } else if (fetchFormat==26u) {
+                // Xenia/ReXGlue TextureFormat::k_16_16_16_16 (26):
+                // four 16-bit UNORM channels, eight bytes per pixel.
+                // Format 32 is the distinct RGBA16_FLOAT representation.
+                for (uint32_t c=0;c<4u;++c) {
+                    const uint32_t component =
+                        uint32_t(pixel[c*2u]) | (uint32_t(pixel[c*2u+1u]) << 8u);
+                    sourceChannels[c] = static_cast<uint8_t>(
+                        (component * 255u + 32767u) / 65535u);
+                }
             } else if (fetchFormat==32u) {
                 for (uint32_t c=0;c<4u;++c) {
                     const uint16_t half=uint16_t(pixel[c*2u])|
@@ -8388,6 +8443,8 @@ static uint32_t writeTouchGamepadState(uint8_t *base, uint32_t userIndex,
         std::lock_guard<std::mutex> lock(g_touchControllerMutex);
         state = g_touchController;
     }
+    if ((state.buttons & 0x1000u) != 0u)
+        g_xowueTouchAGuestPollCount.fetch_add(1u, std::memory_order_relaxed);
     if (state.buttons != 0u || state.leftTrigger != 0u || state.rightTrigger != 0u ||
         state.leftX != 0 || state.leftY != 0 || state.rightX != 0 || state.rightY != 0) {
         g_xowueInputNonzeroPollCount.fetch_add(1u, std::memory_order_relaxed);
@@ -8705,6 +8762,10 @@ void xowue_VdEnableDisableClockGating(PPCContext &context) { context.r3.u32 = 0u
 void xowue_VdPersistDisplay(PPCContext &context) { context.r3.u32 = 1u; }
 void xowue_VdRetrainEDRAM(PPCContext &context) {
     GuestThread *thread = g_currentGuestThread;
+    // The video worker reaches this export in its tight retrain loop. Make it
+    // a cooperative stop point instead of waiting for an unrelated timer/frame.
+    if (thread && g_schedulerStopRequested.load(std::memory_order_acquire))
+        throw GuestThreadStopRequested{};
     if (thread && (thread->startAddress == 0x82690DC0u ||
                    thread->startupAddress == 0x82690DC0u)) {
         const uint32_t order =

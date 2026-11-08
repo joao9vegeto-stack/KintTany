@@ -106,10 +106,16 @@ private final class XOWUELandscapePresentationCoordinator {
     var presentationPending = false
 
     private func finishDismissal(of host: XOWUELandscapeHostingController) {
+        let scene = host.view.window?.windowScene ?? presentingController?.view.window?.windowScene
         if presentedHost === host { presentedHost = nil }
         presentingController = nil
         presentationPending = false
-        XOWUEDiagnostics.log("orientation.host dismissal_completed tracked_host_cleared=1")
+        XOWUEOrientationDelegate.effectiveMask = .portrait
+        host.setNeedsUpdateOfSupportedInterfaceOrientations()
+        scene?.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { error in
+            XOWUEDiagnostics.log("orientation.host restore_portrait failed: \(error.localizedDescription)")
+        }
+        XOWUEDiagnostics.log("orientation.host dismissal_completed tracked_host_cleared=1 portrait_requested=1")
     }
 
     func dismissPresentedHost(fallback: UIViewController?) {
@@ -173,6 +179,15 @@ private struct XOWUELandscapePresenter: UIViewControllerRepresentable {
 
     func updateUIViewController(_ anchor: UIViewController, context: Context) {
         let coordinator = context.coordinator
+        // Native boot completion dismisses this exact tracked UIKit host
+        // directly, rather than depending solely on a later SwiftUI diff.
+        library.installGameSurfaceDismissHandler { [weak coordinator, weak anchor] in
+            guard let coordinator else {
+                XOWUEDiagnostics.log("orientation.host dismiss coordinator unavailable")
+                return
+            }
+            coordinator.dismissPresentedHost(fallback: anchor)
+        }
         if library.gameSurfacePresented {
             guard coordinator.presentedHost == nil, !coordinator.presentationPending else { return }
             DispatchQueue.main.async {
@@ -1314,6 +1329,20 @@ private final class XOWUEGameLibrary: ObservableObject {
     @Published var isBusy = false
     @Published var gameSurfacePresented = false
     private var exitRequested = false
+    private var gameSurfaceDismissHandler: (() -> Void)?
+
+    func installGameSurfaceDismissHandler(_ handler: @escaping () -> Void) {
+        gameSurfaceDismissHandler = handler
+    }
+
+    func dismissGameSurface(reason: String) {
+        XOWUEDiagnostics.log("orientation.host dismiss dispatch reason=\(reason) handler=\(gameSurfaceDismissHandler != nil)")
+        guard let handler = gameSurfaceDismissHandler else {
+            XOWUEDiagnostics.log("orientation.host dismiss handler unavailable reason=\(reason)")
+            return
+        }
+        handler()
+    }
 
     var selectedLocation: String {
         guard let selectedGame, let docs = try? XOWUEFileStore.documents() else {
@@ -1439,6 +1468,7 @@ private final class XOWUEGameLibrary: ObservableObject {
             exitRequested = false
             gameSurfacePresented = false
             XOWUEDiagnostics.log("runtime.stop surface dismissed; native call already returned phase=\(phase)")
+            dismissGameSurface(reason: "native-already-returned")
             return
         }
         exitRequested = true
@@ -1488,6 +1518,7 @@ private final class XOWUEGameLibrary: ObservableObject {
                     detail = "Threads PPC finalizadas; pronto para iniciar novamente."
                     gameSurfacePresented = false
                     XOWUEDiagnostics.log("runtime.stop completed code=\(outcome.code)")
+                    dismissGameSurface(reason: "native-stop-complete")
                     return
                 }
                 if outcome.code == 3 {
@@ -1511,6 +1542,7 @@ private final class XOWUEGameLibrary: ObservableObject {
                     gameSurfacePresented = false
                     status = "Sessão encerrada."
                     XOWUEDiagnostics.log("runtime.stop completed after error: \(error.localizedDescription)")
+                    dismissGameSurface(reason: "native-stop-error-return")
                     return
                 }
                 phase = .failed
