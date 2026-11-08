@@ -97,6 +97,11 @@ void xowue_note_scratch_reg4_write(uint32_t address, uint32_t value) {
 void pumpGuestXenosRingBuffer();
 static uint32_t loadGuestBe32(const uint8_t *base, uint32_t address);
 static void storeGuestBe32(uint8_t *base, uint32_t address, uint32_t value);
+// Spinlock helpers are defined with the kernel runtime below, but are also
+// called by the earlier import dispatcher; declare the shared guest ABI here.
+static bool tryAcquireGuestSpinLock(uint8_t *base, uint32_t address, uint32_t owner);
+static void acquireGuestSpinLock(uint8_t *base, uint32_t address, uint32_t owner);
+static void releaseGuestSpinLock(uint8_t *base, uint32_t address);
 static void updateXowueKernelTimeStampBundle(uint8_t *base);
 
 

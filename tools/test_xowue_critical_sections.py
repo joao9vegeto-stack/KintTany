@@ -104,6 +104,14 @@ require("g_criticalSectionLocks.clear();" in ENGINE,
 
 # Match MW2 Recompiled/Xenia's Xbox 360 spinlock ABI: the guest word stores
 # the owning KPCR pointer (r13), acquired atomically in guest memory.
+for declaration in (
+    "static bool tryAcquireGuestSpinLock(uint8_t *base, uint32_t address, uint32_t owner);",
+    "static void acquireGuestSpinLock(uint8_t *base, uint32_t address, uint32_t owner);",
+    "static void releaseGuestSpinLock(uint8_t *base, uint32_t address);",
+):
+    require(ENGINE.index(declaration) < ENGINE.index("if (api == \\"KfAcquireSpinLock\\")"),
+            f"spinlock helper must be declared before the import dispatcher: {declaration}")
+
 require("static bool tryAcquireGuestSpinLock(" in ENGINE and
         "__atomic_compare_exchange_n" in ENGINE and
         "__builtin_bswap32(owner)" in ENGINE and
