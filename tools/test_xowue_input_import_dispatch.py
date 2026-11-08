@@ -76,6 +76,32 @@ require("userIndex == kXowueTouchControllerUserIndex" in xinput_set and
         "userIndex == kXowueTouchControllerUserIndex" in xam_set,
         "XInput and XAM rumble must use the same connected-controller slot as GetState")
 
+# XamInputGetKeystrokeEx has a different ABI from XamInputGetKeystroke:
+# its first guest argument is a pointer to a USER_INDEX, updated on success.
+# Verified against Xenia/ReXGlue:
+# https://github.com/KoreanSeats1/Theft4/blob/main/glue/rexglue-sdk-main/src/kernel/xam/xam_input.cpp
+keystroke_ex = ENGINE[ENGINE.index("void xowue_XamInputGetKeystrokeEx("):
+                      ENGINE.index("void xowue_XInputGetCapabilities(")]
+keystroke_core = ENGINE[ENGINE.index("static void xowue_XamInputGetKeystrokeImpl("):
+                        ENGINE.index("void xowue_XamInputGetKeystroke(")]
+keystroke_regular = ENGINE[ENGINE.index("void xowue_XamInputGetKeystroke("):
+                           ENGINE.index("void xowue_XamInputGetKeystrokeEx(")]
+require("const uint32_t userIndexAddress = context.r3.u32;" in keystroke_ex,
+        "XamInputGetKeystrokeEx r3 must be treated as a pointer to USER_INDEX")
+require("validGuestRange(userIndexAddress, 4u)" in keystroke_ex and
+        "PPC_LOAD_U32(userIndexAddress)" in keystroke_ex,
+        "XamInputGetKeystrokeEx must validate and dereference the guest USER_INDEX pointer")
+require("userIndexAddress, userIndexAddress" in keystroke_ex,
+        "XamInputGetKeystrokeEx must retain the caller pointer for successful write-back")
+require("PPC_STORE_U32(userIndexWriteBackAddress, keystroke.userIndex)" in keystroke_core,
+        "XamInputGetKeystrokeEx must write the selected user index back only after a key is dequeued")
+require("if (userIndexWriteBackAddress != 0u)" in keystroke_core,
+        "the ordinary GetKeystroke ABI must not write through its r3 user-index value")
+require("const uint32_t requestedUserIndex = context.r3.u32;" in keystroke_regular,
+        "XamInputGetKeystroke must continue to accept r3 as a direct user index")
+require("xowueXamFlagsAllowGamepad(flags)" in keystroke_core,
+        "both XAM keystroke APIs must reject unsupported device-type masks")
+
 print("XOWUE_GENERATED_INPUT_IMPORTS_OK")
 
 

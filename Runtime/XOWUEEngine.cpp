@@ -8592,18 +8592,31 @@ void xowue_XamInputGetState(PPCContext &context, uint8_t *base) {
                           stateAddress, 0u, status, context);
 }
 
-static void xowue_XamInputGetKeystrokeImpl(PPCContext &context, uint8_t *base, const char *apiName) {
-    const uint32_t requestedUserIndex = context.r3.u32;
-    const uint32_t flags = context.r4.u32;
-    const uint32_t outputAddress = context.r5.u32;
+// XamInputGetKeystroke uses a user index value; XamInputGetKeystrokeEx
+// uses a guest pointer to the user index and writes the selected user back.
+// This matches Xenia/ReXGlue's XAM ABI (xam_input.cpp).
+static void xowue_XamInputGetKeystrokeImpl(
+    PPCContext &context, uint8_t *base, const char *apiName,
+    uint32_t requestedUserIndex, uint32_t flags, uint32_t outputAddress,
+    uint32_t userIndexWriteBackAddress, uint32_t traceArg3) {
     if (!base || outputAddress == 0u || !validGuestRange(outputAddress, 8u)) {
         context.r3.u32 = kXInputErrorBadArguments;
+        traceXowueInputImport(7u, apiName, traceArg3, flags,
+                              outputAddress, 0u, kXInputErrorBadArguments, context);
+        return;
+    }
+    if (!xowueXamFlagsAllowGamepad(flags)) {
+        context.r3.u32 = kXInputErrorDeviceNotConnected;
+        traceXowueInputImport(7u, apiName, traceArg3, flags,
+                              outputAddress, 0u, kXInputErrorDeviceNotConnected, context);
         return;
     }
     const bool anyUser = (requestedUserIndex & 0xFFu) == 0xFFu ||
                          (flags & kXInputFlagAnyUser) != 0u;
     if (!anyUser && requestedUserIndex > 3u) {
         context.r3.u32 = kXInputErrorBadArguments;
+        traceXowueInputImport(7u, apiName, traceArg3, flags,
+                              outputAddress, 0u, kXInputErrorBadArguments, context);
         return;
     }
     GuestInputKeystroke keystroke{};
@@ -8623,7 +8636,7 @@ static void xowue_XamInputGetKeystrokeImpl(PPCContext &context, uint8_t *base, c
     }
     if (!found) {
         context.r3.u32 = kXInputErrorEmpty;
-        traceXowueInputImport(7u, apiName, requestedUserIndex, flags,
+        traceXowueInputImport(7u, apiName, traceArg3, flags,
                               outputAddress, 0u, kXInputErrorEmpty, context);
         return;
     }
@@ -8632,22 +8645,42 @@ static void xowue_XamInputGetKeystrokeImpl(PPCContext &context, uint8_t *base, c
     PPC_STORE_U16(outputAddress + 4u, keystroke.flags);
     base[outputAddress + 6u] = keystroke.userIndex;
     base[outputAddress + 7u] = keystroke.hidCode;
+    if (userIndexWriteBackAddress != 0u)
+        PPC_STORE_U32(userIndexWriteBackAddress, keystroke.userIndex);
     context.r3.u32 = kNtStatusSuccess;
     char event[192];
     std::snprintf(event, sizeof(event),
         "XOWUE_INPUT_KEYSTROKE event=1 api=%s user=%u vk=0x%04X flags=0x%04X",
         apiName, keystroke.userIndex, keystroke.virtualKey, keystroke.flags);
     persistGuestInputTrace(event);
-    traceXowueInputImport(7u, apiName, requestedUserIndex, flags,
+    traceXowueInputImport(7u, apiName, traceArg3, flags,
                           outputAddress, keystroke.virtualKey, kNtStatusSuccess, context);
 }
 
 void xowue_XamInputGetKeystroke(PPCContext &context, uint8_t *base) {
-    xowue_XamInputGetKeystrokeImpl(context, base, "XamInputGetKeystroke");
+    const uint32_t requestedUserIndex = context.r3.u32;
+    const uint32_t flags = context.r4.u32;
+    const uint32_t outputAddress = context.r5.u32;
+    xowue_XamInputGetKeystrokeImpl(
+        context, base, "XamInputGetKeystroke", requestedUserIndex, flags,
+        outputAddress, 0u, requestedUserIndex);
 }
 
 void xowue_XamInputGetKeystrokeEx(PPCContext &context, uint8_t *base) {
-    xowue_XamInputGetKeystrokeImpl(context, base, "XamInputGetKeystrokeEx");
+    const uint32_t userIndexAddress = context.r3.u32;
+    const uint32_t flags = context.r4.u32;
+    const uint32_t outputAddress = context.r5.u32;
+    if (!base || userIndexAddress == 0u || !validGuestRange(userIndexAddress, 4u)) {
+        context.r3.u32 = kXInputErrorBadArguments;
+        traceXowueInputImport(7u, "XamInputGetKeystrokeEx", userIndexAddress,
+                              flags, outputAddress, 0u,
+                              kXInputErrorBadArguments, context);
+        return;
+    }
+    const uint32_t requestedUserIndex = PPC_LOAD_U32(userIndexAddress);
+    xowue_XamInputGetKeystrokeImpl(
+        context, base, "XamInputGetKeystrokeEx", requestedUserIndex, flags,
+        outputAddress, userIndexAddress, userIndexAddress);
 }
 
 void xowue_XInputGetCapabilities(PPCContext &context, uint8_t *base) {
