@@ -112,8 +112,11 @@ require("XOWUE_INPUT_HOST" in send and "XOWUEDiagnostics.logInput(" in send,
         "host touch events must use asynchronous input logging")
 require("activeButtonTouches" in app and "activeTriggerTouches" in app,
         "each physical touch must have its own begin/end edge state")
-require(".milliseconds(16)" in app and ".milliseconds(50)" in app,
-        "rapid repeated taps must emit a release edge then a guest-pollable press pulse")
+require(".milliseconds(16)" in app and ".milliseconds(180)" in app,
+        "rapid repeated taps must emit a release edge and the current 180 ms guest-pollable press pulse")
+require("XOWUE_AOT_HOT_FUNCTION" in engine and "XOWUE_AOT_HOT_CALLER" in engine and
+        "CRITICAL_SPINLOCK" not in engine,
+        "hot AOT helpers must be logged as hot functions with caller instructions, not assumed spinlocks")
 require("buttons &= ~mask" in app and "self.buttons |= mask" in app,
         "a second tap during the minimum hold must force a distinct up/down transition")
 require("triggerReleaseGeneration" in app and "self.leftTrigger = 255" in app,

@@ -71,7 +71,9 @@ assert "sourceHeight=t->extent.height<720u?t->extent.height:720u" in color
 critical=engine[engine.index("void xowue_RtlTryEnterCriticalSection"):engine.index("void xowue_RtlLeaveCriticalSection")]
 assert "criticalSectionLock(address)" in critical
 assert "sectionLock->try_lock()" in critical
-assert "owner == g_currentGuestThreadId" in critical
+assert "currentGuestKThread(context, base)" in critical
+assert "owner == currentKThread" in critical
+assert "g_currentGuestThreadId" not in critical
 assert "std::recursive_timed_mutex" in engine
 assert "atomicCompareExchangeGuestBe32" not in critical
 assert "waitGuestObject(" not in critical
@@ -238,10 +240,10 @@ assert "xowue_note_scratch_reg4_write" in patch
 print("PASS: real Bink media opens, APFS path case-folding, one-shot SCRATCH_REG4 recovery, NtReadFile event, hotspot yields")
 
 
-# Build 58: AOT spin detector, recursive case-folded UE3 package index,
+# Build 58: AOT hot-function detector, recursive case-folded UE3 package index,
 # deterministic EDRAM clear resolve, SCRATCH_REG4 aliases, immediate watchdog.
 for token in (
-    "[CRITICAL_SPINLOCK]", "XOWUE_XEX_CODE_AUDIT",
+    "XOWUE_AOT_HOT_FUNCTION", "XOWUE_XEX_CODE_AUDIT",
     "XOWUE_VFS_INDEX_READY", "recursive_directory_iterator",
     "g_guestPathIndex.find(fileKey)", "XOWUE_GUEST_PROGRESS_WATCHDOG_RING",
     "XENOS_SCRATCH_REG4_CAPTURED", "0x7FC81710u", "0x90311010u",
@@ -274,7 +276,7 @@ assert "KKDestroyVulkan(&localState)" in dealloc_body
 assert "kMaxBackendLogBytes = 4 * 1024 * 1024" in backend
 
 print("PASS: Build 112 SetState loop cancellation, bounded diagnostics and asynchronous Vulkan shutdown")
-print("PASS: Build 58 spinlock diagnostics, indexed UE3 VFS, clear-color resolve, callback aliases, watchdog state")
+print("PASS: Build 58 hot-function diagnostics, indexed UE3 VFS, clear-color resolve, callback aliases, watchdog state")
 
 
 # Build 60: AOT milestone diagnostics must include the real indirect PPC
@@ -291,7 +293,7 @@ assert 'XENOS_PM4_TAIL count=%u' in engine
 assert 'opcode == 0x57u || opcode == 0x5Au' in engine
 assert 'XENOS_PM4_EVENT_WRITE initiator=0x%08X address=0x%08X value=0x%08X' in engine
 assert "HotFunctionSlot" in engine
-assert "[CRITICAL_SPINLOCK] thread=%u fn=0x%08X lr=0x%08X calls=%u swaps=%llu code=" in engine
+assert "XOWUE_AOT_HOT_FUNCTION thread=%u fn=0x%08X lr=0x%08X calls=%u swaps=%llu code=" in engine
 assert "std::chrono::milliseconds(1500)" in engine
 assert "sameFunctionCalls >= 250000u && swaps == 0u" not in engine
 assert "XOWUE_XEX_CODE_AUDIT addr=0x%08X words=" in engine

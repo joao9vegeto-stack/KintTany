@@ -145,6 +145,9 @@ COMPATIBILITY_IMPORTS = {
     "sprintf",
 }
 
+# Runtime ABI route retained for parity/testing although this title XEX does not import it.
+EXTRA_RUNTIME_DISPATCH_IMPORTS = {"KeTryToAcquireSpinLockAtRaisedIrql"}
+
 
 def instrument_aot_entries(contents: str) -> tuple[str, int]:
     instrumented = 0
@@ -753,6 +756,14 @@ def main() -> int:
     if missing_compat:
         raise SystemExit(
             f"compatibility imports lack a dispatch route: {sorted(missing_compat)}"
+        )
+    missing_extra_dispatch = {
+        name for name in EXTRA_RUNTIME_DISPATCH_IMPORTS
+        if f'api == "{name}"' not in compat_dispatch
+    }
+    if missing_extra_dispatch:
+        raise SystemExit(
+            f"extra runtime ABI routes are missing: {sorted(missing_extra_dispatch)}"
         )
     implemented_imports = len(set(imports) & implemented)
     print(f"generated {len(imports)} import adapters ({implemented_imports} explicit handlers, {len(imports) - implemented_imports} classified runtime compatibility handlers); marked {len(to_mark)}/{len(addresses)} undecoded words with function entries; inserted cancellable checkpoints at {total_loop_checkpoints} hot-loop labels")

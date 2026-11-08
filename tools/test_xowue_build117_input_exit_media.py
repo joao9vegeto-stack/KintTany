@@ -32,6 +32,9 @@ screen_end = APP.index("@MainActor\nprivate final class XOWUETouchController", s
 screen = APP[screen_start:screen_end]
 require('.overlay(alignment: .topLeading)' in screen,
         "SAIR must be an isolated top-leading overlay")
+require(".frame(minWidth: 96, minHeight: 48)" in screen and
+        ".contentShape(Rectangle())" in screen and ".zIndex(1000)" in screen,
+        "SAIR must expose a large rectangular hit target above the game and HUD")
 require("navigation.exit tapped: dispatching native cancellation" in screen,
         "the SAIR tap diagnostic must remain")
 require("VStack(spacing: 0)" not in screen,

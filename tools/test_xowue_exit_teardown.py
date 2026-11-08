@@ -62,6 +62,13 @@ finish = ENGINE[ENGINE.index("void finishGuestThread("):
 require("thread->stateMutex" in finish and "thread->exited.store(true" in finish,
         "thread exit predicate must be published while holding its wait mutex")
 
+stop_start = ENGINE.index("void requestGuestSchedulerStop()")
+stop_end = ENGINE.index("constexpr uint32_t kGraphicsInterruptVblank", stop_start)
+stop = ENGINE[stop_start:stop_end]
+require("g_mainGuestThread->stateChanged.notify_all()" in stop and
+        "g_graphicsInterruptThread->stateChanged.notify_all()" in stop,
+        "native stop must wake suspended main and graphics threads as well as ordinary guest threads")
+
 teardown = ENGINE[ENGINE.index("void stopGuestThreads() {"):
                   ENGINE.index("struct GuestSchedulerSessionGuard", ENGINE.index("void stopGuestThreads() {"))]
 for token in ("XOWUE_SESSION_TEARDOWN", "XOWUE_THREAD_JOINED",

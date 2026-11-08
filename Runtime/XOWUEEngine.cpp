@@ -555,14 +555,12 @@ std::mutex g_tlsMutex;
 std::mutex g_virtualMemoryMutex;
 std::mutex g_guestObjectMutex;
 std::mutex g_guestFileMutex;
-std::mutex g_spinLockMapMutex;
 std::mutex g_slistMutex;
 std::mutex g_ioShareMutex;
 std::mutex g_socketMutex;
 std::mutex g_l2Mutex;
 std::unordered_map<uint32_t, std::shared_ptr<GuestFile>> g_guestFiles;
 std::unordered_map<uint32_t, PPCFunc *> g_aotFunctionMap;
-std::unordered_map<uint32_t, std::shared_ptr<std::mutex>> g_guestSpinLocks;
 std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> g_ioShareByFileObject;
 std::unordered_map<uint32_t, int> g_guestSockets;
 std::unordered_set<uint32_t> g_guestXmaContexts;
@@ -627,6 +625,14 @@ std::vector<std::shared_ptr<GuestThread>> snapshotAllGuestThreads() {
 bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     if (event.find("XOWUE_XAUDIO_") != std::string::npos)
         return g_xaudioTraceLogs.fetch_add(1u, std::memory_order_relaxed) < 256u;
+    if (event.find("XOWUE_AOT_HOT_FUNCTION") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 128u;
+    }
+    if (event.find("XOWUE_AOT_HOT_CALLER") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 32u;
+    }
     if (event.find("XOWUE_BINK_FRAME_MARKER") != std::string::npos ||
         event.find("XOWUE_BINK_VIDEO_THREAD_START") != std::string::npos ||
         event.find("XOWUE_BINK_VIDEO_CONTEXT") != std::string::npos ||
@@ -2089,6 +2095,20 @@ std::shared_ptr<std::recursive_timed_mutex> criticalSectionLock(uint32_t address
     return entry;
 }
 
+// Xbox 360 RTL_CRITICAL_SECTION.OwningThread is the current KTHREAD pointer,
+// obtained through KPCR.CurrentThread at r13 + 0x100 (MW2 Recompiled/Xenia ABI).
+uint32_t currentGuestKThread(PPCContext &context, uint8_t *base) {
+    constexpr uint32_t kCurrentThreadOffset = 0x100u;
+    if (!base || context.r13.u32 > kGuestAddressSpaceSize - (kCurrentThreadOffset + 4u) ||
+        !validGuestRange(context.r13.u32 + kCurrentThreadOffset, 4u)) {
+        throw std::runtime_error("RTL critical section called without a valid KPCR.CurrentThread");
+    }
+    const uint32_t currentThread = loadGuestBe32(base, context.r13.u32 + kCurrentThreadOffset);
+    if (currentThread == 0u || !validGuestRange(currentThread, 4u))
+        throw std::runtime_error("RTL critical section has no valid owning KTHREAD");
+    return currentThread;
+}
+
 bool shouldTraceCriticalSection() {
     const size_t count = g_criticalSectionTraceCount.fetch_add(1u, std::memory_order_relaxed) + 1u;
     return count <= 12u || (count % 2048u) == 0u;
@@ -2263,6 +2283,10 @@ void requestGuestSchedulerStop() {
     g_waitSetChanged.notify_all();
     g_xaudioChanged.notify_all();
     notifyGuestWaiters();
+    // notifyGuestWaiters covers g_guestThreads; the main and graphics
+    // interrupt threads are retained separately and must also leave suspend waits.
+    if (g_mainGuestThread) g_mainGuestThread->stateChanged.notify_all();
+    if (g_graphicsInterruptThread) g_graphicsInterruptThread->stateChanged.notify_all();
 }
 
 constexpr uint32_t kGraphicsInterruptVblank = 0u;
@@ -3748,11 +3772,27 @@ void xowue_thread_checkpoint(uint32_t guestAddress) {
         }
         char event[512];
         std::snprintf(event, sizeof(event),
-            "[CRITICAL_SPINLOCK] thread=%u fn=0x%08X lr=0x%08X calls=%u swaps=%llu code=%08X,%08X,%08X,%08X,%08X,%08X,%08X,%08X",
+            "XOWUE_AOT_HOT_FUNCTION thread=%u fn=0x%08X lr=0x%08X calls=%u swaps=%llu code=%08X,%08X,%08X,%08X,%08X,%08X,%08X,%08X",
             threadId, guestAddress, lr, slot->count, static_cast<unsigned long long>(swaps),
             words[0], words[1], words[2], words[3], words[4], words[5], words[6], words[7]);
         std::fprintf(stderr, "%s\n", event);
         recordRuntimeTrace(event);
+        // LR is the return address after the BL into this hot function.
+        // Capture the caller's surrounding PPC instructions so a hot helper
+        // cannot be mistaken for a lock without inspecting its actual caller.
+        if (memory && memory->base && lr >= 16u && validGuestRange(lr - 16u, 32u)) {
+            uint32_t callerWords[8]{};
+            const uint32_t callerStart = lr - 16u;
+            for (uint32_t i = 0; i < 8u; ++i)
+                callerWords[i] = loadGuestBe32(memory->base, callerStart + i * 4u);
+            char callerEvent[320];
+            std::snprintf(callerEvent, sizeof(callerEvent),
+                "XOWUE_AOT_HOT_CALLER thread=%u callsite=0x%08X return=0x%08X words=%08X,%08X,%08X,%08X,%08X,%08X,%08X,%08X",
+                threadId, lr - 4u, lr, callerWords[0], callerWords[1],
+                callerWords[2], callerWords[3], callerWords[4], callerWords[5],
+                callerWords[6], callerWords[7]);
+            recordRuntimeTrace(callerEvent);
+        }
     }
     // QPC is guest-visible timebase code and may be polled in a guest busy-wait.
     // Never sleep, synthesize time, pump graphics, or signal guest objects here.
@@ -4588,10 +4628,6 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             g_guestSymbolicLinks.clear();
         }
         {
-            std::lock_guard<std::mutex> spinLock(g_spinLockMapMutex);
-            g_guestSpinLocks.clear();
-        }
-        {
             std::lock_guard<std::mutex> socketLock(g_socketMutex);
             for (const auto &socket : g_guestSockets) ::close(socket.second);
             g_guestSockets.clear();
@@ -5338,41 +5374,28 @@ void xowue_compat_import(const char *name, PPCContext &context, uint8_t *base) {
     auto clearOutput = [base](uint32_t address, uint32_t size) {
         if (base && size && validGuestRange(address, size)) std::memset(base + address, 0, size);
     };
-    auto spinLockFor = [](uint32_t address) -> std::shared_ptr<std::mutex> {
-        std::lock_guard<std::mutex> guard(g_spinLockMapMutex);
-        auto &lock = g_guestSpinLocks[address];
-        if (!lock) lock = std::make_shared<std::mutex>();
-        return lock;
-    };
     if (api == "KfAcquireSpinLock") {
         const uint32_t address = context.r3.u32;
-        if (!base || !validGuestRange(address, 4u)) { context.r3.u32 = kNtStatusInvalidParameter; return; }
+        if (!base || !validGuestRange(address, 4u) || (address & 3u) != 0u ||
+            context.r13.u32 == 0u) {
+            context.r3.u32 = kNtStatusInvalidParameter;
+            return;
+        }
         const uint32_t previousIrql = g_guestIrql;
         g_guestIrql = 2u;
-        spinLockFor(address)->lock();
-        PPC_STORE_U32(address, 1u);
+        acquireGuestSpinLock(base, address, context.r13.u32);
         context.r3.u32 = previousIrql;
         return;
     }
     if (api == "KfReleaseSpinLock") {
-        const uint32_t address = context.r3.u32;
-        std::shared_ptr<std::mutex> lock;
-        {
-            std::lock_guard<std::mutex> guard(g_spinLockMapMutex);
-            const auto found = g_guestSpinLocks.find(address);
-            if (found != g_guestSpinLocks.end()) lock = found->second;
-        }
-        if (!lock || !base || !validGuestRange(address, 4u)) {
-            recordRuntimeTrace("KfReleaseSpinLock rejected an unknown lock");
-            return;
-        }
-        PPC_STORE_U32(address, 0u);
-        lock->unlock();
-        const uint32_t previousIrql = context.r4.u32;
-        if (previousIrql > 2u) throw std::runtime_error("KfReleaseSpinLock received an invalid IRQL");
-        const uint32_t oldIrql = g_guestIrql;
-        g_guestIrql = previousIrql;
-        // Lowering IRQL does not deliver user APCs; they require an alertable wait.
+        // Retail ABI: KfReleaseSpinLock takes only the lock pointer. The caller
+        // restores its saved IRQL separately with KfLowerIrql.
+        releaseGuestSpinLock(base, context.r3.u32);
+        return;
+    }
+    if (api == "KeTryToAcquireSpinLockAtRaisedIrql") {
+        context.r3.u32 = tryAcquireGuestSpinLock(base, context.r3.u32, context.r13.u32)
+            ? 1u : 0u;
         return;
     }
     if (api == "KfLowerIrql") {
@@ -9881,6 +9904,8 @@ void xowue_RtlInitializeCriticalSection(PPCContext &context, uint8_t *base) {
     std::lock_guard<std::recursive_timed_mutex> held(*sectionLock);
     std::memset(base + address, 0, kXboxCriticalSectionSize);
     base[address] = 1; // X_DISPATCH_HEADER.type = EventSynchronizationObject.
+    PPC_STORE_U32(address + 0x08, address + 0x08); // wait-list Flink.
+    PPC_STORE_U32(address + 0x0C, address + 0x08); // wait-list Blink.
     PPC_STORE_U32(address + 0x10, 0xFFFFFFFFu); // lock_count = -1.
     PPC_STORE_U32(address + 0x14, 0);            // recursion_count = 0.
     PPC_STORE_U32(address + 0x18, 0);            // owning_thread = nullptr.
@@ -9902,6 +9927,8 @@ void xowue_RtlInitializeCriticalSectionAndSpinCount(PPCContext &context, uint8_t
     std::memset(base + address, 0, kXboxCriticalSectionSize);
     base[address] = 1;
     base[address + 1] = static_cast<uint8_t>(packedSpinCount);
+    PPC_STORE_U32(address + 0x08, address + 0x08); // wait-list Flink.
+    PPC_STORE_U32(address + 0x0C, address + 0x08); // wait-list Blink.
     PPC_STORE_U32(address + 0x10, 0xFFFFFFFFu);
     PPC_STORE_U32(address + 0x14, 0);
     PPC_STORE_U32(address + 0x18, 0);
@@ -9918,6 +9945,7 @@ void xowue_RtlEnterCriticalSection(PPCContext &context, uint8_t *base) {
     if (!base || address > kGuestAddressSpaceSize - kXboxCriticalSectionSize) {
         throw std::runtime_error("RtlEnterCriticalSection recebeu endereço inválido");
     }
+    const uint32_t currentKThread = currentGuestKThread(context, base);
     auto sectionLock = criticalSectionLock(address);
     // A blocked PPC guest worker must observe SAIR instead of parking forever
     // in an uninterruptible host mutex acquisition.
@@ -9925,12 +9953,12 @@ void xowue_RtlEnterCriticalSection(PPCContext &context, uint8_t *base) {
         if (g_schedulerStopRequested.load(std::memory_order_acquire))
             throw GuestThreadStopRequested{};
     }
-    // Once acquired, keep the guest lock consistent and let the next PPC
-    // dispatch/timebase checkpoint unwind the worker through its normal path.
+    // The host recursive mutex serializes updates, while guest-visible owner
+    // identity remains the retail KPCR.CurrentThread/KTHREAD pointer.
     const uint32_t owner = PPC_LOAD_U32(address + 0x18);
     int32_t lockCount = static_cast<int32_t>(PPC_LOAD_U32(address + 0x10));
     uint32_t recursion = PPC_LOAD_U32(address + 0x14);
-    if (owner == g_currentGuestThreadId) {
+    if (owner == currentKThread) {
         ++lockCount;
         ++recursion;
     } else {
@@ -9940,7 +9968,7 @@ void xowue_RtlEnterCriticalSection(PPCContext &context, uint8_t *base) {
         }
         ++lockCount;
         recursion = 1;
-        PPC_STORE_U32(address + 0x18, g_currentGuestThreadId);
+        PPC_STORE_U32(address + 0x18, currentKThread);
     }
     PPC_STORE_U32(address + 0x10, static_cast<uint32_t>(lockCount));
     PPC_STORE_U32(address + 0x14, recursion);
@@ -9959,6 +9987,7 @@ void xowue_RtlTryEnterCriticalSection(PPCContext &context, uint8_t *base) {
     }
     if (g_schedulerStopRequested.load(std::memory_order_acquire))
         throw GuestThreadStopRequested{};
+    const uint32_t currentKThread = currentGuestKThread(context, base);
     auto sectionLock = criticalSectionLock(address);
     if (!sectionLock->try_lock()) {
         context.r3.u32 = 0u;
@@ -9972,7 +10001,7 @@ void xowue_RtlTryEnterCriticalSection(PPCContext &context, uint8_t *base) {
     const uint32_t owner = PPC_LOAD_U32(address + 0x18);
     int32_t lockCount = static_cast<int32_t>(PPC_LOAD_U32(address + 0x10));
     uint32_t recursion = PPC_LOAD_U32(address + 0x14);
-    if (owner == g_currentGuestThreadId) {
+    if (owner == currentKThread) {
         ++lockCount;
         ++recursion;
     } else {
@@ -9982,7 +10011,7 @@ void xowue_RtlTryEnterCriticalSection(PPCContext &context, uint8_t *base) {
         }
         ++lockCount;
         recursion = 1u;
-        PPC_STORE_U32(address + 0x18, g_currentGuestThreadId);
+        PPC_STORE_U32(address + 0x18, currentKThread);
     }
     PPC_STORE_U32(address + 0x10, static_cast<uint32_t>(lockCount));
     PPC_STORE_U32(address + 0x14, recursion);
@@ -9991,7 +10020,7 @@ void xowue_RtlTryEnterCriticalSection(PPCContext &context, uint8_t *base) {
         char event[128];
         std::snprintf(event, sizeof(event),
                       "RtlTryEnterCriticalSection guest=0x%08X owner=%u recursion=%u lockCount=%d acquired",
-                      address, g_currentGuestThreadId, recursion, lockCount);
+                      address, currentKThread, recursion, lockCount);
         recordRuntimeTrace(event);
     }
 }
@@ -10002,11 +10031,12 @@ void xowue_RtlLeaveCriticalSection(PPCContext &context, uint8_t *base) {
     if (!base || address > kGuestAddressSpaceSize - kXboxCriticalSectionSize) {
         throw std::runtime_error("RtlLeaveCriticalSection recebeu endereço inválido");
     }
+    const uint32_t currentKThread = currentGuestKThread(context, base);
     auto sectionLock = criticalSectionLock(address);
     const uint32_t owner = PPC_LOAD_U32(address + 0x18);
     int32_t lockCount = static_cast<int32_t>(PPC_LOAD_U32(address + 0x10));
     uint32_t recursion = PPC_LOAD_U32(address + 0x14);
-    if (owner != g_currentGuestThreadId || recursion == 0) {
+    if (owner != currentKThread || recursion == 0) {
         throw std::runtime_error("RtlLeaveCriticalSection sem proprietário na thread PPC ativa");
     }
     --recursion;
@@ -10137,33 +10167,44 @@ void xowue_KeRaiseIrqlToDpcLevel(PPCContext &context) {
     g_guestIrql = 2u;
 }
 
-void xowue_KeAcquireSpinLockAtRaisedIrql(PPCContext &context, uint8_t *base) {
-    const uint32_t address = context.r3.u32;
-    std::shared_ptr<std::mutex> lock;
-    {
-        std::lock_guard<std::mutex> mapLock(g_spinLockMapMutex);
-        auto &entry = g_guestSpinLocks[address];
-        if (!entry) entry = std::make_shared<std::mutex>();
-        lock = entry;
+// Xbox 360 spinlocks are guest-memory words containing the owning KPCR (r13),
+// not host mutexes and not a boolean 1. Keep the guest ABI observable to PPC code.
+static bool tryAcquireGuestSpinLock(uint8_t *base, uint32_t address, uint32_t owner) {
+    if (!base || owner == 0u || (address & 3u) != 0u ||
+        !validGuestRange(address, 4u)) return false;
+    auto *word = reinterpret_cast<uint32_t *>(base + address);
+    uint32_t expected = 0u;
+    const uint32_t desired = __builtin_bswap32(owner);
+    return __atomic_compare_exchange_n(word, &expected, desired, false,
+                                        __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+}
+
+static void acquireGuestSpinLock(uint8_t *base, uint32_t address, uint32_t owner) {
+    if (!base || owner == 0u || (address & 3u) != 0u ||
+        !validGuestRange(address, 4u))
+        throw std::runtime_error("guest spinlock received an invalid address or owner");
+    while (!tryAcquireGuestSpinLock(base, address, owner)) {
+        if (g_schedulerStopRequested.load(std::memory_order_acquire))
+            throw GuestThreadStopRequested{};
+        std::this_thread::yield();
     }
-    lock->lock();
-    if (validGuestRange(address, 4u)) PPC_STORE_U32(address, 1u);
+}
+
+static void releaseGuestSpinLock(uint8_t *base, uint32_t address) {
+    if (!base || (address & 3u) != 0u || !validGuestRange(address, 4u)) {
+        recordRuntimeTrace("XOWUE_SPINLOCK_RELEASE_REJECTED invalid guest lock address");
+        return;
+    }
+    auto *word = reinterpret_cast<uint32_t *>(base + address);
+    __atomic_store_n(word, 0u, __ATOMIC_RELEASE);
+}
+
+void xowue_KeAcquireSpinLockAtRaisedIrql(PPCContext &context, uint8_t *base) {
+    acquireGuestSpinLock(base, context.r3.u32, context.r13.u32);
 }
 
 void xowue_KeReleaseSpinLockFromRaisedIrql(PPCContext &context, uint8_t *base) {
-    const uint32_t address = context.r3.u32;
-    std::shared_ptr<std::mutex> lock;
-    {
-        std::lock_guard<std::mutex> mapLock(g_spinLockMapMutex);
-        const auto it = g_guestSpinLocks.find(address);
-        if (it != g_guestSpinLocks.end()) lock = it->second;
-    }
-    if (!lock) {
-        recordRuntimeTrace("KeReleaseSpinLockFromRaisedIrql ignored an unlocked spinlock");
-        return;
-    }
-    if (validGuestRange(address, 4u)) PPC_STORE_U32(address, 0u);
-    lock->unlock();
+    releaseGuestSpinLock(base, context.r3.u32);
 }
 
 void xowue_KeLockL2(PPCContext &) { g_l2Mutex.lock(); }

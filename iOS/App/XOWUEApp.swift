@@ -285,10 +285,12 @@ private struct XOWUEGameSurfaceScreen: View {
                     .tracking(0.6)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
+                    .frame(minWidth: 96, minHeight: 48)
                     .background(.black.opacity(0.78), in: Capsule())
             }
             .buttonStyle(.plain)
-            .contentShape(Capsule())
+            .contentShape(Rectangle())
+            .zIndex(1000)
             .padding(.leading, 16)
             .padding(.top, 14)
         }
