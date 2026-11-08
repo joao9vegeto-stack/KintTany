@@ -298,6 +298,12 @@ jobs:
           python3 -m py_compile tools/test_xowue_input_import_dispatch.py
           python3 tools/test_xowue_input_import_dispatch.py
 
+      - name: Verify XAM overlapped completion and single-controller input ABI
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/test_xowue_xam_io_input_contract.py
+          python3 tools/test_xowue_xam_io_input_contract.py
+
       - name: Verify Build 118.4 touch ports, exit dispatch and boot media tracing
         run: |
           set -euo pipefail
