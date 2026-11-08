@@ -25,7 +25,7 @@ jobs:
       - name: Checkout Kleo2iOS only
         uses: actions/checkout@v4
         with:
-          ref: Kleo2iOS
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Verify branch and handoff request
