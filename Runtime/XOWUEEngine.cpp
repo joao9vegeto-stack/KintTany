@@ -772,7 +772,8 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     for (const char *required : {"CODE_AUDIT_B69", "APP_LAUNCH", "XOWUE_SYNC_CREATE", "XOWUE_MAIN_WAIT_WATCHDOG", "B85_MULTIWAIT_WATCHDOG_PUMP", "B85_WAIT_WATCHDOG_PUMP", "XOWUE_POOL_ALLOC_82DC2BF0", "XOWUE_QPC_WRITE",
                                  "CODE_AUDIT_QPC_CALLERS", "XOWUE_QPC_CALLER_DUMP", "CODE_AUDIT_B65",
                                  "XOWUE_82DC2390_GUARD", "B105_GUEST_EVENT_STATE_ADOPT",
-                                 "B105_MOVIE_PPC_FLOW", "B105_MEDIA_OPEN_ORDER", "B105_MEDIA_READ_ORDER"}) {
+                                 "B105_MOVIE_PPC_FLOW", "B105_MEDIA_OPEN_ORDER", "B105_MEDIA_READ_ORDER",
+                                 "XOWUE_MAIN_LIST_CYCLE_REPAIRED", "XOWUE_MAIN_LIST_REPAIR_SKIPPED"}) {
         if (event.find(required) != std::string::npos) return true;
     }
     if (sequence < 96u) return true;
@@ -3774,10 +3775,19 @@ void xowue_thread_checkpoint(uint32_t guestAddress) {
     // If a guest-side mutation leaves a cycle, the title spins here forever
     // after the final movie. Break only the cycle edge (last unique node -> 0);
     // acyclic lists and every node's callback are left untouched.
-    if (guestAddress == 0x824ACC1Cu && g_currentGuestThread &&
-        g_currentGuestThread->id == 1u && auditMemory && auditMemory->base) {
-        const uint32_t root = g_currentGuestThread->lastR30.load(std::memory_order_relaxed);
-        const uint32_t current = g_currentGuestThread->lastR31.load(std::memory_order_relaxed);
+    const uint32_t checkpointThreadId = g_currentGuestThread
+        ? g_currentGuestThread->id : g_currentGuestThreadId;
+    if (guestAddress == 0x824ACC1Cu && checkpointThreadId == 1u &&
+        auditMemory && auditMemory->base) {
+        // The main PPC entry can run with the global register snapshot rather
+        // than a secondary GuestThread object. Use the same source that feeds
+        // XOWUE_STALL_THREADS' t1=... record.
+        const uint32_t root = g_currentGuestThread
+            ? g_currentGuestThread->lastR30.load(std::memory_order_relaxed)
+            : g_mainThreadLastR30.load(std::memory_order_relaxed);
+        const uint32_t current = g_currentGuestThread
+            ? g_currentGuestThread->lastR31.load(std::memory_order_relaxed)
+            : g_mainThreadLastR31.load(std::memory_order_relaxed);
         static thread_local uint32_t lastInspectedRoot = 0u;
         static thread_local uint64_t loopCheckpointCount = 0u;
         ++loopCheckpointCount;
