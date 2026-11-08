@@ -1,0 +1,25 @@
+# Game packages, keys, dumps and private build outputs
+*.nsp
+*.nsz
+*.xci
+*.xcz
+*.nup
+*.tik
+prod.keys
+title.keys
+*.ipa
+*.zip
+*.7z
+*.rar
+*_build/
+build/
+dist/
+handoff/
+artifacts/
+.drive/
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.DS_Store

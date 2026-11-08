@@ -1,56 +1,23 @@
-# KintTany iOS
+# Kleo2iOS
 
-## Versão atual
+Pipeline for building a Nintendo Switch game for iOS using a Linux preparation stage (Google Colab) and a macOS finalization stage (GitHub Actions).
 
-**KintTany v2.0 (build 20)**.
+## Build architecture
 
+1. **Colab / Linux** — inspect the supplied game package and run only preparation/AOT stages that are verified to work on Linux. Produce a versioned handoff bundle and a manifest. Do not put game dumps, keys, or copyrighted game data in this repository.
+2. **Google Drive** — hold the private handoff bundle. The Colab notebook must upload it to a user-owned Drive location.
+3. **GitHub Actions / macOS 26** — retrieve the handoff bundle using user-provided secrets, run the Apple-only compilation steps (iOS SDK, Metal and Xcode), build the per-game framework, integrate it into the Shared shell, and package an unsigned IPA.
+4. **iPhone** — install the IPA with the user's sideloading method and copy the separate game data to the location expected by the launcher.
 
-Projeto iOS nativo Swift/SwiftUI.
+## Non-negotiable constraints
 
-## Fluxo oficial sem Mac
+- The only workflow in this branch must trigger on pushes to `Kleo2iOS` (plus manual dispatch on that branch). No workflow should run for pushes to other branches.
+- Keep the game data and console keys out of Git.
+- No paid Apple Developer account or App Store signing; produce an unsigned IPA for sideloading.
+- Keep the IPA and game data separate when the upstream runtime supports the separate-RomFS mode.
+- Do not claim the Linux stage is complete until every Linux command and every handoff artifact has been validated against the pinned NX2Apple/NXNative revision.
+- Do not use caches in Actions unless explicitly justified and requested.
 
-O repositório contém dois pipelines de compilação remota:
+## Current status
 
-- `codemagic.yaml` — fluxo mais simples para compilar e baixar pelo iPhone usando Codemagic;
-- `.github/workflows/ios.yml` — pipeline equivalente no GitHub Actions.
-
-Nenhum dos dois exige Mac ou Xcode local.
-Cada push ou pull request executa, em um runner macOS do GitHub:
-
-1. seleção da toolchain Xcode disponível;
-2. XCTest no simulador iOS;
-3. build `iphoneos` sem assinatura;
-4. geração de `KintTany-unsigned.ipa` e `KintTany.app`;
-5. upload dos arquivos na aba **Actions → Artifacts**.
-
-Assim, o projeto pode ser compilado e baixado inteiramente pelo navegador do
-iPhone. Nenhuma etapa fundamental exige abrir o projeto no Xcode localmente.
-
-## IPA assinado
-
-Sem Secrets de assinatura, o workflow sempre gera o artefato não assinado para
-o fluxo posterior de sideload. Para gerar também `KintTany.ipa` assinado,
-configure no GitHub Actions os Secrets:
-
-- `IOS_DISTRIBUTION_CERTIFICATE_BASE64`: certificado `.p12` em Base64;
-- `IOS_DISTRIBUTION_CERTIFICATE_PASSWORD`;
-- `IOS_PROVISIONING_PROFILE_BASE64`: perfil `.mobileprovision` em Base64;
-- `APPLE_TEAM_ID`;
-- `KEYCHAIN_PASSWORD` (opcional; há valor temporário para o runner).
-
-O certificado, o perfil e as credenciais nunca são incluídos no repositório ou
-nos artefatos não assinados.
-
-Não inclua cookies, chaves privadas, carteiras ou arquivos `.env` no projeto.
-
-
-## Codemagic
-
-1. Suba o conteúdo desta pasta para a raiz do repositório GitHub.
-2. Conecte esse repositório ao Codemagic.
-3. Selecione a branch `main` e toque em **Check for configuration files**.
-4. O workflow **KintTany iOS - Unsigned IPA** será encontrado a partir de `codemagic.yaml`.
-5. Inicie o build. O runner Mac executará XCTest, compilará para `iphoneos` e publicará `KintTany-unsigned.ipa`.
-6. Baixe o artifact diretamente pelo navegador do iPhone e assine-o pelo seu fluxo de sideload.
-
-O workflow do Codemagic usa Xcode 26.5 em Mac mini M2 e não requer certificado Apple para o artifact sem assinatura.
+This is a clean project branch created from `main`. The inherited KintTany application, old workflows, tests, patches and unrelated documentation have been removed. The Colab preparation pipeline and macOS Shared-App finalizer are the next implementation stages; the initial workflow is deliberately limited to branch-isolation validation.

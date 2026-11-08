@@ -1,0 +1,31 @@
+name: Kleo2iOS
+
+on:
+  push:
+    branches:
+      - Kleo2iOS
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kleo2ios-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  branch-isolation:
+    if: github.ref == 'refs/heads/Kleo2iOS'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Kleo2iOS only
+        uses: actions/checkout@v4
+        with:
+          ref: Kleo2iOS
+      - name: Verify branch isolation
+        shell: bash
+        run: |
+          test "${GITHUB_REF}" = "refs/heads/Kleo2iOS"
+          test "$(git branch --show-current)" = "Kleo2iOS"
+          echo "Kleo2iOS branch isolation verified."
+          echo "Linux preparation and macOS Shared-App finalization are not enabled until their handoff contract is implemented and tested."
