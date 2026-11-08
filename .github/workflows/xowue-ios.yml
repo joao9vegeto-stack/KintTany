@@ -60,6 +60,13 @@ jobs:
           print(f"PYTHON_PREFLIGHT_OK: compiled {len(tools)} tools; all {len(tests)} test files are wired into CI")
           PY
 
+      - name: Test XOWUE VdSwap PM4 packet contract
+        run: |
+          set -euo pipefail
+          c++ -std=c++23 -Wall -Wextra -Werror -I Runtime \
+            Runtime/VdSwapPacketSmoke.cpp -o "$RUNNER_TEMP/xowue-vdswap-smoke"
+          "$RUNNER_TEMP/xowue-vdswap-smoke"
+
       - name: Assign app build number
         id: version
         uses: actions/github-script@v7
