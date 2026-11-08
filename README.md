@@ -1,3 +1,14 @@
+> [!IMPORTANT]
+> **Experimental fork — not the official NX2Apple project.**
+>
+> **Fried2iOS** is an independent, experimental fork of **[LNPANDY/NX2Apple](https://github.com/LNPANDY/NX2Apple)**. This repository exists to explore, test, and develop experimental changes on top of the original project. The upstream repository remains the authoritative source for the original project, its official releases, documentation, roadmap, and issue tracking.
+>
+> **Original project credit:** NX2Apple was created and is maintained upstream by **[LNPANDY](https://github.com/LNPANDY)**, together with the contributors credited below. This fork preserves the upstream project’s code, documentation, assets, licenses, and contributor acknowledgements; it does not claim authorship of that work.
+>
+> **Core engine credit:** NX2Apple builds on **[nxnative](https://github.com/seedds/nxnative)** by **[seedds](https://github.com/seedds)**, along with the third-party projects and contributors listed in the Credits section.
+>
+> Fried2iOS is not affiliated with, sponsored by, or endorsed by the NX2Apple or nxnative maintainers. Experimental changes made specifically in Fried2iOS will be identified separately from upstream work.
+
 <div align="center">
 
 <picture>
@@ -217,6 +228,16 @@ the iPad. The other Switch 2 games were not tried here. [GAMES.md](GAMES.md#swit
 - **Release history:** [CHANGELOG.md](CHANGELOG.md).
 
 ## Credits
+
+### Original project — NX2Apple
+
+The upstream project and the foundation of this repository are **[NX2Apple](https://github.com/LNPANDY/NX2Apple)**, created and maintained by **[LNPANDY](https://github.com/LNPANDY)**. Fried2iOS is an experimental fork; all original NX2Apple implementation, design, documentation, assets, and project history remain credited to the upstream project and its authors. Please visit the upstream repository for official releases and project direction.
+
+### Upstream engine — nxnative
+
+The native Switch execution engine is **[nxnative](https://github.com/seedds/nxnative)**, maintained by **[seedds](https://github.com/seedds)**. Its code and engineering work remain credited to their original authors and are subject to their original license.
+
+### Community contributors
 
 **Community contributors** — this project's code is not one maintainer's output:
 
