@@ -4,8 +4,8 @@ from __future__ import annotations
 import argparse, hashlib, json, subprocess
 from pathlib import Path
 
-def zstd_pipe(args):
-    return subprocess.Popen(["zstd", "-dc", str(args.archive)], stdout=subprocess.PIPE)
+def zstd_pipe(archive):
+    return subprocess.Popen(["zstd", "-dc", str(archive)], stdout=subprocess.PIPE)
 
 def main():
     ap = argparse.ArgumentParser()
@@ -20,7 +20,9 @@ def main():
     if h.hexdigest().lower() != args.sha256.lower():
         raise SystemExit("Handoff archive SHA-256 does not match handoff.json")
 
-    z = zstd_pipe(args)
+    # Inspect names and file types before extraction. The handoff should contain only regular
+    # files and directories; links are unnecessary and could escape the destination.
+    z = zstd_pipe(args.archive)
     listing = subprocess.run(["tar", "-tvf", "-"], stdin=z.stdout, capture_output=True, text=True, check=True)
     z.stdout.close()
     if z.wait() != 0:
@@ -28,15 +30,8 @@ def main():
     for line in listing.stdout.splitlines():
         if line.startswith(("l", "h")):
             raise SystemExit("Handoff archive contains a symbolic or hard link; refusing extraction")
-    z = zstd_pipe(args)
-    args.destination.mkdir(parents=True, exist_ok=True)
-    extracted = subprocess.run(["tar", "-xf", "-", "-C", str(args.destination),
-                                "--no-same-owner", "--no-same-permissions"], stdin=z.stdout, check=False)
-    z.stdout.close()
-    if extracted.returncode != 0 or z.wait() != 0:
-        raise SystemExit("Could not extract the handoff archive")
-    # Verify the member names too; the archive is produced by our notebook and must be relative.
-    z = zstd_pipe(args)
+
+    z = zstd_pipe(args.archive)
     names = subprocess.run(["tar", "-tf", "-"], stdin=z.stdout, capture_output=True, text=True, check=True).stdout
     z.stdout.close()
     if z.wait() != 0:
@@ -45,6 +40,15 @@ def main():
         p = Path(name)
         if p.is_absolute() or ".." in p.parts:
             raise SystemExit(f"Unsafe path in handoff archive: {name}")
+
+    args.destination.mkdir(parents=True, exist_ok=True)
+    z = zstd_pipe(args.archive)
+    extracted = subprocess.run(["tar", "-xf", "-", "-C", str(args.destination)],
+                               stdin=z.stdout, check=False)
+    z.stdout.close()
+    if extracted.returncode != 0 or z.wait() != 0:
+        raise SystemExit("Could not extract the handoff archive")
+
     manifest = json.loads((args.destination / "manifest.json").read_text())
     if manifest.get("format") != 1:
         raise SystemExit("Unsupported handoff archive format")
