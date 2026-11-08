@@ -33,7 +33,7 @@ required = {
     "B97 records bypass legacy sampling": 'event.find("B97_")',
     "movie read order is explicit": "B105_MEDIA_READ_ORDER",
     "movie open order is explicit": "B105_MEDIA_OPEN_ORDER",
-    "guest media call flow is chronological": "B105_MOVIE_PPC_FLOW",
+    "guest media call flow is chronological": "XOWUE_MEDIA_PPC_FLOW",
     "directory enumeration is inventory-only": "XOWUE_MEDIA_ENUM_COMPLETE inventory_only=1",
     "guest SignalState polling": "adoptGuestEventMemorySignalStateLocked",
     "targeted wait handle 0x115": "B98_WAIT_BEGIN",
@@ -156,7 +156,7 @@ trace_filter_start = source.index("for (const char *required : {")
 trace_filter_end = source.index("}) {", trace_filter_start)
 trace_filter = source[trace_filter_start:trace_filter_end]
 for event_name in (
-    "B105_MOVIE_PPC_FLOW",
+    "XOWUE_MEDIA_PPC_FLOW",
     "XOWUE_B90_BINK_STATE",
     "XOWUE_B80_SETSTATE",
     "XOWUE_B90_CIRCULAR_LIST_PRESERVED",

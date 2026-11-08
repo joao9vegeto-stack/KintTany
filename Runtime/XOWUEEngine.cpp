@@ -775,7 +775,7 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     for (const char *required : {"CODE_AUDIT_B69", "APP_LAUNCH", "XOWUE_SYNC_CREATE", "XOWUE_MAIN_WAIT_WATCHDOG", "B85_MULTIWAIT_WATCHDOG_PUMP", "B85_WAIT_WATCHDOG_PUMP", "XOWUE_POOL_ALLOC_82DC2BF0", "XOWUE_QPC_WRITE",
                                  "CODE_AUDIT_QPC_CALLERS", "XOWUE_QPC_CALLER_DUMP", "CODE_AUDIT_B65",
                                  "XOWUE_82DC2390_GUARD", "B105_GUEST_EVENT_STATE_ADOPT",
-                                 "B105_MOVIE_PPC_FLOW", "B105_MEDIA_OPEN_ORDER", "B105_MEDIA_READ_ORDER", "XOWUE_B90_BINK_STATE", "XOWUE_B80_SETSTATE", "XOWUE_B90_CIRCULAR_LIST_PRESERVED", "B102_TIMER_WAIT_BEGIN", "B102_TIMER_WAIT_RESULT"}) {
+                                 "XOWUE_MEDIA_PPC_FLOW", "B105_MEDIA_OPEN_ORDER", "B105_MEDIA_READ_ORDER", "XOWUE_B90_BINK_STATE", "XOWUE_B80_SETSTATE", "XOWUE_B90_CIRCULAR_LIST_PRESERVED", "B102_TIMER_WAIT_BEGIN", "B102_TIMER_WAIT_RESULT"}) {
         if (event.find(required) != std::string::npos) return true;
     }
     if (sequence < 96u) return true;
@@ -3450,7 +3450,7 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
                 const uint32_t flowSample = mediaFlowSamples.fetch_add(1u, std::memory_order_relaxed) + 1u;
                 char flow[512];
                 std::snprintf(flow, sizeof(flow),
-                    "B105_MOVIE_PPC_FLOW sample=%u entry=0x%08X hit=%u tid=%u lr=0x%08X "
+                    "XOWUE_MEDIA_PPC_FLOW sample=%u entry=0x%08X hit=%u tid=%u lr=0x%08X "
                     "r3=0x%08X r4=0x%08X r5=0x%08X r6=0x%08X r7=0x%08X r8=0x%08X "
                     "r10=0x%08X r30=0x%08X r31=0x%08X",
                     flowSample, guestAddress, hit, g_currentGuestThreadId, static_cast<uint32_t>(ctx.lr),
