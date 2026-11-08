@@ -1,0 +1,53 @@
+name: Aida1iOS - Thin IPA tooling validation
+
+on:
+  push:
+    branches:
+      - Aida1iOS
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aida1ios-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-thin-ipa:
+    name: Validate Thin IPA packager
+    if: github.ref == 'refs/heads/Aida1iOS'
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - name: Checkout Aida1iOS and pinned engine
+        uses: actions/checkout@v4
+        with:
+          ref: Aida1iOS
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify engine pin
+        shell: pwsh
+        run: |
+          $expected = '269d61ff974b2e8e073d7357466ae130c3f6812f'
+          $actual = (git -C engine rev-parse HEAD).Trim()
+          if ($actual -ne $expected) {
+            throw "Engine pin mismatch: expected $expected, got $actual"
+          }
+          if (!(Test-Path 'engine/win/build_ipa_windows.py')) {
+            throw 'NXNativeWindows builder is missing.'
+          }
+          if (!(Test-Path 'engine/dm/games/01007EF00011E000/game.tsv')) {
+            throw 'BOTW profile is missing.'
+          }
+          if (!(Test-Path 'engine/dm/games/0100F2C0115B6000/game.tsv')) {
+            throw 'TOTK profile is missing.'
+          }
+
+      - name: Test full-IPA to Thin-IPA conversion
+        run: python tools/thin_ipa.py --self-test
