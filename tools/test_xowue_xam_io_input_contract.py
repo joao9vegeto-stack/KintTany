@@ -54,7 +54,7 @@ msg_start = compat.index('if (api == "XMsgStartIORequest" || api == "XMsgStartIO
 msg_end = compat.index('if (api == "XexGetModuleHandle")', msg_start)
 messages = compat[msg_start:msg_end]
 require("validGuestRange(overlapped, 0x1Cu)" in messages and
-        "xowueCompleteXamOverlappedImmediate(base,overlapped,result)" in messages,
+        "xowueCompleteXamOverlappedImmediate(base, overlapped, result)" in messages,
         "XMsgStartIORequest must complete through the same XOVERLAPPED helper")
 write_start = compat.index('if (api == "XamUserWriteProfileSettings")')
 write_end = compat.index('if (api == "XamContentGetLicenseMask")', write_start)
