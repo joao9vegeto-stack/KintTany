@@ -3,8 +3,6 @@
 #include "image.h"
 #include "ppc_recomp_shared.h"
 #include "XOWUEDispatchGuard.h"
-#include "XOWUEListCycleRepair.hpp"
-#include "XOWUEVdSwapPacket.hpp"
 #include "Graphics/Xenos/XOWUEGpuBridge.h"
 #include "Graphics/Xenos/XOWUEGuestDraw.h"
 #include "Graphics/Xenos/XOWUEDxt.h"
@@ -773,10 +771,7 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     for (const char *required : {"CODE_AUDIT_B69", "APP_LAUNCH", "XOWUE_SYNC_CREATE", "XOWUE_MAIN_WAIT_WATCHDOG", "B85_MULTIWAIT_WATCHDOG_PUMP", "B85_WAIT_WATCHDOG_PUMP", "XOWUE_POOL_ALLOC_82DC2BF0", "XOWUE_QPC_WRITE",
                                  "CODE_AUDIT_QPC_CALLERS", "XOWUE_QPC_CALLER_DUMP", "CODE_AUDIT_B65",
                                  "XOWUE_82DC2390_GUARD", "B105_GUEST_EVENT_STATE_ADOPT",
-                                 "B105_MOVIE_PPC_FLOW", "B105_MEDIA_OPEN_ORDER", "B105_MEDIA_READ_ORDER",
-                                 "XOWUE_MAIN_LIST_CYCLE_REPAIRED", "XOWUE_MAIN_LIST_REPAIR_SKIPPED",
-                                 "XOWUE_VDSWAP_PACKET_QUEUED", "XENOS_GUEST_RESOLVE_REJECT",
-                                 "XENOS_GPU_GUEST_RESOLVE_COMMITTED"}) {
+                                 "B105_MOVIE_PPC_FLOW", "B105_MEDIA_OPEN_ORDER", "B105_MEDIA_READ_ORDER"}) {
         if (event.find(required) != std::string::npos) return true;
     }
     if (sequence < 96u) return true;
@@ -3772,64 +3767,6 @@ void xowue_thread_checkpoint(uint32_t guestAddress) {
     const uint32_t previousGuestLr = g_b90PreviousEntryLr;
     recordAotFunctionExecution(guestAddress);
     g_b90LastAotEntry = guestAddress;
-
-    // Retail PPC at 0x824ACC1C walks a NULL-terminated singly-linked chain:
-    // lwz r11,0x28(r31); compare with zero; branch back while nonzero.
-    // If a guest-side mutation leaves a cycle, the title spins here forever
-    // after the final movie. Break only the cycle edge (last unique node -> 0);
-    // acyclic lists and every node's callback are left untouched.
-    const uint32_t checkpointThreadId = g_currentGuestThread
-        ? g_currentGuestThread->id : g_currentGuestThreadId;
-    if (guestAddress == 0x824ACC1Cu && checkpointThreadId == 1u &&
-        auditMemory && auditMemory->base) {
-        // The main PPC entry can run with the global register snapshot rather
-        // than a secondary GuestThread object. Use the same source that feeds
-        // XOWUE_STALL_THREADS' t1=... record.
-        const uint32_t root = g_currentGuestThread
-            ? g_currentGuestThread->lastR30.load(std::memory_order_relaxed)
-            : g_mainThreadLastR30.load(std::memory_order_relaxed);
-        const uint32_t current = g_currentGuestThread
-            ? g_currentGuestThread->lastR31.load(std::memory_order_relaxed)
-            : g_mainThreadLastR31.load(std::memory_order_relaxed);
-        static thread_local uint32_t lastInspectedRoot = 0u;
-        static thread_local uint64_t loopCheckpointCount = 0u;
-        ++loopCheckpointCount;
-        const bool firstVisitToRoot = root != lastInspectedRoot;
-        const bool periodicRescan = (loopCheckpointCount & 0xFFFu) == 0u;
-        if ((firstVisitToRoot || periodicRescan) &&
-            root >= 0x40000000u && root < 0x70000000u &&
-            current >= 0x40000000u && current < 0x70000000u) {
-            lastInspectedRoot = root;
-            const auto repair = xowue::repairNullTerminatedGuestListCycle(
-                root, 0x28u, 0xA0u, 8192u,
-                [base = auditMemory->base](uint32_t address) {
-                    return loadGuestBe32(base, address);
-                },
-                [base = auditMemory->base](uint32_t address, uint32_t value) {
-                    storeGuestBe32(base, address, value);
-                },
-                [](uint32_t address, uint32_t size) {
-                    return address >= 0x40000000u && address < 0x70000000u &&
-                           validGuestRange(address, size);
-                });
-            if (repair.repaired) {
-                char event[256];
-                std::snprintf(event, sizeof(event),
-                    "XOWUE_MAIN_LIST_CYCLE_REPAIRED root=0x%08X from=0x%08X to=0x%08X "
-                    "steps=%u link_offset=0x28 termination=null",
-                    root, repair.cycleFrom, repair.cycleTo, repair.steps);
-                recordRuntimeTrace(event);
-            } else if (repair.invalidNext || repair.truncated) {
-                char event[224];
-                std::snprintf(event, sizeof(event),
-                    "XOWUE_MAIN_LIST_REPAIR_SKIPPED root=0x%08X steps=%u invalid=%u "
-                    "bad=0x%08X truncated=%u",
-                    root, repair.steps, repair.invalidNext ? 1u : 0u,
-                    repair.badAddress, repair.truncated ? 1u : 0u);
-                recordRuntimeTrace(event);
-            }
-        }
-    }
     // Build 90: thread-local read-only transition observer. It reports the
     // previous AOT entry as a candidate context, never as a proven store PC.
     if (auditMemory && auditMemory->base) {
@@ -4402,47 +4339,21 @@ static void swapXenosPixelEndian(uint8_t* pixel,uint32_t bytesPerPixel,
 extern "C" bool xowue_xenos_commit_resolved_rgba(
     uint32_t dest,uint32_t pitch,uint32_t height,uint32_t info,
     const uint8_t* rgba,size_t sourceBytes) {
-    static std::atomic<uint32_t> rejectLogBudget{0u};
-    auto reject = [&](const char *reason, bool fetchValid, uint8_t fetchMask,
-                      uint32_t latestAddress, uint32_t latestWidth,
-                      uint32_t latestHeight, const std::array<uint32_t,6> &fetch) {
-        if (rejectLogBudget.fetch_add(1u, std::memory_order_relaxed) < 16u) {
-            char event[512];
-            std::snprintf(event, sizeof(event),
-                "XENOS_GUEST_RESOLVE_REJECT reason=%s dest=%08X size=%ux%u info=%08X "
-                "bytes=%llu fetch_valid=%u fetch_mask=%02X latest=%08X/%ux%u "
-                "fetch=%08X,%08X,%08X,%08X,%08X,%08X",
-                reason, dest, pitch, height, info,
-                static_cast<unsigned long long>(sourceBytes), fetchValid ? 1u : 0u,
-                fetchMask, latestAddress, latestWidth, latestHeight,
-                fetch[0], fetch[1], fetch[2], fetch[3], fetch[4], fetch[5]);
-            recordRuntimeTrace(event);
-        }
-        return false;
-    };
-    std::array<uint32_t,6> fetch{};
-    bool fetchValid=false;
-    uint8_t fetchMask=0u;
-    uint32_t latestAddress=0u, latestWidth=0u, latestHeight=0u;
     if(!rgba || pitch==0u || height==0u || pitch>2048u || height>2048u ||
        ((info>>7u)&63u)!=6u || (uint64_t(pitch)*height*4u)!=sourceBytes)
-        return reject("invalid_resolve_args",false,0u,0u,0u,0u,fetch);
+        return false;
+    std::array<uint32_t,6> fetch{};
     {
         std::lock_guard<std::mutex> lk(g_xenosMutex);
-        fetchValid=g_xenosFrontend.swapFetchValid;
-        fetchMask=g_xenosFrontend.swapFetchMask;
-        latestAddress=g_xenosFrontend.latestFrontbufferAddress;
-        latestWidth=g_xenosFrontend.latestWidth;
-        latestHeight=g_xenosFrontend.latestHeight;
+        if(!g_xenosFrontend.swapFetchValid ||
+           g_xenosFrontend.latestFrontbufferAddress!=dest ||
+           g_xenosFrontend.latestWidth!=pitch ||
+           g_xenosFrontend.latestHeight!=height)
+            return false;
         fetch=g_xenosFrontend.swapFetch;
     }
-    if(!fetchValid || latestAddress!=dest || latestWidth!=pitch ||
-       latestHeight!=height)
-        return reject("frontbuffer_state_mismatch",fetchValid,fetchMask,
-                      latestAddress,latestWidth,latestHeight,fetch);
     if((fetch[1]&63u)!=6u || (((fetch[1]>>12u)&0xFFFFFu)<<12u)!=dest)
-        return reject("fetch_descriptor_mismatch",fetchValid,fetchMask,
-                      latestAddress,latestWidth,latestHeight,fetch);
+        return false;
     const uint32_t actualPitch=((fetch[0]>>22u)&0x1FFu)<<5u;
     const bool tiled=(fetch[0]>>31u)!=0u;
     const uint32_t pitchPixels=(actualPitch>=pitch)?actualPitch:
@@ -8262,8 +8173,9 @@ void startGuestProgressWatchdog() {
 
 void xowue_VdSwap(PPCContext &context, uint8_t *base) {
     startGuestProgressWatchdog();
-    constexpr uint32_t kReservedDwords = xowue::kVdSwapReservedDwords;
-    static_assert(kReservedDwords == 64u);
+    constexpr uint32_t kReservedDwords = 64u;
+    constexpr uint32_t kSwapSignature = 0x53574150u;
+    constexpr uint32_t kType2Nop = 0x80000000u;
     const uint32_t commandBuffer = context.r3.u32;
     const uint32_t fetch = context.r4.u32;
     const uint32_t frontbufferPointer = context.r8.u32;
@@ -8290,45 +8202,26 @@ void xowue_VdSwap(PPCContext &context, uint8_t *base) {
     const uint32_t colorSpace = PPC_LOAD_U32(colorSpacePointer);
     const uint32_t requestedWidth = PPC_LOAD_U32(widthPointer);
     const uint32_t requestedHeight = PPC_LOAD_U32(heightPointer);
-    std::array<uint32_t, 6> fetchWords{};
-    for (uint32_t i = 0u; i < fetchWords.size(); ++i)
+    uint32_t fetchWords[6]{};
+    for (uint32_t i = 0u; i < 6u; ++i)
         fetchWords[i] = PPC_LOAD_U32(fetch + i * 4u);
-    const uint32_t fetchVirtualAddress =
-        ((fetchWords[1] >> 12u) & 0xFFFFFu) << 12u;
     const uint32_t fetchWidth = (fetchWords[2] & 0x1FFFu) + 1u;
     const uint32_t fetchHeight = ((fetchWords[2] >> 13u) & 0x1FFFu) + 1u;
     const uint32_t width = fetchWidth > 1u ? fetchWidth : requestedWidth;
     const uint32_t height = fetchHeight > 1u ? fetchHeight : requestedHeight;
+    const uint32_t frontbufferPhysicalAddress =
+        ((fetchWords[1] >> 12u) & 0xFFFFFu) << 12u;
+    if (frontbufferVirtualAddress != frontbufferPhysicalAddress)
+        recordRuntimeTrace("VdSwap frontbuffer pointer differs from fetch base; fetch physical address retained");
 
-    // Xenia verifies that the D3D9 texture-header fetch base is the supplied
-    // frontbuffer virtual address, translates that address to physical, then
-    // rewrites xe_gpu_texture_fetch_t::base_address before emitting Type-0.
-    // XOWUE's current guest physical memory contract (MmGetPhysicalAddress)
-    // is identity-mapped; keep the conversion/rewrite explicit so this code
-    // follows the same ABI and can adopt a real map without changing PM4 code.
-    const uint32_t frontbufferPhysicalAddress = frontbufferVirtualAddress;
-    if (!xowue::translateVdSwapFetchBase(
-            fetchWords, frontbufferVirtualAddress, frontbufferPhysicalAddress)) {
-        context.r3.u32 = kNtStatusInvalidParameter;
-        {
-            std::lock_guard<std::mutex> lock(g_xenosMutex);
-            ++g_xenosFrontend.malformedPackets;
-        }
-        char event[224];
-        std::snprintf(event, sizeof(event),
-            "VdSwap rejected fetch-base mismatch virtual=0x%08X descriptor=0x%08X physical=0x%08X",
-            frontbufferVirtualAddress, fetchVirtualAddress, frontbufferPhysicalAddress);
-        recordRuntimeTrace(event);
-        return;
-    }
-
-    // Emit all six translated fetch dwords before PM4_XE_SWAP, exactly as
-    // xboxkrnl_video.cc does; a fetch-valid bit is set only after all six
-    // Type-0 registers are consumed by the Xenos command processor.
-    const auto packet = xowue::buildVdSwapPacket(
-        fetchWords, frontbufferPhysicalAddress, width, height);
-    for (uint32_t i = 0u; i < packet.size(); ++i)
-        PPC_STORE_U32(commandBuffer + i * 4u, packet[i]);
+    for (uint32_t i = 0u; i < kReservedDwords; ++i)
+        PPC_STORE_U32(commandBuffer + i * 4u, kType2Nop);
+    PPC_STORE_U32(commandBuffer + 0u,
+        (3u << 30u) | (3u << 16u) | (kXenosPm4SwapOpcode << 8u));
+    PPC_STORE_U32(commandBuffer + 4u, kSwapSignature);
+    PPC_STORE_U32(commandBuffer + 8u, frontbufferPhysicalAddress);
+    PPC_STORE_U32(commandBuffer + 12u, width);
+    PPC_STORE_U32(commandBuffer + 16u, height);
 
     uint32_t ringAddress = 0u;
     uint32_t ringSize = 0u;
@@ -8341,17 +8234,14 @@ void xowue_VdSwap(PPCContext &context, uint8_t *base) {
         commandBuffer >= ringAddress &&
         static_cast<uint64_t>(commandBuffer) + kReservedDwords * 4u <=
             static_cast<uint64_t>(ringAddress) + ringSize;
-    char event[512];
+    char event[320];
     std::snprintf(event, sizeof(event),
         "XOWUE_VDSWAP_PACKET_QUEUED command=0x%08X ring=0x%08X ring_size=0x%08X "
         "in_ring=%u frontbuffer=0x%08X width=%u height=%u fetch_format=%u "
-        "requested=%ux%u colorspace=%u type0=%08X swap=%08X "
-        "fetch=%08X,%08X,%08X,%08X,%08X,%08X",
+        "requested=%ux%u colorspace=%u",
         commandBuffer, ringAddress, ringSize, commandBufferInsideRing ? 1u : 0u,
         frontbufferPhysicalAddress, width, height, textureFormat,
-        requestedWidth, requestedHeight, colorSpace,
-        packet[0], packet[7], fetchWords[0], fetchWords[1], fetchWords[2],
-        fetchWords[3], fetchWords[4], fetchWords[5]);
+        requestedWidth, requestedHeight, colorSpace);
     recordRuntimeTrace(event);
     // Count this validated request from the guest title separately from
     // the later PM4/XE_SWAP packet consumed by the Xenos renderer.

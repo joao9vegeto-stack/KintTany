@@ -373,25 +373,7 @@ vd = engine[vd_start:vd_end]
 assert "XOWUE_VDSWAP_PACKET_QUEUED" in vd
 assert "decodeXenosSwapTexture" not in vd
 assert "xowue_vulkan_backend_guest_frame_rgba" not in vd
-# VdSwap must write the six fetch registers before XE_SWAP, then pad the
-# reserved command buffer; validating the helper separately is not enough.
-packet_helper=Path("Runtime/XOWUEVdSwapPacket.hpp").read_text()
-assert '#include "XOWUEVdSwapPacket.hpp"' in engine
-assert "xowue::translateVdSwapFetchBase(" in vd
-assert "fetchWords, frontbufferVirtualAddress, frontbufferPhysicalAddress" in vd
-assert "frontbufferPhysicalAddress = frontbufferVirtualAddress" in vd
-assert "xowue::buildVdSwapPacket(" in vd
-assert "frontbufferPhysicalAddress, width, height" in vd
-assert "for (uint32_t i = 0u; i < packet.size(); ++i)" in vd
-assert "translateVdSwapFetchBase" in packet_helper
-assert "descriptorVirtualAddress" in packet_helper
-assert "fetch[1] = (fetch[1] & 0x00000FFFu)" in packet_helper
-assert "PPC_STORE_U32(commandBuffer + i * 4u, packet[i]);" in vd
-assert "kVdSwapFetchRegister = 0x4800u" in packet_helper
-assert "kVdSwapOpcode = 0x64u" in packet_helper
-assert "packet[0] = ((static_cast<uint32_t>(fetch.size()) - 1u) << 16u)" in packet_helper
-assert "packet[7] = (3u << 30u) | (3u << 16u) | (kVdSwapOpcode << 8u)" in packet_helper
-assert "packet[11] = height" in packet_helper
+assert "PPC_STORE_U32(commandBuffer + 4u, kSwapSignature)" in vd
 assert "context.r3.u32 = 0u" in vd
 assert "last_guest_swap_count" in vulkan
 assert "guestSwapSerial == state->last_guest_swap_count" in vulkan

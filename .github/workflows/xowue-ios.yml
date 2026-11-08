@@ -60,13 +60,6 @@ jobs:
           print(f"PYTHON_PREFLIGHT_OK: compiled {len(tools)} tools; all {len(tests)} test files are wired into CI")
           PY
 
-      - name: Test XOWUE VdSwap PM4 packet contract
-        run: |
-          set -euo pipefail
-          c++ -std=c++23 -Wall -Wextra -Werror -I Runtime \
-            Runtime/VdSwapPacketSmoke.cpp -o "$RUNNER_TEMP/xowue-vdswap-smoke"
-          "$RUNNER_TEMP/xowue-vdswap-smoke"
-
       - name: Assign app build number
         id: version
         uses: actions/github-script@v7
@@ -337,8 +330,6 @@ jobs:
           clang++ -std=c++23 -Wall -Wextra -Werror -pedantic Runtime/PathContainmentSmoke.cpp -o "$RUNNER_TEMP/xowue-path-containment-smoke"
           "$RUNNER_TEMP/xowue-path-containment-smoke"
           python3 tools/test_xowue_aot_instrumentation.py
-          clang++ -std=c++23 -Wall -Wextra -Werror -pedantic Runtime/ListCycleRepairSmoke.cpp -o "$RUNNER_TEMP/xowue-list-cycle-repair-smoke"
-          "$RUNNER_TEMP/xowue-list-cycle-repair-smoke"
           python3 -m py_compile tools/generate_aot.py
           python3 tools/generate_aot.py --self-test
           python3 -m py_compile tools/test_xowue_build86_diagnostics.py
