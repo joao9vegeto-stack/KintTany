@@ -29,6 +29,18 @@ require("host.presentingViewController" in APP and
         "dismissal must target the actual controller that presented the tracked host")
 require("func makeCoordinator() -> XOWUELandscapePresentationCoordinator" in APP,
         "UIViewControllerRepresentable must persist the presentation coordinator")
+
+require("library.installGameSurfaceDismissHandler { [coordinator, weak anchor] in" in APP,
+        "the library must retain the UIKit presentation coordinator until dismissal completes")
+require("dismiss(animated: false) { [self, host] in" in APP,
+        "UIKit dismissal completion must retain its coordinator and presented host until cleanup finishes")
+require("DispatchQueue.global(qos: .userInitiated).async { [self] in" in APP and
+        "DispatchQueue.main.async { [self] in" in APP,
+        "the library session must remain alive from native boot through main-queue completion")
+require("DispatchQueue.main.async { [weak self] in" not in
+        APP[APP.index("func runBoot()"):APP.index("\n    private func fail(", APP.index("func runBoot()"))],
+        "native completion must not be silently dropped when a weak library reference disappears")
+
 require("runtime.stop duplicate request ignored" in APP,
         "repeated exit taps must not issue overlapping scheduler stops")
 

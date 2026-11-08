@@ -127,9 +127,8 @@ private final class XOWUELandscapePresentationCoordinator {
         if let presenter = host.presentingViewController,
            presenter.presentedViewController === host {
             XOWUEDiagnostics.log("orientation.host dismiss exact_presenter=\(String(describing: type(of: presenter))) exact_host=1")
-            presenter.dismiss(animated: false) { [weak self, weak host] in
-                guard let self, let host else { return }
-                self.finishDismissal(of: host)
+            presenter.dismiss(animated: false) { [self, host] in
+                finishDismissal(of: host)
             }
             return
         }
@@ -145,9 +144,8 @@ private final class XOWUELandscapePresentationCoordinator {
         if let root = fallback?.view.window?.rootViewController,
            root.presentedViewController === host {
             XOWUEDiagnostics.log("orientation.host dismiss window_root=1 exact_host=1")
-            root.dismiss(animated: false) { [weak self, weak host] in
-                guard let self, let host else { return }
-                self.finishDismissal(of: host)
+            root.dismiss(animated: false) { [self, host] in
+                finishDismissal(of: host)
             }
             return
         }
@@ -157,9 +155,8 @@ private final class XOWUELandscapePresentationCoordinator {
             return
         }
         XOWUEDiagnostics.log("orientation.host dismiss fallback_on_tracked_host=1 presenter_missing=1")
-        host.dismiss(animated: false) { [weak self, weak host] in
-            guard let self, let host else { return }
-            self.finishDismissal(of: host)
+        host.dismiss(animated: false) { [self, host] in
+            finishDismissal(of: host)
         }
     }
 }
@@ -182,7 +179,7 @@ private struct XOWUELandscapePresenter: UIViewControllerRepresentable {
         let coordinator = context.coordinator
         // Native boot completion dismisses this exact tracked UIKit host
         // directly, rather than depending solely on a later SwiftUI diff.
-        library.installGameSurfaceDismissHandler { [weak coordinator, weak anchor] in
+        library.installGameSurfaceDismissHandler { [coordinator, weak anchor] in
             guard let coordinator else {
                 XOWUEDiagnostics.log("orientation.host dismiss coordinator unavailable")
                 return
@@ -1708,17 +1705,16 @@ private final class XOWUEGameLibrary: ObservableObject {
         // Keep the native call on a worker queue, then perform the completion
         // as an explicit main-queue callback. This avoids making launcher exit
         // depend on resuming a Swift Task awaiting a detached task's value.
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
             let result: Result<XOWUERuntime.Outcome, XOWUERuntime.BootFailure>
             do {
                 result = .success(try XOWUERuntime.inspectAndBoot(executable))
             } catch {
                 result = .failure(XOWUERuntime.BootFailure(message: error.localizedDescription))
             }
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
+            DispatchQueue.main.async { [self] in
                 XOWUEDiagnostics.log("runtime.boot completion delivered to main queue")
-                self.completeBoot(result)
+                completeBoot(result)
             }
         }
     }
