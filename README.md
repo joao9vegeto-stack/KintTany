@@ -11,6 +11,10 @@ Switch 2 to iOS Shared-App pipeline. Google Colab/Linux performs the verified of
 - One macOS job, no cache, no workflow_dispatch, no push trigger on any other branch.
 - Ordinary source edits do not start a build. Colab uploads the private archive, then commits only its Drive file ID, size and SHA-256 to handoff.json. That one commit starts the build.
 
+## Start Colab
+
+[Open Kleo2iOS_Colab.ipynb in Google Colab](https://colab.research.google.com/github/joao9vegeto-stack/KintTany/blob/Kleo2iOS/colab/Kleo2iOS_Colab.ipynb)
+
 ## Pipeline
 
 ### Colab / Linux
@@ -49,7 +53,7 @@ The launcher checks the RomFS identity recorded in the framework manifest. An in
 
 ## Limitations
 
-- Donkey Kong Bananza has upstream Mac playtesting, but iPhone/iPad remain explicitly untested. A successful IPA build does not prove the game boots or renders on iPhone.
+- Donkey Kong Bananza has upstream Mac playtesting, but iPhone/iPad remain explicitly untested. Its profile reserves a 9 GiB app pool (0x240000000) and a 9.75 GiB address reservation (0x270000000); iOS devices with a lower process-memory limit may fail allocations or be terminated. A successful IPA build does not prove the game boots or renders on iPhone.
 - The target GPU is g18p, corresponding to the user's iPhone 17 Pro / A19 Pro. If Apple's metal-tt utility is unavailable on the runner, the optional offline pipeline archive may be omitted and the device will build pipeline bases on first launch.
 - Colab currently supports registered NVN profiles whose offline shader split does not require a Mac-host decoder/capture. Unsupported cases fail closed.
 
