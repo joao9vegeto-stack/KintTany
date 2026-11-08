@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Finish a Colab-prepared NXNative build on macOS and export the Shared NX2Apple IPA."""
+"""Finish the Switch game framework and build the Route C Shared shell on macOS."""
 from __future__ import annotations
 import argparse, json, os, shutil, subprocess, sys, zipfile
 from pathlib import Path
@@ -33,44 +33,31 @@ def main():
     if len(title_id) != 16:
         raise SystemExit("Handoff manifest has no valid title ID.")
 
-    stage_ipa = out / "framework-stage.ipa"
+    framework_root = out / "frameworks"
+    shutil.rmtree(framework_root, ignore_errors=True)
+    framework_root.mkdir(parents=True)
     builder = engine / "scripts" / "build_ipa_from_nsp.py"
-    run([sys.executable, str(builder), str(nup), "--framework", "--romfs", "separate",
+    run([sys.executable, str(builder), str(nup), "--shell-framework", str(framework_root),
          "--work-dir", str(work), "--keep-extracted", "--progress", "lines",
-         "--gpu", "g18p", "--out", str(stage_ipa)], cwd=nx, env=os.environ.copy())
-    if not stage_ipa.is_file():
-        raise SystemExit("NXNative completed without producing the framework-stage IPA.")
+         "--gpu", "g18p"], cwd=nx, env=os.environ.copy())
 
     framework_name = f"DmGame{title_id}.framework"
-    extracted = out / "framework-extracted"
-    shutil.rmtree(extracted, ignore_errors=True)
-    extracted.mkdir(parents=True)
-    prefix = f"Payload/DmIOS.app/Frameworks/{framework_name}/"
-    with zipfile.ZipFile(stage_ipa) as zf:
-        names = [n for n in zf.namelist() if n.startswith(prefix)]
-        if not names:
-            raise SystemExit(f"Framework {framework_name} is missing from the stage IPA.")
-        for name in names:
-            rel = name[len(prefix):]
-            if rel:
-                target = extracted / framework_name / rel
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with zf.open(name) as src, target.open("wb") as dst:
-                    shutil.copyfileobj(src, dst)
-    framework = extracted / framework_name
+    framework = framework_root / framework_name
     manifest_path = framework / "game.manifest.json"
-    executable = framework / framework_name.removesuffix(".framework")
-    if not manifest_path.is_file() or not executable.is_file():
-        raise SystemExit("Extracted game framework is incomplete (manifest or executable missing).")
+    if not manifest_path.is_file():
+        raise SystemExit(f"NXNative did not produce {framework_name}/game.manifest.json")
     manifest = json.loads(manifest_path.read_text())
-    if manifest.get("title_id", "").upper() != title_id:
-        raise SystemExit("Framework title ID does not match the Colab handoff.")
-    package_version = manifest.get("package_version", "")
+    if manifest.get("title_id", "").upper() != title_id or manifest.get("framework") != framework_name:
+        raise SystemExit("Framework manifest title/name does not match the NUP handoff.")
+    executable = framework / str(manifest.get("framework_executable", ""))
+    if not executable.is_file():
+        raise SystemExit(f"Framework executable is missing: {executable}")
+    package_version = str(manifest.get("package_version", ""))
     romfs = work / "extract" / package_version / "RomFS.img"
     if not romfs.is_file():
         raise SystemExit(f"Separate RomFS image not found: {romfs}")
 
-    # Shared-shell game data is deliberately outside the IPA.
+    # The shell's Documents/games/<title ID>/ folder contains RomFS and optional DLC data.
     data_root = out / "game-data" / "games" / title_id
     shutil.rmtree(data_root, ignore_errors=True)
     data_root.mkdir(parents=True)
@@ -81,36 +68,64 @@ def main():
     data_archive = out / "game-data.tar.zst"
     run(["tar", "--zstd", "-1", "-cf", str(data_archive), "-C", str(out / "game-data"), "games"])
 
-    shell_root = out / "shell-library"
-    shutil.rmtree(shell_root, ignore_errors=True)
-    template = shell_root / "template" / "DmShell.app"
-    run([sys.executable, str(nx / "tools" / "build_shell_template.py"),
-         "--engine", str(engine), "--out", str(template)], cwd=nx)
-    sys.path.insert(0, str(nx / "frontend-qt"))
-    from nspb_qt.win.shell_export import export_shell
-    ok, ipa_path, message, notes = export_shell(
-        root=shell_root, repo=engine, framework=framework, title_id=title_id,
-        name=str(manifest.get("name") or title_id), python_exe=sys.executable,
-        log=lambda line: print(line, end="" if line.endswith("\n") else "\n", flush=True))
-    if not ok:
-        raise SystemExit(f"Shared shell export failed: {message}")
+    # Route C M2: build the real shell project around this game's framework, then sign nested code
+    # ad-hoc (frameworks without entitlements first, shell executable with Increased Memory Limit).
+    shell_dir = out / "shell-project"
+    shutil.rmtree(shell_dir, ignore_errors=True)
+    shell_dir.mkdir(parents=True)
+    shell_script = engine / "dm" / "ios" / "tools" / "build_shell.sh"
+    env = os.environ.copy()
+    env.update({
+        "SHELL_DIR": str(shell_dir),
+        "DM_SHELL_FRAMEWORKS": str(framework),
+        "DM_SHELL_PACKAGE": str(nx / "frontend-ios"),
+        "DM_SHELL_NAME": "NX2Apple",
+        "DM_BUNDLE_ID": "org.nxnative.shell",
+        "DM_APP_VERSION": "1.0",
+        "DM_TEAM_ID": "0000000000",
+        "FONT_PY": sys.executable,
+        "STD_FONT": "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    })
+    run(["bash", str(shell_script), "--build"], cwd=engine, env=env)
+    app = shell_dir / "dd" / "Build" / "Products" / "Release-iphoneos" / "DmShell.app"
+    if not (app / "DmShell").is_file():
+        raise SystemExit(f"Shared shell app was not built: {app}")
+    entitlements = shell_dir / "Gen" / "DmShell.entitlements"
+    if not entitlements.is_file():
+        raise SystemExit("build_shell.sh did not generate DmShell.entitlements")
+
+    for fw in sorted((app / "Frameworks").glob("*.framework")):
+        run(["xattr", "-cr", str(fw)])
+        run(["codesign", "--force", "--sign", "-", "--timestamp=none", str(fw)])
+        run(["codesign", "--verify", "--strict", str(fw)])
+    run(["xattr", "-cr", str(app)])
+    run(["codesign", "--force", "--sign", "-", "--entitlements", str(entitlements),
+         "--timestamp=none", str(app)])
+    run(["codesign", "--verify", "--deep", "--strict", str(app)])
+    ent_dump = subprocess.run(["codesign", "-d", "--entitlements", ":-", str(app / "DmShell")],
+                              capture_output=True, text=True, check=False)
+    if "com.apple.developer.kernel.increased-memory-limit" not in (ent_dump.stdout + ent_dump.stderr):
+        raise SystemExit("Ad-hoc shell signature is missing the Increased Memory Limit entitlement.")
+
     final_ipa = out / "NX2Apple.ipa"
-    shutil.copy2(ipa_path, final_ipa)
+    packer = engine / "dm" / "ios" / "tools" / "pack_ipa.py"
+    run([sys.executable, str(packer), str(final_ipa), "--no-reuse", f"Payload/DmShell.app={app}"], cwd=engine)
     with zipfile.ZipFile(final_ipa) as zf:
         entries = set(zf.namelist())
-        fw_exe = f"Payload/DmShell.app/Frameworks/{framework_name}/{framework_name.removesuffix('.framework')}"
+        fw_exe = f"Payload/DmShell.app/Frameworks/{framework_name}/{manifest['framework_executable']}"
         required = ("Payload/DmShell.app/DmShell", fw_exe,
                     f"Payload/DmShell.app/Frameworks/{framework_name}/game.manifest.json")
         missing = [p for p in required if p not in entries]
         if missing:
             raise SystemExit("Final Shared IPA failed structural validation: " + ", ".join(missing))
+
     report = {
         "title_id": title_id, "name": manifest.get("name"),
         "display_version": manifest.get("display_version"), "package_version": package_version,
         "engine_pin": prep["engine_pin"], "nx2apple_tag": prep["nx2apple_tag"],
         "ipa": str(final_ipa), "ipa_size": final_ipa.stat().st_size,
         "game_data": str(data_archive), "game_data_size": data_archive.stat().st_size,
-        "notes": notes,
+        "framework": framework_name,
     }
     (out / "build-report.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Validate a Colab handoff archive and extract it without trusting its paths."""
+"""Verify a zstd-compressed handoff archive and safely extract it with system tar."""
 from __future__ import annotations
-import argparse, hashlib, json, tarfile
+import argparse, hashlib, json, subprocess
 from pathlib import Path
 
 def main():
@@ -12,20 +12,18 @@ def main():
     args = ap.parse_args()
     h = hashlib.sha256()
     with args.archive.open("rb") as f:
-        while True:
-            block = f.read(16 * 1024 * 1024)
-            if not block:
-                break
+        for block in iter(lambda: f.read(16 * 1024 * 1024), b""):
             h.update(block)
     if h.hexdigest().lower() != args.sha256.lower():
         raise SystemExit("Handoff archive SHA-256 does not match handoff.json")
+    listing = subprocess.run(["tar", "--zstd", "-tf", str(args.archive)], capture_output=True, text=True, check=True).stdout
+    for name in listing.splitlines():
+        p = Path(name)
+        if p.is_absolute() or ".." in p.parts:
+            raise SystemExit(f"Unsafe path in handoff archive: {name}")
     args.destination.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(args.archive, "r|*") as tf:
-        for member in tf:
-            p = Path(member.name)
-            if p.is_absolute() or ".." in p.parts:
-                raise SystemExit(f"Unsafe path in handoff archive: {member.name}")
-            tf.extract(member, args.destination, filter="data")
+    subprocess.run(["tar", "--zstd", "-xf", str(args.archive), "-C", str(args.destination),
+                    "--no-same-owner", "--no-same-permissions"], check=True)
     manifest = json.loads((args.destination / "manifest.json").read_text())
     if manifest.get("format") != 1:
         raise SystemExit("Unsupported handoff archive format")
@@ -33,6 +31,9 @@ def main():
         raise SystemExit("Handoff archive has no game.nup")
     if not (args.destination / "work" / "kleo-linux-prep.json").is_file():
         raise SystemExit("Handoff archive has no Linux preparation output")
+    prep = json.loads((args.destination / "work" / "kleo-linux-prep.json").read_text())
+    if manifest.get("title_id") != prep.get("title_id") or manifest.get("engine_pin") != prep.get("engine_pin"):
+        raise SystemExit("Archive manifest and Linux preparation metadata disagree")
     print(json.dumps(manifest, indent=2))
 
 if __name__ == "__main__":

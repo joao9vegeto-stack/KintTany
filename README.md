@@ -1,6 +1,6 @@
 # Kleo2iOS
 
-Switch 2 → iOS Shared-App pipeline. Google Colab/Linux performs the verified offline preparation stages; GitHub Actions/macOS performs iOS Metal compilation, framework linking and Shared shell export.
+Switch 2 to iOS Shared-App pipeline. Google Colab/Linux performs the verified offline preparation stages; GitHub Actions/macOS performs iOS Metal compilation, framework linking and Shared shell build.
 
 ## Branch and workflow isolation
 
@@ -21,7 +21,7 @@ The Linux adapter refuses unknown profiles, Mac-host shader capture, Oodle/LZ5 d
 
 ### GitHub Actions / macOS
 
-The workflow downloads and verifies the handoff, resumes the same pinned build directory, compiles iOS Metal libraries, creates DmGame<TITLE_ID>.framework using the NX2Apple Route C framework patches, builds the DmShell.app template and exports an unsigned NX2Apple.ipa.
+The workflow downloads and verifies the handoff, resumes the same pinned build directory, compiles iOS Metal libraries, creates DmGame<TITLE_ID>.framework using NXNative's DM_FRAMEWORK_ONLY route, then uses the upstream Route C build_shell.sh to build and embed the framework in the unsigned DmShell app. The app is packaged as NX2Apple.ipa.
 
 The artifact also contains game-data.tar.zst because the large RomFS and DLC data remain outside the IPA.
 
@@ -57,4 +57,5 @@ The launcher checks the RomFS identity recorded in the framework manifest. An in
 
 - NX2Apple v1.3.0-rc10: https://github.com/LNPANDY/NX2Apple/tree/v1.3.0-rc10
 - NXNative pin: https://github.com/seedds/nxnative/tree/c78d7375bea9c862679ec294a6a69ff3e22e18d0
-- Route C framework patch: https://github.com/LNPANDY/NX2Apple/blob/v1.3.0-rc10/patches/0047-route-c-framework-build.patch
+- Route C shell patch: https://github.com/LNPANDY/NX2Apple/blob/v1.3.0-rc10/patches/0050-route-c-shell.patch
+- Shell framework handoff patch: https://github.com/LNPANDY/NX2Apple/blob/v1.3.0-rc10/patches/0051-nsp-shell-framework.patch

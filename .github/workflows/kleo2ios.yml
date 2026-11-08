@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: kleo2ios-\${{ github.ref }}
+  group: kleo2ios-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -79,10 +79,10 @@ jobs:
 
       - name: Download private Colab handoff from Google Drive
         env:
-          GOOGLE_SERVICE_ACCOUNT_JSON: \${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          DRIVE_FILE_ID: \${{ steps.request.outputs.file_id }}
-          EXPECTED_SIZE: \${{ steps.request.outputs.size }}
-          EXPECTED_SHA256: \${{ steps.request.outputs.sha256 }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          DRIVE_FILE_ID: ${{ steps.request.outputs.file_id }}
+          EXPECTED_SIZE: ${{ steps.request.outputs.size }}
+          EXPECTED_SHA256: ${{ steps.request.outputs.sha256 }}
         run: |
           set -euo pipefail
           python scripts/download_drive.py --file-id "$DRIVE_FILE_ID" \
@@ -93,7 +93,7 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/verify_handoff.py --archive "$RUNNER_TEMP/handoff.tar.zst" \
-            --destination "$RUNNER_TEMP/handoff" --sha256 "\${{ steps.request.outputs.sha256 }}"
+            --destination "$RUNNER_TEMP/handoff" --sha256 "${{ steps.request.outputs.sha256 }}"
 
       - name: Build game framework and export Shared IPA
         shell: bash
@@ -110,10 +110,10 @@ jobs:
       - name: Upload installable Shared IPA and separate game data
         uses: actions/upload-artifact@v4
         with:
-          name: Kleo2iOS-\${{ github.run_number }}
+          name: Kleo2iOS-${{ github.run_number }}
           path: |
-            \${{ runner.temp }}/kleo-output/NX2Apple.ipa
-            \${{ runner.temp }}/kleo-output/game-data.tar.zst
-            \${{ runner.temp }}/kleo-output/build-report.json
+            ${{ runner.temp }}/kleo-output/NX2Apple.ipa
+            ${{ runner.temp }}/kleo-output/game-data.tar.zst
+            ${{ runner.temp }}/kleo-output/build-report.json
           if-no-files-found: error
           retention-days: 7

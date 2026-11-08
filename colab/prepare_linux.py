@@ -23,8 +23,8 @@ def load_builder(engine):
     return module
 
 def inspect_nup(engine, nup_path):
-    sys.path.insert(0, str(engine / "scripts"))
-    sys.path.insert(0, str(engine / "dm/games"))
+    for p in (engine / "dm/tools", engine / "dm/games", engine / "scripts"):
+        sys.path.insert(0, str(p))
     import pack_nup
     import game as game_profiles
     nup = pack_nup.Nup(nup_path)
@@ -55,16 +55,13 @@ def linux_prerequisites(module, env, xlate, mac=False):
     print("[Kleo2iOS] Linux prerequisites passed; Apple SDK and Metal checks are deferred to Actions.")
 
 def run_preparation(args):
-    engine = args.engine_root.resolve()
-    nup = args.nup.resolve()
-    work = args.work_dir.resolve()
+    engine, nup, work = args.engine_root.resolve(), args.nup.resolve(), args.work_dir.resolve()
     require(nup.is_file(), f"NUP file not found: {nup}")
     require(nup.suffix.lower() == ".nup", "input must be a Switch 2 .nup container")
     require(sys.platform.startswith("linux"), "run this script in Google Colab/Linux")
     title_id, package_version = inspect_nup(engine, nup)
     module = load_builder(engine)
-    original_run = module.run
-    original_split = module.split_shaders
+    original_run, original_split = module.run, module.split_shaders
 
     def intercept_final_build(command, log=None, *pos, **kw):
         cmd = [str(x) for x in command] if isinstance(command, (list, tuple)) else [str(command)]
@@ -104,11 +101,11 @@ def run_preparation(args):
         if hasattr(module, name):
             setattr(module, name, unsupported_capture)
 
+    framework_out = work / "shell-framework"
     argv = [
-        str(nup), "--work-dir", str(work), "--romfs", "separate",
-        "--keep-extracted", "--no-heap-check", "--framework",
-        "--progress", "lines", "--gpu", "g18p",
-        "--out", str(work / "handoff-not-built.ipa"),
+        str(nup), "--work-dir", str(work), "--shell-framework", str(framework_out),
+        "--keep-extracted", "--no-heap-check", "--progress", "lines",
+        "--gpu", "g18p", "--out", str(work / "handoff-not-built.ipa"),
     ]
     parsed = module.parse_args(argv)
     try:
@@ -126,7 +123,7 @@ def run_preparation(args):
     require(bool(extracts), f"no extracted RomFS image under {work / 'extract'}")
     patched = sorted(work.glob("patched_*"))
     require(bool(patched), "rewritten module directory was not produced")
-    require(any(p.glob("main.patched.bin") for p in patched), "rewritten main module is missing")
+    require(any(any(p.glob("main.patched.bin")) for p in patched), "rewritten main module is missing")
     require((work / "shader/pkg").is_dir(), "offline shader package was not produced")
 
     result = {
@@ -135,7 +132,7 @@ def run_preparation(args):
         "engine_pin": (args.nx2apple_root / ".upstream-ref").read_text().strip(),
         "nx2apple_tag": "v1.3.0-rc10", "work_dir": "work",
         "prepared_stages": ["nup_scan", "romfs_extraction", "module_rewrite", "offline_shader_split"],
-        "deferred_stages": ["ios_metal_shader_compile", "pipeline_archive", "xcode_framework_build", "shared_shell_export"],
+        "deferred_stages": ["ios_metal_shader_compile", "pipeline_archive", "game_framework_build", "shared_shell_build"],
         "romfs_images": [{"path": str(p.relative_to(work)), "size": p.stat().st_size} for p in extracts],
     }
     work.mkdir(parents=True, exist_ok=True)
