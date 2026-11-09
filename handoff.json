@@ -1,12 +1,12 @@
 {
   "format": 1,
-  "request_id": "cbad65b2-de29-4b49-a2fd-13efcd914892",
-  "drive_file_id": "1gHPtYZkMV2TXM1hb4HyRcx5xf-jzHLSA",
-  "archive_sha256": "3338fe27cb3eb0ccef5de33ea20ea00d7f90706d60ca68b291dc7db87b18c9df",
-  "archive_size": 18205375439,
+  "request_id": "b5b9fb7b-96aa-4856-b455-5b5170e6217f",
+  "drive_file_id": "1IdsHgxTgQ5-3yK-2g-QaRrFPkakjKfaH",
+  "archive_sha256": "f28afe6834bd8817b3a3b1904436ee263fdf56149024b9d0ec8fac5e09f10a16",
+  "archive_size": 18573019813,
   "title_id": "040074A01BF12000",
   "package_version": "v458752",
   "engine_pin": "c78d7375bea9c862679ec294a6a69ff3e22e18d0",
   "nx2apple_tag": "v1.3.0-rc10",
-  "created_utc": "2026-11-08T22:23:16.815384+00:00"
+  "created_utc": "2026-11-09T02:36:31.186346+00:00"
 }
