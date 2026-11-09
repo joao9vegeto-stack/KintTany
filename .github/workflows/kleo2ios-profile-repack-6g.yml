@@ -1,14 +1,7 @@
-name: Kleo2iOS iOS26 6G guest heap A-B repack
+name: Kleo2iOS experimental 6G Bananza reservation (manual only)
 
 on:
-  push:
-    branches:
-      - Kleo2iOS
-    paths:
-      - profile-repack-6g.json
-      - scripts/repack_ipa_ios26_6g.py
-      - scripts/symbolicate_ios_crash.py
-      - .github/workflows/kleo2ios-profile-repack-6g.yml
+  workflow_dispatch:
 
 permissions:
   contents: read
