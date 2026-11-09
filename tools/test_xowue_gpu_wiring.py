@@ -140,6 +140,11 @@ assert "XDCollectPipelines(&localState)" in vulkan
 assert "xowue_xenos_commit_resolved_rgba" in engine
 assert "xowue_xenos_commit_resolved_rgba" in color
 assert "VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL" in color
+assert "std::array<uint32_t, 6> vdSwapFetch" in engine
+assert "g_xenosFrontend.vdSwapFetch = fetchWords" in engine
+assert "fetchFromVdSwap = g_xenosFrontend.vdSwapFetchValid" in engine
+assert "XOWUE_GPU_GUEST_RESOLVE_REJECT" in engine
+assert "XENOS_GPU_GUEST_RESOLVE_COMMITTED" in engine
 assert "g_xd_guest_resolves_count=0" in color
 assert "xenosTiledOffset2D(x,y,alignedPitch,2u)" in engine
 print("PASS: native guest EDRAM GPU writeback linked to Xenos tiled original framebuffer")
@@ -383,6 +388,8 @@ assert "decodeXenosSwapTexture" not in vd
 assert "xowue_vulkan_backend_guest_frame_rgba" not in vd
 assert "PPC_STORE_U32(commandBuffer + 4u, kSwapSignature)" in vd
 assert "context.r3.u32 = 0u" in vd
+assert "g_xenosFrontend.vdSwapFetch = fetchWords" in vd
+assert "XOWUE_VDSWAP_FETCH" in vd
 assert "last_guest_swap_count" in vulkan
 assert "guestSwapSerial == state->last_guest_swap_count" in vulkan
 assert "newGuestFrame = guest_frame_ready" in vulkan

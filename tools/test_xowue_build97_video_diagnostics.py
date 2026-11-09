@@ -49,7 +49,7 @@ required = {
     "PPC media instruction words": "B97_MOVIE_PPC_WORD",
     "movie scatter read evidence": "B97_MOVIE_SCATTER",
     "movie close / transition evidence": "B97_MOVIE_CLOSE",
-    "Xenos decode boundary": "decodeXenosSwapTexture(base, frontend.swapFetch.data(),",
+    "Xenos decode boundary": "decodeXenosSwapTexture(base, frameFetch.data(),",
     "Xenos decode failure accounting": "++summary.frameDecodeFailures;",
     "Xenos stale-frame rejection": "XENOS_STALE_GUEST_FRAME: swap_cpu_decode_failed",
     "Xenos decoded-frame commit": "NotifyGuestFrameCommitted()",
@@ -102,7 +102,7 @@ if source.count(scatter_apc_enqueue) != 3:
 else:
     print("PASS: scatter and file-write completions enqueue APC only with a non-null context")
 
-swap_start = source.index("decodeXenosSwapTexture(base, frontend.swapFetch.data(),")
+swap_start = source.index("decodeXenosSwapTexture(base, frameFetch.data(),")
 swap_end = source.index("XENOS_STALE_GUEST_FRAME: swap_cpu_decode_failed", swap_start)
 swap_body = source[swap_start:swap_end]
 if "++frontend.decodedFrames;" not in swap_body or "NotifyGuestFrameCommitted()" not in swap_body:
