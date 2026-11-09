@@ -44,7 +44,8 @@ def main() -> None:
     linux_prep = json.loads((work / "link2ios-linux-prep.json").read_text(encoding="utf-8"))
     if linux_prep.get("engine_pin") != pin:
         raise SystemExit("Colab's workspace was prepared with another engine commit.")
-    if not nsp_dir.is_dir() or not keys.is_file() or not list(nsp_dir.glob("*.nsp")):
+    has_nsp = nsp_dir.is_dir() and any(p.is_file() and p.suffix.lower() == ".nsp" for p in nsp_dir.iterdir())
+    if not nsp_dir.is_dir() or not keys.is_file() or not has_nsp:
         raise SystemExit("Original NSP files or prod.keys are missing from the verified Drive download.")
 
     engine = nx / "engine"

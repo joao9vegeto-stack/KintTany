@@ -138,7 +138,7 @@ def main() -> None:
             fail(f"unexpected AOC image name: {filename}")
         download_drive_file(api, item, aoc_dir / filename)
 
-    if not list(nsp_dir.glob("*.nsp")):
+    if not any(p.is_file() and p.suffix.lower() == ".nsp" for p in nsp_dir.iterdir()):
         fail("no NSP source files reached the macOS runner.")
     prepared = {
         "project": "Link2iOS",

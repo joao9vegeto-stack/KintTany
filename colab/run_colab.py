@@ -140,6 +140,7 @@ def build_work_archive(work: Path, destination: Path) -> None:
     command = [
         "tar", "-C", str(work),
         "--exclude=./build/nsp",
+        "--exclude=./nsp",
         "--exclude=./tools",
         "--exclude=./tmp",
         "--exclude=./aoc/*.img",
@@ -164,7 +165,10 @@ def build_work_archive(work: Path, destination: Path) -> None:
 def install_linux_dependencies(root: Path) -> None:
     print("[Link2iOS] Installing Linux build dependencies...")
     subprocess.run(["apt-get", "update", "-qq"], check=True)
-    subprocess.run(["apt-get", "install", "-y", "-qq", "zstd", "git", "curl"], check=True)
+    subprocess.run([
+        "apt-get", "install", "-y", "-qq", "zstd", "git", "curl",
+        "build-essential", "cmake", "ninja-build", "pkg-config", "libssl-dev",
+    ], check=True)
     subprocess.run([
         sys.executable, "-m", "pip", "install", "-q", "--upgrade",
         "lz4", "capstone>=5,<6", "fonttools", "zbic", "backports.zstd",
@@ -182,6 +186,11 @@ def install_linux_dependencies(root: Path) -> None:
 
 
 def prepare(args) -> None:
+    # Install the Drive client before the first API call in a fresh Colab runtime.
+    subprocess.run([
+        sys.executable, "-m", "pip", "install", "-q",
+        "google-api-python-client", "google-auth", "requests",
+    ], check=True)
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from prepare_linux import run_preparation
 
