@@ -1,21 +1,12 @@
 #!/usr/bin/env python3
 """Finish the Switch game framework and build the Route C Shared shell on macOS."""
 from __future__ import annotations
-import argparse, json, os, shutil, subprocess, sys, zipfile
+import argparse, json, os, shutil, subprocess, sys
 from pathlib import Path
 
 def run(cmd, cwd=None, env=None):
     print("+", " ".join(map(str, cmd)), flush=True)
     subprocess.run(list(map(str, cmd)), cwd=cwd, env=env, check=True)
-
-def make_zip(source_root, archive_path, top_level):
-    # ZIP_STORED + ZIP64 keeps the large RomFS uncompressed and makes the archive
-    # directly extractable in the iOS Files app. The shell can then bookmark romfs.img.
-    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as zf:
-        root = source_root / top_level
-        for path in sorted(root.rglob("*")):
-            if path.is_file():
-                zf.write(path, path.relative_to(source_root).as_posix())
 
 def main():
     ap = argparse.ArgumentParser()
@@ -24,6 +15,8 @@ def main():
     ap.add_argument("--nup", type=Path, required=True)
     ap.add_argument("--work-dir", type=Path, required=True)
     ap.add_argument("--output", type=Path, required=True)
+    ap.add_argument("--drive-handoff-id", required=True,
+                    help="Google Drive ID of the existing work-only archive containing RomFS.img.")
     args = ap.parse_args()
     if sys.platform != "darwin":
         raise SystemExit("The Shared App finalizer must run on macOS.")
@@ -66,15 +59,8 @@ def main():
     if not romfs.is_file():
         raise SystemExit(f"Separate RomFS image not found: {romfs}")
 
-    data_root = out / "game-data" / "games" / title_id
-    shutil.rmtree(data_root, ignore_errors=True)
-    data_root.mkdir(parents=True)
-    shutil.copy2(romfs, data_root / "romfs.img")
-    aoc_src = work / "aoc"
-    if aoc_src.is_dir() and any(aoc_src.iterdir()):
-        shutil.copytree(aoc_src, data_root / "aoc", dirs_exist_ok=True)
-    data_archive = out / "game-data.zip"
-    make_zip(out / "game-data", data_archive, "games")
+    # RomFS is already stored in the verified Google Drive work-only handoff archive.
+    # Do not duplicate this multi-GB image on the runner or create a second ZIP copy.
 
     shell_dir = out / "shell-project"
     shutil.rmtree(shell_dir, ignore_errors=True)
@@ -130,7 +116,17 @@ def main():
         "display_version": manifest.get("display_version"), "package_version": package_version,
         "engine_pin": prep["engine_pin"], "nx2apple_tag": prep["nx2apple_tag"],
         "ipa": str(final_ipa), "ipa_size": final_ipa.stat().st_size,
-        "game_data": str(data_archive), "game_data_size": data_archive.stat().st_size,
+        "game_data": {
+            "storage": "Google Drive work-only handoff archive",
+            "drive_file_id": args.drive_handoff_id,
+            "drive_url": f"https://drive.google.com/file/d/{args.drive_handoff_id}/view",
+            "archive_format": "tar.zst",
+            "archive_members": {
+                "romfs": f"work/extract/{package_version}/RomFS.img",
+                "aoc": "work/aoc/",
+            },
+            "romfs_size": romfs.stat().st_size,
+        },
         "framework": framework_name,
     }
     (out / "build-report.json").write_text(json.dumps(report, indent=2) + "\n")

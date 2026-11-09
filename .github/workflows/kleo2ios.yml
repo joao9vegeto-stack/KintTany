@@ -138,15 +138,15 @@ jobs:
             --engine-root "$NX/engine" \
             --nup "$RUNNER_TEMP/handoff/game.nup" \
             --work-dir "$RUNNER_TEMP/handoff/work" \
-            --output "$RUNNER_TEMP/kleo-output"
+            --output "$RUNNER_TEMP/kleo-output" \
+            --drive-handoff-id "${{ steps.request.outputs.file_id }}"
 
-      - name: Upload installable Shared IPA and separate game data
+      - name: Upload installable Shared IPA and build report
         uses: actions/upload-artifact@v4
         with:
           name: Kleo2iOS-${{ github.run_number }}
           path: |
             ${{ runner.temp }}/kleo-output/NX2Apple.ipa
-            ${{ runner.temp }}/kleo-output/game-data.zip
             ${{ runner.temp }}/kleo-output/build-report.json
           if-no-files-found: error
           retention-days: 7
