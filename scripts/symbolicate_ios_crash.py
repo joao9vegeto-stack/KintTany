@@ -139,7 +139,7 @@ def direct_callers(fp: BinaryIO, section: dict, targets: set[int], md) -> list[s
     code = fp.read(section["size"])
     found: dict[int, list[int]] = {target: [] for target in targets}
     for ins in md.disasm(code, 0):
-        if ins.mnemonic != "bl" or not ins.operands:
+        if ins.mnemonic != "bl":
             continue
         # Parse Capstone's printed immediate because operand type/imm representation
         # varies between Capstone builds; the encoded BL target is printed as "#0x...".
@@ -243,6 +243,9 @@ def main() -> int:
             ("main", 0x489680, "resource/object lookup helper", 0x80, 0x180),
             ("main", 0x1B7B130, "memory helper thunk used during owner setup", 0x20, 0x80),
             ("main", 0x1761C0, "region allocator/registrar called after clearing auxiliary structure +0x10 (full routine)", 0x100, 0x1900),
+            ("main", 0x178500, "backing-region allocator whose null return leaves auxiliary +0x10 unset", 0x100, 0x1400),
+            ("main", 0x28BA40, "allocator used to create region record", 0x100, 0x500),
+            ("main", 0x17A2E0, "region record registration helper", 0x100, 0x500),
             ("main", 0x187E1A0, "memory-region mapping helper called by region allocator", 0x100, 0x500),
             ("main", 0x1592600, "memory teardown/helper called from allocator early-exit path", 0x80, 0x200),
             ("main", 0x51D6A0, "resource-region helper called from allocator retry path", 0x80, 0x280),
@@ -297,7 +300,7 @@ def main() -> int:
                 ))
             if main_text:
                 report.extend(direct_callers(
-                    fp, main_text, {0x1761C0, 0x1A0860, 0x1B7AE50, 0x4A9918, 0x48A65C}, md
+                    fp, main_text, {0x1761C0, 0x178500, 0x28BA40, 0x17A2E0, 0x1A0860, 0x1B7AE50, 0x4A9918, 0x48A65C}, md
                 ))
     except Exception as exc:
         # Optional audit only: do not fail the profile repack if one Mach-O variant cannot be decoded.
