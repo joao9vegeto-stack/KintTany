@@ -155,6 +155,16 @@ def main() -> None:
 
     profile_rel, memory_changes = patch_runtime_profile(framework, manifest)
 
+    # iOS-native diagnostic switch: logs SetHeapSize and guest memory/alias SVCs.
+    # Documents/env.txt still takes precedence if the user has an explicit override.
+    diagnostic_env = app / "dm" / "env.txt"
+    diagnostic_env.parent.mkdir(parents=True, exist_ok=True)
+    existing_env = diagnostic_env.read_text(encoding="utf-8") if diagnostic_env.is_file() else ""
+    env_lines = [line for line in existing_env.splitlines() if line.strip()]
+    if not any(line.partition("=")[0].strip() == "DM_SVC" for line in env_lines):
+        env_lines.append("DM_SVC=1")
+    diagnostic_env.write_text("\\n".join(env_lines) + "\\n", encoding="utf-8")
+
     pso_dir = framework / "pso"
     if not pso_dir.is_dir():
         raise SystemExit("The expected PSO folder disappeared during IPA extraction.")
@@ -233,6 +243,12 @@ def main() -> None:
         "changes": memory_changes,
         "shader_rebuild": False,
         "framework_rebuild": False,
+    }
+    report["diagnostics"] = {
+        "bundled_env_file": "DmShell.app/dm/env.txt",
+        "DM_SVC": "1",
+        "purpose": "Log SetHeapSize, MapMemory and Map/UnmapPhysicalMemory on the iPhone.",
+        "shader_rebuild": False,
     }
     report["repackaged_from_run_id"] = args.source_run_id
     report["repackaged_at_utc"] = datetime.now(timezone.utc).isoformat()
