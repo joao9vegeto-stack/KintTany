@@ -100,7 +100,9 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/verify_handoff.py --archive "$RUNNER_TEMP/handoff.tar.zst" \
-            --destination "$RUNNER_TEMP/handoff" --sha256 "${{ steps.request.outputs.sha256 }}"
+            --destination "$RUNNER_TEMP/handoff" --sha256 "${{ steps.request.outputs.sha256 }}" \
+            --nup-size "${{ steps.request.outputs.nup_size }}" \
+            --nup-sha256 "${{ steps.request.outputs.nup_sha256 }}"
 
       - name: Release compressed handoff archive and report disk space
         shell: bash
