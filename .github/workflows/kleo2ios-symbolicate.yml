@@ -6,6 +6,7 @@ on:
       - Kleo2iOS
     paths:
       - symbolicate-request.json
+      - scripts/symbolicate_ios_crash.py
       - .github/workflows/kleo2ios-symbolicate.yml
 
 permissions:
