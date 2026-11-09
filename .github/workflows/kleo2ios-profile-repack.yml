@@ -68,6 +68,11 @@ jobs:
           echo "Using original IPA from workflow run ${{ steps.request.outputs.source_run_id }}"
           du -h "$RUNNER_TEMP/source/NX2Apple.ipa"
 
+      - name: Select packer Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Sync exact NX2Apple packer
         shell: bash
         run: |

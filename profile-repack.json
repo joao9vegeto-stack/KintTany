@@ -5,5 +5,5 @@
   "mem_reserve": "0x140000000",
   "app_pool": "0x110000000",
   "reason": "5 GiB total guest reservation for iOS without extended-virtual-addressing; 256 MiB front + 256 MiB alias + 256 MiB stack + 4.25 GiB app pool. Preserve MSL libraries; no shader rebuild.",
-  "request_revision": "ios26-5gb-total-reservation-v3"
+  "request_revision": "ios26-5gb-total-reservation-v4-python312"
 }
