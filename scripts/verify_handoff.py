@@ -52,14 +52,16 @@ def main():
     manifest = json.loads((args.destination / "manifest.json").read_text())
     if manifest.get("format") != 1:
         raise SystemExit("Unsupported handoff archive format")
-    if not (args.destination / "game.nup").is_file():
-        raise SystemExit("Handoff archive has no game.nup")
     prep_path = args.destination / "work" / "kleo-linux-prep.json"
     if not prep_path.is_file():
         raise SystemExit("Handoff archive has no Linux preparation output")
     prep = json.loads(prep_path.read_text())
     if manifest.get("title_id") != prep.get("title_id") or manifest.get("engine_pin") != prep.get("engine_pin"):
         raise SystemExit("Archive manifest and Linux preparation metadata disagree")
+    if int(manifest.get("nup_size", 0)) <= 0 or len(manifest.get("nup_sha256", "")) != 64:
+        raise SystemExit("Archive manifest has no valid separate NUP size/SHA-256")
+    if not manifest.get("nup_name", "").lower().endswith(".nup"):
+        raise SystemExit("Archive manifest has no valid NUP filename")
     print(json.dumps(manifest, indent=2))
 
 if __name__ == "__main__":
