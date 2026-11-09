@@ -41,9 +41,13 @@ def main():
     shutil.rmtree(framework_root, ignore_errors=True)
     framework_root.mkdir(parents=True)
     builder = engine / "scripts" / "build_ipa_from_nsp.py"
+    # No offline Metal 4 archive: iOS 26 must build its pipeline bases on device.
+    # Keep pulling shader libraries because the device may use them for Metal 4 prebuild/hybrid pipelines.
+    builder_env = os.environ.copy()
+    builder_env["IOS_PULL"] = "1"
     run([sys.executable, str(builder), str(nup), "--shell-framework", str(framework_root),
          "--work-dir", str(work), "--keep-extracted", "--progress", "lines",
-         "--gpu", "none"], cwd=nx, env=os.environ.copy())
+         "--gpu", "none"], cwd=nx, env=builder_env)
 
     framework_name = f"DmGame{title_id}.framework"
     framework = framework_root / framework_name
