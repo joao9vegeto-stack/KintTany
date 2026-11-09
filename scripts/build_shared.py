@@ -43,10 +43,17 @@ def main():
     builder = engine / "scripts" / "build_ipa_from_nsp.py"
     run([sys.executable, str(builder), str(nup), "--shell-framework", str(framework_root),
          "--work-dir", str(work), "--keep-extracted", "--progress", "lines",
-         "--gpu", "g18p"], cwd=nx, env=os.environ.copy())
+         "--gpu", "none"], cwd=nx, env=os.environ.copy())
 
     framework_name = f"DmGame{title_id}.framework"
     framework = framework_root / framework_name
+    # iOS 26 cannot open the Metal 4 pipeline archive produced by the iOS 27 SDK.
+    # Keep the regular Metal shader libraries, but require the offline PSO archive to be absent.
+    pso_dir = framework / "pso"
+    incompatible_pso = sorted(pso_dir.rglob("*.mtl4a")) if pso_dir.is_dir() else []
+    if incompatible_pso:
+        raise SystemExit("iOS 26-compatible build must not contain Metal 4 PSO archives: " +
+                         ", ".join(str(p.relative_to(framework)) for p in incompatible_pso))
     manifest_path = framework / "game.manifest.json"
     if not manifest_path.is_file():
         raise SystemExit(f"NXNative did not produce {framework_name}/game.manifest.json")
@@ -110,6 +117,10 @@ def main():
         required = ("Payload/DmShell.app/DmShell", fw_exe,
                     f"Payload/DmShell.app/Frameworks/{framework_name}/game.manifest.json")
         missing = [p for p in required if p not in entries]
+        pso_entries = sorted(p for p in entries
+                             if f"/{framework_name}/pso/" in p and p.endswith(".mtl4a"))
+        if pso_entries:
+            raise SystemExit("Final IPA contains unsupported Metal 4 PSO archives: " + ", ".join(pso_entries))
         if missing:
             raise SystemExit("Final Shared IPA failed structural validation: " + ", ".join(missing))
 
@@ -129,6 +140,11 @@ def main():
             "contents": [f"games/{title_id}/romfs.img", f"games/{title_id}/aoc/"],
         },
         "framework": framework_name,
+        "pipeline_archive": {
+            "included": False,
+            "gpu": "none",
+            "reason": "Disabled for iOS 26; pipeline bases are prepared by the device at first use.",
+        },
     }
     (out / "build-report.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
