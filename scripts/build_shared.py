@@ -8,6 +8,46 @@ def run(cmd, cwd=None, env=None):
     print("+", " ".join(map(str, cmd)), flush=True)
     subprocess.run(list(map(str, cmd)), cwd=cwd, env=env, check=True)
 
+def apply_ios26_memory_profile(engine: Path, title_id: str) -> dict:
+    """Experimental no-Extended-VA profile for iOS 26 sideloading."""
+    if title_id != "040074A01BF12000":
+        raise SystemExit(f"Refusing the iOS 26 memory override for unexpected title {title_id}.")
+    profile = engine / "dm" / "games" / title_id / "game.tsv"
+    if not profile.is_file():
+        raise SystemExit(f"Bananza game profile is missing: {profile}")
+    text = profile.read_text(encoding="utf-8")
+    expected = {
+        "mem_reserve": "0x270000000",
+        "app_pool": "0x240000000",
+    }
+    values = {}
+    for key, original in expected.items():
+        import re
+        pattern = rf"(?m)^{key}[\\t ]+{re.escape(original)}[\\t ]*$"
+        if len(re.findall(pattern, text)) != 1:
+            raise SystemExit(
+                f"Unexpected {key} in Bananza profile; expected exactly one {original}. "
+                "Refusing to overwrite an upstream profile change."
+            )
+    text = re.sub(r"(?m)^mem_reserve[\\t ]+0x270000000[\\t ]*$",
+                  "mem_reserve\\t0x180000000", text)
+    text = re.sub(r"(?m)^app_pool[\\t ]+0x240000000[\\t ]*$",
+                  "app_pool\\t0x150000000", text)
+    profile.write_text(text, encoding="utf-8")
+    # 6 GiB reservation = 256 MiB front + 5.25 GiB heap + 256 MiB stack + 256 MiB alias.
+    result = {
+        "mode": "experimental_ios26_no_extended_virtual_addressing",
+        "mem_reserve": "0x180000000",
+        "app_pool": "0x150000000",
+        "mem_alias": "0x10000000",
+        "mem_stack": "0x10000000",
+        "heap_capacity": "0x150000000",
+        "note": "The 9 GiB Switch 2 pool is reduced to 5.25 GiB for this compatibility experiment; gameplay may still fail if Bananza needs more.",
+    }
+    print("[memory] applied experimental iOS 26 profile:", json.dumps(result), flush=True)
+    return result
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--nx2apple-root", type=Path, required=True)
@@ -36,6 +76,8 @@ def main():
     title_id = str(prep.get("title_id", "")).upper()
     if len(title_id) != 16:
         raise SystemExit("Handoff manifest has no valid title ID.")
+
+    memory_profile = apply_ios26_memory_profile(engine, title_id)
 
     framework_root = out / "frameworks"
     shutil.rmtree(framework_root, ignore_errors=True)
@@ -143,6 +185,7 @@ def main():
             "romfs_size": romfs.stat().st_size,
             "contents": [f"games/{title_id}/romfs.img", f"games/{title_id}/aoc/"],
         },
+        "memory_profile": memory_profile,
         "framework": framework_name,
         "pipeline_archive": {
             "included": False,
