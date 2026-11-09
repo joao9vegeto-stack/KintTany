@@ -4,5 +4,6 @@
   "title_id": "040074A01BF12000",
   "framework_binary": "Payload/DmShell.app/Frameworks/DmGame040074A01BF12000.framework/DmGame040074A01BF12000",
   "framework_profile": "Payload/DmShell.app/Frameworks/DmGame040074A01BF12000.framework/profile.tsv",
-  "reason": "Disassemble the exact SIGSEGV PC/LR from log.txt using the already-built IPA; no game rebuild, shader rebuild, or profile mutation."
+  "reason": "Disassemble the exact SIGSEGV PC/LR from log.txt using the already-built IPA; no game rebuild, shader rebuild, or profile mutation.",
+  "request_revision": "arm64-crash-disassembly-direct-ipa-v2"
 }
