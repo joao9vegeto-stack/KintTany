@@ -73,7 +73,7 @@ jobs:
           git clone --depth 1 --branch v1.3.0-rc10 https://github.com/LNPANDY/NX2Apple.git "$RUNNER_TEMP/NX2Apple"
           cd "$RUNNER_TEMP/NX2Apple"
           python3 tools/engine.py sync
-          test "$(cat engine/.upstream-ref)" = "c78d7375bea9c862679ec294a6a69ff3e22e18d0"
+          test "$(cat .upstream-ref)" = "c78d7375bea9c862679ec294a6a69ff3e22e18d0"
           python3 -m pip install --upgrade pip
           python3 -m pip install lz4 backports.zstd
 
