@@ -39,7 +39,6 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -d "$DEVELOPER_DIR"
           xcodebuild -version
-          codesign --version
 
       - name: Download the successful build #7 artifact
         uses: actions/download-artifact@v4
