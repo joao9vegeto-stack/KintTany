@@ -159,6 +159,44 @@ def main() -> int:
                 )
             else:
                 report.append(f"MISSING SECTION {key[0]},{key[1]}")
+        # The constructor's vtable lives in main's writable embedded image, not x0.
+        main_text = sections.get(("__TEXT", "__dmmainx0"))
+        main_data = sections.get(("__DMmainW", "__img"))
+        if main_text and main_data:
+            module_data_off = main_data["address"] - main_text["address"]
+            report.append(
+                f"Section __DMmainW,__img: vmaddr=0x{main_data['address']:x} "
+                f"size=0x{main_data['size']:x} fileoff=0x{main_data['file_offset']:x} "
+                f"module_offset=0x{module_data_off:x}"
+            )
+            vtable_off = 0x2426EE0
+            local = vtable_off - module_data_off
+            if 0 <= local and local + 0x80 <= main_data["size"]:
+                with args.macho.open("rb") as data_fp:
+                    data_fp.seek(main_data["file_offset"] + local)
+                    raw = data_fp.read(0x80)
+                report.append(f"main vtable data main+0x{vtable_off:x} (raw, pre-relocation):")
+                for off in range(0, len(raw), 8):
+                    value = struct.unpack_from("<Q", raw, off)[0]
+                    report.append(f"  +0x{off:02x}: 0x{value:016x}")
+                # These are the virtual slots called by main+0x48a584 / +0x48a5d4.
+                for slot in (0x28, 0x40):
+                    value = struct.unpack_from("<Q", raw, slot)[0]
+                    report.append(f"  vtable slot +0x{slot:x}: raw target 0x{value:x}")
+                    if 0 < value < main_text["size"]:
+                        with args.macho.open("rb") as code_fp:
+                            report.extend(disassemble_window(
+                                code_fp, main_text, "main", value, md,
+                                before=0x40, after=0x100,
+                                label=f"vtable slot +0x{slot:x} target",
+                            ))
+            else:
+                report.append(
+                    f"vtable main+0x{vtable_off:x} is outside __DMmainW,__img "
+                    f"(local offset 0x{local:x})"
+                )
+        else:
+            report.append("MISSING MAIN DATA SECTION __DMmainW,__img or __TEXT,__dmmainx0")
         sites = [
             # Trace the caller that constructed the null memcpy destination.
             ("main", 0x48A390, "caller function around null destination", 0x180, 0x280),
