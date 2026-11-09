@@ -23,16 +23,16 @@ def apply_ios26_memory_profile(engine: Path, title_id: str) -> dict:
     values = {}
     for key, original in expected.items():
         import re
-        pattern = rf"(?m)^{key}[\\t ]+{re.escape(original)}[\\t ]*$"
+        pattern = rf"(?m)^{key}[\t ]+{re.escape(original)}[\t ]*$"
         if len(re.findall(pattern, text)) != 1:
             raise SystemExit(
                 f"Unexpected {key} in Bananza profile; expected exactly one {original}. "
                 "Refusing to overwrite an upstream profile change."
             )
-    text = re.sub(r"(?m)^mem_reserve[\\t ]+0x270000000[\\t ]*$",
-                  "mem_reserve\\t0x180000000", text)
-    text = re.sub(r"(?m)^app_pool[\\t ]+0x240000000[\\t ]*$",
-                  "app_pool\\t0x150000000", text)
+    text = re.sub(r"(?m)^mem_reserve[\t ]+0x270000000[\t ]*$",
+                  "mem_reserve\t0x180000000", text)
+    text = re.sub(r"(?m)^app_pool[\t ]+0x240000000[\t ]*$",
+                  "app_pool\t0x150000000", text)
     profile.write_text(text, encoding="utf-8")
     # 6 GiB reservation = 256 MiB front + 5.25 GiB heap + 256 MiB stack + 256 MiB alias.
     result = {
