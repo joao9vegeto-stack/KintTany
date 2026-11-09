@@ -1,0 +1,83 @@
+name: Kleo2iOS iOS 26 Repack
+
+on:
+  push:
+    branches:
+      - Kleo2iOS
+    paths:
+      - scripts/repack_ipa_ios26.py
+      - .github/workflows/kleo2ios-repack.yml
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: kleo2ios-repack-\${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repack-ios26:
+    if: github.ref == 'refs/heads/Kleo2iOS' && github.event_name == 'push'
+    runs-on: xcode-27
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+    steps:
+      - name: Checkout Kleo2iOS only
+        uses: actions/checkout@v4
+        with:
+          ref: \${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify branch and Apple signing tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/Kleo2iOS"
+          test "$GITHUB_REF_NAME" = "Kleo2iOS"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version
+          codesign --version
+
+      - name: Download the successful build #7 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Kleo2iOS-7
+          github-token: \${{ github.token }}
+          run-id: 42571125251
+          path: \${{ runner.temp }}/source-artifact
+
+      - name: Sync the pinned NX2Apple IPA packer
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v1.3.0-rc10 https://github.com/LNPANDY/NX2Apple.git "$RUNNER_TEMP/NX2Apple"
+          cd "$RUNNER_TEMP/NX2Apple"
+          python3 tools/engine.py sync
+          test "$(cat .upstream-ref)" = "c78d7375bea9c862679ec294a6a69ff3e22e18d0"
+          test -f engine/dm/ios/tools/pack_ipa.py
+
+      - name: Remove only the incompatible PSO archive and re-sign
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$RUNNER_TEMP/source-artifact/NX2Apple.ipa"
+          test -s "$RUNNER_TEMP/source-artifact/build-report.json"
+          python3 scripts/repack_ipa_ios26.py \
+            --ipa "$RUNNER_TEMP/source-artifact/NX2Apple.ipa" \
+            --report "$RUNNER_TEMP/source-artifact/build-report.json" \
+            --engine-root "$RUNNER_TEMP/NX2Apple/engine" \
+            --output-dir "$RUNNER_TEMP/kleo-ios26-output" \
+            --source-run-id 42571125251
+
+      - name: Upload the iOS 26-compatible Shared IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kleo2iOS-iOS26-fixed
+          path: |
+            \${{ runner.temp }}/kleo-ios26-output/NX2Apple-iOS26.ipa
+            \${{ runner.temp }}/kleo-ios26-output/build-report.json
+          if-no-files-found: error
+          retention-days: 7
