@@ -388,7 +388,15 @@ assert "decodeXenosSwapTexture" not in vd
 assert "xowue_vulkan_backend_guest_frame_rgba" not in vd
 assert "PPC_STORE_U32(commandBuffer + 4u, kSwapSignature)" in vd
 assert "context.r3.u32 = 0u" in vd
-assert "g_xenosFrontend.vdSwapFetch = fetchWords" in vd
+assert "g_xenosFrontend.vdSwapFetch = physicalFetchWords" in vd
+assert "physicalFetchWords[1] = (physicalFetchWords[1] & 0x00000FFFu)" in vd
+assert "kXenosShaderConstantFetchRegister" in vd
+assert "PPC_STORE_U32(commandBuffer + 0u, kFetchPacketHeader)" in vd
+assert "for (uint32_t i = 0u; i < physicalFetchWords.size(); ++i)" in vd
+assert "commandBuffer + (i + 1u) * 4u" in vd
+assert "PPC_STORE_U32(commandBuffer + 28u, kSwapPacketHeader)" in vd
+assert "PPC_STORE_U32(commandBuffer + 32u, kSwapSignature)" in vd
+assert vd.index("PPC_STORE_U32(commandBuffer + 0u, kFetchPacketHeader)") < vd.index("PPC_STORE_U32(commandBuffer + 28u, kSwapPacketHeader)")
 assert "XOWUE_VDSWAP_FETCH" in vd
 assert "last_guest_swap_count" in vulkan
 assert "guestSwapSerial == state->last_guest_swap_count" in vulkan

@@ -8367,16 +8367,27 @@ void xowue_VdSwap(PPCContext &context, uint8_t *base) {
     const uint32_t fetchHeight = ((fetchWords[2] >> 13u) & 0x1FFFu) + 1u;
     const uint32_t width = fetchWidth > 1u ? fetchWidth : requestedWidth;
     const uint32_t height = fetchHeight > 1u ? fetchHeight : requestedHeight;
-    const uint32_t frontbufferPhysicalAddress =
+    // Xenia's VdSwap contract treats fetchWords as the D3D9 texture-header
+    // descriptor, translates its base through the guest physical mapping, then
+    // emits that descriptor to CP fetch register 0 before PM4_XE_SWAP.
+    const uint32_t fetchVirtualAddress =
         ((fetchWords[1] >> 12u) & 0xFFFFFu) << 12u;
-    if (frontbufferVirtualAddress != frontbufferPhysicalAddress)
-        recordRuntimeTrace("VdSwap frontbuffer pointer differs from fetch base; fetch physical address retained");
+    // XOWUE's guest MmGetPhysicalAddress mapping is identity-mapped for the
+    // physical heap used by this title, matching the address in the frontbuffer
+    // pointer. Keep the descriptor base synchronized with that physical address.
+    const uint32_t frontbufferPhysicalAddress = frontbufferVirtualAddress;
+    if (frontbufferVirtualAddress != fetchVirtualAddress)
+        recordRuntimeTrace("VdSwap frontbuffer pointer differs from fetch base; translated pointer address retained");
+    std::array<uint32_t, 6> physicalFetchWords = fetchWords;
+    physicalFetchWords[1] = (physicalFetchWords[1] & 0x00000FFFu) |
+        (((frontbufferPhysicalAddress >> 12u) & 0x000FFFFFu) << 12u);
 
-    // Capture the exact descriptor supplied by the title. It is not the same
-    // state as CP shader fetch constants, which describe draw input buffers.
+    // Keep the exact physical descriptor for resolve writeback and the CPU
+    // fallback. The same six words are also written into the real CP stream
+    // below, so the native Xenos command processor sees the same fetch state.
     {
         std::lock_guard<std::mutex> lock(g_xenosMutex);
-        g_xenosFrontend.vdSwapFetch = fetchWords;
+        g_xenosFrontend.vdSwapFetch = physicalFetchWords;
         g_xenosFrontend.vdSwapFetchValid = true;
     }
     static std::atomic<uint32_t> vdSwapFetchTraceCount{0u};
@@ -8384,19 +8395,28 @@ void xowue_VdSwap(PPCContext &context, uint8_t *base) {
         char fetchEvent[320];
         std::snprintf(fetchEvent, sizeof(fetchEvent),
             "XOWUE_VDSWAP_FETCH dest=0x%08X size=%ux%u words=%08X,%08X,%08X,%08X,%08X,%08X",
-            frontbufferPhysicalAddress, width, height, fetchWords[0], fetchWords[1],
-            fetchWords[2], fetchWords[3], fetchWords[4], fetchWords[5]);
+            frontbufferPhysicalAddress, width, height, physicalFetchWords[0], physicalFetchWords[1],
+            physicalFetchWords[2], physicalFetchWords[3], physicalFetchWords[4], physicalFetchWords[5]);
         recordRuntimeTrace(fetchEvent);
     }
 
+    constexpr uint32_t kFetchPacketHeader =
+        ((6u - 1u) << 16u) | kXenosShaderConstantFetchRegister;
+    constexpr uint32_t kSwapPacketHeader =
+        (3u << 30u) | (3u << 16u) | (kXenosPm4SwapOpcode << 8u);
     for (uint32_t i = 0u; i < kReservedDwords; ++i)
         PPC_STORE_U32(commandBuffer + i * 4u, kType2Nop);
-    PPC_STORE_U32(commandBuffer + 0u,
-        (3u << 30u) | (3u << 16u) | (kXenosPm4SwapOpcode << 8u));
-    PPC_STORE_U32(commandBuffer + 4u, kSwapSignature);
-    PPC_STORE_U32(commandBuffer + 8u, frontbufferPhysicalAddress);
-    PPC_STORE_U32(commandBuffer + 12u, width);
-    PPC_STORE_U32(commandBuffer + 16u, height);
+
+    // Match Xenia VdSwap_entry: write the six-dword frontbuffer texture fetch
+    // descriptor to XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0, then issue XE_SWAP.
+    PPC_STORE_U32(commandBuffer + 0u, kFetchPacketHeader);
+    for (uint32_t i = 0u; i < physicalFetchWords.size(); ++i)
+        PPC_STORE_U32(commandBuffer + (i + 1u) * 4u, physicalFetchWords[i]);
+    PPC_STORE_U32(commandBuffer + 28u, kSwapPacketHeader);
+    PPC_STORE_U32(commandBuffer + 32u, kSwapSignature);
+    PPC_STORE_U32(commandBuffer + 36u, frontbufferPhysicalAddress);
+    PPC_STORE_U32(commandBuffer + 40u, width);
+    PPC_STORE_U32(commandBuffer + 44u, height);
 
     uint32_t ringAddress = 0u;
     uint32_t ringSize = 0u;
