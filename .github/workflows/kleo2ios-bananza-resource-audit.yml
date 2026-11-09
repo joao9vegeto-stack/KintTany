@@ -1,0 +1,90 @@
+name: Kleo2iOS Bananza null-resource initializer audit
+
+on:
+  push:
+    branches:
+      - Kleo2iOS
+    paths:
+      - scripts/symbolicate_ios_crash.py
+      - .github/workflows/kleo2ios-bananza-resource-audit.yml
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: kleo2ios-bananza-resource-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  disassemble-resource-initializer:
+    if: github.ref == 'refs/heads/Kleo2iOS' && github.event_name == 'push'
+    runs-on: xcode-27
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout Kleo2iOS only
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Select Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ARM64 disassembler
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade pip
+          python3 -m pip install "capstone>=5,<6"
+
+      - name: Download original Bananza IPA artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run download 42571125251 \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "Kleo2iOS-7" \
+            --dir "$RUNNER_TEMP/source-artifact"
+          IPA=$(find "$RUNNER_TEMP/source-artifact" -type f -name 'NX2Apple.ipa' -print -quit)
+          test -n "$IPA" && test -s "$IPA"
+          echo "SOURCE_IPA=$IPA" >> "$GITHUB_ENV"
+          du -h "$IPA"
+
+      - name: Extract original framework Mach-O
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bananza-audit"
+          ditto -x -k "$SOURCE_IPA" "$RUNNER_TEMP/bananza-audit/extracted"
+          FRAMEWORK="$RUNNER_TEMP/bananza-audit/extracted/Payload/DmShell.app/Frameworks/DmGame040074A01BF12000.framework"
+          test -s "$FRAMEWORK/game.manifest.json"
+          EXECUTABLE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["framework_executable"])' "$FRAMEWORK/game.manifest.json")
+          test -s "$FRAMEWORK/$EXECUTABLE"
+          echo "MACHO=$FRAMEWORK/$EXECUTABLE" >> "$GITHUB_ENV"
+          echo "Embedded executable: $EXECUTABLE"
+
+      - name: Disassemble null-resource initializer and all direct callers
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/symbolicate_ios_crash.py \
+            --macho "$MACHO" \
+            --output "$RUNNER_TEMP/bananza-audit/resource-init-audit.txt"
+          test -s "$RUNNER_TEMP/bananza-audit/resource-init-audit.txt"
+          grep -n -E '1761c0|1a0860|1b7ae50|4a9ee0|direct BL cross-references|SYMBOLICATION_UNAVAILABLE' \
+            "$RUNNER_TEMP/bananza-audit/resource-init-audit.txt" || true
+          sed -n '1,260p' "$RUNNER_TEMP/bananza-audit/resource-init-audit.txt"
+
+      - name: Upload Bananza resource initializer audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kleo2iOS-Bananza-resource-init-audit
+          path: ${{ runner.temp }}/bananza-audit/resource-init-audit.txt
+          if-no-files-found: error
+          retention-days: 7
