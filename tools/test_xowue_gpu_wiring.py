@@ -378,8 +378,8 @@ assert "frontend.binMask" in engine and "frontend.binSelect" in engine
 swap_start = engine.index("} else if (opcode == kXenosPm4SwapOpcode")
 swap_end = engine.index("\n            }\n        }", swap_start)
 swap = engine[swap_start:swap_end]
-assert swap.index("NotifyGuestSwap") < swap.index("if (!frontend.swapFetchValid)")
-assert swap.index("xowue_vulkan_backend_guest_swap") < swap.index("if (!frontend.swapFetchValid)")
+assert swap.index("NotifyGuestSwap") < swap.index("if (!frameFetchValid)")
+assert swap.index("xowue_vulkan_backend_guest_swap") < swap.index("if (!frameFetchValid)")
 vd_start = engine.index("void xowue_VdSwap(")
 vd_end = engine.index("\nvoid xowue_VdInitializeScalerCommandBuffer", vd_start)
 vd = engine[vd_start:vd_end]

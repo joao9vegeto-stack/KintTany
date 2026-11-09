@@ -8112,7 +8112,7 @@ static bool executeGuestPM4Words(uint8_t *base,
                 std::snprintf(swapTrace, sizeof(swapTrace),
                     "XOWUE_PM4_XE_SWAP sequence=%llu frontbuffer=0x%08X size=%ux%u fetch_valid=%u",
                     static_cast<unsigned long long>(summary.swaps), frontbuffer,
-                    width, height, frontend.swapFetchValid ? 1u : 0u);
+                    width, height, frameFetchValid ? 1u : 0u);
                 recordRuntimeTrace(swapTrace);
                 xowue::xenos::NotifyGuestSwap(frontbuffer,width,height,textureFormat);
                 if (xowue_vulkan_backend_guest_swap)
