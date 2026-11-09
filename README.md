@@ -1,56 +1,69 @@
-# KintTany iOS
+# Link2iOS — Breath of the Wild
 
-## Versão atual
+Projeto independente para compilar **The Legend of Zelda: Breath of the Wild no iOS** usando NX2Apple Route C / Shared Shell.
 
-**KintTany v2.0 (build 20)**.
+A branch `Link2iOS` foi criada diretamente de `main`. Os arquivos não relacionados ao port foram removidos somente desta branch. `main` e `Kleo2iOS` não são alteradas.
 
+## Pasta de entrada no Google Drive
 
-Projeto iOS nativo Swift/SwiftUI.
+Compartilhe a pasta com a service account como **Editor**. Estrutura:
 
-## Fluxo oficial sem Mac
+```
+BOTW/
+├── base/
+│   └── base-game.nsp
+├── update/
+│   └── update-1.9.0.nsp
+├── dlc/
+│   ├── dlc-1.nsp
+│   └── dlc-2.nsp
+└── prod.keys
+```
 
-O repositório contém dois pipelines de compilação remota:
+Os nomes podem variar. O NXNative identifica base, update e DLC pelo conteúdo dos NSPs, não pelos nomes. O perfil aceito é BOTW `01007EF00011E000`, versão **1.9.0 / v1114112**, SDK 20.5.22. A entrada deve incluir os NSPs de DLC que deseja utilizar. `prod.keys` é necessário para descriptografar os NSPs e nunca será enviado ao GitHub.
 
-- `codemagic.yaml` — fluxo mais simples para compilar e baixar pelo iPhone usando Codemagic;
-- `.github/workflows/ios.yml` — pipeline equivalente no GitHub Actions.
+## Fluxo completo
 
-Nenhum dos dois exige Mac ou Xcode local.
-Cada push ou pull request executa, em um runner macOS do GitHub:
+**Colab/Linux:** acessa o Drive com service account, baixa NSPs e keys, sincroniza NX2Apple v1.3.1-rc2 e o commit fixo do NXNative, verifica os pacotes, extrai os conteúdos, reescreve módulos AArch64 e prepara o pacote NVN de shaders. A execução para antes do estágio Metal/Xcode.
 
-1. seleção da toolchain Xcode disponível;
-2. XCTest no simulador iOS;
-3. build `iphoneos` sem assinatura;
-4. geração de `KintTany-unsigned.ipa` e `KintTany.app`;
-5. upload dos arquivos na aba **Actions → Artifacts**.
+Em seguida, o Colab publica no Drive:
+- `pipeline/botw-work.tar.zst`: somente arquivos necessários à continuação do build;
+- `games/01007EF00011E000/romfs.img`;
+- `games/01007EF00011E000/aoc/<index>.img`: cada DLC separadamente.
 
-Assim, o projeto pode ser compilado e baixado inteiramente pelo navegador do
-iPhone. Nenhuma etapa fundamental exige abrir o projeto no Xcode localmente.
+O workspace não contém o RomFS/AOC, NSPs, `prod.keys`, caches NCA grandes, ferramentas Linux ou arquivos temporários. O upload separado evita duplicar o conteúdo do jogo dentro do arquivo de build.
 
-## IPA assinado
+**Última célula do Colab:** pede o Fine-grained PAT e atualiza `handoff.json` na branch `Link2iOS`. Esse commit dispara o workflow.
 
-Sem Secrets de assinatura, o workflow sempre gera o artefato não assinado para
-o fluxo posterior de sideload. Para gerar também `KintTany.ipa` assinado,
-configure no GitHub Actions os Secrets:
+**GitHub Actions/macOS:** baixa o workspace, os NSPs, keys, RomFS e AOC a partir do Drive; verifica os SHA-256; restaura os dados externos no workspace; compila shaders Metal para iOS; cria `DmGame01007EF00011E000.framework`; compila o Route C Shared Shell; assina ad-hoc e empacota a IPA.
 
-- `IOS_DISTRIBUTION_CERTIFICATE_BASE64`: certificado `.p12` em Base64;
-- `IOS_DISTRIBUTION_CERTIFICATE_PASSWORD`;
-- `IOS_PROVISIONING_PROFILE_BASE64`: perfil `.mobileprovision` em Base64;
-- `APPLE_TEAM_ID`;
-- `KEYCHAIN_PASSWORD` (opcional; há valor temporário para o runner).
+## A IPA não contém o jogo
 
-O certificado, o perfil e as credenciais nunca são incluídos no repositório ou
-nos artefatos não assinados.
+A IPA contém o launcher Shared Shell, o framework do BOTW, módulos reescritos, tabelas, configurações, shaders e componentes de runtime. Ela é verificada para garantir que **não contenha `romfs.img`, diretório AOC ou NSPs**.
 
-Não inclua cookies, chaves privadas, carteiras ou arquivos `.env` no projeto.
+O RomFS e DLC permanecem em uma pasta independente no Drive. O Shared Shell já oferece o seletor de dados externos e bookmark por jogo. O arquivo precisa estar disponível com acesso aleatório para leitura. A integração do provedor Google Drive no seletor do iOS precisa ser validada no dispositivo; se o provedor não oferecer a semântica de arquivo necessária, use uma pasta local ou iCloud Drive. O build não copia o RomFS para dentro da IPA.
 
+## Configuração
 
-## Codemagic
+1. Compartilhe a pasta de entrada com a service account como Editor.
+2. No Colab, crie o Secret `LINK2IOS_GOOGLE_SERVICE_ACCOUNT_JSON`.
+3. Em GitHub → Settings → Secrets and variables → Actions, crie `GOOGLE_SERVICE_ACCOUNT_JSON` com o mesmo JSON.
+4. Gere um Fine-grained PAT restrito a este repositório com **Contents: Read and write**.
+5. Abra o [notebook Link2iOS_BOTW.ipynb no Google Colab](https://colab.research.google.com/github/joao9vegeto-stack/KintTany/blob/Link2iOS/colab/Link2iOS_BOTW.ipynb), informe o ID da pasta e execute as células em ordem.
 
-1. Suba o conteúdo desta pasta para a raiz do repositório GitHub.
-2. Conecte esse repositório ao Codemagic.
-3. Selecione a branch `main` e toque em **Check for configuration files**.
-4. O workflow **KintTany iOS - Unsigned IPA** será encontrado a partir de `codemagic.yaml`.
-5. Inicie o build. O runner Mac executará XCTest, compilará para `iphoneos` e publicará `KintTany-unsigned.ipa`.
-6. Baixe o artifact diretamente pelo navegador do iPhone e assine-o pelo seu fluxo de sideload.
+## Isolamento
 
-O workflow do Codemagic usa Xcode 26.5 em Mac mini M2 e não requer certificado Apple para o artifact sem assinatura.
+Existe apenas `.github/workflows/link2ios.yml`. Ele é acionado somente por `push` em `refs/heads/Link2iOS` que altere `handoff.json`. O job repete a validação da ref. Não há gatilho em `main`, `Kleo2iOS`, `workflow_dispatch` ou workflow auxiliar nesta branch. Uma execução nova cancela outra execução Link2iOS ainda ativa.
+
+## Perfil e pontos de atenção
+
+- O perfil BOTW usa reserva de memória de 4 GiB, alias de 256 MiB, stack de 256 MiB e app pool de aproximadamente 3,2 GiB.
+- O upstream registra BOTW jogável em iPhone, com 60 FPS no perfil 1.9.0. Os testes descritos incluem iPhone 17 Pro Max e iOS 27.0.1; isso não garante o resultado no iPhone 17 Pro com iOS 26.5.1.
+- Para evitar PSO `.mtl4a` do SDK mais novo no alvo iOS 26, usamos `--gpu none` e mantemos as bibliotecas de shader necessárias. O dispositivo prepara os pipeline bases no primeiro uso; o primeiro carregamento pode demorar mais.
+- IPA construída com sucesso não significa gameplay validado. O teste no aparelho continua necessário.
+
+## Pins
+
+- NX2Apple: https://github.com/LNPANDY/NX2Apple/tree/v1.3.1-rc2
+- NXNative: https://github.com/seedds/nxnative/tree/81906931262fb25d774cce8bca2db8926439e5a2
+- Perfil BOTW: https://github.com/seedds/nxnative/tree/81906931262fb25d774cce8bca2db8926439e5a2/dm/games/01007EF00011E000

@@ -1,0 +1,8 @@
+lz4
+capstone>=5,<6
+fonttools
+zbic
+backports.zstd
+google-api-python-client
+google-auth
+requests

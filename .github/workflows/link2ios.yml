@@ -1,0 +1,108 @@
+name: Link2iOS BOTW
+
+on:
+  push:
+    branches:
+      - Link2iOS
+    paths:
+      - handoff.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: link2ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-botw:
+    if: github.ref == 'refs/heads/Link2iOS' && github.event_name == 'push'
+    runs-on: xcode-27
+    timeout-minutes: 360
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+    steps:
+      - name: Checkout Link2iOS handoff commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Enforce branch isolation and validate BOTW handoff
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/Link2iOS"
+          test "$GITHUB_REF_NAME" = "Link2iOS"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 - <<'PY'
+          import json, re
+          d=json.load(open("handoff.json", encoding="utf-8"))
+          assert d.get("project") == "Link2iOS"
+          assert d.get("branch") == "Link2iOS"
+          assert d.get("title_id") == "01007EF00011E000"
+          assert d.get("package_version") == "v1114112"
+          assert d.get("nx2apple_tag") == "v1.3.1-rc2"
+          assert d.get("engine_pin") == "81906931262fb25d774cce8bca2db8926439e5a2"
+          assert re.fullmatch(r"[0-9a-f-]{36}", d.get("request_id", ""))
+          assert d.get("work_archive", {}).get("id")
+          assert re.fullmatch(r"[0-9a-f]{64}", d.get("work_archive", {}).get("sha256", ""))
+          assert d.get("prod_keys", {}).get("id")
+          assert d.get("game_data", {}).get("romfs", {}).get("id")
+          assert d.get("game_data", {}).get("aoc")
+          assert len(d.get("source_files", [])) >= 3
+          assert all(x.get("id") and x.get("size") and x.get("sha256") for x in d["source_files"])
+          print("Link2iOS handoff validated:", d["request_id"])
+          PY
+
+      - name: Select Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned Apple build toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "$DEVELOPER_DIR" || { echo "::error::Xcode 27.2 is missing from xcode-27"; exit 1; }
+          xcodebuild -version
+          brew install xcodegen zstd glslang
+          brew list --cask dotnet-sdk >/dev/null 2>&1 || brew install --cask dotnet-sdk
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphoneos metal --version
+          python -m pip install --upgrade pip
+          python -m pip install lz4 "capstone>=5,<6" fonttools zbic backports.zstd google-api-python-client google-auth
+
+      - name: Sync exact NX2Apple release and Route C patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v1.3.1-rc2 https://github.com/LNPANDY/NX2Apple.git "$RUNNER_TEMP/NX2Apple"
+          cd "$RUNNER_TEMP/NX2Apple"
+          python tools/engine.py sync
+          EXPECTED="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["engine_pin"])' "$GITHUB_WORKSPACE/handoff.json")"
+          test "$(cat .upstream-ref)" = "$EXPECTED"
+          test "$EXPECTED" = "81906931262fb25d774cce8bca2db8926439e5a2"
+
+      - name: Download and verify Colab workspace, NSPs, keys and external game data
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          python scripts/prepare_actions.py             --handoff "$GITHUB_WORKSPACE/handoff.json"             --destination "$RUNNER_TEMP/link2ios"
+
+      - name: Build BOTW framework and Shared Shell IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/build_shared.py             --nx2apple-root "$RUNNER_TEMP/NX2Apple"             --prepared-json "$RUNNER_TEMP/link2ios/actions-input.json"             --output "$RUNNER_TEMP/link2ios-output"
+
+      - name: Publish installable IPA and build report
+        uses: actions/upload-artifact@v4
+        with:
+          name: Link2iOS-BOTW-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/link2ios-output/Link2iOS-BOTW.ipa
+            ${{ runner.temp }}/link2ios-output/build-report.json
+          if-no-files-found: error
+          retention-days: 7
