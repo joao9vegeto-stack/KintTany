@@ -1,4 +1,4 @@
-name: Kleo2iOS iOS26 original 9G pool A-B repack
+name: Kleo2iOS iOS26 restore known 5G profile
 
 on:
   push:
@@ -43,8 +43,8 @@ jobs:
           assert d.get("source_run_id") == 42571125251
           assert d.get("source_artifact_name") == "Kleo2iOS-7"
           assert d.get("title_id") == "040074A01BF12000"
-          assert d.get("mem_reserve") == "0x270000000"
-          assert d.get("app_pool") == "0x240000000"
+          assert d.get("mem_reserve") == "0x140000000"
+          assert d.get("app_pool") == "0x110000000"
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write("source_run_id="+str(d["source_run_id"])+"\n")
               f.write("artifact_name="+d["source_artifact_name"]+"\n")
@@ -87,7 +87,7 @@ jobs:
           "$RUNNER_TEMP/kleo-venv/bin/python" -m pip install lz4 backports.zstd
           "$RUNNER_TEMP/kleo-venv/bin/python" -m pip install "capstone>=5,<6" || echo "::warning::Capstone install failed; the IPA repack will still complete without instruction decoding."
 
-      - name: Restore original 9 GiB pool, remove iOS27 PSO and re-sign
+      - name: Restore tested 5 GiB profile, remove iOS27 PSO and re-sign
         shell: bash
         run: |
           set -euo pipefail
@@ -112,10 +112,10 @@ jobs:
             --output "$RUNNER_TEMP/kleo-output/crash-disassembly.txt"
           sed -n '1,260p' "$RUNNER_TEMP/kleo-output/crash-disassembly.txt"
 
-      - name: Upload iOS26 original 9 GiB pool IPA (no shader rebuild)
+      - name: Upload iOS26 known 5 GiB profile IPA (no shader rebuild)
         uses: actions/upload-artifact@v4
         with:
-          name: Kleo2iOS-iOS26-9G-pool
+          name: Kleo2iOS-iOS26-5G-profile
           path: |
             ${{ runner.temp }}/kleo-output/NX2Apple-iOS26.ipa
             ${{ runner.temp }}/kleo-output/build-report.json
