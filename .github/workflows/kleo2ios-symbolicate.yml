@@ -1,0 +1,132 @@
+name: Kleo2iOS Bananza crash symbolication
+
+on:
+  push:
+    branches:
+      - Kleo2iOS
+    paths:
+      - symbolicate-request.json
+      - .github/workflows/kleo2ios-symbolicate.yml
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: kleo2ios-symbolicate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  disassemble-existing-build:
+    if: github.ref == 'refs/heads/Kleo2iOS' && github.event_name == 'push'
+    runs-on: xcode-27
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout Kleo2iOS only
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate exact source artifact
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/Kleo2iOS"
+          python3 - <<'PY'
+          import json, os
+          d=json.load(open("symbolicate-request.json", encoding="utf-8"))
+          assert d.get("source_run_id") == 42571125251
+          assert d.get("source_artifact_name") == "Kleo2iOS-7"
+          assert d.get("title_id") == "040074A01BF12000"
+          assert d.get("framework_binary", "").endswith("/DmGame040074A01BF12000")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("source_run_id="+str(d["source_run_id"])+"\n")
+              f.write("artifact_name="+d["source_artifact_name"]+"\n")
+          PY
+
+      - name: Download the already-built IPA artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run download "${{ steps.request.outputs.source_run_id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "${{ steps.request.outputs.artifact_name }}" \
+            --dir "$RUNNER_TEMP/source-artifact"
+          IPA=$(find "$RUNNER_TEMP/source-artifact" -type f -name 'NX2Apple.ipa' -print -quit)
+          REPORT=$(find "$RUNNER_TEMP/source-artifact" -type f -name 'build-report.json' -print -quit)
+          test -n "$IPA" && test -s "$IPA"
+          test -n "$REPORT" && test -s "$REPORT"
+          mkdir -p "$RUNNER_TEMP/source"
+          cp "$IPA" "$RUNNER_TEMP/source/NX2Apple.ipa"
+          cp "$REPORT" "$RUNNER_TEMP/source/build-report.json"
+          echo "Using the original IPA from workflow run ${{ steps.request.outputs.source_run_id }}"
+          du -h "$RUNNER_TEMP/source/NX2Apple.ipa"
+
+      - name: Install ARM64 disassembler
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Capstone
+        shell: bash
+        run: python -m pip install --disable-pip-version-check "capstone>=5,<6"
+
+      - name: Extract the embedded game framework only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, shutil, zipfile
+          from pathlib import Path
+          req=json.load(open("symbolicate-request.json", encoding="utf-8"))
+          ipa=Path("${{ runner.temp }}/source/NX2Apple.ipa")
+          out=Path("${{ runner.temp }}/symbolicate")
+          out.mkdir(parents=True, exist_ok=True)
+          with zipfile.ZipFile(ipa) as z:
+              names=set(z.namelist())
+              binary=req["framework_binary"]
+              profile=req["framework_profile"]
+              missing=[p for p in (binary,profile) if p not in names]
+              if missing:
+                  raise SystemExit("IPA is missing expected framework members: "+", ".join(missing))
+              for member,dest in ((binary,out/"DmGame040074A01BF12000"),(profile,out/"profile.tsv")):
+                  with z.open(member) as src, dest.open("wb") as dst:
+                      shutil.copyfileobj(src,dst,1024*1024)
+          h=hashlib.sha256((out/"DmGame040074A01BF12000").read_bytes()).hexdigest()
+          (out/"sha256.txt").write_text(
+              f"source_run_id={req['source_run_id']}\n"
+              f"artifact={req['source_artifact_name']}\n"
+              f"framework_binary_sha256={h}\n", encoding="utf-8")
+          print("Extracted framework executable:", (out/"DmGame040074A01BF12000").stat().st_size, "bytes")
+          print("Runtime profile:")
+          print((out/"profile.tsv").read_text(encoding="utf-8"))
+          PY
+
+      - name: Disassemble crash PC, LR and caller chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/symbolicate_ios_crash.py \
+            --macho "$RUNNER_TEMP/symbolicate/DmGame040074A01BF12000" \
+            --output "$RUNNER_TEMP/symbolicate/bananza-crash-disassembly.txt"
+          test -s "$RUNNER_TEMP/symbolicate/bananza-crash-disassembly.txt"
+          if grep -q "SYMBOLICATION_UNAVAILABLE" "$RUNNER_TEMP/symbolicate/bananza-crash-disassembly.txt"; then
+            cat "$RUNNER_TEMP/symbolicate/bananza-crash-disassembly.txt"
+            exit 1
+          fi
+          grep -q "TARGET" "$RUNNER_TEMP/symbolicate/bananza-crash-disassembly.txt"
+          cat "$RUNNER_TEMP/symbolicate/bananza-crash-disassembly.txt"
+
+      - name: Upload small disassembly report (no IPA, game assets or shaders)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kleo2iOS-Bananza-SIGSEGV-symbolication
+          path: |
+            ${{ runner.temp }}/symbolicate/bananza-crash-disassembly.txt
+            ${{ runner.temp }}/symbolicate/profile.tsv
+            ${{ runner.temp }}/symbolicate/sha256.txt
+          if-no-files-found: error
+          retention-days: 7
