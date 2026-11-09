@@ -160,6 +160,14 @@ def main() -> int:
             else:
                 report.append(f"MISSING SECTION {key[0]},{key[1]}")
         sites = [
+            # Trace the caller that constructed the null memcpy destination.
+            ("main", 0x48A390, "caller function around null destination", 0x180, 0x280),
+            ("main", 0x489620, "object preparation before caller", 0x100, 0x180),
+            ("main", 0x4810E8, "caller of object preparation", 0x100, 0x180),
+            ("main", 0x488ED4, "caller of main+0x4811c4", 0x100, 0x180),
+            ("main", 0x1B7B210, "memcpy tail-call helper", 0x40, 0x100),
+            ("main", 0x5259C0, "helper called before memcpy", 0x100, 0x180),
+            ("main", 0x2621C0, "allocation helper", 0x100, 0x180),
             ("sdk", 0x702920, "CRASH PC", 0x40, 0x40),
             ("main", 0x48A5D8, "LR return address", 0x40, 0x28),
             ("main", 0x48909C, "backtrace return address", 0x20, 0x10),
