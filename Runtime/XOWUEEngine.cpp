@@ -775,7 +775,7 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     for (const char *required : {"CODE_AUDIT_B69", "APP_LAUNCH", "XOWUE_SYNC_CREATE", "XOWUE_MAIN_WAIT_WATCHDOG", "B85_MULTIWAIT_WATCHDOG_PUMP", "B85_WAIT_WATCHDOG_PUMP", "XOWUE_POOL_ALLOC_82DC2BF0", "XOWUE_QPC_WRITE",
                                  "CODE_AUDIT_QPC_CALLERS", "XOWUE_QPC_CALLER_DUMP", "CODE_AUDIT_B65",
                                  "XOWUE_82DC2390_GUARD", "B105_GUEST_EVENT_STATE_ADOPT",
-                                 "XOWUE_MEDIA_PPC_FLOW", "B105_MEDIA_OPEN_ORDER", "B105_MEDIA_READ_ORDER", "XOWUE_B90_BINK_STATE", "XOWUE_B80_SETSTATE", "XOWUE_B90_CIRCULAR_LIST_PRESERVED", "B102_TIMER_WAIT_BEGIN", "B102_TIMER_WAIT_RESULT"}) {
+                                 "XOWUE_B132_SETSTATE_SINGLETON_TERMINATED", "XOWUE_B132_SETSTATE_SINGLETON_LINK_NORMALIZED", "XOWUE_MEDIA_PPC_FLOW", "B105_MEDIA_OPEN_ORDER", "B105_MEDIA_READ_ORDER", "XOWUE_B90_BINK_STATE", "XOWUE_B80_SETSTATE", "XOWUE_B90_CIRCULAR_LIST_PRESERVED", "B102_TIMER_WAIT_BEGIN", "B102_TIMER_WAIT_RESULT"}) {
         if (event.find(required) != std::string::npos) return true;
     }
     if (sequence < 96u) return true;
@@ -4231,13 +4231,40 @@ static void xowue_trace_hot_guest_entry(uint32_t guestAddress, PPCContext &ctx) 
                 }
                 recordRuntimeTrace(ev);
             }
+            // SetState's PPC walk is NULL-terminated: it reads +0x28 and
+            // loops until that pointer is zero. A one-node self-link therefore
+            // traps the main guest thread forever before it can process +0x98
+            // or publish the requested state. Normalize only this exact,
+            // singleton, state-changing case into the equivalent NULL-terminated
+            // one-node chain. Multi-node cycles and all other guest links remain
+            // untouched and are still reported below.
+            const uint32_t oldState = loadGuestBe32(b80Base, obj + 0x24u);
+            const uint32_t requestedState = ctx.r4.u32;
+            const uint32_t nodeFlags = loadGuestBe32(b80Base, obj + 0x98u);
+            bool singletonSelfLinkTerminated = false;
+            if (cycle && count == 1u && cycleFrom == obj && cycleTo == obj &&
+                oldState != requestedState) {
+                storeGuestBe32(b80Base, obj + 0x28u, 0u);
+                singletonSelfLinkTerminated = true;
+                char repair[256];
+                std::snprintf(repair, sizeof(repair),
+                    "XOWUE_B132_SETSTATE_SINGLETON_TERMINATED entry=%u node=0x%08X "
+                    "old_next=0x%08X new_next=0x00000000 old_state=0x%08X "
+                    "requested_state=0x%08X node_flags=0x%08X thread=%u",
+                    entryNo, obj, cycleTo, oldState, requestedState, nodeFlags,
+                    g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId);
+                recordRuntimeTrace(repair);
+            }
             if (cycle) {
-                // Circular links are guest-owned data; report them without rewriting the list.
-                char ev[160];
-                std::snprintf(ev, sizeof(ev),
-                    "XOWUE_B90_CIRCULAR_LIST_PRESERVED node=0x%08X next=0x%08X entry=%u",
-                    cycleFrom, cycleTo, entryNo);
-                recordRuntimeTrace(ev);
+                if (singletonSelfLinkTerminated) {
+                    recordRuntimeTrace("XOWUE_B132_SETSTATE_SINGLETON_LINK_NORMALIZED; PPC SetState will process the node once and reach the NULL terminator");
+                } else {
+                    char ev[160];
+                    std::snprintf(ev, sizeof(ev),
+                        "XOWUE_B90_CIRCULAR_LIST_PRESERVED node=0x%08X next=0x%08X entry=%u",
+                        cycleFrom, cycleTo, entryNo);
+                    recordRuntimeTrace(ev);
+                }
             }
         } else if (entryNo <= 8u) {
             char ev[160];
