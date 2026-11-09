@@ -41,12 +41,12 @@ def read_entitlements(executable: Path, output: Path) -> None:
     output.write_text(xml, encoding="utf-8")
 
 
-# Diagnostic baseline: restore the original Bananza profile unchanged.
-# This isolates the effect of the earlier 5 GiB repack (4.25 GiB app pool).
-# Keep the 256 MiB alias and stack untouched for this A/B test.
+# Known bootable Bananza profile on the target iPhone/iOS 26 setup.
+# Do not restore the upstream 9 GiB pool: that reservation aborts at nnosInitialize.
+# Keep mem_alias and mem_stack at their known-tested 256 MiB values.
 MEMORY_PROFILE = {
-    "mem_reserve": ("0x270000000", "0x270000000"),
-    "app_pool": ("0x240000000", "0x240000000"),
+    "mem_reserve": ("0x270000000", "0x140000000"),
+    "app_pool": ("0x240000000", "0x110000000"),
 }
 
 
@@ -229,7 +229,7 @@ def main() -> None:
     report["memory_profile"] = {
         "source": profile_rel,
         "loaded_by": "DM_PROFILE (NX2Apple Route C EngineLaunchPlan)",
-        "mode": "ios26_original_9gb_app_pool_alias_unchanged",
+        "mode": "ios26_known_bootable_5gb_reservation_4250m_pool",
         "changes": memory_changes,
         "shader_rebuild": False,
         "framework_rebuild": False,
