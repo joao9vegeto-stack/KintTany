@@ -26,12 +26,15 @@ For this one case, `+0x28` is set to zero, so the original PPC routine processes
 
 The runtime persists the old link, old state, requested state, flags, node address, and guest thread in `XOWUE_B132_SETSTATE_SINGLETON_TERMINATED`. CI has a source-contract regression that rejects widening the repair or changing the node state/flags directly.
 
-## Separate blocker: guest rendering remains black
+## Separate rendering and guest-memory writeback observations
 
-Build 132.1 also reports:
-- 26 native draws submitted and a guest swap;
-- Xenos EDRAM color/depth target state with missing/zero target fields in the initial draw sequence;
-- GPU readback `sampled_nonblack=0` with a stable black checksum;
-- repeated host presents are not new guest content frames.
+The Build 132.1 capture does **not** establish that the entire renderer is black:
+- the first sampled GPU readback is black (`sampled_nonblack=0`);
+- subsequent readbacks contain about 8,160 non-black samples out of 8,209, consistent with the visible production-logo sequence in the recording;
+- the EDRAM resolve path reports `copied_to_swapchain=1` repeatedly;
+- however, the separate writeback into Xbox guest memory reports `XENOS_GUEST_RESOLVE_WRITEBACK ... status=0` on all 1,286 attempts in the captured log;
+- the guest-content-update counter remains zero, so host presentation and non-black GPU samples are not proof that the game menu is being rendered.
 
-This commit does not pretend that the SetState repair solves the Xenos renderer. The actual menu acceptance test still requires changing non-black guest pixels, continued VdSwap progression after the transition, and the real Wolverine menu on-device.
+The exact reason that guest-memory writeback returns false is not identified by this build: the function rejects several frontbuffer descriptor/address/size mismatches without a per-condition trace. It remains a separate item to diagnose after the main PPC state loop is released. It is not established as the cause of the SetState stall.
+
+The actual menu acceptance test still requires the main PPC thread to leave `0x824ACC1C`, guest state to advance, the real Wolverine menu to appear, and the menu to respond to input on-device.
