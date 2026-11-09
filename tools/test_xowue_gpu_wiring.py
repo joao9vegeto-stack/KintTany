@@ -141,7 +141,7 @@ assert "xowue_xenos_commit_resolved_rgba" in engine
 assert "xowue_xenos_commit_resolved_rgba" in color
 assert "VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL" in color
 assert "std::array<uint32_t, 6> vdSwapFetch" in engine
-assert "g_xenosFrontend.vdSwapFetch = fetchWords" in engine
+assert "g_xenosFrontend.vdSwapFetch = physicalFetchWords" in engine
 assert "fetchFromVdSwap = g_xenosFrontend.vdSwapFetchValid" in engine
 assert "XOWUE_GPU_GUEST_RESOLVE_REJECT" in engine
 assert "XENOS_GPU_GUEST_RESOLVE_COMMITTED" in engine
@@ -386,7 +386,7 @@ vd = engine[vd_start:vd_end]
 assert "XOWUE_VDSWAP_PACKET_QUEUED" in vd
 assert "decodeXenosSwapTexture" not in vd
 assert "xowue_vulkan_backend_guest_frame_rgba" not in vd
-assert "PPC_STORE_U32(commandBuffer + 4u, kSwapSignature)" in vd
+assert "PPC_STORE_U32(commandBuffer + 32u, kSwapSignature)" in vd
 assert "context.r3.u32 = 0u" in vd
 assert "g_xenosFrontend.vdSwapFetch = physicalFetchWords" in vd
 assert "physicalFetchWords[1] = (physicalFetchWords[1] & 0x00000FFFu)" in vd
