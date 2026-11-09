@@ -182,15 +182,16 @@ def main() -> int:
                 for off in range(0, len(raw), 8):
                     value = struct.unpack_from("<Q", raw, off)[0]
                     report.append(f"  +0x{off:02x}: 0x{value:016x}")
-                # These are the virtual slots called by main+0x48a584 / +0x48a5d4.
-                for slot in (0x28, 0x40):
+                # Dump every plausible code pointer in the vtable, including the
+                # callbacks used by the setup routines before the null memcpy.
+                for slot in range(0, 0x80, 8):
                     value = struct.unpack_from("<Q", raw, slot)[0]
                     report.append(f"  vtable slot +0x{slot:x}: raw target 0x{value:x}")
                     if 0 < value < main_text["size"]:
                         with args.macho.open("rb") as code_fp:
                             report.extend(disassemble_window(
                                 code_fp, main_text, "main", value, md,
-                                before=0x40, after=0x100,
+                                before=0x30, after=0x180,
                                 label=f"vtable slot +0x{slot:x} target",
                             ))
             else:
@@ -226,7 +227,8 @@ def main() -> int:
             ("main", 0x17580C, "object registration / initialization helper", 0x100, 0x240),
             ("main", 0x453B10, "object setup helper", 0x80, 0x180),
             ("main", 0x51DA40, "object setup helper 2", 0x80, 0x180),
-            ("main", 0x4A9918, "object setup helper 3", 0x80, 0x180),
+            ("main", 0x4A9918, "object setup helper 3", 0x100, 0x600),
+            ("main", 0x453B10, "object setup helper 4", 0x100, 0x500),
             ("main", 0x288EA0, "guest allocator entry", 0x100, 0x240),
             ("sdk", 0x702920, "CRASH PC", 0x40, 0x40),
             ("main", 0x48A5D8, "LR return address", 0x40, 0x28),
