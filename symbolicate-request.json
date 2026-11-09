@@ -5,5 +5,5 @@
   "framework_binary": "Payload/DmShell.app/Frameworks/DmGame040074A01BF12000.framework/DmGame040074A01BF12000",
   "framework_profile": "Payload/DmShell.app/Frameworks/DmGame040074A01BF12000.framework/profile.tsv",
   "reason": "Disassemble the exact SIGSEGV PC/LR from log.txt using the already-built IPA; no game rebuild, shader rebuild, or profile mutation.",
-  "request_revision": "trace-null-destination-callers-v3"
+  "request_revision": "trace-object-field-allocation-v4"
 }
