@@ -134,25 +134,22 @@ def disassemble_window(fp: BinaryIO, section: dict, module: str, offset: int, md
 
 
 def direct_callers(fp: BinaryIO, section: dict, targets: set[int], md) -> list[str]:
-    """Find direct BL callsites to selected guest functions in the embedded main text."""
+    """Find exact direct ARM64 BL callsites by decoding their 26-bit PC-relative target."""
     fp.seek(section["file_offset"])
     code = fp.read(section["size"])
     found: dict[int, list[int]] = {target: [] for target in targets}
-    for ins in md.disasm(code, 0):
-        if ins.mnemonic != "bl":
+    # BL is 100101iiiiiiiiiiiiiiiiiiiiiiiiii; sign-extend imm26 and scale by four.
+    for offset in range(0, len(code) - 3, 4):
+        insn = struct.unpack_from("<I", code, offset)[0]
+        if (insn & 0xFC000000) != 0x94000000:
             continue
-        # Parse Capstone's printed immediate because operand type/imm representation
-        # varies between Capstone builds; the encoded BL target is printed as "#0x...".
-        try:
-            target_text = ins.op_str.split(",", 1)[0].strip()
-            if not target_text.startswith("#"):
-                continue
-            target = int(target_text[1:], 0)
-        except (ValueError, IndexError):
-            continue
+        imm26 = insn & 0x03FFFFFF
+        if imm26 & (1 << 25):
+            imm26 -= 1 << 26
+        target = offset + (imm26 << 2)
         if target in found:
-            found[target].append(ins.address)
-    lines = ["\\n[direct BL cross-references in main text]"]
+            found[target].append(offset)
+    lines = ["\\n[direct BL cross-references in main text; raw ARM64 encoding]"]
     for target in sorted(found):
         callers = found[target]
         lines.append(f"  main+0x{target:x}: {len(callers)} direct caller(s)")
