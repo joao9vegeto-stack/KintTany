@@ -198,6 +198,19 @@ def main() -> int:
         else:
             report.append("MISSING MAIN DATA SECTION __DMmainW,__img or __TEXT,__dmmainx0")
         sites = [
+            # Trace how the 0x90-byte owner object and its +0x18 destination member are initialized.
+            ("main", 0x4788CC, "constructor called for the 0x90-byte object", 0x100, 0x300),
+            ("main", 0x17580C, "object attach/init call after allocation", 0x100, 0x200),
+            ("main", 0x453B10, "object configuration before null copy", 0x80, 0x180),
+            ("main", 0x51DA40, "object setup helper before null copy", 0x80, 0x180),
+            ("main", 0x4A9918, "object setup helper before null copy", 0x80, 0x180),
+            ("main", 0x48A65C, "virtual method invoked before and after null copy", 0x80, 0x180),
+            ("main", 0x474188, "repeated object field setter in owner setup", 0x80, 0x180),
+            ("main", 0x3BDF94, "object preparation called by owner constructor", 0x80, 0x180),
+            ("main", 0x288EA0, "allocator used by owner constructor", 0x80, 0x200),
+            ("main", 0x489680, "resource/object lookup helper", 0x80, 0x180),
+            ("main", 0x1B7B130, "memory helper thunk used during owner setup", 0x20, 0x80),
+            ("main", 0x46916C, "object registration/cleanup after subobject setup", 0x80, 0x180),
             # Trace the caller that constructed the null memcpy destination.
             ("main", 0x48A390, "caller function around null destination", 0x180, 0x280),
             ("main", 0x489620, "object preparation before caller", 0x100, 0x180),
