@@ -13,7 +13,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: kleo2ios-repack-\${{ github.ref }}
+  group: kleo2ios-repack-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -27,7 +27,7 @@ jobs:
       - name: Checkout Kleo2iOS only
         uses: actions/checkout@v4
         with:
-          ref: \${{ github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Verify branch and Apple signing tools
@@ -45,9 +45,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: Kleo2iOS-7
-          github-token: \${{ github.token }}
+          github-token: ${{ github.token }}
           run-id: 42571125251
-          path: \${{ runner.temp }}/source-artifact
+          path: ${{ runner.temp }}/source-artifact
 
       - name: Sync the pinned NX2Apple IPA packer
         shell: bash
@@ -77,7 +77,7 @@ jobs:
         with:
           name: Kleo2iOS-iOS26-fixed
           path: |
-            \${{ runner.temp }}/kleo-ios26-output/NX2Apple-iOS26.ipa
-            \${{ runner.temp }}/kleo-ios26-output/build-report.json
+            ${{ runner.temp }}/kleo-ios26-output/NX2Apple-iOS26.ipa
+            ${{ runner.temp }}/kleo-ios26-output/build-report.json
           if-no-files-found: error
           retention-days: 7
