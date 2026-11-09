@@ -133,6 +133,26 @@ def disassemble_window(fp: BinaryIO, section: dict, module: str, offset: int, md
     return lines
 
 
+def direct_callers(fp: BinaryIO, section: dict, targets: set[int], md) -> list[str]:
+    """Find direct BL callsites to selected guest functions in the embedded main text."""
+    fp.seek(section["file_offset"])
+    code = fp.read(section["size"])
+    found: dict[int, list[int]] = {target: [] for target in targets}
+    for ins in md.disasm(code, 0):
+        if ins.mnemonic != "bl" or not ins.operands:
+            continue
+        operand = ins.operands[0]
+        if operand.type == 2 and operand.imm in found:  # ARM64_OP_IMM
+            found[operand.imm].append(ins.address)
+    lines = ["\\n[direct BL cross-references in main text]"]
+    for target in sorted(found):
+        callers = found[target]
+        lines.append(f"  main+0x{target:x}: {len(callers)} direct caller(s)")
+        for caller in callers:
+            lines.append(f"    main+0x{caller:x}")
+    return lines
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--macho", type=Path, required=True, help="DmGame framework Mach-O executable")
@@ -214,6 +234,10 @@ def main() -> int:
             ("main", 0x288EA0, "allocator used by owner constructor", 0x80, 0x200),
             ("main", 0x489680, "resource/object lookup helper", 0x80, 0x180),
             ("main", 0x1B7B130, "memory helper thunk used during owner setup", 0x20, 0x80),
+            ("main", 0x1761C0, "initializer called immediately after clearing auxiliary structure +0x10", 0x100, 0x800),
+            ("main", 0x1A0860, "fallback allocator for eight 0x40-byte records", 0x100, 0x280),
+            ("main", 0x1B7AE50, "resource / address-region lookup used by initializer", 0x100, 0x280),
+            ("main", 0x4A9EE0, "null-resource fallback branch in object setup", 0x80, 0x180),
             ("main", 0x46916C, "object registration/cleanup after subobject setup", 0x80, 0x180),
             # Trace the caller that constructed the null memcpy destination.
             ("main", 0x48A390, "caller function around null destination", 0x180, 0x280),
@@ -227,7 +251,7 @@ def main() -> int:
             ("main", 0x17580C, "object registration / initialization helper", 0x100, 0x240),
             ("main", 0x453B10, "object setup helper", 0x80, 0x180),
             ("main", 0x51DA40, "object setup helper 2", 0x80, 0x180),
-            ("main", 0x4A9918, "object setup helper 3", 0x100, 0x600),
+            ("main", 0x4A9918, "object setup helper 3 (extended through all fallback branches)", 0x180, 0x900),
             ("main", 0x453B10, "object setup helper 4", 0x100, 0x500),
             ("main", 0x288EA0, "guest allocator entry", 0x100, 0x240),
             ("sdk", 0x702920, "CRASH PC", 0x40, 0x40),
@@ -257,6 +281,10 @@ def main() -> int:
                 report.extend(disassemble_window(
                     fp, section, module, offset, md,
                     before=before, after=after, label=label,
+                ))
+            if main_text:
+                report.extend(direct_callers(
+                    fp, main_text, {0x1761C0, 0x1A0860, 0x1B7AE50, 0x4A9918, 0x48A65C}, md
                 ))
     except Exception as exc:
         # Optional audit only: do not fail the profile repack if one Mach-O variant cannot be decoded.
