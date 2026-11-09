@@ -12,6 +12,8 @@ def main():
     ap.add_argument("--archive", type=Path, required=True)
     ap.add_argument("--destination", type=Path, required=True)
     ap.add_argument("--sha256", required=True)
+    ap.add_argument("--nup-size", type=int, required=True)
+    ap.add_argument("--nup-sha256", required=True)
     args = ap.parse_args()
     h = hashlib.sha256()
     with args.archive.open("rb") as f:
@@ -62,6 +64,8 @@ def main():
         raise SystemExit("Archive manifest has no valid separate NUP size/SHA-256")
     if not manifest.get("nup_name", "").lower().endswith(".nup"):
         raise SystemExit("Archive manifest has no valid NUP filename")
+    if int(manifest["nup_size"]) != args.nup_size or manifest["nup_sha256"].lower() != args.nup_sha256.lower():
+        raise SystemExit("Archive manifest and separate NUP handoff metadata disagree")
     print(json.dumps(manifest, indent=2))
 
 if __name__ == "__main__":
