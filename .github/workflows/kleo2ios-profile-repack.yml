@@ -1,0 +1,99 @@
+name: Kleo2iOS iOS26 profile-only repack
+
+on:
+  push:
+    branches:
+      - Kleo2iOS
+    paths:
+      - profile-repack.json
+
+permissions:
+  contents: read
+  actions: read
+
+# Shares the build concurrency group so this profile-only job cancels a full shader rebuild.
+concurrency:
+  group: kleo2ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repack-existing-ipa:
+    if: github.ref == 'refs/heads/Kleo2iOS' && github.event_name == 'push'
+    runs-on: xcode-27
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout Kleo2iOS only
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate source artifact request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/Kleo2iOS"
+          python3 - <<'PY'
+          import json, os
+          d=json.load(open("profile-repack.json", encoding="utf-8"))
+          assert d.get("source_run_id") == 42571125251
+          assert d.get("source_artifact_name") == "Kleo2iOS-7"
+          assert d.get("title_id") == "040074A01BF12000"
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("source_run_id="+str(d["source_run_id"])+"\n")
+              f.write("artifact_name="+d["source_artifact_name"]+"\n")
+          PY
+
+      - name: Download already-built IPA artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run download "${{ steps.request.outputs.source_run_id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "${{ steps.request.outputs.artifact_name }}" \
+            --dir "$RUNNER_TEMP/source-artifact"
+          IPA=$(find "$RUNNER_TEMP/source-artifact" -type f -name 'NX2Apple.ipa' -print -quit)
+          REPORT=$(find "$RUNNER_TEMP/source-artifact" -type f -name 'build-report.json' -print -quit)
+          test -n "$IPA" && test -s "$IPA"
+          test -n "$REPORT" && test -s "$REPORT"
+          mkdir -p "$RUNNER_TEMP/source"
+          cp "$IPA" "$RUNNER_TEMP/source/NX2Apple.ipa"
+          cp "$REPORT" "$RUNNER_TEMP/source/build-report.json"
+          echo "Using original IPA from workflow run ${{ steps.request.outputs.source_run_id }}"
+          du -h "$RUNNER_TEMP/source/NX2Apple.ipa"
+
+      - name: Sync exact NX2Apple packer
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v1.3.0-rc10 https://github.com/LNPANDY/NX2Apple.git "$RUNNER_TEMP/NX2Apple"
+          cd "$RUNNER_TEMP/NX2Apple"
+          python3 tools/engine.py sync
+          test "$(cat engine/.upstream-ref)" = "c78d7375bea9c862679ec294a6a69ff3e22e18d0"
+          python3 -m pip install --upgrade pip
+          python3 -m pip install lz4 backports.zstd
+
+      - name: Patch runtime profile, remove iOS27 PSO and re-sign
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/repack_ipa_ios26.py \
+            --ipa "$RUNNER_TEMP/source/NX2Apple.ipa" \
+            --report "$RUNNER_TEMP/source/build-report.json" \
+            --engine-root "$RUNNER_TEMP/NX2Apple/engine" \
+            --output-dir "$RUNNER_TEMP/kleo-output" \
+            --source-run-id "${{ steps.request.outputs.source_run_id }}"
+
+      - name: Upload iOS26 6 GiB profile IPA (no shader rebuild)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kleo2iOS-iOS26-6G-profile
+          path: |
+            ${{ runner.temp }}/kleo-output/NX2Apple-iOS26.ipa
+            ${{ runner.temp }}/kleo-output/build-report.json
+          if-no-files-found: error
+          retention-days: 7
