@@ -43,6 +43,8 @@ jobs:
           assert d.get("source_run_id") == 42571125251
           assert d.get("source_artifact_name") == "Kleo2iOS-7"
           assert d.get("title_id") == "040074A01BF12000"
+          assert d.get("mem_reserve") == "0x140000000"
+          assert d.get("app_pool") == "0x110000000"
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write("source_run_id="+str(d["source_run_id"])+"\n")
               f.write("artifact_name="+d["source_artifact_name"]+"\n")
@@ -74,8 +76,10 @@ jobs:
           cd "$RUNNER_TEMP/NX2Apple"
           python3 tools/engine.py sync
           test "$(cat .upstream-ref)" = "c78d7375bea9c862679ec294a6a69ff3e22e18d0"
-          python3 -m pip install --upgrade pip
-          python3 -m pip install lz4 backports.zstd
+          python3 -m venv "$RUNNER_TEMP/kleo-venv"
+          echo "$RUNNER_TEMP/kleo-venv/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/kleo-venv/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/kleo-venv/bin/python" -m pip install lz4 backports.zstd
 
       - name: Patch runtime profile, remove iOS27 PSO and re-sign
         shell: bash
@@ -88,10 +92,10 @@ jobs:
             --output-dir "$RUNNER_TEMP/kleo-output" \
             --source-run-id "${{ steps.request.outputs.source_run_id }}"
 
-      - name: Upload iOS26 6 GiB profile IPA (no shader rebuild)
+      - name: Upload iOS26 5 GiB profile IPA (no shader rebuild)
         uses: actions/upload-artifact@v4
         with:
-          name: Kleo2iOS-iOS26-6G-profile
+          name: Kleo2iOS-iOS26-5G-profile
           path: |
             ${{ runner.temp }}/kleo-output/NX2Apple-iOS26.ipa
             ${{ runner.temp }}/kleo-output/build-report.json

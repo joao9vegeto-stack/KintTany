@@ -41,9 +41,13 @@ def read_entitlements(executable: Path, output: Path) -> None:
     output.write_text(xml, encoding="utf-8")
 
 
+# 5 GiB total guest reservation: 256 MiB front + 256 MiB alias +
+# 256 MiB stack + 4.25 GiB application heap. The NX Native memory guide
+# documents 5 GiB as the total proven on iOS without extended VA; Metal
+# and the host process need address space outside the guest reservation.
 MEMORY_PROFILE = {
-    "mem_reserve": ("0x270000000", "0x180000000"),
-    "app_pool": ("0x240000000", "0x150000000"),
+    "mem_reserve": ("0x270000000", "0x140000000"),
+    "app_pool": ("0x240000000", "0x110000000"),
 }
 
 
@@ -226,7 +230,7 @@ def main() -> None:
     report["memory_profile"] = {
         "source": profile_rel,
         "loaded_by": "DM_PROFILE (NX2Apple Route C EngineLaunchPlan)",
-        "mode": "ios26_6gb_virtual_reservation",
+        "mode": "ios26_5gb_total_virtual_reservation_no_eva",
         "changes": memory_changes,
         "shader_rebuild": False,
         "framework_rebuild": False,

@@ -1,12 +1,7 @@
 name: Kleo2iOS iOS 26 Repack
 
 on:
-  push:
-    branches:
-      - Kleo2iOS
-    paths:
-      - scripts/repack_ipa_ios26.py
-      - .github/workflows/kleo2ios-repack.yml
+  workflow_dispatch:
 
 permissions:
   contents: read
