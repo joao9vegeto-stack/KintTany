@@ -59,7 +59,7 @@ def patch_runtime_profile(framework: Path, manifest: dict) -> tuple[str, dict]:
     content = profile.read_text(encoding="utf-8")
     changes = {}
     for key, (before, after) in MEMORY_PROFILE.items():
-        pattern = re.compile(rf"(?m)^{re.escape(key)}([\\t ]+){re.escape(before)}([\\t ]*)$")
+        pattern = re.compile(rf"(?m)^{re.escape(key)}([\t ]+){re.escape(before)}([\t ]*)$")
         updated, count = pattern.subn(lambda m: f"{key}{m.group(1)}{after}{m.group(2)}", content)
         if count != 1:
             raise SystemExit(
@@ -71,7 +71,7 @@ def patch_runtime_profile(framework: Path, manifest: dict) -> tuple[str, dict]:
     profile.write_text(content, encoding="utf-8")
     saved = profile.read_text(encoding="utf-8")
     for key, (_, after) in MEMORY_PROFILE.items():
-        if len(re.findall(rf"(?m)^{re.escape(key)}[\\t ]+{re.escape(after)}[\\t ]*$", saved)) != 1:
+        if len(re.findall(rf"(?m)^{re.escape(key)}[\t ]+{re.escape(after)}[\t ]*$", saved)) != 1:
             raise SystemExit(f"Runtime profile verification failed for {key}={after}.")
     return rel, changes
 
@@ -203,7 +203,7 @@ def main() -> None:
         with zf.open(profile_entry) as f:
             final_profile = f.read().decode("utf-8")
         for key, (_, after) in MEMORY_PROFILE.items():
-            if len(re.findall(rf"(?m)^{re.escape(key)}[\\t ]+{re.escape(after)}[\\t ]*$", final_profile)) != 1:
+            if len(re.findall(rf"(?m)^{re.escape(key)}[\t ]+{re.escape(after)}[\t ]*$", final_profile)) != 1:
                 raise SystemExit(f"Final IPA runtime profile has the wrong {key} value.")
         final_missing = [n for n in required if n not in final_names]
         if final_missing:
