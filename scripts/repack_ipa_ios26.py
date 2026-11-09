@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Remove the iOS 27 Metal 4 PSO archive from an existing IPA without rebuilding game shaders."""
+"""Adjust the runtime memory profile in an existing IPA without rebuilding the host or game shaders."""
 from __future__ import annotations
 
 import argparse
 import json
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -38,6 +39,41 @@ def read_entitlements(executable: Path, output: Path) -> None:
     if entitlements.get(MEMORY_ENTITLEMENT) is not True:
         raise SystemExit("The original IPA does not carry the Increased Memory Limit entitlement.")
     output.write_text(xml, encoding="utf-8")
+
+
+MEMORY_PROFILE = {
+    "mem_reserve": ("0x270000000", "0x180000000"),
+    "app_pool": ("0x240000000", "0x150000000"),
+}
+
+
+def patch_runtime_profile(framework: Path, manifest: dict) -> tuple[str, dict]:
+    """Patch the external runtime profile read by the shell through DM_PROFILE."""
+    rel = str(manifest.get("profile") or "profile.tsv")
+    rel_path = Path(rel)
+    if rel_path.is_absolute() or ".." in rel_path.parts:
+        raise SystemExit(f"Unsafe runtime profile path in manifest: {rel}")
+    profile = framework / rel_path
+    if not profile.is_file():
+        raise SystemExit(f"Framework runtime profile is missing: {profile}")
+    content = profile.read_text(encoding="utf-8")
+    changes = {}
+    for key, (before, after) in MEMORY_PROFILE.items():
+        pattern = re.compile(rf"(?m)^{re.escape(key)}([\\t ]+){re.escape(before)}([\\t ]*)$")
+        updated, count = pattern.subn(lambda m: f"{key}{m.group(1)}{after}{m.group(2)}", content)
+        if count != 1:
+            raise SystemExit(
+                f"Expected exactly one {key}={before} in {profile}; found {count}. "
+                "Refusing an ambiguous memory-profile patch."
+            )
+        content = updated
+        changes[key] = {"before": before, "after": after}
+    profile.write_text(content, encoding="utf-8")
+    saved = profile.read_text(encoding="utf-8")
+    for key, (_, after) in MEMORY_PROFILE.items():
+        if len(re.findall(rf"(?m)^{re.escape(key)}[\\t ]+{re.escape(after)}[\\t ]*$", saved)) != 1:
+            raise SystemExit(f"Runtime profile verification failed for {key}={after}.")
+    return rel, changes
 
 
 def main() -> None:
@@ -114,6 +150,8 @@ def main() -> None:
     entitlements_file = work / "DmShell.entitlements"
     read_entitlements(executable, entitlements_file)
 
+    profile_rel, memory_changes = patch_runtime_profile(framework, manifest)
+
     pso_dir = framework / "pso"
     if not pso_dir.is_dir():
         raise SystemExit("The expected PSO folder disappeared during IPA extraction.")
@@ -159,6 +197,14 @@ def main() -> None:
         }
         if final_shader_entries != shader_entries_before:
             raise SystemExit("Metal shader library entries changed during repack; refusing to publish.")
+        profile_entry = framework_root + "/" + profile_rel.replace("\\\\", "/")
+        if profile_entry not in final_names:
+            raise SystemExit("Repacked IPA is missing the runtime memory profile.")
+        with zf.open(profile_entry) as f:
+            final_profile = f.read().decode("utf-8")
+        for key, (_, after) in MEMORY_PROFILE.items():
+            if len(re.findall(rf"(?m)^{re.escape(key)}[\\t ]+{re.escape(after)}[\\t ]*$", final_profile)) != 1:
+                raise SystemExit(f"Final IPA runtime profile has the wrong {key} value.")
         final_missing = [n for n in required if n not in final_names]
         if final_missing:
             raise SystemExit("Repacked IPA is missing required files: " + ", ".join(final_missing))
@@ -176,6 +222,14 @@ def main() -> None:
         "recompiled": False,
         "retained_from_original_ipa": True,
         "verified_entries_unchanged": len(shader_entries_before),
+    }
+    report["memory_profile"] = {
+        "source": profile_rel,
+        "loaded_by": "DM_PROFILE (NX2Apple Route C EngineLaunchPlan)",
+        "mode": "ios26_6gb_virtual_reservation",
+        "changes": memory_changes,
+        "shader_rebuild": False,
+        "framework_rebuild": False,
     }
     report["repackaged_from_run_id"] = args.source_run_id
     report["repackaged_at_utc"] = datetime.now(timezone.utc).isoformat()
