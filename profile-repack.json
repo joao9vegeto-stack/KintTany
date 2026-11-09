@@ -2,8 +2,8 @@
   "source_run_id": 42571125251,
   "source_artifact_name": "Kleo2iOS-7",
   "title_id": "040074A01BF12000",
-  "mem_reserve": "0x270000000",
-  "app_pool": "0x240000000",
-  "reason": "A/B diagnostic baseline: restore original NXNative Bananza profile (9 GiB app_pool, 9.75 GiB mem_reserve), keep mem_alias=256 MiB and mem_stack=256 MiB unchanged. Remove iOS27 PSO archives and re-sign for iOS26; no shader or framework rebuild.",
-  "request_revision": "ios26-original-9g-pool-alias-256m-ab-test-v6"
+  "mem_reserve": "0x140000000",
+  "app_pool": "0x110000000",
+  "reason": "Restore the proven bootable Bananza layout for the target iPhone/iOS 26 test: 5 GiB guest reservation, 4.25 GiB app pool, mem_alias=256 MiB and mem_stack=256 MiB unchanged. Do not use the upstream 9.75 GiB reservation because the device aborts at FATAL reserve guest AS. Preserve existing Metal shader libraries; remove only incompatible iOS 27 Metal 4 PSO files and re-sign.",
+  "request_revision": "ios26-known-bootable-5g-reservation-4250m-pool-restore-v7"
 }
