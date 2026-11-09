@@ -1,0 +1,132 @@
+name: Kleo2iOS iOS26 6G guest heap A-B repack
+
+on:
+  push:
+    branches:
+      - Kleo2iOS
+    paths:
+      - profile-repack-6g.json
+      - scripts/repack_ipa_ios26_6g.py
+      - scripts/symbolicate_ios_crash.py
+      - .github/workflows/kleo2ios-profile-repack-6g.yml
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: kleo2ios-profile-6g-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repack-existing-ipa:
+    if: github.ref == 'refs/heads/Kleo2iOS' && github.event_name == 'push'
+    runs-on: xcode-27
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout Kleo2iOS only
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate 6 GiB guest profile request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/Kleo2iOS"
+          python3 - <<'PY'
+          import json, os
+          d=json.load(open("profile-repack-6g.json", encoding="utf-8"))
+          assert d.get("source_run_id") == 42571125251
+          assert d.get("source_artifact_name") == "Kleo2iOS-7"
+          assert d.get("title_id") == "040074A01BF12000"
+          assert d.get("mem_reserve") == "0x180000000"
+          assert d.get("app_pool") == "0x150000000"
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("source_run_id="+str(d["source_run_id"])+"\n")
+              f.write("artifact_name="+d["source_artifact_name"]+"\n")
+          PY
+
+      - name: Download original built IPA (no game/shader rebuild)
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run download "${{ steps.request.outputs.source_run_id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "${{ steps.request.outputs.artifact_name }}" \
+            --dir "$RUNNER_TEMP/source-artifact"
+          IPA=$(find "$RUNNER_TEMP/source-artifact" -type f -name 'NX2Apple.ipa' -print -quit)
+          REPORT=$(find "$RUNNER_TEMP/source-artifact" -type f -name 'build-report.json' -print -quit)
+          test -n "$IPA" && test -s "$IPA"
+          test -n "$REPORT" && test -s "$REPORT"
+          mkdir -p "$RUNNER_TEMP/source"
+          cp "$IPA" "$RUNNER_TEMP/source/NX2Apple.ipa"
+          cp "$REPORT" "$RUNNER_TEMP/source/build-report.json"
+          du -h "$RUNNER_TEMP/source/NX2Apple.ipa"
+
+      - name: Select packer Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Sync exact NX2Apple packer
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v1.3.0-rc10 https://github.com/LNPANDY/NX2Apple.git "$RUNNER_TEMP/NX2Apple"
+          cd "$RUNNER_TEMP/NX2Apple"
+          python3 tools/engine.py sync
+          test "$(cat .upstream-ref)" = "c78d7375bea9c862679ec294a6a69ff3e22e18d0"
+          python3 -m venv "$RUNNER_TEMP/kleo-venv"
+          echo "$RUNNER_TEMP/kleo-venv/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/kleo-venv/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/kleo-venv/bin/python" -m pip install lz4 backports.zstd
+          "$RUNNER_TEMP/kleo-venv/bin/python" -m pip install "capstone>=5,<6"
+
+      - name: Repack 6 GiB reservation / 5.25 GiB app heap
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/repack_ipa_ios26_6g.py \
+            --ipa "$RUNNER_TEMP/source/NX2Apple.ipa" \
+            --report "$RUNNER_TEMP/source/build-report.json" \
+            --engine-root "$RUNNER_TEMP/NX2Apple/engine" \
+            --output-dir "$RUNNER_TEMP/kleo-output" \
+            --source-run-id "${{ steps.request.outputs.source_run_id }}"
+
+      - name: Disassemble Bananza allocator failure path (static, same game binary)
+        shell: bash
+        run: |
+          set -euo pipefail
+          FRAMEWORK="$RUNNER_TEMP/kleo-output/repack-work/Payload/DmShell.app/Frameworks/DmGame040074A01BF12000.framework"
+          MANIFEST="$FRAMEWORK/game.manifest.json"
+          test -s "$MANIFEST"
+          EXECUTABLE=$("$RUNNER_TEMP/kleo-venv/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["framework_executable"])' "$MANIFEST")
+          test -s "$FRAMEWORK/$EXECUTABLE"
+          "$RUNNER_TEMP/kleo-venv/bin/python" scripts/symbolicate_ios_crash.py \
+            --macho "$FRAMEWORK/$EXECUTABLE" \
+            --output "$RUNNER_TEMP/kleo-output/bananza-allocator-disassembly.txt"
+          grep -A12 -B4 'direct BL cross-references' "$RUNNER_TEMP/kleo-output/bananza-allocator-disassembly.txt" || true
+
+      - name: Upload iOS26 6 GiB guest heap IPA (shaders retained)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kleo2iOS-iOS26-6G-guest-heap
+          path: |
+            ${{ runner.temp }}/kleo-output/NX2Apple-iOS26.ipa
+            ${{ runner.temp }}/kleo-output/build-report.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload allocator disassembly
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kleo2iOS-Bananza-allocator-disassembly
+          path: ${{ runner.temp }}/kleo-output/bananza-allocator-disassembly.txt
+          if-no-files-found: error
+          retention-days: 7
