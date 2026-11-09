@@ -141,9 +141,17 @@ def direct_callers(fp: BinaryIO, section: dict, targets: set[int], md) -> list[s
     for ins in md.disasm(code, 0):
         if ins.mnemonic != "bl" or not ins.operands:
             continue
-        operand = ins.operands[0]
-        if operand.type == 2 and operand.imm in found:  # ARM64_OP_IMM
-            found[operand.imm].append(ins.address)
+        # Parse Capstone's printed immediate because operand type/imm representation
+        # varies between Capstone builds; the encoded BL target is printed as "#0x...".
+        try:
+            target_text = ins.op_str.split(",", 1)[0].strip()
+            if not target_text.startswith("#"):
+                continue
+            target = int(target_text[1:], 0)
+        except (ValueError, IndexError):
+            continue
+        if target in found:
+            found[target].append(ins.address)
     lines = ["\\n[direct BL cross-references in main text]"]
     for target in sorted(found):
         callers = found[target]
@@ -234,7 +242,12 @@ def main() -> int:
             ("main", 0x288EA0, "allocator used by owner constructor", 0x80, 0x200),
             ("main", 0x489680, "resource/object lookup helper", 0x80, 0x180),
             ("main", 0x1B7B130, "memory helper thunk used during owner setup", 0x20, 0x80),
-            ("main", 0x1761C0, "initializer called immediately after clearing auxiliary structure +0x10", 0x100, 0x800),
+            ("main", 0x1761C0, "region allocator/registrar called after clearing auxiliary structure +0x10 (full routine)", 0x100, 0x1900),
+            ("main", 0x187E1A0, "memory-region mapping helper called by region allocator", 0x100, 0x500),
+            ("main", 0x1592600, "memory teardown/helper called from allocator early-exit path", 0x80, 0x200),
+            ("main", 0x51D6A0, "resource-region helper called from allocator retry path", 0x80, 0x280),
+            ("main", 0x557B30, "guest memory region registration helper", 0x80, 0x300),
+            ("main", 0x1591668, "region registration callback after mapping", 0x80, 0x300),
             ("main", 0x1A0860, "fallback allocator for eight 0x40-byte records", 0x100, 0x280),
             ("main", 0x1B7AE50, "resource / address-region lookup used by initializer", 0x100, 0x280),
             ("main", 0x4A9EE0, "null-resource fallback branch in object setup", 0x80, 0x180),
