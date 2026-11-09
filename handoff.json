@@ -1,15 +1,18 @@
 {
   "format": 1,
-  "request_id": "d8945294-6191-4d33-bebf-88fcc56434d4",
+  "request_id": "225816b8-b91e-49b3-9981-d8e1200718e1",
   "drive_file_id": "1Kc1HYEj4VgSNhr950g6w73Ct1kEh-CKv",
   "archive_sha256": "a3eb69fbda92ff93341e4d98c562c48b10a929b3145d73486510d481dd560991",
   "archive_size": 9307452709,
   "nup_file_id": "1B8g2vzWjS4EpuuhmUT8ZLwANAHVLlAgo",
   "nup_size": 9288386019,
   "nup_sha256": "536bba3b35ca11a9203e2cb4a1f5680506a4519d856f9674261249c545fdbbf5",
+  "game_data_folder_id": "1hY3bRawhDtsuLrXH5eCI6sp_47tSwY78",
+  "game_data_size": 10140203747,
+  "game_data_sha256": "ced7d7fa1a8f17f3c2a4650e726b08240ab3e72374ceb87803eddc95d3df8a2a",
   "title_id": "040074A01BF12000",
   "package_version": "v458752",
   "engine_pin": "c78d7375bea9c862679ec294a6a69ff3e22e18d0",
   "nx2apple_tag": "v1.3.0-rc10",
-  "created_utc": "2026-11-09T03:26:05.582316+00:00"
+  "created_utc": "2026-11-09T06:07:06.169192+00:00"
 }
