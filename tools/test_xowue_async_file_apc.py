@@ -77,8 +77,8 @@ require("resetGuestWaitableForIo(eventWaitable)" in read and
 require("!hasSuppliedEvent" in completion_body and
         "GuestEventSignalOnReturn eventSignal(eventHandle, eventWaitable);" in completion_body,
         "a supplied request event must replace, not accompany, the file wait object")
-require("context.r3.u32 = result.status;" in read,
-        "an inline-completed read must return its final NT status, not false STATUS_PENDING")
+require("context.r3.u32 = file->synchronous ? result.status : kNtStatusPending;" in read,
+        "inline-completed reads must preserve Xbox/Xenia STATUS_PENDING for asynchronous file handles while publishing the final IOSB")
 require("eventWaitable->kind != GuestWaitable::Kind::Event" in read,
         "a non-null invalid event handle must be rejected instead of silently ignored")
 require(completion_end < async_read.index("queueGuestApc("),
@@ -124,4 +124,4 @@ require("std::this_thread::yield();" in delay,
 require("alertable && guestApcCanInterruptWait()" in delay,
         "an APC queued during an alertable relative delay must interrupt the wait")
 
-print("PASS: XOWUE NtReadFile defers APC transfers, selects one reset completion object, and returns final status for inline reads.")
+print("PASS: XOWUE NtReadFile defers APC transfers, selects one reset completion object, and preserves Xbox async-handle return semantics.")

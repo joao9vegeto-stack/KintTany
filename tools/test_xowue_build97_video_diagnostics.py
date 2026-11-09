@@ -68,7 +68,7 @@ required = {
     "scatter diagnostics report segment stride and pointers": "segment_stride=4 first_segment=0x",
     "file objects retain NT synchronous-open flags": "file->synchronous = (options & (0x00000010u | 0x00000020u)) != 0u;",
     "scatter async handles return STATUS_PENDING": "context.r3.u32 = file->synchronous ? status : kNtStatusPending;",
-    "NtReadFile inline fallback returns final completion status": "context.r3.u32 = result.status;",
+    "NtReadFile async fallback returns STATUS_PENDING": "context.r3.u32 = file->synchronous ? result.status : kNtStatusPending;",
     "FILE_USE_FILE_POINTER_POSITION (-2) is supported": "requested != std::numeric_limits<uint64_t>::max() - 1u",
     "NtReadFile accepts current-position sentinel -2": "requestedOffset != std::numeric_limits<uint64_t>::max() - 1u",
     "scatter read diagnostics retained": "B95_SCATTER_READ",

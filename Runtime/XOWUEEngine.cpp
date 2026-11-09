@@ -9553,9 +9553,10 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
                                result.status, result.eof, result.sequence != 0u,
                                !hasSuppliedEvent);
     signal.signalNow();
-    // This branch has completed the transfer inline. Return its final NT
-    // status; STATUS_PENDING is reserved for the deferred APC path above.
-    context.r3.u32 = result.status;
+    // Preserve Xbox/Xenia semantics: an asynchronous file handle reports
+    // STATUS_PENDING even when this host-side fallback completed inline. The
+    // final transfer status and byte count remain available in the IOSB.
+    context.r3.u32 = file->synchronous ? result.status : kNtStatusPending;
 }
 
 void xowue_NtWriteFile(PPCContext &context, uint8_t *base) {
