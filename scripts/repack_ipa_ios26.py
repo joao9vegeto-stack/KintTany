@@ -197,7 +197,7 @@ def main() -> None:
         }
         if final_shader_entries != shader_entries_before:
             raise SystemExit("Metal shader library entries changed during repack; refusing to publish.")
-        profile_entry = framework_root + "/" + profile_rel.replace("\\\\", "/")
+        profile_entry = framework_root + "/" + profile_rel.replace("\\", "/")
         if profile_entry not in final_names:
             raise SystemExit("Repacked IPA is missing the runtime memory profile.")
         with zf.open(profile_entry) as f:
