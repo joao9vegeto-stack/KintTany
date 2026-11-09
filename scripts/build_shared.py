@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Finish the Switch game framework and build the Route C Shared shell on macOS."""
 from __future__ import annotations
-import argparse, json, os, shutil, subprocess, sys
+import argparse, json, os, shutil, subprocess, sys, zipfile
 from pathlib import Path
 
 def run(cmd, cwd=None, env=None):
@@ -15,8 +15,10 @@ def main():
     ap.add_argument("--nup", type=Path, required=True)
     ap.add_argument("--work-dir", type=Path, required=True)
     ap.add_argument("--output", type=Path, required=True)
-    ap.add_argument("--drive-handoff-id", required=True,
-                    help="Google Drive ID of the existing work-only archive containing RomFS.img.")
+    ap.add_argument("--game-data-drive-id", required=True,
+                    help="Google Drive ID of the separate iOS-importable game-data ZIP.")
+    ap.add_argument("--game-data-size", type=int, required=True)
+    ap.add_argument("--game-data-sha256", required=True)
     args = ap.parse_args()
     if sys.platform != "darwin":
         raise SystemExit("The Shared App finalizer must run on macOS.")
@@ -117,15 +119,15 @@ def main():
         "engine_pin": prep["engine_pin"], "nx2apple_tag": prep["nx2apple_tag"],
         "ipa": str(final_ipa), "ipa_size": final_ipa.stat().st_size,
         "game_data": {
-            "storage": "Google Drive work-only handoff archive",
-            "drive_file_id": args.drive_handoff_id,
-            "drive_url": f"https://drive.google.com/file/d/{args.drive_handoff_id}/view",
-            "archive_format": "tar.zst",
-            "archive_members": {
-                "romfs": f"work/extract/{package_version}/RomFS.img",
-                "aoc": "work/aoc/",
-            },
+            "storage": "Google Drive",
+            "drive_file_id": args.game_data_drive_id,
+            "drive_url": f"https://drive.google.com/file/d/{args.game_data_drive_id}/view",
+            "filename": "game-data.zip",
+            "format": "zip (ZIP_STORED, ZIP64)",
+            "size": args.game_data_size,
+            "sha256": args.game_data_sha256,
             "romfs_size": romfs.stat().st_size,
+            "contents": [f"games/{title_id}/romfs.img", f"games/{title_id}/aoc/"],
         },
         "framework": framework_name,
     }
