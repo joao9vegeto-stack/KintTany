@@ -163,7 +163,10 @@ def main() -> int:
         main_text = sections.get(("__TEXT", "__dmmainx0"))
         main_data = sections.get(("__DMmainW", "__img"))
         if main_text and main_data:
-            module_data_off = main_data["address"] - main_text["address"]
+            # gen_embed.py places x0 at module offset 0; the following W segment
+            # starts exactly where x0 ends (rounded TEXT_END). Mach-O vmaddrs
+            # are not game-module offsets and must not be subtracted here.
+            module_data_off = main_text["size"]
             report.append(
                 f"Section __DMmainW,__img: vmaddr=0x{main_data['address']:x} "
                 f"size=0x{main_data['size']:x} fileoff=0x{main_data['file_offset']:x} "
