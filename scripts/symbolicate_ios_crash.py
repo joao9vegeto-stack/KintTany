@@ -240,6 +240,12 @@ def main() -> int:
             ("main", 0x489680, "resource/object lookup helper", 0x80, 0x180),
             ("main", 0x1B7B130, "memory helper thunk used during owner setup", 0x20, 0x80),
             ("main", 0x1761C0, "region allocator/registrar called after clearing auxiliary structure +0x10 (full routine)", 0x100, 0x1900),
+            ("main", 0x176518, "second caller: setup path that registers region records", 0x180, 0x380),
+            ("main", 0x176A70, "failed-allocation callsite: arguments passed into backing allocator", 0x180, 0x400),
+            ("main", 0x178500, "backing-region allocator: complete entry, allocation and failure/cleanup paths", 0x100, 0x1600),
+            ("main", 0x231900, "second independent caller and object preparation around main+0x231db8", 0x300, 0xA00),
+            ("main", 0x231DB8, "second caller of backing allocator", 0x100, 0x500),
+            ("main", 0x231F5C, "second caller of region record registration helper", 0x100, 0x300),
             ("main", 0x178500, "backing-region allocator whose null return leaves auxiliary +0x10 unset", 0x100, 0x1400),
             ("main", 0x28BA40, "allocator used to create region record", 0x100, 0x500),
             ("main", 0x17A2E0, "region record registration helper", 0x100, 0x500),
@@ -297,7 +303,7 @@ def main() -> int:
                 ))
             if main_text:
                 report.extend(direct_callers(
-                    fp, main_text, {0x1761C0, 0x178500, 0x28BA40, 0x17A2E0, 0x1A0860, 0x1B7AE50, 0x4A9918, 0x48A65C}, md
+                    fp, main_text, {0x1761C0, 0x176518, 0x176A70, 0x178500, 0x231DB8, 0x231F5C, 0x28BA40, 0x17A2E0, 0x1A0860, 0x1B7AE50, 0x4A9918, 0x48A65C}, md
                 ))
     except Exception as exc:
         # Optional audit only: do not fail the profile repack if one Mach-O variant cannot be decoded.
