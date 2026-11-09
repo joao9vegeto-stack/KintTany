@@ -16,13 +16,23 @@ assert "signalGuestEventHandle(handle);" not in guard
 assert "B99_EVENT_COMPLETION_SIGNAL" in guard
 assert "B99_EVENT_COMPLETION_MISSING" in guard
 
-# The asynchronous event reference is captured at request submission, while
-# the existing file completion guard separately retains its file-owned event.
+# NtReadFile validates and captures the supplied event at submission so
+# deferred APC completion cannot lose it if the numeric handle is closed.
+# Scatter and write retain their existing synchronous event guard.
 for function in ("xowue_NtReadFile", "xowue_NtReadFileScatter", "xowue_NtWriteFile"):
     p = engine.index("void " + function + "(")
     q = engine.find("\nvoid ", p + 6)
     body = engine[p:q if q >= 0 else len(engine)]
-    assert "GuestEventSignalOnReturn signal(context.r4.u32);" in body, function
+    if function == "xowue_NtReadFile":
+        assert "GuestEventSignalOnReturn signal(eventHandle, eventWaitable);" in body
+        assert "GuestEventSignalOnReturn eventSignal(eventHandle, eventWaitable);" in body
+        assert "eventWaitable, hasSuppliedEvent," in body
+        assert "resetGuestWaitableForIo(eventWaitable)" in body
+        assert "resetGuestWaitableForIo(file->completion)" in body
+        assert "!hasSuppliedEvent" in body
+        assert "GuestEventSignalOnReturn signal(context.r4.u32);" not in body
+    else:
+        assert "GuestEventSignalOnReturn signal(context.r4.u32);" in body, function
 
 assert 'event.find("B98_")' in engine
 assert 'event.find("B99_")' in engine
