@@ -43,11 +43,17 @@ jobs:
           assert re.fullmatch(r"[A-Za-z0-9_-]{10,}", d.get("drive_file_id", ""))
           assert re.fullmatch(r"[0-9a-f]{64}", d.get("archive_sha256", ""))
           assert int(d.get("archive_size", 0)) > 0
+          assert re.fullmatch(r"[A-Za-z0-9_-]{10,}", d.get("nup_file_id", ""))
+          assert re.fullmatch(r"[0-9a-f]{64}", d.get("nup_sha256", ""))
+          assert int(d.get("nup_size", 0)) > 0
           assert d.get("engine_pin")
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write("file_id="+d["drive_file_id"]+"\n")
               f.write("sha256="+d["archive_sha256"]+"\n")
               f.write("size="+str(d["archive_size"])+"\n")
+              f.write("nup_file_id="+d["nup_file_id"]+"\n")
+              f.write("nup_sha256="+d["nup_sha256"]+"\n")
+              f.write("nup_size="+str(d["nup_size"])+"\n")
           PY
 
       - name: Select Python
@@ -100,13 +106,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -s "$RUNNER_TEMP/handoff/game.nup"
-          # The extracted handoff is now verified; retaining its 18+ GB compressed
-          # archive during Metal shader compilation needlessly consumes runner disk.
+          test -s "$RUNNER_TEMP/handoff/work/kleo-linux-prep.json"
+          # The work archive is verified and extracted. Remove it before downloading
+          # the original NUP so compressed and extracted copies never coexist with it.
           rm -f "$RUNNER_TEMP/handoff.tar.zst"
-          echo "Disk space after releasing verified archive:"
+          echo "Disk space after releasing verified work archive:"
           df -h "$RUNNER_TEMP"
           du -sh "$RUNNER_TEMP/handoff" "$RUNNER_TEMP/NX2Apple" || true
+
+      - name: Download original NUP after extracting work
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          DRIVE_FILE_ID: ${{ steps.request.outputs.nup_file_id }}
+          EXPECTED_SIZE: ${{ steps.request.outputs.nup_size }}
+          EXPECTED_SHA256: ${{ steps.request.outputs.nup_sha256 }}
+        run: |
+          set -euo pipefail
+          python scripts/download_drive.py --file-id "$DRIVE_FILE_ID" \
+            --output "$RUNNER_TEMP/handoff/game.nup" \
+            --expected-size "$EXPECTED_SIZE" --expected-sha256 "$EXPECTED_SHA256"
 
       - name: Build game framework and export Shared IPA
         shell: bash
