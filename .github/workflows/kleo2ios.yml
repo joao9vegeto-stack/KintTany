@@ -46,7 +46,7 @@ jobs:
           assert re.fullmatch(r"[A-Za-z0-9_-]{10,}", d.get("nup_file_id", ""))
           assert re.fullmatch(r"[0-9a-f]{64}", d.get("nup_sha256", ""))
           assert int(d.get("nup_size", 0)) > 0
-          assert re.fullmatch(r"[A-Za-z0-9_-]{10,}", d.get("game_data_file_id", ""))
+          assert re.fullmatch(r"[A-Za-z0-9_-]{10,}", d.get("game_data_folder_id", ""))
           assert re.fullmatch(r"[0-9a-f]{64}", d.get("game_data_sha256", ""))
           assert int(d.get("game_data_size", 0)) > 0
           assert d.get("engine_pin")
@@ -57,7 +57,7 @@ jobs:
               f.write("nup_file_id="+d["nup_file_id"]+"\n")
               f.write("nup_sha256="+d["nup_sha256"]+"\n")
               f.write("nup_size="+str(d["nup_size"])+"\n")
-              f.write("game_data_file_id="+d["game_data_file_id"]+"\n")
+              f.write("game_data_folder_id="+d["game_data_folder_id"]+"\n")
               f.write("game_data_sha256="+d["game_data_sha256"]+"\n")
               f.write("game_data_size="+str(d["game_data_size"])+"\n")
           PY
@@ -145,7 +145,7 @@ jobs:
             --nup "$RUNNER_TEMP/handoff/game.nup" \
             --work-dir "$RUNNER_TEMP/handoff/work" \
             --output "$RUNNER_TEMP/kleo-output" \
-            --game-data-drive-id "${{ steps.request.outputs.game_data_file_id }}" \
+            --game-data-folder-id "${{ steps.request.outputs.game_data_folder_id }}" \
             --game-data-size "${{ steps.request.outputs.game_data_size }}" \
             --game-data-sha256 "${{ steps.request.outputs.game_data_sha256 }}"
 

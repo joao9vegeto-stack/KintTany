@@ -15,8 +15,8 @@ def main():
     ap.add_argument("--nup", type=Path, required=True)
     ap.add_argument("--work-dir", type=Path, required=True)
     ap.add_argument("--output", type=Path, required=True)
-    ap.add_argument("--game-data-drive-id", required=True,
-                    help="Google Drive ID of the separate iOS-importable game-data ZIP.")
+    ap.add_argument("--game-data-folder-id", required=True,
+                    help="Google Drive folder ID containing the already-extracted game data.")
     ap.add_argument("--game-data-size", type=int, required=True)
     ap.add_argument("--game-data-sha256", required=True)
     args = ap.parse_args()
@@ -120,10 +120,9 @@ def main():
         "ipa": str(final_ipa), "ipa_size": final_ipa.stat().st_size,
         "game_data": {
             "storage": "Google Drive",
-            "drive_file_id": args.game_data_drive_id,
-            "drive_url": f"https://drive.google.com/file/d/{args.game_data_drive_id}/view",
-            "filename": "game-data.zip",
-            "format": "zip (ZIP_STORED, ZIP64)",
+            "folder_id": args.game_data_folder_id,
+            "drive_url": f"https://drive.google.com/drive/folders/{args.game_data_folder_id}",
+            "format": "extracted Drive folder",
             "size": args.game_data_size,
             "sha256": args.game_data_sha256,
             "romfs_size": romfs.stat().st_size,
