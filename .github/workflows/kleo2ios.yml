@@ -34,7 +34,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/Kleo2iOS"
-          test "$(git branch --show-current)" = "Kleo2iOS"
+          test "$GITHUB_REF_NAME" = "Kleo2iOS"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           python3 - <<'PY'
           import json, os, re
           d=json.load(open("handoff.json", encoding="utf-8"))
