@@ -1,12 +1,15 @@
 {
   "format": 1,
-  "request_id": "b5b9fb7b-96aa-4856-b455-5b5170e62180",
-  "drive_file_id": "1IdsHgxTgQ5-3yK-2g-QaRrFPkakjKfaH",
-  "archive_sha256": "f28afe6834bd8817b3a3b1904436ee263fdf56149024b9d0ec8fac5e09f10a16",
-  "archive_size": 18573019813,
+  "request_id": "d8945294-6191-4d33-bebf-88fcc56434d4",
+  "drive_file_id": "1Kc1HYEj4VgSNhr950g6w73Ct1kEh-CKv",
+  "archive_sha256": "a3eb69fbda92ff93341e4d98c562c48b10a929b3145d73486510d481dd560991",
+  "archive_size": 9307452709,
+  "nup_file_id": "1B8g2vzWjS4EpuuhmUT8ZLwANAHVLlAgo",
+  "nup_size": 9288386019,
+  "nup_sha256": "536bba3b35ca11a9203e2cb4a1f5680506a4519d856f9674261249c545fdbbf5",
   "title_id": "040074A01BF12000",
   "package_version": "v458752",
   "engine_pin": "c78d7375bea9c862679ec294a6a69ff3e22e18d0",
   "nx2apple_tag": "v1.3.0-rc10",
-  "created_utc": "2026-11-09T02:45:00.000000+00:00"
+  "created_utc": "2026-11-09T03:26:05.582316+00:00"
 }
