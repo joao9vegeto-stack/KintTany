@@ -2060,6 +2060,16 @@ void signalGuestWaitable(const std::shared_ptr<GuestWaitable> &waitable) {
     g_waitSetChanged.notify_all();
 }
 
+// Prepare the single wait object selected for an NT read. Clearing the
+// unconsumed count matters here: an old completion must not satisfy a new I/O.
+void resetGuestWaitableForIo(const std::shared_ptr<GuestWaitable> &waitable) {
+    if (!waitable || waitable->kind != GuestWaitable::Kind::Event) return;
+    std::lock_guard<std::mutex> lock(waitable->mutex);
+    waitable->signaled = false;
+    waitable->unconsumedSignals = 0u;
+    syncGuestDispatcherSignalState(waitable);
+}
+
 bool signalGuestEventStructure(uint32_t address, uint8_t *base) {
     auto waitable = ensurePointerWaitable(address, base);
     if (!waitable || waitable->kind != GuestWaitable::Kind::Event) return false;
@@ -2090,9 +2100,15 @@ struct GuestEventSignalOnReturn final {
     // completion. NtClose may remove the numeric handle while the operation is
     // still in flight; resolving the handle again at completion would then
     // silently lose the completion signal and strand the waiting guest thread.
-    explicit GuestEventSignalOnReturn(uint32_t eventHandle)
+    explicit GuestEventSignalOnReturn(
+        uint32_t eventHandle,
+        std::shared_ptr<GuestWaitable> capturedWaitable = {})
         : handle(eventHandle),
-          waitable(eventHandle != 0u ? lookupGuestWaitable(eventHandle) : nullptr) {}
+          waitable(eventHandle != 0u
+              ? (capturedWaitable ? std::move(capturedWaitable)
+                                  : lookupGuestWaitable(eventHandle))
+              : nullptr) {}
+    void resetNow() { resetGuestWaitableForIo(waitable); }
     void signalNow() {
         if (signaled) return;
         signaled = true;
@@ -2128,13 +2144,19 @@ struct GuestEventSignalOnReturn final {
 struct GuestFileCompletionSignalOnReturn final {
     explicit GuestFileCompletionSignalOnReturn(std::shared_ptr<GuestFile> value)
         : file(std::move(value)) {}
+    void resetNow() {
+        if (file) resetGuestWaitableForIo(file->completion);
+    }
     void signalNow(uint64_t readSequence = 0u, uint64_t readOffset = 0u,
                    uint32_t readBytes = 0u, uint32_t readStatus = 0u,
-                   bool readEof = false, bool readCompleted = false) {
+                   bool readEof = false, bool readCompleted = false,
+                   bool signalFileWaitable = true) {
         if (signaled) return;
         signaled = true;
         if (!file || !file->completion) return;
-        signalGuestWaitable(file->completion);
+        if (signalFileWaitable) {
+            signalGuestWaitable(file->completion);
+        }
         std::string ext = file->path.extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(),
             [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -2158,12 +2180,15 @@ struct GuestFileCompletionSignalOnReturn final {
                     static_cast<unsigned long long>(readOffset), readBytes, readStatus,
                     file->path.string().c_str());
                 recordRuntimeTrace(eofEvent);
-                if (ext == ".bik") recordRuntimeTrace("B99_BIK_EOF_COMPLETION emitted after file signal");
+                if (ext == ".bik")
+                    recordRuntimeTrace("B99_BIK_EOF_COMPLETION emitted after I/O result publication");
             }
             if (sample <= 24u || (sample % 512u) == 0u) {
-                char event[512];
+                char event[544];
                 std::snprintf(event, sizeof(event),
-                    "B99_FILE_COMPLETION_SIGNAL sample=%u handle=0x%08X object=0x%08X generation=%llu path=%s",
+                    "%s sample=%u handle=0x%08X object=0x%08X generation=%llu path=%s",
+                    signalFileWaitable ? "B99_FILE_COMPLETION_SIGNAL"
+                                       : "B99_FILE_COMPLETION_NOT_SELECTED",
                     sample, file->completion->handle, file->completion->objectAddress,
                     static_cast<unsigned long long>(generation),
                     file->path.string().c_str());
@@ -9170,17 +9195,32 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
         recordRuntimeTrace(event);
     };
     const auto file = lookupGuestFile(handle);
+    const auto eventWaitable = eventHandle != 0u
+        ? lookupGuestWaitable(eventHandle) : nullptr;
+    // Xenia and THEFT4 both reject a non-null event handle that is not an
+    // event object. Do not silently complete a request without its event.
+    if (eventHandle != 0u &&
+        (!eventWaitable || eventWaitable->kind != GuestWaitable::Kind::Event)) {
+        context.r3.u32 = kNtStatusInvalidHandle;
+        writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
+        b83LogRead(context.r3.u32);
+        return;
+    }
     if (!base || !file || file->directory || !file->readable ||
         length > 64u * 1024u * 1024u ||
         (length != 0u && !validGuestRange(buffer, length)) ||
         (ioStatus != 0u && !validGuestRange(ioStatus, 8u))) {
-        GuestEventSignalOnReturn signal(context.r4.u32);
-        GuestFileCompletionSignalOnReturn completionSignal(file);
         context.r3.u32 = file ? kNtStatusInvalidParameter : kNtStatusInvalidHandle;
         writeGuestIoStatus(base, ioStatus, context.r3.u32, 0u);
         b83LogRead(context.r3.u32);
         return;
     }
+
+    const bool hasSuppliedEvent = eventHandle != 0u;
+    // The supplied per-request event replaces the shared FileHandle wait
+    // object. Reset only the selected target, never both.
+    if (hasSuppliedEvent) resetGuestWaitableForIo(eventWaitable);
+    else resetGuestWaitableForIo(file->completion);
 
     // Capture explicit offsets now. A null/current-file-pointer offset is
     // resolved against the file position when this read transfer executes.
@@ -9462,9 +9502,10 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
         // the final IOSB, guest buffer and event are published by APC delivery.
         writeGuestIoStatus(base, ioStatus, kNtStatusPending, 0u);
         auto completion = [performRead, file, base, ioStatus, eventHandle,
+                           eventWaitable, hasSuppliedEvent,
                            b83ReadCall, handle, length, apcRoutine, apcContext]() mutable {
             GuestFileCompletionSignalOnReturn completionSignal(file);
-            GuestEventSignalOnReturn eventSignal(eventHandle);
+            GuestEventSignalOnReturn eventSignal(eventHandle, eventWaitable);
             GuestFileReadResult result{};
             try {
                 result = performRead(true);
@@ -9473,11 +9514,11 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
                 writeGuestIoStatus(base, ioStatus, result.status, 0u);
                 recordRuntimeTrace("B103_ASYNC_NTREADFILE_COMPLETE_EXCEPTION");
             }
-            // The transfer writes the final IOSB before either completion
-            // object is signalled; then the APC normal routine receives IOSB
-            // as arg1 and may safely consume the newly filled buffer.
+            // Publish the final IOSB and buffer before signaling exactly one
+            // wait object. A supplied event replaces the file-object event.
             completionSignal.signalNow(result.sequence, result.offset, result.bytesRead,
-                                       result.status, result.eof, result.sequence != 0u);
+                                       result.status, result.eof, result.sequence != 0u,
+                                       !hasSuppliedEvent);
             eventSignal.signalNow();
 
             char completeEvent[512];
@@ -9499,7 +9540,7 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
 
     if (apcRoutine != 0u && !apcThread)
         recordRuntimeTrace("B103_ASYNC_NTREADFILE_FALLBACK no guest APC target; completing synchronously");
-    GuestEventSignalOnReturn signal(context.r4.u32);
+    GuestEventSignalOnReturn signal(eventHandle, eventWaitable);
     GuestFileCompletionSignalOnReturn completionSignal(file);
     GuestFileReadResult result{};
     try {
@@ -9509,11 +9550,12 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
         writeGuestIoStatus(base, ioStatus, result.status, 0u);
     }
     completionSignal.signalNow(result.sequence, result.offset, result.bytesRead,
-                               result.status, result.eof, result.sequence != 0u);
+                               result.status, result.eof, result.sequence != 0u,
+                               !hasSuppliedEvent);
     signal.signalNow();
-    // Preserve the Xbox asynchronous-handle contract even when this fallback
-    // path completes the host read inline; the final status remains in IOSB.
-    context.r3.u32 = file->synchronous ? result.status : kNtStatusPending;
+    // This branch has completed the transfer inline. Return its final NT
+    // status; STATUS_PENDING is reserved for the deferred APC path above.
+    context.r3.u32 = result.status;
 }
 
 void xowue_NtWriteFile(PPCContext &context, uint8_t *base) {

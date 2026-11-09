@@ -44,9 +44,11 @@ for token in (
     "auto completion = [performRead, file, base, ioStatus, eventHandle,",
     "result = performRead(true);",
     "GuestFileCompletionSignalOnReturn completionSignal(file);",
-    "GuestEventSignalOnReturn eventSignal(eventHandle);",
+    "GuestEventSignalOnReturn eventSignal(eventHandle, eventWaitable);",
     "completionSignal.signalNow(result.sequence, result.offset, result.bytesRead,",
     "queueGuestApc(apcThread, apcRoutine, apcContext, ioStatus, 0u, std::move(completion));",
+    "completionSignal.signalNow(result.sequence, result.offset, result.bytesRead,",
+    "!hasSuppliedEvent);",
     "context.r3.u32 = kNtStatusPending;",
     "B103_ASYNC_NTREADFILE_SUBMIT",
     "B103_ASYNC_NTREADFILE_COMPLETE",
@@ -69,6 +71,16 @@ require(completion_body.index("result = performRead(true);") <
         completion_body.index("completionSignal.signalNow(result.sequence") <
         completion_body.index("eventSignal.signalNow();"),
         "final IOSB and guest buffer must be published before completion signals")
+require("resetGuestWaitableForIo(eventWaitable)" in read and
+        "resetGuestWaitableForIo(file->completion)" in read,
+        "each NT read must reset only its selected completion wait object")
+require("!hasSuppliedEvent" in completion_body and
+        "GuestEventSignalOnReturn eventSignal(eventHandle, eventWaitable);" in completion_body,
+        "a supplied request event must replace, not accompany, the file wait object")
+require("context.r3.u32 = result.status;" in read,
+        "an inline-completed read must return its final NT status, not false STATUS_PENDING")
+require("eventWaitable->kind != GuestWaitable::Kind::Event" in read,
+        "a non-null invalid event handle must be rejected instead of silently ignored")
 require(completion_end < async_read.index("queueGuestApc("),
         "the APC must be queued with the completed deferred-work closure")
 require("std::move(completion)" in async_read,
@@ -112,4 +124,4 @@ require("std::this_thread::yield();" in delay,
 require("alertable && guestApcCanInterruptWait()" in delay,
         "an APC queued during an alertable relative delay must interrupt the wait")
 
-print("PASS: XOWUE NtReadFile defers transfer, IOSB completion and event signalling until guest APC delivery.")
+print("PASS: XOWUE NtReadFile defers APC transfers, selects one reset completion object, and returns final status for inline reads.")
