@@ -163,7 +163,7 @@ def main() -> None:
     env_lines = [line for line in existing_env.splitlines() if line.strip()]
     if not any(line.partition("=")[0].strip() == "DM_SVC" for line in env_lines):
         env_lines.append("DM_SVC=1")
-    diagnostic_env.write_text("\\n".join(env_lines) + "\\n", encoding="utf-8")
+    diagnostic_env.write_text("\n".join(env_lines) + "\n", encoding="utf-8")
 
     pso_dir = framework / "pso"
     if not pso_dir.is_dir():
