@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""Remove the iOS 27 Metal 4 PSO archive from an existing IPA without rebuilding game shaders."""
+from __future__ import annotations
+
+import argparse
+import json
+import plistlib
+import shutil
+import subprocess
+import sys
+import zipfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+MEMORY_ENTITLEMENT = "com.apple.developer.kernel.increased-memory-limit"
+
+
+def run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess:
+    print("+", " ".join(map(str, cmd)), flush=True)
+    return subprocess.run(cmd, cwd=cwd, check=True)
+
+
+def read_entitlements(executable: Path, output: Path) -> None:
+    result = subprocess.run(
+        ["codesign", "-d", "--entitlements", ":-", str(executable)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    text = result.stdout + "\n" + result.stderr
+    start = text.find("<?xml")
+    end = text.find("</plist>", start)
+    if result.returncode != 0 or start < 0 or end < 0:
+        raise SystemExit("Could not read the existing app entitlements before re-signing.")
+    xml = text[start:end + len("</plist>")] + "\n"
+    entitlements = plistlib.loads(xml.encode("utf-8"))
+    if entitlements.get(MEMORY_ENTITLEMENT) is not True:
+        raise SystemExit("The original IPA does not carry the Increased Memory Limit entitlement.")
+    output.write_text(xml, encoding="utf-8")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--ipa", type=Path, required=True)
+    ap.add_argument("--report", type=Path, required=True)
+    ap.add_argument("--engine-root", type=Path, required=True)
+    ap.add_argument("--output-dir", type=Path, required=True)
+    ap.add_argument("--source-run-id", type=int, required=True)
+    args = ap.parse_args()
+
+    ipa = args.ipa.resolve()
+    report_path = args.report.resolve()
+    engine = args.engine_root.resolve()
+    out = args.output_dir.resolve()
+    if sys.platform != "darwin":
+        raise SystemExit("IPA re-signing must run on macOS.")
+    if not ipa.is_file() or not report_path.is_file():
+        raise SystemExit("The original IPA or build report is missing.")
+    packer = engine / "dm" / "ios" / "tools" / "pack_ipa.py"
+    if not packer.is_file():
+        raise SystemExit(f"NXNative IPA packer is missing: {packer}")
+
+    with zipfile.ZipFile(ipa) as zf:
+        names = set(zf.namelist())
+        pso_entries = sorted(
+            n for n in names
+            if "/Frameworks/" in n and "/pso/" in n and n.lower().endswith(".mtl4a")
+        )
+        if not pso_entries:
+            raise SystemExit("The source IPA contains no Metal 4 PSO archive to remove.")
+        framework_roots = sorted({
+            n.split("/pso/", 1)[0]
+            for n in pso_entries
+        })
+        if len(framework_roots) != 1:
+            raise SystemExit(f"Expected one game framework, found: {framework_roots}")
+        framework_root = framework_roots[0]
+        app_root = "Payload/DmShell.app"
+        if not framework_root.startswith(app_root + "/Frameworks/"):
+            raise SystemExit(f"Unexpected framework location: {framework_root}")
+        manifest_name = framework_root + "/game.manifest.json"
+        if manifest_name not in names:
+            raise SystemExit("The original IPA is missing the game framework manifest.")
+        manifest = json.loads(zf.read(manifest_name))
+        executable_name = str(manifest.get("framework_executable", ""))
+        required = [
+            app_root + "/DmShell",
+            manifest_name,
+            framework_root + "/" + executable_name,
+        ]
+        missing = [n for n in required if n not in names]
+        if missing:
+            raise SystemExit("The original IPA is structurally incomplete: " + ", ".join(missing))
+        shader_prefix = framework_root + "/msl/"
+        shader_entries_before = {
+            n: (zf.getinfo(n).file_size, zf.getinfo(n).CRC)
+            for n in names if n.startswith(shader_prefix) and not n.endswith("/")
+        }
+        if not shader_entries_before:
+            raise SystemExit("The original IPA has no bundled Metal shader libraries to preserve.")
+
+    out.mkdir(parents=True, exist_ok=True)
+    work = out / "repack-work"
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    run(["ditto", "-x", "-k", str(ipa), str(work)])
+    app = work / "Payload" / "DmShell.app"
+    framework = app / "Frameworks" / framework_root.split("/Frameworks/", 1)[1]
+    if not app.is_dir() or not framework.is_dir():
+        raise SystemExit("Could not locate DmShell.app or the Bananza framework after extraction.")
+
+    executable = app / "DmShell"
+    entitlements_file = work / "DmShell.entitlements"
+    read_entitlements(executable, entitlements_file)
+
+    pso_dir = framework / "pso"
+    if not pso_dir.is_dir():
+        raise SystemExit("The expected PSO folder disappeared during IPA extraction.")
+    removed = sorted(str(p.relative_to(app)) for p in pso_dir.rglob("*") if p.is_file())
+    if not removed:
+        raise SystemExit("The PSO folder is empty; refusing an unverified repack.")
+    shutil.rmtree(pso_dir)
+
+    # Re-seal the modified nested framework, then the app, preserving its memory entitlement.
+    run(["xattr", "-cr", str(framework)])
+    run(["codesign", "--force", "--sign", "-", "--timestamp=none", str(framework)])
+    run(["codesign", "--verify", "--strict", str(framework)])
+    run(["xattr", "-cr", str(app)])
+    run([
+        "codesign", "--force", "--sign", "-", "--entitlements", str(entitlements_file),
+        "--timestamp=none", str(app),
+    ])
+    run(["codesign", "--verify", "--deep", "--strict", str(app)])
+    signed = subprocess.run(
+        ["codesign", "-d", "--entitlements", ":-", str(executable)],
+        capture_output=True, text=True, check=False,
+    )
+    if MEMORY_ENTITLEMENT not in (signed.stdout + signed.stderr):
+        raise SystemExit("Re-signed app lost the Increased Memory Limit entitlement.")
+
+    output_ipa = out / "NX2Apple-iOS26.ipa"
+    run([
+        sys.executable, str(packer), str(output_ipa), "--no-reuse",
+        f"Payload/DmShell.app={app}",
+    ], cwd=engine)
+
+    with zipfile.ZipFile(output_ipa) as zf:
+        final_names = set(zf.namelist())
+        remaining = sorted(
+            n for n in final_names
+            if "/Frameworks/" in n and "/pso/" in n and n.lower().endswith(".mtl4a")
+        )
+        if remaining:
+            raise SystemExit("The repacked IPA still contains Metal 4 archives: " + ", ".join(remaining))
+        final_shader_entries = {
+            n: (zf.getinfo(n).file_size, zf.getinfo(n).CRC)
+            for n in final_names if n.startswith(shader_prefix) and not n.endswith("/")
+        }
+        if final_shader_entries != shader_entries_before:
+            raise SystemExit("Metal shader library entries changed during repack; refusing to publish.")
+        final_missing = [n for n in required if n not in final_names]
+        if final_missing:
+            raise SystemExit("Repacked IPA is missing required files: " + ", ".join(final_missing))
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["ipa"] = str(output_ipa)
+    report["ipa_size"] = output_ipa.stat().st_size
+    report["pipeline_archive"] = {
+        "included": False,
+        "gpu": "none",
+        "reason": "Removed because the iOS 27 Metal 4 archive is not loadable on iOS 26; the device builds its pipeline bases at first use.",
+        "removed_files": removed,
+    }
+    report["shader_libraries"] = {
+        "recompiled": False,
+        "retained_from_original_ipa": True,
+        "verified_entries_unchanged": len(shader_entries_before),
+    }
+    report["repackaged_from_run_id"] = args.source_run_id
+    report["repackaged_at_utc"] = datetime.now(timezone.utc).isoformat()
+    (out / "build-report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(report, indent=2), flush=True)
+
+
+if __name__ == "__main__":
+    main()
