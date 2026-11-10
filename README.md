@@ -8,17 +8,17 @@ O notebook utiliza diretamente a pasta Google Drive compartilhada com a service 
 
 `https://drive.google.com/drive/folders/19HXEJCK-26NfBVKeUP3wqFxMFpoF3ykm`
 
-Deixe `prod.keys`, `dlc1.nsp` e `dlc2.nsp` na raiz dessa pasta. Não crie pastas `base/`, `update/` ou `dlc/`.
+Na raiz dessa pasta, deixe `prod.keys`, exatamente um NSP de update (recomendado: `update.nsp`), `dlc1.nsp` e `dlc2.nsp`. O jogo base não precisa ficar no Drive antes da primeira execução.
 
-Na primeira execução, o notebook pede o link assinado do RAR por uma entrada protegida. O link não fica embutido no repositório público, não é impresso e não é gravado no Drive. O Colab baixa o RAR para seu armazenamento temporário, valida e extrai com 7-Zip, procura os NSPs recursivamente e envia apenas os NSPs extraídos para uma pasta `BOTW_Extracted/` criada automaticamente no Drive. O RAR temporário é apagado.
+Na primeira execução, o notebook pede o link assinado do 7z por uma entrada protegida. O link não fica embutido no repositório público, não é impresso e não é gravado no Drive. O Colab baixa o 7z para seu armazenamento temporário, valida a assinatura, testa e extrai com 7-Zip. Exige exatamente um XCI com cabeçalho `HEAD` no offset `0x100` e envia somente esse XCI para uma pasta `BOTW_Base_XCI/` criada automaticamente no Drive. O 7z temporário e a extração local são apagados.
 
-O `prod.keys` é baixado da raiz da pasta Drive para o runtime temporário do Colab e apagado após a preparação. Os NSPs extraídos permanecem no Drive. Nas próximas execuções, o notebook reutiliza `BOTW_Extracted/` e não baixa o RAR novamente; o campo do link pode ficar vazio.
+O `prod.keys` e os três NSPs (update + duas DLCs) são baixados da raiz da pasta Drive para o runtime temporário do Colab e apagados após a preparação. O XCI base extraído permanece no Drive. Nas próximas execuções, o notebook reutiliza `BOTW_Base_XCI/` e não baixa o 7z novamente; o campo do link pode ficar vazio.
 
-A entrada desta execução é o BOTW base + update 1.9.0 no RAR, Title ID `01007EF00011E000`, package `v1114112`, mais os dois DLCs `dlc1.nsp` e `dlc2.nsp` na raiz do Drive. Ambos são obrigatórios e precisam gerar imagens AOC.
+A entrada desta execução é BOTW base XCI + update 1.9.0 + dois DLCs, Title ID `01007EF00011E000`, package `v1114112`. O NXNative/NX2Apple reconhece XCI diretamente e combina o XCI base com o NSP de update e os dois NSPs de DLC. Os dois DLCs são obrigatórios e precisam gerar imagens AOC.
 
 ## Fluxo completo
 
-**Colab/Linux:** acessa o Drive com service account, obtém `prod.keys`, baixa e extrai o RAR (somente na primeira execução), identifica os NSPs de base/update, sincroniza NX2Apple v1.3.1-rc2 e o commit fixo do NXNative, verifica os pacotes, extrai os conteúdos, reescreve módulos AArch64 e prepara o pacote NVN de shaders. A execução para antes do estágio Metal/Xcode.
+**Colab/Linux:** acessa o Drive com service account, obtém `prod.keys`, baixa e extrai o 7z com o XCI base (somente na primeira execução), identifica os NSPs de base/update, sincroniza NX2Apple v1.3.1-rc2 e o commit fixo do NXNative, verifica os pacotes, extrai os conteúdos, reescreve módulos AArch64 e prepara o pacote NVN de shaders. A execução para antes do estágio Metal/Xcode.
 
 Em seguida, o Colab publica no Drive:
 - `pipeline/botw-work.tar.zst`: somente os arquivos necessários à continuação do build;
@@ -43,7 +43,7 @@ RomFS e DLC (quando existentes) permanecem no Drive externo. O Shared Shell prec
 2. No Colab, configure o Secret `LINK2IOS_GOOGLE_SERVICE_ACCOUNT_JSON`.
 3. Em GitHub → Settings → Secrets and variables → Actions, configure `GOOGLE_SERVICE_ACCOUNT_JSON` com a credencial de leitura do Drive.
 4. Gere um Fine-grained PAT restrito a este repositório com **Contents: Read and write**.
-5. Abra o [notebook Link2iOS_BOTW.ipynb no Google Colab](https://colab.research.google.com/github/joao9vegeto-stack/KintTany/blob/Link2iOS/colab/Link2iOS_BOTW.ipynb), cole o link do RAR quando solicitado e execute as células em ordem.
+5. Abra o [notebook Link2iOS_BOTW.ipynb no Google Colab](https://colab.research.google.com/github/joao9vegeto-stack/KintTany/blob/Link2iOS/colab/Link2iOS_BOTW.ipynb), cole o link do 7z quando solicitado e execute as células em ordem.
 
 ## Isolamento
 
