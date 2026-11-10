@@ -18,9 +18,11 @@ for required in ("B86_MEDIA_OPEN", "isStartupMoviePath", "B86_STREAM_ANOMALY",
                  "kMaxRuntimeTraceFileBytes"):
     assert required in engine, f"missing Build 86 runtime diagnostic: {required}"
 
-# Build 86 stream/file evidence is now deliberately bounded to avoid diagnostic flooding.
-for symbol in ("g_runtimeTracePersistB83", "g_runtimeTracePersistB84", "g_runtimeTracePersistB85"):
+# Build 86 stream/file evidence is bounded per family. B84 receives 128
+# records because it now includes the caller + continuation disassembly.
+for symbol in ("g_runtimeTracePersistB83", "g_runtimeTracePersistB85"):
     assert f"{symbol}.fetch_add(1, std::memory_order_relaxed) < 64u" in engine
+assert "g_runtimeTracePersistB84.fetch_add(1, std::memory_order_relaxed) < 128u" in engine
 
 assert "4 * 1024 * 1024" in engine
 assert "kMaxGuestInputTraceFileBytes = 256 * 1024" in engine
