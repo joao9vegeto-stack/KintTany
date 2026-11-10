@@ -18,14 +18,14 @@ A entrada desta execução é BOTW base XCI + update 1.9.0 + dois DLCs, Title ID
 
 ## Fluxo completo
 
-**Colab/Linux:** acessa o Drive com service account, obtém `prod.keys`, baixa e extrai o 7z com o XCI base (somente na primeira execução), identifica os NSPs de base/update, sincroniza NX2Apple v1.3.1-rc2 e o commit fixo do NXNative, verifica os pacotes, extrai os conteúdos, reescreve módulos AArch64 e prepara o pacote NVN de shaders. A execução para antes do estágio Metal/Xcode.
+**Colab/Linux:** acessa o Drive com service account, obtém `prod.keys`, baixa e extrai o 7z com o XCI base (somente na primeira execução), identifica o XCI base e os NSPs de update/DLC, sincroniza NX2Apple v1.3.1-rc2 e o commit fixo do NXNative, verifica os pacotes, extrai os conteúdos, reescreve módulos AArch64 e prepara o pacote NVN de shaders. A execução para antes do estágio Metal/Xcode.
 
 Em seguida, o Colab publica no Drive:
 - `pipeline/botw-work.tar.zst`: somente os arquivos necessários à continuação do build;
 - `games/01007EF00011E000/romfs.img`;
 - `games/01007EF00011E000/aoc/<index>.img`, geradas a partir de `dlc1.nsp` e `dlc2.nsp`.
 
-O workspace não contém RomFS/AOC, NSPs, `prod.keys`, caches NCA grandes, ferramentas Linux ou arquivos temporários. Ele mantém os módulos reescritos, o pacote NVN de shaders e sua chave de conteúdo.
+O workspace não contém RomFS/AOC, XCI/NSPs de origem, `prod.keys`, caches NCA grandes, ferramentas Linux ou arquivos temporários. Ele mantém os módulos reescritos, o pacote NVN de shaders e sua chave de conteúdo.
 
 **Última célula do Colab:** pede o Fine-grained PAT e atualiza `handoff.json` na branch `Link2iOS`. Esse commit dispara o workflow.
 
@@ -35,11 +35,11 @@ O workspace não contém RomFS/AOC, NSPs, `prod.keys`, caches NCA grandes, ferra
 
 A IPA contém o launcher Shared Shell, o framework do BOTW, módulos reescritos, tabelas, configurações, bibliotecas Metal e componentes de runtime. A validação rejeita `romfs.img`, AOC, NSPs, `prod.keys` e arquivos PSO `.mtl4a` dentro da IPA.
 
-RomFS e DLC (quando existentes) permanecem no Drive externo. O Shared Shell precisa receber o RomFS externo por um provedor de arquivos que permita acesso aleatório; isso precisa ser validado no dispositivo. Se o provedor Google Drive do iOS não atender essa semântica, use uma pasta local ou iCloud Drive. O build não copia o RomFS para dentro da IPA.
+RomFS e as imagens AOC dos dois DLCs permanecem no Drive externo. O Shared Shell precisa receber o RomFS externo por um provedor de arquivos que permita acesso aleatório; isso precisa ser validado no dispositivo. Se o provedor Google Drive do iOS não atender essa semântica, use uma pasta local ou iCloud Drive. O build não copia o RomFS para dentro da IPA.
 
 ## Configuração
 
-1. Mantenha `prod.keys`, `dlc1.nsp` e `dlc2.nsp` na raiz da pasta Drive já compartilhada com a service account.
+1. Mantenha `prod.keys`, um único NSP de update (`update.nsp`), `dlc1.nsp` e `dlc2.nsp` na raiz da pasta Drive já compartilhada com a service account.
 2. No Colab, configure o Secret `LINK2IOS_GOOGLE_SERVICE_ACCOUNT_JSON`.
 3. Em GitHub → Settings → Secrets and variables → Actions, configure `GOOGLE_SERVICE_ACCOUNT_JSON` com a credencial de leitura do Drive.
 4. Gere um Fine-grained PAT restrito a este repositório com **Contents: Read and write**.
