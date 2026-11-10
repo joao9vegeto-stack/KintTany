@@ -1,0 +1,87 @@
+name: Link2iOS BOTW Host Optimization
+
+on:
+  push:
+    branches:
+      - Link2iOS
+    paths:
+      - scripts/optimize_existing_ipa.py
+      - scripts/patches/botw-metal4-encode-thread.patch
+      - .github/workflows/link2ios-optimize.yml
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: link2ios-optimize-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  optimize-host-only:
+    if: github.ref == 'refs/heads/Link2iOS' && github.event_name == 'push'
+    runs-on: xcode-27
+    timeout-minutes: 180
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+    steps:
+      - name: Checkout Link2iOS optimizer
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Select Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate optimizer and sync exact NX2Apple pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/Link2iOS"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          python -m py_compile scripts/optimize_existing_ipa.py
+          brew list --formula xcodegen >/dev/null 2>&1 || brew install xcodegen
+          git clone --depth 1 --branch v1.3.1-rc2 https://github.com/LNPANDY/NX2Apple.git "$RUNNER_TEMP/NX2Apple"
+          cd "$RUNNER_TEMP/NX2Apple"
+          python3 tools/engine.py sync
+          test "$(cat .upstream-ref)" = "81906931262fb25d774cce8bca2db8926439e5a2"
+          git -C engine apply --check "$GITHUB_WORKSPACE/scripts/patches/botw-metal4-encode-thread.patch"
+          echo "PATCH_APPLIES_TO_PINNED_ENGINE=1"
+
+      - name: Download existing repacked IPA artifact (no game-data rebuild)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 5 --retry-all-errors --silent --show-error \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/joao9vegeto-stack/KintTany/actions/artifacts/13802649444/zip" \
+            --output "$RUNNER_TEMP/Link2iOS-BOTW-existing.zip"
+          test -s "$RUNNER_TEMP/Link2iOS-BOTW-existing.zip"
+          echo "EXISTING_IPA_ARTIFACT_DOWNLOADED=$(stat -f%z "$RUNNER_TEMP/Link2iOS-BOTW-existing.zip")"
+
+      - name: Rebuild only DmShellGame host framework
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/optimize_existing_ipa.py \
+            --artifact-zip "$RUNNER_TEMP/Link2iOS-BOTW-existing.zip" \
+            --nx2apple-root "$RUNNER_TEMP/NX2Apple" \
+            --output "$RUNNER_TEMP/link2ios-optimized-output" \
+            --work "$RUNNER_TEMP/link2ios-optimized-work"
+
+      - name: Publish optimized IPA and verification report
+        uses: actions/upload-artifact@v4
+        with:
+          name: Link2iOS-BOTW-Optimized-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/link2ios-optimized-output/Link2iOS-BOTW-Optimized.ipa
+            ${{ runner.temp }}/link2ios-optimized-output/build-report.json
+          if-no-files-found: error
+          retention-days: 14
