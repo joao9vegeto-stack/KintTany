@@ -247,7 +247,7 @@ def prepare(args) -> None:
     game_id = create_folder(api, TITLE_ID, games_id)
     aoc_id = create_folder(api, "aoc", game_id) if aoc_files else None
 
-    print("[Link2iOS] Uploading external RomFS and any available DLC images...")
+    print("[Link2iOS] Uploading external RomFS and required DLC AOC images...")
     romfs_record = upload_drive_file(api, romfs, game_id, "romfs.img")
     aoc_records = [
         upload_drive_file(api, path, aoc_id, path.name) for path in aoc_files
@@ -332,7 +332,7 @@ def dispatch(args) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Link2iOS Colab pipeline")
     sub = parser.add_subparsers(dest="command", required=True)
-    p_prepare = sub.add_parser("prepare", help="download NSPs, run Linux stages and upload outputs to Drive")
+    p_prepare = sub.add_parser("prepare", help="download XCI/NSP packages, run Linux stages and upload outputs to Drive")
     p_prepare.add_argument("--drive-folder-id", required=True)
     p_prepare.set_defaults(func=prepare)
     p_dispatch = sub.add_parser("dispatch", help="commit handoff.json and trigger the Link2iOS workflow")
