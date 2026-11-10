@@ -206,7 +206,7 @@ def existing_extracted_folder(api, root_id: str) -> tuple[dict, list[dict]] | No
 
 
 def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
-    """Reuse the flattened NSP folder or download/extract the provided RAR once."""
+    """Reuse base/update NSPs from Drive and always include both root-level DLC NSPs."""
     from googleapiclient.http import MediaIoBaseDownload  # noqa: F401
 
     local_nsp_dir = runtime_root / "input-nsps"
@@ -215,10 +215,28 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
     local_nsp_dir.mkdir(parents=True, exist_ok=True)
     local_keys.parent.mkdir(parents=True, exist_ok=True)
 
-    key_item = drive_key(api, drive_folder_id)
+    root_items = list_children(api, drive_folder_id)
+    key_item = next((item for item in root_items
+                     if item.get("mimeType") != FOLDER_MIME
+                     and item.get("name", "").lower() == "prod.keys"), None)
     if key_item is None:
-        fail("prod.keys não foi encontrado na raiz da pasta do Drive. Coloque prod.keys ao lado do link/pasta BOTW e execute novamente.")
+        fail("prod.keys não foi encontrado na raiz da pasta compartilhada.")
+    dlc_items = {}
+    for expected in ("dlc1.nsp", "dlc2.nsp"):
+        item = next((entry for entry in root_items
+                     if entry.get("mimeType") != FOLDER_MIME
+                     and entry.get("name", "").lower() == expected), None)
+        if item is None:
+            fail(f"{expected} não foi encontrado na raiz da pasta compartilhada.")
+        dlc_items[expected] = item
     download_drive_file(api, key_item, local_keys)
+
+    def add_root_dlcs() -> None:
+        for index, expected in enumerate(("dlc1.nsp", "dlc2.nsp"), start=1):
+            item = dlc_items[expected]
+            local = local_nsp_dir / f"dlc_{index:02d}_{safe_name(item['name'])}"
+            download_drive_file(api, item, local)
+            print(f"[Link2iOS] DLC raiz incluído: {expected}")
 
     existing = existing_extracted_folder(api, drive_folder_id)
     if existing:
@@ -227,10 +245,12 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
         for index, item in enumerate(items, start=1):
             local = local_nsp_dir / f"{index:03d}_{safe_name(item['name'])}"
             download_drive_file(api, item, local)
+        add_root_dlcs()
         return {
             "nsp_dir": str(local_nsp_dir), "keys_path": str(local_keys),
             "source_folder_id": folder["id"], "source_folder_name": folder["name"],
-            "nsp_count": len(items), "source_reused": True,
+            "nsp_count": len(items) + len(dlc_items), "dlc_nsp_count": len(dlc_items),
+            "source_reused": True,
         }
 
     url = os.environ.get("LINK2IOS_DOWNLOAD_URL", "").strip()
@@ -262,11 +282,13 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
             local = local_nsp_dir / filename
             shutil.copy2(source, local)
             upload_drive_file(api, local, folder["id"], filename)
-        print("[Link2iOS] Somente NSPs extraídos foram mantidos no Drive; prod.keys permanece na raiz.")
+        add_root_dlcs()
+        print("[Link2iOS] NSPs base/update extraídos mantidos no Drive; DLC1/DLC2 são lidos diretamente da raiz.")
         return {
             "nsp_dir": str(local_nsp_dir), "keys_path": str(local_keys),
             "source_folder_id": folder["id"], "source_folder_name": folder_name,
-            "nsp_count": len(nsps), "source_reused": False,
+            "nsp_count": len(nsps) + len(dlc_items), "dlc_nsp_count": len(dlc_items),
+            "source_reused": False,
         }
     finally:
         archive.unlink(missing_ok=True)
