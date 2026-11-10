@@ -316,9 +316,26 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
     existing = existing_base_folder(api, drive_folder_id)
     if existing:
         folder, item = existing
-        local_base = local_package_dir / f"000_base_{safe_name(item['name'])}"
+        # The Drive item is already named 000_base_<original package>. Do not
+        # prepend the prefix a second time: doing so left two base NSPs in the
+        # local input directory and made NXNative see five NSPs on the next run.
+        base_name = safe_name(item["name"])
+        if not base_name.lower().startswith("000_base_"):
+            base_name = f"000_base_{base_name}"
+        local_base = local_package_dir / base_name
         download_drive_file(api, item, local_base)
         base_type = validate_base_package(local_base)
+        # Remove only obsolete duplicate base-package cache entries; keep the
+        # canonical base, update, and both DLCs cached on Colab storage.
+        for stale in local_package_dir.iterdir():
+            if (
+                stale.is_file()
+                and stale != local_base
+                and stale.name.lower().startswith("000_base_")
+                and stale.suffix.lower() in (".nsp", ".xci")
+            ):
+                print(f"[Link2iOS] Removendo cópia local duplicada do pacote base: {stale.name}")
+                stale.unlink()
         print(f"[Link2iOS] Reutilizando pacote base {base_type} do Drive: {folder['name']}/{item['name']}")
         add_root_packages()
         return {
@@ -416,9 +433,7 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
         upload_drive_file(api, local_base, folder["id"], filename)
         add_root_packages()
         print(f"[Link2iOS] Pacote base {base_type} armazenado no Drive; update e DLC1/DLC2 são lidos diretamente da raiz.")
-        archive.unlink(missing_ok=True)
-        shutil.rmtree(extracted, ignore_errors=True)
-        shutil.rmtree(temp_root, ignore_errors=True)
+        print("[Link2iOS] Mantendo o 7z e a extração no armazenamento local do Colab para próximas tentativas:", temp_root)
         return {
             "package_dir": str(local_package_dir), "keys_path": str(local_keys),
             "source_folder_id": folder["id"], "source_folder_name": folder_name,
