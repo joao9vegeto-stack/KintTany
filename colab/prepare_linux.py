@@ -128,6 +128,30 @@ def run_preparation(args) -> dict:
     module.build_shaders = defer_ios_metal
     module.split_shaders = split_without_apple_host
     module.run = intercept_final_build
+
+    # Validate the exact package version from NXNative's content metadata during
+    # its normal scan. This avoids starting extraction/rewrite with an older
+    # update and produces an actionable error before expensive Linux stages.
+    original_scan_nsps = module.scan_nsps
+
+    def scan_with_required_botw_version(nsp_dir, contents_of, want=None):
+        app, family = original_scan_nsps(nsp_dir, contents_of, want)
+        if app == int(TITLE_ID, 16):
+            base_version = int(family.get("base_version", 0))
+            update_versions = sorted({int(version) for version, _ in family.get("updates", [])})
+            required_version = int(PACKAGE_VERSION.removeprefix("v"))
+            if required_version not in update_versions:
+                available = [f"v{base_version}", *(f"v{version}" for version in update_versions)]
+                raise module.BuildError(
+                    f"BOTW profile requires update {PACKAGE_VERSION} (1.9.0), "
+                    f"but the supplied base/update packages contain: {', '.join(available)}. "
+                    "The current update.nsp is not the profile's 1.9.0 update. "
+                    "Replace only update.nsp in the shared Drive folder with the correct "
+                    "1.9.0 package; the base NSP and DLC cache can be reused."
+                )
+        return app, family
+
+    module.scan_nsps = scan_with_required_botw_version
     module.HEAP_CHECK = False
     for name in ("capture_glslc", "capture_shaders", "decode_ue_shaders",
                  "capture_jit", "build_vk_shaders", "build_gl_shaders"):
