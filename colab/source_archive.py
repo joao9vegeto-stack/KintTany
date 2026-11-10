@@ -397,3 +397,7 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
             "package_count": 4, "xci_count": 1, "nsp_count": 3,
             "update_nsp_count": 1, "dlc_nsp_count": 2, "source_reused": False,
         }
+    except BaseException:
+        # Keep the archive and extracted payload intact so the next Colab run can retry.
+        print("[Link2iOS] Falha na validação/preparação do XCI; 7z e extração foram preservados em:", temp_root)
+        raise
