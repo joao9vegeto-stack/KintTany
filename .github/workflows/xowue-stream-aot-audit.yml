@@ -136,6 +136,58 @@ jobs:
           retention-days: 30
           compression-level: 6
 
+      - name: Inspect generated PPC memory ABI and guest table decoder inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "=== generated archive files ==="
+            find "$RUNNER_TEMP/generated" -maxdepth 3 -type f | sort
+            echo "=== PPC store/load definitions ==="
+            grep -R -n -E 'PPC_STORE_U32|PPC_STORE_U64|PPC_LOAD_U32|#define PPC_STORE|storeGuestBe32' Runtime "$RUNNER_TEMP/generated" 2>/dev/null | head -n 1200 || true
+            echo "=== generated shared headers ==="
+            find "$RUNNER_TEMP/generated" Runtime -type f \( -name '*shared*.h' -o -name '*recomp*.h' \) -print
+          } > "$RUNNER_TEMP/xowue-ppc-memory-abi.txt"
+          test -s "$RUNNER_TEMP/xowue-ppc-memory-abi.txt"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, zlib, hashlib
+          packed=Path("tools/xowue_tables.guest.bin.z").read_bytes()
+          assert packed[4233:4236] == bytes.fromhex("e42fe9")
+          packed=bytearray(packed)
+          packed[4233:4236]=bytes.fromhex("e5c3ea")
+          assert hashlib.sha256(packed).hexdigest()=="64738d001baa4bf0c6c18b9fdfc1d48fd4aa4fdd593550e214d2307f581f9212"
+          decoded=zlib.decompress(packed)
+          Path("/tmp/xowue-guest-tables-decoded.bin").write_bytes(decoded)
+          Path("/tmp/xowue-guest-tables-header.json").write_text(json.dumps({
+            "compressed_sha256":hashlib.sha256(packed).hexdigest(),
+            "decoded_sha256":hashlib.sha256(decoded).hexdigest(),
+            "decoded_size":len(decoded),
+            "prefix_hex":decoded[:128].hex()
+          },indent=2))
+          PY
+          cp /tmp/xowue-guest-tables-decoded.bin "$RUNNER_TEMP/"
+          cp /tmp/xowue-guest-tables-header.json "$RUNNER_TEMP/"
+          find "$RUNNER_TEMP/generated" Runtime -type f \( -name 'ppc_recomp_shared.h' -o -name '*ppc*shared*.h' \) -print > "$RUNNER_TEMP/xowue-ppc-shared-header-paths.txt"
+          while IFS= read -r file; do
+            test -n "$file" || continue
+            cat "$file" >> "$RUNNER_TEMP/xowue-ppc-memory-abi.txt"
+          done < "$RUNNER_TEMP/xowue-ppc-shared-header-paths.txt"
+
+      - name: Upload PPC memory ABI and decoded guest tables
+        uses: actions/upload-artifact@v4
+        with:
+          name: XOWUE-PPC-Memory-ABI
+          path: |
+            ${{ runner.temp }}/xowue-ppc-memory-abi.txt
+            \${{ runner.temp }}/xowue-ppc-shared-header-paths.txt
+            \${{ runner.temp }}/xowue-guest-tables-decoded.bin
+            \${{ runner.temp }}/xowue-guest-tables-header.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
+
       - name: Upload native stream-stall source evidence
         uses: actions/upload-artifact@v4
         with:

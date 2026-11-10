@@ -1,2 +1,2 @@
-Audit-only trigger: inspect raw compressed table signature for vtable resolution.
-No runtime or IPA source is modified.
+Audit-only trigger: capture generated PPC memory ABI and correctly repaired/decompressed guest tables.
+No runtime source or IPA build input is changed.
