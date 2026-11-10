@@ -142,7 +142,18 @@ assert "xowue_xenos_commit_resolved_rgba" in color
 assert "VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL" in color
 assert "std::array<uint32_t, 6> vdSwapFetch" in engine
 assert "g_xenosFrontend.vdSwapFetch = physicalFetchWords" in engine
-assert "fetchFromVdSwap = g_xenosFrontend.vdSwapFetchValid" in engine
+assert "XOWUE_VDSWAP_PACKET_QUEUED" in engine
+assert "commandBufferInsideRing" in engine
+resolve_start = engine.index('extern "C" bool xowue_xenos_commit_resolved_rgba')
+resolve_end = engine.index('\n}', resolve_start)
+resolve = engine[resolve_start:resolve_end]
+assert "if(!g_xenosFrontend.swapFetchValid" in resolve
+assert "fetch = g_xenosFrontend.swapFetch;" in resolve
+assert "fetchFromVdSwap" not in resolve
+assert 'fetch_source=cp_constants' in resolve
+assert 'const std::array<uint32_t, 6>& frameFetch = frontend.swapFetch;' in engine
+assert 'const bool frameFetchValid = frontend.swapFetchValid;' in engine
+assert 'frontend.vdSwapFetchValid ?' not in engine
 assert "XOWUE_GPU_GUEST_RESOLVE_REJECT" in engine
 assert "XENOS_GPU_GUEST_RESOLVE_COMMITTED" in engine
 assert "g_xd_guest_resolves_count=0" in color
@@ -435,3 +446,11 @@ assert "XOWUE_GPU_SWAP_WAIT" in vulkan and "XOWUE_GPU_SWAP_WAIT" in diagnostics
 
 audit_script=Path("tools/audit_xowue_global_callsite_gaps.py").read_text()
 assert 'if "PPC_CALL_INDIRECT_FUNC" in chunk:' in audit_script
+
+# Build 136 follow-up: main PPC stream stall disassembly and CP provenance.
+assert '{0x82495C30u, 0x82495C90u, "STREAM_CALLER_82495C64"}' in engine
+assert '{0x82575320u, 0x82575600u, "STREAM_LOOP_CONT_82575510"}' in engine
+assert 'g_runtimeTracePersistB84.fetch_add(1, std::memory_order_relaxed) < 128u' in engine
+assert 'event.find("XOWUE_VDSWAP_PACKET_QUEUED")' in engine
+assert 'r5=0x%08X r6=0x%08X r7=0x%08X r8=0x%08X' in engine
+print("PASS: stream-stall caller/back-edge audit and VdSwap CP provenance")

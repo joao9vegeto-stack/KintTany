@@ -684,6 +684,10 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
         static std::atomic<uint32_t> count{0u};
         return count.fetch_add(1u, std::memory_order_relaxed) < 8u;
     }
+    if (event.find("XOWUE_VDSWAP_PACKET_QUEUED") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 8u;
+    }
     if (event.find("XOWUE_GPU_GUEST_RESOLVE_REJECT") != std::string::npos ||
         event.find("XENOS_GPU_GUEST_RESOLVE_COMMITTED") != std::string::npos) return true;
     if (event.find("XOWUE_BINK_FILE_READ_ORDER") != std::string::npos) {
@@ -720,7 +724,7 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     if (event.find("B83_") != std::string::npos)
         return g_runtimeTracePersistB83.fetch_add(1, std::memory_order_relaxed) < 64u;
     if (event.find("B84_") != std::string::npos)
-        return g_runtimeTracePersistB84.fetch_add(1, std::memory_order_relaxed) < 64u;
+        return g_runtimeTracePersistB84.fetch_add(1, std::memory_order_relaxed) < 128u;
     if (event.find("B85_") != std::string::npos)
         return g_runtimeTracePersistB85.fetch_add(1, std::memory_order_relaxed) < 64u;
     if (event.find("B86_STREAM_") != std::string::npos)
@@ -3351,7 +3355,9 @@ static void logCodeAuditBuild84(uint8_t *base) {
     if (!base || emitted.exchange(true, std::memory_order_acq_rel)) return;
     struct Range { uint32_t begin, end; const char *name; };
     static constexpr Range ranges[] = {
+        {0x82495C30u, 0x82495C90u, "STREAM_CALLER_82495C64"},
         {0x82575220u, 0x82575320u, "STREAM_POLL_82575250"},
+        {0x82575320u, 0x82575600u, "STREAM_LOOP_CONT_82575510"},
         {0x82C3EE40u, 0x82C3EF20u, "STREAM_LOOP_82C3EE78"},
         {0x82C4BE00u, 0x82C4BF00u, "STREAM_WAIT_82C4BE30"},
         {0x82C3C4B0u, 0x82C3C540u, "TIMEBASE_82C3C4D8"}
@@ -3604,12 +3610,16 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
         }
         const uint32_t plus8C = words[7], plus90 = words[8], chunkTable = words[15];
         if (calls <= 8u || (calls & 0xFFFFFu) == 0u) {
-            char event[448];
+            char event[640];
             std::snprintf(event, sizeof(event),
-                "B86_STREAM_STATE calls=%llu thread=%u pc=0x82575250 obj=0x%08X r3=0x%08X r4=0x%08X "
-                "plus8C=0x%08X plus90=0x%08X plusA4=0x%08X plusA8=0x%08X plusAC=0x%08X valid=%u lr=0x%08X",
+                "B86_STREAM_STATE calls=%llu thread=%u pc=0x82575250 obj=0x%08X "
+                "r3=0x%08X r4=0x%08X r5=0x%08X r6=0x%08X r7=0x%08X r8=0x%08X "
+                "r9=0x%08X r10=0x%08X r31=0x%08X plus8C=0x%08X plus90=0x%08X "
+                "plusA4=0x%08X plusA8=0x%08X plusAC=0x%08X valid=%u lr=0x%08X",
                 static_cast<unsigned long long>(calls), static_cast<uint32_t>(g_currentGuestThreadId),
-                object, ctx.r3.u32, ctx.r4.u32, plus8C, plus90, words[13], words[14], chunkTable,
+                object, ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32,
+                ctx.r8.u32, ctx.r9.u32, ctx.r10.u32, ctx.r31.u32,
+                plus8C, plus90, words[13], words[14], chunkTable,
                 objectValid ? 1u : 0u, static_cast<uint32_t>(ctx.lr));
             recordRuntimeTrace(event);
         }
@@ -4445,20 +4455,19 @@ extern "C" bool xowue_xenos_commit_resolved_rgba(
        ((info>>7u)&63u)!=6u || (uint64_t(pitch)*height*4u)!=sourceBytes)
         return reject("readback_parameters", info, static_cast<uint32_t>(sourceBytes));
     std::array<uint32_t,6> fetch{};
-    bool fetchFromVdSwap = false;
     uint32_t currentFrontbuffer = 0u, currentWidth = 0u, currentHeight = 0u;
     {
         std::lock_guard<std::mutex> lk(g_xenosMutex);
-        fetchFromVdSwap = g_xenosFrontend.vdSwapFetchValid;
-        const bool fetchValid = fetchFromVdSwap || g_xenosFrontend.swapFetchValid;
         currentFrontbuffer = g_xenosFrontend.latestFrontbufferAddress;
         currentWidth = g_xenosFrontend.latestWidth;
         currentHeight = g_xenosFrontend.latestHeight;
-        if(!fetchValid || currentFrontbuffer!=dest ||
+        // A VdSwap side descriptor is not CP state. Only a fetch descriptor
+        // consumed by executeGuestPM4Words may authorize a guest-memory resolve.
+        if(!g_xenosFrontend.swapFetchValid || currentFrontbuffer!=dest ||
            currentWidth!=pitch || currentHeight!=height)
             return reject("framebuffer_state_mismatch", currentFrontbuffer,
                           ((currentWidth & 0xFFFFu) << 16u) | (currentHeight & 0xFFFFu));
-        fetch = fetchFromVdSwap ? g_xenosFrontend.vdSwapFetch : g_xenosFrontend.swapFetch;
+        fetch = g_xenosFrontend.swapFetch;
     }
     const uint32_t descriptorAddress = (((fetch[1]>>12u)&0xFFFFFu)<<12u);
     if((fetch[1]&63u)!=6u || descriptorAddress!=dest)
@@ -4503,8 +4512,8 @@ extern "C" bool xowue_xenos_commit_resolved_rgba(
     }
     char event[240];
     std::snprintf(event,sizeof(event),
-        "XENOS_GPU_GUEST_RESOLVE_COMMITTED dest=%08X %ux%u format=6 tiled=%u endian=%u fetch_source=%s pixels=%llu",
-        dest,pitch,height,tiled?1u:0u,endian,fetchFromVdSwap?"vdswap":"cp_constants",
+        "XENOS_GPU_GUEST_RESOLVE_COMMITTED dest=%08X %ux%u format=6 tiled=%u endian=%u fetch_source=cp_constants pixels=%llu",
+        dest,pitch,height,tiled?1u:0u,endian,
         static_cast<unsigned long long>(committed));
     recordRuntimeTrace(event);
     xowue::xenos::NotifyGuestResolve(dest,pitch,height,pitch,info & 0x1Fu,committed?1u:0u);
@@ -8096,10 +8105,11 @@ static bool executeGuestPM4Words(uint8_t *base,
                 const uint32_t frontbuffer = words[offset + 2u];
                 const uint32_t width = words[offset + 3u];
                 const uint32_t height = words[offset + 4u];
-                // Prefer the descriptor supplied to VdSwap over CP shader constants.
-                const std::array<uint32_t, 6>& frameFetch = frontend.vdSwapFetchValid
-                    ? frontend.vdSwapFetch : frontend.swapFetch;
-                const bool frameFetchValid = frontend.vdSwapFetchValid || frontend.swapFetchValid;
+                // XE_SWAP consumes the command processor's current fetch state.
+                // A VdSwap-side descriptor is not a substitute for a Type0 packet
+                // that the native CP has actually consumed.
+                const std::array<uint32_t, 6>& frameFetch = frontend.swapFetch;
+                const bool frameFetchValid = frontend.swapFetchValid;
                 const uint32_t textureFormat =
                     frameFetchValid ? (frameFetch[1] & 0x3Fu) : 0u;
                 frontend.latestFrontbufferAddress = frontbuffer;
