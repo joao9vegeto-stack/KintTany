@@ -199,6 +199,7 @@ def main():
             "contents": [f"games/{title_id}/romfs.img", f"games/{title_id}/aoc/"],
         },
         "framework": framework_name,
+        "memory_profile": memory_profile,
         "pipeline_archive": {
             "included": False,
             "gpu": "none",
