@@ -169,7 +169,7 @@ jobs:
           PY
           cp /tmp/xowue-guest-tables-decoded.bin "$RUNNER_TEMP/"
           cp /tmp/xowue-guest-tables-header.json "$RUNNER_TEMP/"
-          find "$RUNNER_TEMP/generated" Runtime -type f \( -name 'ppc_recomp_shared.h' -o -name '*ppc*shared*.h' \) -print > "$RUNNER_TEMP/xowue-ppc-shared-header-paths.txt"
+          find "$RUNNER_TEMP/generated" Runtime -type f \( -name 'ppc_recomp_shared.h' -o -name '*ppc*shared*.h' -o -name 'ppc_context.h' -o -name 'ppc_config.h' \) -print > "$RUNNER_TEMP/xowue-ppc-shared-header-paths.txt"
           while IFS= read -r file; do
             test -n "$file" || continue
             cat "$file" >> "$RUNNER_TEMP/xowue-ppc-memory-abi.txt"

@@ -1,2 +1,2 @@
-Audit-only trigger: capture generated PPC memory ABI and correctly repaired/decompressed guest tables.
-No runtime source or IPA build input is changed.
+Audit-only trigger: capture PPC context/config headers containing guest memory load/store ABI.
+No runtime or IPA source is changed.
