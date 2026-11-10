@@ -14,6 +14,8 @@ OWNERS = (
     0x82574348,  # virtual stream-provider read submission callback (observed in Build 138)
     0x82573CB0,  # implementation behind the observed 0x82574348 wrapper
     0x824A7DF0,  # async stream service interface getter used by the observed callsite
+    0x8257D290,  # stream provider's request enqueue/dispatch implementation
+    0x822A0608,  # request descriptor preparation immediately before enqueue
     0x82573620,  # async stream-manager setup/use path
     0x82573AE8,  # async stream-manager setup/use path
     0x822A0160,  # stream metadata helper
@@ -55,6 +57,8 @@ def main():
                 "observed_submission_callback":"0x82574348",
                 "observed_submission_implementation":"0x82573CB0",
                 "observed_service_getter":"0x824A7DF0",
+                "observed_request_enqueue":"0x8257D290",
+                "observed_request_prepare":"0x822A0608",
                 "observed_submission_site":"0x82575244",
                 "expected_completion_site":"0x82575474"
             }}
@@ -65,7 +69,7 @@ def main():
                   "instruction_comments":f["instruction_comment_count"],
                   "body_chars":len(f["body"])} for f in result["functions"]],
         "missing":missing}))
-    required=(0x82575480,0x82575108,0x82574348,0x82573CB0,0x824A7DF0)
+    required=(0x82575480,0x82575108,0x82574348,0x82573CB0,0x824A7DF0,0x8257D290,0x822A0608)
     missing_required=[f"0x{x:08X}" for x in required if x not in found]
     if missing_required:
         raise SystemExit("Required stream poll / callback source missing: "+", ".join(missing_required))
