@@ -277,8 +277,13 @@ def main() -> int:
             # SIGSEGV addr=0xc8, PC=main+0x40115c, LR=main+0x401150.
             # This is a different code path from the earlier null-memcpy crash.
             ("main", 0x40115C, "CURRENT CRASH PC (SIGSEGV addr=0xc8)", 0x180, 0x240),
-            ("main", 0x401150, "CURRENT CRASH LR / likely callsite", 0x180, 0x100),
-            ("main", 0x3FEFFC, "CURRENT backtrace frame 0", 0x180, 0x240),
+            ("main", 0x401150, "CURRENT LR / return from resource-object factory", 0x180, 0x100),
+            ("main", 0x4010DC, "CURRENT failing initializer function entry", 0x80, 0x500),
+            ("main", 0x202024, "CURRENT resource-object factory returning NULL", 0x300, 0x1800),
+            ("main", 0x401670, "CURRENT post-factory resource registration helper", 0x180, 0x700),
+            ("main", 0x401C40, "CURRENT resource allocation helper", 0x180, 0x900),
+            ("main", 0x401660, "CURRENT resource allocation helper variant", 0x180, 0x700),
+            ("main", 0x3FEFFC, "CURRENT backtrace frame 0 / caller resource setup", 0x500, 0x300),
             ("main", 0x3D3104, "CURRENT backtrace frame 1", 0x180, 0x240),
             ("main", 0x3C7D10, "CURRENT backtrace frame 2", 0x180, 0x240),
             ("main", 0x6908C0, "CURRENT backtrace frame 3", 0x180, 0x240),
@@ -318,7 +323,7 @@ def main() -> int:
                 ))
             if main_text:
                 report.extend(direct_callers(
-                    fp, main_text, {0x1761C0, 0x176518, 0x176A70, 0x178500, 0x231DB8, 0x231F5C, 0x28BA40, 0x17A2E0, 0x1A0860, 0x1B7AE50, 0x4A9918, 0x48A65C}, md
+                    fp, main_text, {0x1761C0, 0x176518, 0x176A70, 0x178500, 0x231DB8, 0x231F5C, 0x28BA40, 0x17A2E0, 0x1A0860, 0x1B7AE50, 0x4A9918, 0x48A65C, 0x202024, 0x401670, 0x401C40, 0x401660}, md
                 ))
     except Exception as exc:
         # Optional audit only: do not fail the profile repack if one Mach-O variant cannot be decoded.
