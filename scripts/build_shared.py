@@ -236,7 +236,7 @@ def main() -> None:
             "DM_TEAM_ID": "0000000000",
             "DM_LANG": language,
             "CONTROL": str(control),
-            "AOC": str(aoc_dir),
+            "AOC": str(aoc_dir) if any(aoc_dir.glob("*.img")) else "",
             "DM_COPY_ROMFS": "NO",
             "DM_PSO_GPUS": "none",
             "DM_SHOW_FPS": "1",
@@ -364,7 +364,7 @@ def main() -> None:
             "ipa": ipa.name,
             "ipa_size_bytes": ipa.stat().st_size,
             "build_architecture": {
-                "colab_linux": ["NSP scan", "base/update/DLC extraction", "RomFS and AOC preparation",
+                "colab_linux": ["NSP scan", "base/update extraction (DLC optional)", "RomFS preparation",
                                 "AArch64 module rewrite", "NVN offline shader split"],
                 "macos": ["iOS Metal library compilation", "DM_FRAMEWORK_ONLY Route C framework",
                           "build_shell Shared Shell", "ad-hoc signing and IPA packaging"],
@@ -380,7 +380,7 @@ def main() -> None:
             "external_game_data": {
                 "drive_folder_url": prepared["game_data"]["folder_url"],
                 "romfs_size_bytes": prepared["game_data"]["romfs"]["size"],
-                "aoc_images": len(prepared["game_data"]["aoc"]),
+                "aoc_images": len(prepared["game_data"].get("aoc", [])),
                 "layout": f"games/{TITLE_ID}/romfs.img + games/{TITLE_ID}/aoc/",
             },
             "pipeline_archive": {
