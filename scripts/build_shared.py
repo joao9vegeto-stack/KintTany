@@ -225,6 +225,11 @@ def main() -> None:
         framework_root = output / "frameworks"
         shutil.rmtree(framework_root, ignore_errors=True)
         framework_root.mkdir(parents=True)
+        # Keep the Route C framework slim. The two validated BOTW AOC images are
+        # external game data in Drive and are selected later through the Shared
+        # Shell's Game data folder (EngineLaunchPlan points DM_AOC_DIR to dataURL/aoc).
+        # Passing AOC here would make build_ipa.sh copy aoc/ into the framework
+        # even with DM_COPY_ROMFS=NO; deliberately pass an empty AOC.
         ipa_env = dict(env)
         ipa_env.update({
             "GAME": TITLE_ID,
@@ -241,7 +246,7 @@ def main() -> None:
             "DM_TEAM_ID": "0000000000",
             "DM_LANG": language,
             "CONTROL": str(control),
-            "AOC": str(aoc_dir) if any(aoc_dir.glob("*.img")) else "",
+            "AOC": "",
             "DM_COPY_ROMFS": "NO",
             "DM_PSO_GPUS": "none",
             "DM_SHOW_FPS": "1",
