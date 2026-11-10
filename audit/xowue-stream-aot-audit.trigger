@@ -1,2 +1,2 @@
-Audit-only trigger: inspect compressed XOWUE guest table static data and vtable references.
-No runtime, AOT, or IPA inputs are changed by this marker file.
+Audit-only trigger: inspect raw compressed table signature for vtable resolution.
+No runtime or IPA source is modified.
