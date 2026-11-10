@@ -53,7 +53,9 @@ The launcher checks the RomFS identity recorded in the framework manifest. An in
 
 ## Limitations
 
-- Donkey Kong Bananza has upstream Mac playtesting, but iPhone/iPad remain explicitly untested. Its profile reserves a 9 GiB app pool (0x240000000) and a 9.75 GiB address reservation (0x270000000); iOS devices with a lower process-memory limit may fail allocations or be terminated. A successful IPA build does not prove the game boots or renders on iPhone.
+- Donkey Kong Bananza has upstream Mac playtesting, but iPhone/iPad remain explicitly untested. The upstream profile asks for a 9 GiB app pool and a 9.75 GiB address reservation, which is not a safe single reservation for this iOS target.
+- The iOS finalizer now applies a device-compatible Bananza layout to the framework runtime profile: 5.1875 GiB total reservation, 256 MiB alias, 256 MiB stack and a 4.4375 GiB app pool. It preserves the 4.4375 GiB heap from the prior device profile while correcting its undersized 64 MiB alias region. NXNative documents that an alias region that is too small can silently skip mapped resources and cause a later null dereference. This is a targeted correction, not proof that the reduced pool can run every Bananza area; gameplay must still be tested.
+- The latest device log also shows guest-file backing falling back to anonymous memory because the runtime sees only 4.0 GiB free, below its 5.0 GiB default minimum. Free at least 5 GiB on the iPhone's system volume before testing again; otherwise the 4.4375 GiB guest pool may add memory pressure and be terminated by iOS.
 - The target GPU is g18p, corresponding to the user's iPhone 17 Pro / A19 Pro. If Apple's metal-tt utility is unavailable on the runner, the optional offline pipeline archive may be omitted and the device will build pipeline bases on first launch.
 - Colab currently supports registered NVN profiles whose offline shader split does not require a Mac-host decoder/capture. Unsupported cases fail closed.
 
