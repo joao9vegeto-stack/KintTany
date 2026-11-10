@@ -215,12 +215,17 @@ def upload_drive_file(api, path: Path, parent_id: str, name: str) -> dict:
 
     media = MediaFileUpload(str(path), mimetype="application/octet-stream",
                             chunksize=CHUNK, resumable=True)
-    item = api.files().create(
+    request = api.files().create(
         body={"name": name, "parents": [parent_id]},
         media_body=media,
         fields="id,name,size",
         supportsAllDrives=True,
-    ).execute()
+    )
+    item = None
+    while item is None:
+        status, item = request.next_chunk()
+        if status:
+            print(f"[Link2iOS] Upload {name}: {status.progress() * 100:.1f}%", flush=True)
     size = path.stat().st_size
     if int(item.get("size", -1)) != size:
         fail(f"tamanho incorreto após enviar {name} ao Drive.")
