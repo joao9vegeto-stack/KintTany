@@ -41,12 +41,14 @@ def read_entitlements(executable: Path, output: Path) -> None:
     output.write_text(xml, encoding="utf-8")
 
 
-# Known bootable Bananza profile on the target iPhone/iOS 26 setup.
-# Do not restore the upstream 9 GiB pool: that reservation aborts at nnosInitialize.
-# Keep mem_alias and mem_stack at their known-tested 256 MiB values.
+# Bananza iOS 26 test: keep the proven 5 GiB total reservation, but move
+# 192 MiB from the alias region to the app heap. The title declares sys_resource=0
+# (heap path, not virtual-address memory); preserve the tested 256 MiB stack region.
+# This is a targeted allocation-headroom test, not a claim that gameplay is fixed.
 MEMORY_PROFILE = {
     "mem_reserve": ("0x270000000", "0x140000000"),
-    "app_pool": ("0x240000000", "0x110000000"),
+    "mem_alias": ("0x10000000", "0x04000000"),
+    "app_pool": ("0x240000000", "0x11c000000"),
 }
 
 
@@ -229,7 +231,7 @@ def main() -> None:
     report["memory_profile"] = {
         "source": profile_rel,
         "loaded_by": "DM_PROFILE (NX2Apple Route C EngineLaunchPlan)",
-        "mode": "ios26_known_bootable_5gb_reservation_4250m_pool",
+        "mode": "ios26_5gb_rebalanced_4437m_heap_64m_alias_256m_stack_test",
         "changes": memory_changes,
         "shader_rebuild": False,
         "framework_rebuild": False,

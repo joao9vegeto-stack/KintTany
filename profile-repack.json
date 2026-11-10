@@ -3,7 +3,8 @@
   "source_artifact_name": "Kleo2iOS-7",
   "title_id": "040074A01BF12000",
   "mem_reserve": "0x140000000",
-  "app_pool": "0x110000000",
-  "reason": "Restore the proven iOS 26 layout after the 6 GiB trial aborted at nnosInitialize with FATAL reserve guest AS on iPhone 17 Pro. Use 5 GiB total: 256 MiB front + 256 MiB alias + 256 MiB stack + 4.25 GiB app heap. The 5 GiB profile is the previously validated configuration; do not raise this reservation to 6 GiB.",
-  "request_revision": "ios26-known-good-5gb-restore-after-6gb-reserve-fatal-v5"
+  "mem_alias": "0x04000000",
+  "app_pool": "0x11c000000",
+  "reason": "Keep mem_reserve at 5 GiB. The 5 GiB gameplay log shows a 4.19 GiB heap inside a 4.25 GiB heap region, followed by a failed backing-resource allocation and null dereference. Bananza declares sys_resource=0, so test moving 192 MiB from mem_alias to app_pool while preserving the 256 MiB stack: 256 MiB front + 64 MiB alias + 256 MiB stack + 4.4375 GiB heap. This is a targeted heap-headroom test; do not increase mem_reserve.",
+  "request_revision": "ios26-5gb-heap-headroom-4437m-alias64m-stack256m-v9"
 }
