@@ -1,0 +1,83 @@
+name: Link2iOS BOTW Repack
+
+on:
+  push:
+    branches:
+      - Link2iOS
+    paths:
+      - scripts/repack_previous_ipa.py
+      - .github/workflows/link2ios-repack.yml
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: link2ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repack-botw:
+    if: github.ref == 'refs/heads/Link2iOS' && github.event_name == 'push'
+    runs-on: xcode-27
+    timeout-minutes: 180
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+    steps:
+      - name: Checkout Link2iOS repack commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate runner and install XcodeGen
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/Link2iOS"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version
+          brew list --formula xcodegen >/dev/null 2>&1 || brew install xcodegen
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Sync exact NX2Apple and NXNative pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v1.3.1-rc2 https://github.com/LNPANDY/NX2Apple.git "$RUNNER_TEMP/NX2Apple"
+          cd "$RUNNER_TEMP/NX2Apple"
+          python3 tools/engine.py sync
+          test "$(cat .upstream-ref)" = "81906931262fb25d774cce8bca2db8926439e5a2"
+
+      - name: Download successful build #3 artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 5 --retry-all-errors --silent --show-error \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/joao9vegeto-stack/KintTany/actions/artifacts/13788108980/zip" \
+            --output "$RUNNER_TEMP/Link2iOS-BOTW-3.zip"
+          test -s "$RUNNER_TEMP/Link2iOS-BOTW-3.zip"
+
+      - name: Patch reused framework and rebuild Shared Shell only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/repack_previous_ipa.py \
+            --artifact-zip "$RUNNER_TEMP/Link2iOS-BOTW-3.zip" \
+            --nx2apple-root "$RUNNER_TEMP/NX2Apple" \
+            --output "$RUNNER_TEMP/link2ios-repack-output"
+
+      - name: Publish repacked IPA and report
+        uses: actions/upload-artifact@v4
+        with:
+          name: Link2iOS-BOTW-Repacked-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/link2ios-repack-output/Link2iOS-BOTW.ipa
+            ${{ runner.temp }}/link2ios-repack-output/build-report.json
+          if-no-files-found: error
+          retention-days: 7
