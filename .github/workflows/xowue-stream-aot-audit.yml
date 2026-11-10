@@ -10,6 +10,7 @@ on:
       - "audit/probe_xowue_stream_support.py"
       - "audit/probe_xowue_stream_field_xrefs.py"
       - "audit/xowue-stream-aot-audit.trigger"
+      - "audit/xowue-stream-aot-audit.trigger"
 
 concurrency:
   group: xowue-stream-aot-audit-${{ github.ref }}
