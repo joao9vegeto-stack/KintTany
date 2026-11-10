@@ -8,7 +8,13 @@ FUNC=re.compile(r'PPC_FUNC_IMPL\(__imp__(sub_[0-9A-Fa-f]{8})\)\s*\{')
 COMMENT=re.compile(r'(?m)^\s*//\s+(.+?)\s*$')
 LIS=re.compile(r'^lis\s+(r\d+),\s*-31906$',re.I)
 GLOBAL_ACCESS=re.compile(r'^(lwz|stw|addi)\s+(r\d+),\s*(76|0x4C)\((r\d+)\)$',re.I)
-TARGETS={0x82575250,0x82575108,0x82575480,0x82495BF8,0x831EDA60}
+TARGETS={
+  0x82575250,0x82575108,0x82575480,0x82495BF8,0x831EDA60,
+  0x82985EA0,0x8236C658,0x82380D60,0x831EE998,0x831EF9E8,
+  0x8240C7D0,0x8249A428,0x824A7CD0,0x824B4B60,
+  0x82573620,0x82573AE8,0x8258A8B8,0x8258A980,
+  0x82693360,0x82694788,0x82694820
+}
 
 def main():
     ap=argparse.ArgumentParser()
