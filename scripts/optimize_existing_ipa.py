@@ -284,22 +284,21 @@ def main() -> None:
         "DM_LANG": str(app_info.get("DMLanguage", "pt-BR")),
     })
 
-    # Recreate the host's normal iOS compile settings from its Makefile, without touching shader packs or game binaries.
-    cfg = gen / "dm.xcconfig"
-    with cfg.open("w", encoding="utf-8") as out:
-        run([sys.executable, ios / "tools/gen_build.py", host, gen], cwd=ios, env=env, log_file=work / "gen-build.log")
-        # gen_build writes its xcconfig to stdout; capture it on a second invocation is avoided below by reading the log file.
-    # gen_build's stdout is the xcconfig, and the command logger writes it to the log file. Copy the final log body back.
-    gen_cfg_text = (work / "gen-build.log").read_text(encoding="utf-8", errors="replace")
-    # Strip the one command-echo line; the generated config itself is the remaining output.
-    config_lines = [line for line in gen_cfg_text.splitlines() if not line.startswith("[Link2iOS optimize] + ")]
-    if not config_lines or not any(line.startswith("HEADER_SEARCH_PATHS =") for line in config_lines):
-        fail("gen_build.py did not produce the iOS compiler settings")
-    with cfg.open("w", encoding="utf-8") as out:
-        out.write("\n".join(config_lines).rstrip() + "\n")
-        out.write("OTHER_LDFLAGS = $(inherited) $(DM_FRAMEWORKS) " + " ".join(segment_flags) + "\n")
+    # Apply the reviewed host-only upstream optimization to this exact pinned tree.
+    run(["git", "apply", "--check", patch], cwd=engine)
+    run(["git", "apply", patch], cwd=engine)
 
-    run(["xcodegen", "generate", "-q", "--spec", "project-framework.yml"], cwd=ios, env=env)
+    # Recreate the host's normal iOS compile settings from its Makefile, without touching game assets.
+    cfg = gen / "dm.xcconfig"
+    p = subprocess.run([sys.executable, str(ios / "tools/gen_build.py"), str(host), str(gen)],
+                       cwd=ios, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if p.returncode:
+        fail("gen_build.py failed:\n" + (p.stderr or p.stdout)[-12000:])
+    if not p.stdout.strip() or "HEADER_SEARCH_PATHS =" not in p.stdout:
+        fail("gen_build.py did not produce the iOS compiler settings:\n" + p.stdout[-4000:] + "\n" + p.stderr[-4000:])
+    cfg.write_text(p.stdout.rstrip() + "\nOTHER_LDFLAGS = $(inherited) $(DM_FRAMEWORKS) " + " ".join(segment_flags) + "\n", encoding="utf-8")
+
+        run(["xcodegen", "generate", "-q", "--spec", "project-framework.yml"], cwd=ios, env=env)
     products = work / "products"
     objects = work / "objects"
     products.mkdir()
