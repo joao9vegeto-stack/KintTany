@@ -41,16 +41,17 @@ def read_entitlements(executable: Path, output: Path) -> None:
     output.write_text(xml, encoding="utf-8")
 
 
-# Bananza iOS 26: keep the 5 GiB guest reservation, but rebalance 96 MiB
-# from the 256 MiB stack + 64 MiB alias reservations into the app heap.
-# The crash disassembly proves VoxelSceneHeap requests 0xb0e00000 (2,830 MiB)
-# and the parent allocator returns NULL. Keep 192 MiB stack and 32 MiB alias;
-# increase app_pool from 4,544 MiB to 4,640 MiB without changing mem_reserve.
+# Bananza iOS 26 max-reservation test, based on the exact crashing IPA #9.
+# NXNative's Mac profile gives Bananza a 9 GiB app pool. The iPhone build had
+# only 4.4375 GiB, while the scene resource table totals about 4.09 GiB.
+# Use the largest single guest reservation documented to work on iOS (6 GiB),
+# keep the game's 256 MiB alias and 256 MiB stack regions, and give the heap
+# the remaining 5.25 GiB. mem_used remains 64 MiB for the two loaded modules.
 MEMORY_PROFILE = {
-    "mem_reserve": ("0x270000000", "0x140000000"),
-    "mem_alias": ("0x10000000", "0x02000000"),
-    "mem_stack": ("0x10000000", "0x0c000000"),
-    "app_pool": ("0x240000000", "0x122000000"),
+    "mem_reserve": ("0x14c000000", "0x180000000"),
+    "mem_alias": ("0x10000000", "0x10000000"),
+    "mem_stack": ("0x10000000", "0x10000000"),
+    "app_pool": ("0x11c000000", "0x150000000"),
 }
 
 
@@ -80,6 +81,19 @@ def patch_runtime_profile(framework: Path, manifest: dict) -> tuple[str, dict]:
     for key, (_, after) in MEMORY_PROFILE.items():
         if len(re.findall(rf"(?m)^{re.escape(key)}[\t ]+{re.escape(after)}[\t ]*$", saved)) != 1:
             raise SystemExit(f"Runtime profile verification failed for {key}={after}.")
+    # The guest block is front prefix + heap + stack + alias. Refuse a profile
+    # whose advertised app pool is not exactly the heap region it reserves.
+    parsed = {}
+    for line in profile.read_text(encoding="utf-8").splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and fields[0] in ("mem_reserve", "mem_alias", "mem_stack", "app_pool"):
+            parsed[fields[0]] = int(fields[1], 0)
+    expected_heap = parsed["mem_reserve"] - 0x10000000 - parsed["mem_alias"] - parsed["mem_stack"]
+    if expected_heap != parsed["app_pool"] or parsed["mem_reserve"] != 0x180000000:
+        raise SystemExit(
+            f"Unsafe 6 GiB Bananza partition: reserve={parsed['mem_reserve']:#x}, "
+            f"heap={expected_heap:#x}, app_pool={parsed['app_pool']:#x}"
+        )
     return rel, changes
 
 
@@ -106,25 +120,18 @@ def main() -> None:
 
     with zipfile.ZipFile(ipa) as zf:
         names = set(zf.namelist())
-        pso_entries = sorted(
-            n for n in names
-            if "/Frameworks/" in n and "/pso/" in n and n.lower().endswith(".mtl4a")
-        )
-        if not pso_entries:
-            raise SystemExit("The source IPA contains no Metal 4 PSO archive to remove.")
-        framework_roots = sorted({
-            n.split("/pso/", 1)[0]
-            for n in pso_entries
-        })
-        if len(framework_roots) != 1:
-            raise SystemExit(f"Expected one game framework, found: {framework_roots}")
-        framework_root = framework_roots[0]
         app_root = "Payload/DmShell.app"
+        manifest_names = sorted(
+            n for n in names
+            if n.startswith(app_root + "/Frameworks/") and n.endswith("/game.manifest.json")
+        )
+        if len(manifest_names) != 1:
+            raise SystemExit(f"Expected exactly one embedded game framework manifest, found: {manifest_names}")
+        manifest_name = manifest_names[0]
+        framework_root = manifest_name.rsplit("/", 1)[0]
         if not framework_root.startswith(app_root + "/Frameworks/"):
             raise SystemExit(f"Unexpected framework location: {framework_root}")
-        manifest_name = framework_root + "/game.manifest.json"
-        if manifest_name not in names:
-            raise SystemExit("The original IPA is missing the game framework manifest.")
+        manifest = json.loads(zf.read(manifest_name))
         manifest = json.loads(zf.read(manifest_name))
         executable_name = str(manifest.get("framework_executable", ""))
         required = [
@@ -160,12 +167,12 @@ def main() -> None:
     profile_rel, memory_changes = patch_runtime_profile(framework, manifest)
 
     pso_dir = framework / "pso"
-    if not pso_dir.is_dir():
-        raise SystemExit("The expected PSO folder disappeared during IPA extraction.")
-    removed = sorted(str(p.relative_to(app)) for p in pso_dir.rglob("*") if p.is_file())
-    if not removed:
-        raise SystemExit("The PSO folder is empty; refusing an unverified repack.")
-    shutil.rmtree(pso_dir)
+    removed = sorted(str(p.relative_to(app)) for p in pso_dir.rglob("*") if p.is_file()) if pso_dir.is_dir() else []
+    # IPA #9 is already an iOS 26 build and can legitimately contain no PSO folder.
+    # Remove only incompatible Metal 4 archives if present; never require them.
+    incompatible = [p for p in removed if p.lower().endswith(".mtl4a")]
+    if incompatible:
+        shutil.rmtree(pso_dir)
 
     # Re-seal the modified nested framework, then the app, preserving its memory entitlement.
     run(["xattr", "-cr", str(framework)])
@@ -222,8 +229,8 @@ def main() -> None:
     report["pipeline_archive"] = {
         "included": False,
         "gpu": "none",
-        "reason": "Removed because the iOS 27 Metal 4 archive is not loadable on iOS 26; the device builds its pipeline bases at first use.",
-        "removed_files": removed,
+        "reason": "No offline Metal 4 pipeline archive is used on iOS 26; the device builds its pipeline bases at first use.",
+        "removed_files": incompatible,
     }
     report["shader_libraries"] = {
         "recompiled": False,
@@ -233,7 +240,7 @@ def main() -> None:
     report["memory_profile"] = {
         "source": profile_rel,
         "loaded_by": "DM_PROFILE (NX2Apple Route C EngineLaunchPlan)",
-        "mode": "ios26_5gb_rebalanced_4640m_heap_32m_alias_192m_stack_test",
+        "mode": "ios26_6gb_reservation_5250m_app_pool_256m_alias_256m_stack_test",
         "changes": memory_changes,
         "shader_rebuild": False,
         "framework_rebuild": False,
