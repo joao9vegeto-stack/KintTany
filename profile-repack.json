@@ -3,8 +3,9 @@
   "source_artifact_name": "Kleo2iOS-7",
   "title_id": "040074A01BF12000",
   "mem_reserve": "0x140000000",
-  "mem_alias": "0x04000000",
-  "app_pool": "0x11c000000",
-  "reason": "Keep mem_reserve at 5 GiB. The 5 GiB gameplay log shows a 4.19 GiB heap inside a 4.25 GiB heap region, followed by a failed backing-resource allocation and null dereference. Bananza declares sys_resource=0, so test moving 192 MiB from mem_alias to app_pool while preserving the 256 MiB stack: 256 MiB front + 64 MiB alias + 256 MiB stack + 4.4375 GiB heap. This is a targeted heap-headroom test; do not increase mem_reserve.",
-  "request_revision": "ios26-5gb-heap-headroom-4437m-alias64m-stack256m-v9"
+  "mem_alias": "0x02000000",
+  "app_pool": "0x121000000",
+  "reason": "Keep mem_reserve at exactly 5 GiB. The crash disassembly shows the VoxelSceneHeap allocation request is 0xb0e00000 (2,830 MiB), and the heap allocator returns NULL; the caller then performs an atomic access at null+0xc8. Rebalance the same 5 GiB guest reservation: front 256 MiB + alias 32 MiB + stack 192 MiB + app_pool 4,640 MiB. This reclaims 96 MiB from the alias/stack reservations for the app heap; no increase to mem_reserve and no shader/framework rebuild.",
+  "request_revision": "ios26-5gb-heap-rebalance-4640m-alias32m-stack192m-v10",
+  "mem_stack": "0x0c000000"
 }
