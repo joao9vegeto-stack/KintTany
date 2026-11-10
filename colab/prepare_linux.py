@@ -58,15 +58,23 @@ def run_preparation(args) -> dict:
     keys = args.keys.resolve()
     work = args.work_dir.resolve()
 
-    require(nsp_dir.is_dir(), f"NSP input directory does not exist: {nsp_dir}")
+    require(nsp_dir.is_dir(), f"game package input directory does not exist: {nsp_dir}")
     require(keys.is_file(), "prod.keys was not downloaded")
     pin = (nx / ".upstream-ref").read_text(encoding="utf-8").strip()
     require(pin == ENGINE_PIN, f"unexpected NXNative pin: {pin}")
 
     module = load_builder(engine)
     check_linux_prerequisites()
-    nsp_files = module.files_with_suffix(nsp_dir, ".nsp")
-    require(bool(nsp_files), "no .nsp files found in the flattened NSP input folder")
+    package_files = module.files_with_suffix(nsp_dir, ".xci", ".nsp")
+    xci_files = [path for path in package_files if path.suffix.lower() == ".xci"]
+    nsp_files = [path for path in package_files if path.suffix.lower() == ".nsp"]
+    require(len(xci_files) == 1,
+            f"expected exactly one BOTW base XCI, found {len(xci_files)}")
+    require(len(nsp_files) == 3,
+            f"expected exactly three NSPs (one update plus two DLCs), found {len(nsp_files)}")
+    for path in package_files:
+        require(module.is_package(path),
+                f"invalid Switch package header in {path.name}; expected XCI HEAD or NSP PFS0")
 
     import game as game_profiles
     profile = game_profiles.by_title(int(TITLE_ID, 16))
@@ -173,6 +181,8 @@ def run_preparation(args) -> dict:
         "package_version": PACKAGE_VERSION,
         "nx2apple_tag": "v1.3.1-rc2",
         "engine_pin": pin,
+        "input_package_count": len(package_files),
+        "input_xci_count": len(xci_files),
         "input_nsp_count": len(nsp_files),
         "profile_package": registered_package,
         "modules": modules,
@@ -183,7 +193,7 @@ def run_preparation(args) -> dict:
         "aoc_relative_dir": "aoc",
         "dlc_present": bool(aoc),
         "prepared_stages": [
-            "nsp_content_meta_scan", "base_update_extract", "romfs_extraction",
+            "xci_nsp_content_meta_scan", "base_xci_update_dlc_extract", "romfs_extraction",
             "aarch64_module_rewrite", "nvn_offline_shader_split", "profile_shader_table_validation",
         ],
         "deferred_stages": [
