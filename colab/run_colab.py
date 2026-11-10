@@ -221,7 +221,7 @@ def install_linux_dependencies(root: Path) -> None:
         [str(dotnet), "--list-runtimes"], env=runtime_env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=True,
     ).stdout
-    if not re.search(r"^Microsoft\\.NETCore\\.App\\s+10\\.", runtimes, re.MULTILINE):
+    if not re.search(r"^Microsoft\.NETCore\.App\s+10\.", runtimes, re.MULTILINE):
         fail(
             ".NET SDK foi instalado, mas o runtime Microsoft.NETCore.App 10.x "
             f"não aparece em dotnet --list-runtimes. Saída: {runtimes[-2000:]}"
