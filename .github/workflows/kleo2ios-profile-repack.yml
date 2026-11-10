@@ -1,4 +1,4 @@
-name: Kleo2iOS iOS26 restore known 5G profile
+name: Kleo2iOS iOS26 max 6G heap repack from IPA9
 
 on:
   push:
@@ -40,13 +40,13 @@ jobs:
           python3 - <<'PY'
           import json, os
           d=json.load(open("profile-repack.json", encoding="utf-8"))
-          assert d.get("source_run_id") == 42571125251
-          assert d.get("source_artifact_name") == "Kleo2iOS-7"
+          assert d.get("source_run_id") == 42737308078
+          assert d.get("source_artifact_name") == "Kleo2iOS-9"
           assert d.get("title_id") == "040074A01BF12000"
-          assert d.get("mem_reserve") == "0x140000000"
-          assert d.get("mem_alias") == "0x02000000"
-          assert d.get("mem_stack") == "0x0c000000"
-          assert d.get("app_pool") == "0x122000000"
+          assert d.get("mem_reserve") == "0x180000000"
+          assert d.get("mem_alias") == "0x10000000"
+          assert d.get("mem_stack") == "0x10000000"
+          assert d.get("app_pool") == "0x150000000"
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write("source_run_id="+str(d["source_run_id"])+"\n")
               f.write("artifact_name="+d["source_artifact_name"]+"\n")
@@ -117,7 +117,7 @@ jobs:
       - name: Upload iOS26 known 5 GiB profile IPA (no shader rebuild)
         uses: actions/upload-artifact@v4
         with:
-          name: Kleo2iOS-iOS26-5G-profile
+          name: Kleo2iOS-iOS26-6G-max-heap-from-IPA9
           path: |
             ${{ runner.temp }}/kleo-output/NX2Apple-iOS26.ipa
             ${{ runner.temp }}/kleo-output/build-report.json
