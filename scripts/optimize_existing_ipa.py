@@ -242,8 +242,8 @@ def main() -> None:
     if not game_profile.is_file():
         fail("source game profile.tsv is missing")
     profile_text = game_profile.read_text(encoding="utf-8")
-    if "fps_target\t60" not in profile_text:
-        fail("source game profile no longer targets 60 FPS")
+    if "fps_target\t60" not in profile_text or "op_mode\thandheld" not in profile_text:
+        fail("source game profile must preserve Handheld mode and the 60 FPS target")
 
     old_hash = sha256(old_binary)
 
