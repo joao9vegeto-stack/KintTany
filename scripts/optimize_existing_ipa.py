@@ -246,7 +246,13 @@ def main() -> None:
         fail("source game profile no longer targets 60 FPS")
 
     old_hash = sha256(old_binary)
-    embed = ios / "Gen/embed.S"
+
+    # Reset Gen before writing the Mach-O assembly: otherwise the cleanup would delete embed.S.
+    gen = ios / "Gen"
+    shutil.rmtree(gen, ignore_errors=True)
+    (gen / "dm").mkdir(parents=True)
+    (gen / "framework" / "dm").mkdir(parents=True)
+    embed = gen / "embed.S"
     segment_flags = embedded_section_assembly(old_binary, manifest, embed)
     if len(manifest["modules"]) != 3:
         fail(f"expected BOTW's 3 already-compiled modules, found {len(manifest['modules'])}")
@@ -254,10 +260,6 @@ def main() -> None:
     log("module bytes are reused verbatim from the source IPA")
 
     # Reuse every game-specific resource byte-for-byte. The engine is rebuilt, not the game.
-    gen = ios / "Gen"
-    shutil.rmtree(gen, ignore_errors=True)
-    (gen / "dm").mkdir(parents=True)
-    (gen / "framework" / "dm").mkdir(parents=True)
     shutil.copytree(fw / "dm", gen / "framework" / "dm", dirs_exist_ok=True)
     shutil.copy2(game_profile, gen / "framework/profile.tsv")
     shutil.copy2(manifest_path, gen / "framework/game.manifest.json")
@@ -298,7 +300,7 @@ def main() -> None:
         fail("gen_build.py did not produce the iOS compiler settings:\n" + p.stdout[-4000:] + "\n" + p.stderr[-4000:])
     cfg.write_text(p.stdout.rstrip() + "\nOTHER_LDFLAGS = $(inherited) $(DM_FRAMEWORKS) " + " ".join(segment_flags) + "\n", encoding="utf-8")
 
-        run(["xcodegen", "generate", "-q", "--spec", "project-framework.yml"], cwd=ios, env=env)
+    run(["xcodegen", "generate", "-q", "--spec", "project-framework.yml"], cwd=ios, env=env)
     products = work / "products"
     objects = work / "objects"
     products.mkdir()
