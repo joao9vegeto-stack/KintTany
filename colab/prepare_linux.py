@@ -172,7 +172,13 @@ def run_preparation(args) -> dict:
     shader_chain = module.chain_of(engine)
     require(bool(shader_chain), "NXNative shader chain header is missing after the Linux preparation")
     aoc = sorted((work / "aoc").glob("*.img")) if (work / "aoc").is_dir() else []
-    require(bool(aoc), "DLC1/DLC2 NSPs were supplied but NX2Apple produced no AOC RomFS images.")
+    expected_aoc = {"1.img", "2.img"}
+    actual_aoc = {path.name for path in aoc}
+    require(
+        actual_aoc == expected_aoc and all(path.stat().st_size > 0 for path in aoc),
+        "BOTW 1.9.0 requires both NXNative AOC images 1.img (01007EF00011F001) "
+        f"and 2.img (01007EF00011F002); found {sorted(actual_aoc)}.",
+    )
 
     result = {
         "format": 1,
@@ -191,10 +197,19 @@ def run_preparation(args) -> dict:
         "romfs_relative_path": f"extract/{PACKAGE_VERSION}/RomFS.img",
         "romfs_id_relative_path": f"extract/{PACKAGE_VERSION}/RomFS.img.id",
         "aoc_relative_dir": "aoc",
-        "dlc_present": bool(aoc),
+        "aoc_title_ids": {
+            "1.img": "01007EF00011F001",
+            "2.img": "01007EF00011F002",
+        },
+        "dlc_present": True,
         "prepared_stages": [
-            "xci_nsp_content_meta_scan", "base_xci_update_dlc_extract", "romfs_extraction",
-            "aarch64_module_rewrite", "nvn_offline_shader_split", "profile_shader_table_validation",
+            "nxnative_build_ipa_from_nsp_scan_nsps",
+            "nx_extract_base_plus_update_to_v1114112",
+            "nx_extract_each_dlc_to_aoc_1_and_2",
+            "romfs_image_and_identity",
+            "aarch64_module_rewrite",
+            "nvn_offline_shader_split",
+            "profile_shader_table_validation",
         ],
         "deferred_stages": [
             "ios_metal_shader_compile", "metal_pipeline_base_build",
