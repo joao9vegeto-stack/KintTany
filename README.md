@@ -8,7 +8,7 @@ O notebook utiliza diretamente a pasta Google Drive compartilhada com a service 
 
 `https://drive.google.com/drive/folders/19HXEJCK-26NfBVKeUP3wqFxMFpoF3ykm`
 
-Na raiz dessa pasta, deixe `prod.keys`, exatamente um NSP de update (recomendado: `update.nsp`), `dlc1.nsp` e `dlc2.nsp`. O jogo base não precisa ficar no Drive antes da primeira execução.
+Na raiz dessa pasta, deixe `prod.keys`, `update.nsp`, `dlc1.nsp` e `dlc2.nsp` (os demais arquivos e pastas são ignorados; `prod.keys` continua obrigatório). O jogo base não precisa ficar no Drive antes da primeira execução.
 
 Na primeira execução, o notebook pede o link assinado do 7z por uma entrada protegida. O link não fica embutido no repositório público, não é impresso e não é gravado no Drive. O Colab baixa o 7z para seu armazenamento temporário, valida a assinatura, testa e extrai com 7-Zip. Exige exatamente um XCI com cabeçalho `HEAD` no offset `0x100` e envia somente esse XCI para uma pasta `BOTW_Base_XCI/` criada automaticamente no Drive. O 7z temporário e a extração local são apagados.
 
@@ -39,7 +39,7 @@ RomFS e as imagens AOC dos dois DLCs permanecem no Drive externo. O Shared Shell
 
 ## Configuração
 
-1. Mantenha `prod.keys`, um único NSP de update (`update.nsp`), `dlc1.nsp` e `dlc2.nsp` na raiz da pasta Drive já compartilhada com a service account.
+1. Mantenha `prod.keys`, `update.nsp`, `dlc1.nsp` e `dlc2.nsp` (ignore os demais itens) na raiz da pasta Drive já compartilhada com a service account.
 2. No Colab, configure o Secret `LINK2IOS_GOOGLE_SERVICE_ACCOUNT_JSON`.
 3. Em GitHub → Settings → Secrets and variables → Actions, configure `GOOGLE_SERVICE_ACCOUNT_JSON` com a credencial de leitura do Drive.
 4. Gere um Fine-grained PAT restrito a este repositório com **Contents: Read and write**.
