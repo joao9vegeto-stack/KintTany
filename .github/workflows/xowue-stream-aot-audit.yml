@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/workflows/xowue-stream-aot-audit.yml"
       - "tools/probe_xowue_stream_stall.py"
+      - "audit/probe_xowue_stream_support.py"
       - "audit/xowue-stream-aot-audit.trigger"
 
 concurrency:
@@ -52,6 +53,26 @@ jobs:
             --report "$RUNNER_TEMP/xowue-stream-stall-aot-source.json"
           test -s "$RUNNER_TEMP/xowue-stream-stall-aot-source.json"
           python3 -m json.tool "$RUNNER_TEMP/xowue-stream-stall-aot-source.json" >/dev/null
+
+      - name: Extract polling wrapper and stream helper source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile audit/probe_xowue_stream_support.py
+          python3 audit/probe_xowue_stream_support.py \
+            --ppc-dir "$RUNNER_TEMP/generated/ppc" \
+            --report "$RUNNER_TEMP/xowue-stream-support-aot-source.json"
+          test -s "$RUNNER_TEMP/xowue-stream-support-aot-source.json"
+          python3 -m json.tool "$RUNNER_TEMP/xowue-stream-support-aot-source.json" >/dev/null
+
+      - name: Upload stream polling wrapper and helper source
+        uses: actions/upload-artifact@v4
+        with:
+          name: XOWUE-Stream-Poll-Support-AOT-Source
+          path: ${{ runner.temp }}/xowue-stream-support-aot-source.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
 
       - name: Upload native stream-stall source evidence
         uses: actions/upload-artifact@v4
