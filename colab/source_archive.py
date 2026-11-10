@@ -231,16 +231,13 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
             fail(f"{expected} não foi encontrado na raiz da pasta compartilhada.")
         dlc_items[expected] = item
 
-    update_items = [
-        item for item in root_items
-        if item.get("mimeType") != FOLDER_MIME
-        and item.get("name", "").lower().endswith(".nsp")
-        and item.get("name", "").lower() not in ("dlc1.nsp", "dlc2.nsp")
-    ]
-    if len(update_items) != 1:
-        names = ", ".join(item.get("name", "?") for item in update_items) or "nenhum"
-        fail("é necessário manter exatamente um NSP de update na raiz do Drive (além de dlc1.nsp e dlc2.nsp); encontrados: " + names)
-    update_item = update_items[0]
+    # Only these exact root-level NSP names are inputs. Ignore all other
+    # files/folders created by Kleo2iOS or previous pipeline runs.
+    update_item = next((entry for entry in root_items
+                        if entry.get("mimeType") != FOLDER_MIME
+                        and entry.get("name", "").lower() == "update.nsp"), None)
+    if update_item is None:
+        fail("update.nsp não foi encontrado na raiz da pasta compartilhada.")
 
     download_drive_file(api, key_item, local_keys)
 
