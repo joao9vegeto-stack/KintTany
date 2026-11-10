@@ -1,0 +1,99 @@
+{
+  "format": 1,
+  "project": "Link2iOS",
+  "request_id": "3e42f91b-60c7-42a1-9144-b419a0583ef6",
+  "branch": "Link2iOS",
+  "title_id": "01007EF00011E000",
+  "package_version": "v1114112",
+  "nx2apple_tag": "v1.3.1-rc2",
+  "engine_pin": "81906931262fb25d774cce8bca2db8926439e5a2",
+  "drive_output_folder_id": "1LhyQMpGQo1vB3IIy0STycGkJ4UzGKbSR",
+  "drive_output_folder_url": "https://drive.google.com/drive/folders/1LhyQMpGQo1vB3IIy0STycGkJ4UzGKbSR",
+  "work_archive": {
+    "name": "botw-work.tar.zst",
+    "id": "1lW9ccGQi4ZvtB1QTNx_zcyK0RR-Jr33q",
+    "size": 64170184,
+    "sha256": "b1e1d9a3d1fe320f3caea5602d2c99b770bf463ce5f6112d296c1b80d6a7f8dd"
+  },
+  "game_data": {
+    "folder_id": "1LFn_oN-Gev1uDIhTkhewOgpfJGbl4_0z",
+    "folder_url": "https://drive.google.com/drive/folders/1LFn_oN-Gev1uDIhTkhewOgpfJGbl4_0z",
+    "romfs": {
+      "name": "romfs.img",
+      "id": "1ExV2KkzNgmTfgz9R14Zhf7oRwVAzaYCq",
+      "size": 15131699782,
+      "sha256": "e265bf2c3cd6868dda194f3d80ada34e159ccd39de18c1c1d9f752af938a38e2"
+    },
+    "aoc": [
+      {
+        "name": "1.img",
+        "id": "1DNFGEPH1gpCUT4BKzytBs1ZEO1PyY-1m",
+        "size": 1390238714,
+        "sha256": "443232f16e5fc2da10a47a3b768d75ef388fb48e8c27b1719d02d7d8fd3d5825"
+      },
+      {
+        "name": "2.img",
+        "id": "1uWzyx3q_N_Bm_vjUzBp1ubfBc6UI3hJW",
+        "size": 127,
+        "sha256": "61d94311f93d4c192f37752863cc2140b1f9f87050c5a24443121a24c6e05357"
+      }
+    ],
+    "romfs_relative_path": "extract/v1114112/RomFS.img"
+  },
+  "prepared": {
+    "format": 1,
+    "project": "Link2iOS",
+    "title_id": "01007EF00011E000",
+    "package_version": "v1114112",
+    "nx2apple_tag": "v1.3.1-rc2",
+    "engine_pin": "81906931262fb25d774cce8bca2db8926439e5a2",
+    "input_package_count": 4,
+    "input_base_type": "NSP",
+    "input_xci_count": 0,
+    "input_nsp_count": 4,
+    "profile_package": "v1114112",
+    "modules": [
+      "main",
+      "subsdk0",
+      "sdk"
+    ],
+    "shader_package_key": "2b82d5116b8466c8c4c5c8cfdba80141d85fc80c7130d5d248ee35dcc1e9a3fc",
+    "shader_chain": "0c434f1b68df",
+    "romfs_relative_path": "extract/v1114112/RomFS.img",
+    "romfs_id_relative_path": "extract/v1114112/RomFS.img.id",
+    "aoc_relative_dir": "aoc",
+    "aoc_title_ids": {
+      "1.img": "01007EF00011F001",
+      "2.img": "01007EF00011F002"
+    },
+    "dlc_present": true,
+    "prepared_stages": [
+      "nxnative_scan_base_update_and_dlc_by_content_meta",
+      "nx_extract_base_plus_update_to_v1114112",
+      "nx_extract_each_dlc_to_aoc_1_and_2",
+      "romfs_image_and_identity",
+      "aarch64_module_rewrite",
+      "nvn_offline_shader_split",
+      "profile_shader_table_validation"
+    ],
+    "deferred_stages": [
+      "ios_metal_shader_compile",
+      "metal_pipeline_base_build",
+      "game_framework_build",
+      "shared_shell_xcode_build",
+      "adhoc_sign_and_ipa_pack"
+    ],
+    "romfs_size": 15131699782,
+    "aoc_images": [
+      {
+        "name": "1.img",
+        "size": 1390238714
+      },
+      {
+        "name": "2.img",
+        "size": 127
+      }
+    ]
+  },
+  "created_utc": "2026-11-10T07:17:10.368651+00:00"
+}
