@@ -39,3 +39,10 @@ The final IPA is inspected to reject `romfs.img`, AOC paths, NSPs, `prod.keys` a
 - The signed 7z URL is supplied at runtime and is never stored in Git.
 
 Neither credential, `prod.keys` nor game data is stored in Git.
+
+
+## Recovery and measured transfers
+
+A successful Colab run stores a small `handoff.json` manifest in the top-level `Link2iOS_BOTW_*` Drive folder alongside the `pipeline/` and `games/` subfolders. The notebook's recovery step scans only those BOTW run folders, validates project/title/version, workspace ID, RomFS ID and non-empty AOC records, and restores the local handoff JSON. It does not download XCI/NSPs, re-extract packages, rewrite modules, or split shaders. Kleo2iOS folders and artifacts are ignored.
+
+Within the same Colab runtime, `/content/link2ios/work`, the pinned NX2Apple checkout, and previously downloaded package files are retained between retries. Matching Drive package files are reused after checking size and Drive MD5 when available. Transfer logs report actual byte counts, elapsed time and measured average throughput; OAuth and Git clone time are not represented as game-data transfer.
