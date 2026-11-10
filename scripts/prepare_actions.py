@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download and verify the Colab handoff, then restore split BOTW game data."""
+"""Download only the Colab-prepared Route C workspace and external BOTW game data."""
 from __future__ import annotations
 
 import argparse
@@ -12,12 +12,19 @@ import tarfile
 from pathlib import Path, PurePosixPath
 
 
+TITLE_ID = "01007EF00011E000"
+PACKAGE_VERSION = "v1114112"
+NX2APPLE_TAG = "v1.3.1-rc2"
+ENGINE_PIN = "81906931262fb25d774cce8bca2db8926439e5a2"
+
+
 def fail(message: str) -> None:
     raise SystemExit("[Link2iOS] ERROR: " + message)
 
 
 def download_drive_file(api, item: dict, destination: Path) -> None:
     from googleapiclient.http import MediaIoBaseDownload
+
     destination.parent.mkdir(parents=True, exist_ok=True)
     temp = destination.with_suffix(destination.suffix + ".part")
     request = api.files().get_media(fileId=item["id"], supportsAllDrives=True)
@@ -77,21 +84,31 @@ def main() -> None:
     parser.add_argument("--handoff", type=Path, required=True)
     parser.add_argument("--destination", type=Path, required=True)
     args = parser.parse_args()
+
     handoff = json.loads(args.handoff.read_text(encoding="utf-8"))
     if handoff.get("project") != "Link2iOS" or handoff.get("branch") != "Link2iOS":
         fail("handoff branch/project mismatch.")
-    if handoff.get("title_id") != "01007EF00011E000" or handoff.get("package_version") != "v1114112":
-        fail("handoff is not the registered BOTW 1.9.0 profile.")
-    if handoff.get("nx2apple_tag") != "v1.3.1-rc2":
-        fail("unsupported NX2Apple tag in handoff.")
-    if handoff.get("engine_pin") != "81906931262fb25d774cce8bca2db8926439e5a2":
-        fail("unexpected NXNative engine pin in handoff.")
+    if handoff.get("title_id") != TITLE_ID or handoff.get("package_version") != PACKAGE_VERSION:
+        fail("handoff is not BOTW 1.9.0 / v1114112.")
+    if handoff.get("nx2apple_tag") != NX2APPLE_TAG or handoff.get("engine_pin") != ENGINE_PIN:
+        fail("NX2Apple/NXNative pin mismatch in handoff.")
+    if not handoff.get("request_id"):
+        fail("handoff request_id is missing.")
+
+    prepared_manifest = handoff.get("prepared") or {}
+    if prepared_manifest.get("shader_package_key") is None:
+        fail("Colab did not hand off the NVN shader-package content key.")
+    if prepared_manifest.get("shader_chain") is None:
+        fail("Colab did not hand off the NVN shader chain.")
+    if prepared_manifest.get("engine_pin") != ENGINE_PIN:
+        fail("Colab preparation manifest carries another NXNative pin.")
 
     raw = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
     if not raw:
         fail("GitHub Actions secret GOOGLE_SERVICE_ACCOUNT_JSON is empty.")
     from google.oauth2 import service_account
     from googleapiclient.discovery import build
+
     credentials = service_account.Credentials.from_service_account_info(
         json.loads(raw), scopes=["https://www.googleapis.com/auth/drive.readonly"]
     )
@@ -100,64 +117,78 @@ def main() -> None:
     root = args.destination.resolve()
     shutil.rmtree(root, ignore_errors=True)
     root.mkdir(parents=True)
-    archive = root / "botw-work.tar.zst"
-    print("[Link2iOS] Downloading prepared workspace...")
-    download_drive_file(api, handoff["work_archive"], archive)
+    work_archive = root / "botw-work.tar.zst"
+    print("[Link2iOS] Downloading the Colab-prepared workspace (no NSP or prod.keys)...")
+    download_drive_file(api, handoff["work_archive"], work_archive)
+
     work = root / "work"
-    print("[Link2iOS] Verifying and extracting workspace...")
-    extract_verified_archive(archive, work)
-    archive.unlink()
+    print("[Link2iOS] Verifying and extracting prepared Linux artifacts...")
+    extract_verified_archive(work_archive, work)
+    work_archive.unlink()
 
-    nsp_dir = root / "input-nsps"
-    nsp_dir.mkdir()
-    for index, item in enumerate(handoff["source_files"], start=1):
-        filename = Path(item["name"]).name
-        local = nsp_dir / f"{item['category']}_{index:02d}_{filename}"
-        download_drive_file(api, item, local)
-    keys_path = root / "keys" / "prod.keys"
-    download_drive_file(api, handoff["prod_keys"], keys_path)
+    prep_path = work / "link2ios-linux-prep.json"
+    if not prep_path.is_file():
+        fail("Colab Linux preparation manifest is missing from the workspace.")
+    prep = json.loads(prep_path.read_text(encoding="utf-8"))
+    for key in ("project", "title_id", "package_version", "nx2apple_tag", "engine_pin",
+                "shader_package_key", "shader_chain", "romfs_relative_path", "romfs_id_relative_path"):
+        if prep.get(key) != prepared_manifest.get(key):
+            fail(f"handoff and workspace disagree on {key}.")
+    if prep.get("project") != "Link2iOS" or prep.get("title_id") != TITLE_ID:
+        fail("prepared workspace is not the BOTW Link2iOS workspace.")
+    if prep.get("package_version") != PACKAGE_VERSION or prep.get("engine_pin") != ENGINE_PIN:
+        fail("prepared workspace package version or engine pin is incorrect.")
 
-    prep = json.loads((work / "link2ios-linux-prep.json").read_text(encoding="utf-8"))
-    if prep.get("engine_pin") != handoff["engine_pin"]:
-        fail("workspace engine pin differs from the handoff.")
-    if prep.get("package_version") != handoff["package_version"]:
-        fail("workspace package version differs from the handoff.")
-
-    romfs_rel = PurePosixPath(handoff["game_data"]["romfs_relative_path"])
-    if romfs_rel.is_absolute() or ".." in romfs_rel.parts:
-        fail("invalid RomFS path in handoff.")
+    romfs_rel = PurePosixPath(prep["romfs_relative_path"])
+    romfs_id_rel = PurePosixPath(prep["romfs_id_relative_path"])
+    if romfs_rel.is_absolute() or ".." in romfs_rel.parts or romfs_id_rel.is_absolute() or ".." in romfs_id_rel.parts:
+        fail("invalid RomFS path in Colab manifest.")
     romfs_path = work.joinpath(*romfs_rel.parts)
-    print("[Link2iOS] Restoring external RomFS into the temporary macOS workspace...")
-    download_drive_file(api, handoff["game_data"]["romfs"], romfs_path)
+    romfs_id_path = work.joinpath(*romfs_id_rel.parts)
+    game_data = handoff.get("game_data") or {}
+    if game_data.get("romfs_relative_path") != prep["romfs_relative_path"]:
+        fail("Drive handoff RomFS path differs from Colab preparation.")
+    if not romfs_id_path.is_file():
+        fail("NX2Apple RomFS identity sidecar was not retained in the Colab workspace.")
 
+    print("[Link2iOS] Restoring only RomFS and DLC AOC from Drive...")
+    download_drive_file(api, game_data["romfs"], romfs_path)
     aoc_dir = work / "aoc"
     aoc_dir.mkdir(parents=True, exist_ok=True)
-    for item in handoff["game_data"]["aoc"]:
+    for item in game_data.get("aoc", []):
         filename = Path(item["name"]).name
         if not filename.lower().endswith(".img"):
             fail(f"unexpected AOC image name: {filename}")
         download_drive_file(api, item, aoc_dir / filename)
+    restored_aoc = sorted(aoc_dir.glob("*.img"))
+    if len(restored_aoc) != len(game_data.get("aoc", [])):
+        fail("restored AOC count does not match the Drive handoff.")
+    if len(restored_aoc) != len(prep.get("aoc_images", [])):
+        fail("restored AOC count does not match the Colab workspace manifest.")
+    if not romfs_path.is_file() or not romfs_path.stat().st_size:
+        fail("external BOTW RomFS image was not restored.")
 
-    if not any(p.is_file() and p.suffix.lower() == ".nsp" for p in nsp_dir.iterdir()):
-        fail("no NSP source files reached the macOS runner.")
     prepared = {
         "project": "Link2iOS",
-        "title_id": handoff["title_id"],
-        "package_version": handoff["package_version"],
-        "engine_pin": handoff["engine_pin"],
-        "nx2apple_tag": handoff["nx2apple_tag"],
+        "title_id": TITLE_ID,
+        "package_version": PACKAGE_VERSION,
+        "nx2apple_tag": NX2APPLE_TAG,
+        "engine_pin": ENGINE_PIN,
         "request_id": handoff["request_id"],
-        "nsp_dir": str(nsp_dir),
-        "keys": str(keys_path),
         "work_dir": str(work),
         "romfs_path": str(romfs_path),
-        "aoc_count": len(handoff["game_data"]["aoc"]),
-        "game_data": handoff["game_data"],
+        "romfs_id_path": str(romfs_id_path),
+        "aoc_dir": str(aoc_dir),
+        "aoc_count": len(restored_aoc),
+        "modules": prep["modules"],
+        "shader_package_key": prep["shader_package_key"],
+        "shader_chain": prep["shader_chain"],
+        "game_data": game_data,
     }
     prepared_path = root / "actions-input.json"
     prepared_path.write_text(json.dumps(prepared, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(prepared, indent=2))
-    print(f"[Link2iOS] Verified inputs and external game data. Build manifest: {prepared_path}")
+    print("[Link2iOS] Complete: Actions has workspace + RomFS/AOC only; original NSPs and prod.keys never left Colab.")
 
 
 if __name__ == "__main__":

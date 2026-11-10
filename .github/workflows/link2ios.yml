@@ -47,11 +47,13 @@ jobs:
           assert re.fullmatch(r"[0-9a-f-]{36}", d.get("request_id", ""))
           assert d.get("work_archive", {}).get("id")
           assert re.fullmatch(r"[0-9a-f]{64}", d.get("work_archive", {}).get("sha256", ""))
-          assert d.get("prod_keys", {}).get("id")
+          p=d.get("prepared", {})
+          assert re.fullmatch(r"[0-9a-f]{64}", p.get("shader_package_key", ""))
+          assert p.get("shader_chain")
+          assert p.get("romfs_relative_path") == d.get("game_data", {}).get("romfs_relative_path")
           assert d.get("game_data", {}).get("romfs", {}).get("id")
           assert d.get("game_data", {}).get("aoc")
-          assert len(d.get("source_files", [])) >= 3
-          assert all(x.get("id") and x.get("size") and x.get("sha256") for x in d["source_files"])
+          assert all(x.get("id") and x.get("size") and x.get("sha256") for x in d["game_data"]["aoc"])
           print("Link2iOS handoff validated:", d["request_id"])
           PY
 
@@ -84,18 +86,18 @@ jobs:
           test "$(cat .upstream-ref)" = "$EXPECTED"
           test "$EXPECTED" = "81906931262fb25d774cce8bca2db8926439e5a2"
 
-      - name: Download and verify Colab workspace, NSPs, keys and external game data
+      - name: Download and verify the Colab workspace and external RomFS/AOC only
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: |
           set -euo pipefail
-          python scripts/prepare_actions.py             --handoff "$GITHUB_WORKSPACE/handoff.json"             --destination "$RUNNER_TEMP/link2ios"
+          python scripts/prepare_actions.py --handoff "$GITHUB_WORKSPACE/handoff.json" --destination "$RUNNER_TEMP/link2ios"
 
       - name: Build BOTW framework and Shared Shell IPA
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/build_shared.py             --nx2apple-root "$RUNNER_TEMP/NX2Apple"             --prepared-json "$RUNNER_TEMP/link2ios/actions-input.json"             --output "$RUNNER_TEMP/link2ios-output"
+          python scripts/build_shared.py --nx2apple-root "$RUNNER_TEMP/NX2Apple" --prepared-json "$RUNNER_TEMP/link2ios/actions-input.json" --output "$RUNNER_TEMP/link2ios-output"
 
       - name: Publish installable IPA and build report
         uses: actions/upload-artifact@v4

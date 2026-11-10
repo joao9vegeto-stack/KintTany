@@ -31,15 +31,15 @@ Em seguida, o Colab publica no Drive:
 - `games/01007EF00011E000/romfs.img`;
 - `games/01007EF00011E000/aoc/<index>.img`: cada DLC separadamente.
 
-O workspace não contém o RomFS/AOC, NSPs, `prod.keys`, caches NCA grandes, ferramentas Linux ou arquivos temporários. O upload separado evita duplicar o conteúdo do jogo dentro do arquivo de build.
+O workspace não contém o RomFS/AOC, NSPs, `prod.keys`, caches NCA grandes, ferramentas Linux ou arquivos temporários. Ele mantém os módulos reescritos, o pacote NVN de shaders e sua chave de conteúdo. O upload separado evita duplicar o conteúdo do jogo dentro do arquivo de build.
 
 **Última célula do Colab:** pede o Fine-grained PAT e atualiza `handoff.json` na branch `Link2iOS`. Esse commit dispara o workflow.
 
-**GitHub Actions/macOS:** baixa o workspace, os NSPs, keys, RomFS e AOC a partir do Drive; verifica os SHA-256; restaura os dados externos no workspace; compila shaders Metal para iOS; cria `DmGame01007EF00011E000.framework`; compila o Route C Shared Shell; assina ad-hoc e empacota a IPA.
+**GitHub Actions/macOS:** baixa do Drive somente o workspace preparado e os arquivos externos `romfs.img`/AOC; verifica SHA-256 e restaura esses arquivos no mesmo layout. Não baixa NSPs nem `prod.keys` e não repete extração, rewrite ou shader split. Importa os helpers do NXNative fixado, valida a chave do pacote NVN produzida no Colab, compila apenas as bibliotecas iOS Metal e chama `build_ipa.sh` com `DM_FRAMEWORK_ONLY`. Depois `build_shell.sh` embute `DmGame01007EF00011E000.framework` no Shared Shell; o workflow assina ad-hoc e empacota a IPA.
 
 ## A IPA não contém o jogo
 
-A IPA contém o launcher Shared Shell, o framework do BOTW, módulos reescritos, tabelas, configurações, shaders e componentes de runtime. Ela é verificada para garantir que **não contenha `romfs.img`, diretório AOC ou NSPs**.
+A IPA contém o launcher Shared Shell, o framework do BOTW, módulos reescritos, tabelas, configurações, bibliotecas Metal e componentes de runtime. Ela é verificada para garantir que **não contenha `romfs.img`, diretório AOC, NSPs, `prod.keys` nem arquivos PSO `.mtl4a`**.
 
 O RomFS e DLC permanecem em uma pasta independente no Drive. O Shared Shell já oferece o seletor de dados externos e bookmark por jogo. O arquivo precisa estar disponível com acesso aleatório para leitura. A integração do provedor Google Drive no seletor do iOS precisa ser validada no dispositivo; se o provedor não oferecer a semântica de arquivo necessária, use uma pasta local ou iCloud Drive. O build não copia o RomFS para dentro da IPA.
 
@@ -59,7 +59,7 @@ Existe apenas `.github/workflows/link2ios.yml`. Ele é acionado somente por `pus
 
 - O perfil BOTW usa reserva de memória de 4 GiB, alias de 256 MiB, stack de 256 MiB e app pool de aproximadamente 3,2 GiB.
 - O upstream registra BOTW jogável em iPhone, com 60 FPS no perfil 1.9.0. Os testes descritos incluem iPhone 17 Pro Max e iOS 27.0.1; isso não garante o resultado no iPhone 17 Pro com iOS 26.5.1.
-- Para evitar PSO `.mtl4a` do SDK mais novo no alvo iOS 26, usamos `--gpu none` e mantemos as bibliotecas de shader necessárias. O dispositivo prepara os pipeline bases no primeiro uso; o primeiro carregamento pode demorar mais.
+- Para evitar PSO `.mtl4a` do SDK mais novo no alvo iOS 26, o estágio macOS passa `DM_PSO_GPUS=none` ao `build_ipa.sh` e mantém as bibliotecas de shader necessárias. O dispositivo prepara os pipeline bases no primeiro uso; o primeiro carregamento pode demorar mais.
 - IPA construída com sucesso não significa gameplay validado. O teste no aparelho continua necessário.
 
 ## Pins

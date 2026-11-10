@@ -239,7 +239,7 @@ def prepare(args) -> None:
         record = download_drive_file(api, item, local)
         record["category"] = category
         source_manifest.append(record)
-    keys_record = download_drive_file(api, keys_item, keys_path)
+    download_drive_file(api, keys_item, keys_path)
 
     install_linux_dependencies(root)
     nx = root / "NX2Apple"
@@ -291,9 +291,6 @@ def prepare(args) -> None:
         "package_version": PACKAGE_VERSION,
         "nx2apple_tag": NX2APPLE_TAG,
         "engine_pin": ENGINE_PIN,
-        "source_drive_folder_id": args.drive_folder_id,
-        "source_files": source_manifest,
-        "prod_keys": keys_record,
         "work_archive": archive_record,
         "game_data": {
             "folder_id": game_id,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -31,6 +32,7 @@ def load_builder(engine: Path):
     spec = importlib.util.spec_from_file_location("link2ios_nxnative_builder", script)
     require(spec is not None and spec.loader is not None, "could not load NXNative builder")
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -75,6 +77,7 @@ def run_preparation(args) -> dict:
 
     original_run = module.run
     original_split = module.split_shaders
+    split_result = {}
 
     def intercept_final_build(command, log=None, *pos, **kw):
         cmd = [str(x) for x in command] if isinstance(command, (list, tuple)) else [str(command)]
@@ -91,7 +94,9 @@ def run_preparation(args) -> dict:
             oodle = pos[9]
         require(oodle is None,
                 "BOTW shader split requested an Oodle/LZ5 decoder from the Apple-silicon Mac host; Colab cannot substitute it.")
-        return original_split(*pos, **kw)
+        key = original_split(*pos, **kw)
+        split_result["key"] = key
+        return key
 
     def defer_ios_metal(py, repo_path, shader_root, *pos, **kw):
         out = Path(shader_root) / "ios"
@@ -136,12 +141,28 @@ def run_preparation(args) -> dict:
         except Exception:
             pass
 
-    romfs = work / "extract" / PACKAGE_VERSION / "RomFS.img"
+    version_dir = work / "extract" / PACKAGE_VERSION
+    exefs = version_dir / "ExeFS"
+    romfs = version_dir / "RomFS.img"
+    romfs_id = version_dir / "RomFS.img.id"
     patched = work / f"patched_{PACKAGE_VERSION}"
+    shader_pkg = work / "shader" / "pkg"
     require(romfs.is_file(), f"extracted BOTW RomFS image not found: {romfs}")
+    require(romfs_id.is_file(), f"RomFS identity sidecar from NX2Apple patch 0087 is missing: {romfs_id}")
+    require((exefs / "main").is_file(), "extracted ExeFS/main is missing")
     require(patched.is_dir(), f"rewritten module directory missing: {patched}")
-    require((patched / "main.patched.bin").is_file(), "rewritten main module is missing")
-    require((work / "shader" / "pkg").is_dir(), "offline NVN shader package is missing")
+    modules = profile.modules_in(exefs)
+    require({"main", "subsdk0", "sdk"}.issubset(set(modules)),
+            f"BOTW ExeFS modules are incomplete: {modules}")
+    for name in modules:
+        require((patched / f"{name}.patched.bin").is_file(), f"rewritten module is missing: {name}")
+        require((patched / f"{name}.fixups.tsv").is_file(), f"rewrite fixup table is missing: {name}")
+    require(shader_pkg.is_dir(), "offline NVN shader package is missing")
+    shader_key = split_result.get("key")
+    require(isinstance(shader_key, str) and re.fullmatch(r"[0-9a-f]{64}", shader_key),
+            "NXNative did not return a reusable shader-package content key; refusing a Mac-side shader resplit")
+    shader_chain = module.chain_of(engine)
+    require(bool(shader_chain), "NXNative shader chain header is missing after the Linux preparation")
     aoc = sorted((work / "aoc").glob("*.img")) if (work / "aoc").is_dir() else []
     require(bool(aoc), "no DLC RomFS images were extracted; check the DLC NSPs.")
 
@@ -154,7 +175,11 @@ def run_preparation(args) -> dict:
         "engine_pin": pin,
         "input_nsp_count": len(nsp_files),
         "profile_package": registered_package,
+        "modules": modules,
+        "shader_package_key": shader_key,
+        "shader_chain": shader_chain,
         "romfs_relative_path": f"extract/{PACKAGE_VERSION}/RomFS.img",
+        "romfs_id_relative_path": f"extract/{PACKAGE_VERSION}/RomFS.img.id",
         "aoc_relative_dir": "aoc",
         "prepared_stages": [
             "nsp_content_meta_scan", "base_update_dlc_extract", "romfs_extraction",
