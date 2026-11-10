@@ -2,11 +2,11 @@
 
 ## Fixed source input
 
-The Colab notebook is preconfigured for Drive folder `19HXEJCK-26NfBVKeUP3wqFxMFpoF3ykm`. At the root, keep `prod.keys`, exactly one update NSP (recommended name `update.nsp`), `dlc1.nsp` and `dlc2.nsp`. No manual `base/`, `update/`, or `dlc/` directories are required.
+The Colab notebook is preconfigured for Drive folder `19HXEJCK-26NfBVKeUP3wqFxMFpoF3ykm`. At the root, keep `prod.keys`, only `update.nsp`, `dlc1.nsp` and `dlc2.nsp` as NSP inputs; all other root files and folders are ignored. No manual `base/`, `update/`, or `dlc/` directories are required.
 
 For the first run, the notebook collects the signed 7z URL through a masked prompt. The URL is not committed to this public repository, echoed, or copied to Drive. Colab downloads the archive to temporary runtime storage, validates the 7z signature and archive paths, tests it, and extracts it with 7-Zip. It requires exactly one XCI with the XCI `HEAD` magic at offset `0x100`, then uploads only that XCI to a generated `BOTW_Base_XCI/` folder in Drive. The original 7z and extracted staging directory are removed from the Colab runtime.
 
-Colab downloads `prod.keys` and the three NSPs (one update and two DLCs) from the Drive root into temporary runtime storage. The key is used to read the XCI/NSP content metadata and decrypt NCAs; the XCI, three NSPs and key are removed from the Colab runtime after Linux preparation. The extracted base XCI remains in `BOTW_Base_XCI/`; subsequent runs reuse it without downloading the 7z again.
+Colab downloads `prod.keys` and the three NSPs (the exact update/DLC filenames and two DLCs) from the Drive root into temporary runtime storage. The key is used to read the XCI/NSP content metadata and decrypt NCAs; the XCI, three NSPs and key are removed from the Colab runtime after Linux preparation. The extracted base XCI remains in `BOTW_Base_XCI/`; subsequent runs reuse it without downloading the 7z again.
 
 The input is BOTW base XCI + update 1.9.0 + `dlc1.nsp` + `dlc2.nsp`, Title ID `01007EF00011E000`, package `v1114112`. The pinned NXNative builder supports XCI directly and scans it together with the update/DLC NSPs; no XCI-to-NSP conversion is performed. Both DLC NSPs are required, and NX2Apple must produce AOC RomFS images or preparation fails.
 
