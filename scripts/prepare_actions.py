@@ -196,6 +196,8 @@ def main() -> None:
         "aoc_count": len(restored_aoc),
         "aoc_images": sorted(path.name for path in restored_aoc),
         "modules": prep["modules"],
+        "romfs_relative_path": prep["romfs_relative_path"],
+        "romfs_id_relative_path": prep["romfs_id_relative_path"],
         "shader_package_key": prep["shader_package_key"],
         "shader_chain": prep["shader_chain"],
         "game_data": game_data,

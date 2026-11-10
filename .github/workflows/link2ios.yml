@@ -6,6 +6,9 @@ on:
       - Link2iOS
     paths:
       - handoff.json
+      - scripts/prepare_actions.py
+      - scripts/build_shared.py
+      - .github/workflows/link2ios.yml
 
 permissions:
   contents: read
