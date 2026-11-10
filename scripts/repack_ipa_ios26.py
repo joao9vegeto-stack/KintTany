@@ -41,14 +41,16 @@ def read_entitlements(executable: Path, output: Path) -> None:
     output.write_text(xml, encoding="utf-8")
 
 
-# Bananza iOS 26 test: keep the proven 5 GiB total reservation, but move
-# 192 MiB from the alias region to the app heap. The title declares sys_resource=0
-# (heap path, not virtual-address memory); preserve the tested 256 MiB stack region.
-# This is a targeted allocation-headroom test, not a claim that gameplay is fixed.
+# Bananza iOS 26: keep the 5 GiB guest reservation, but rebalance 96 MiB
+# from the 256 MiB stack + 64 MiB alias reservations into the app heap.
+# The crash disassembly proves VoxelSceneHeap requests 0xb0e00000 (2,830 MiB)
+# and the parent allocator returns NULL. Keep 192 MiB stack and 32 MiB alias;
+# increase app_pool from 4,544 MiB to 4,640 MiB without changing mem_reserve.
 MEMORY_PROFILE = {
     "mem_reserve": ("0x270000000", "0x140000000"),
-    "mem_alias": ("0x10000000", "0x04000000"),
-    "app_pool": ("0x240000000", "0x11c000000"),
+    "mem_alias": ("0x10000000", "0x02000000"),
+    "mem_stack": ("0x10000000", "0x0c000000"),
+    "app_pool": ("0x240000000", "0x121000000"),
 }
 
 
