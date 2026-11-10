@@ -131,12 +131,20 @@ def upload_drive_file(api, path: Path, parent_id: str, name: str) -> dict:
     print(f"[Link2iOS] Enviando {name}: {size:,} bytes ({size / 1024**3:.2f} GiB)...", flush=True)
     media = MediaFileUpload(str(path), mimetype="application/octet-stream",
                             chunksize=CHUNK, resumable=True)
-    result = api.files().create(
+    request = api.files().create(
         body={"name": name, "parents": [parent_id]},
         media_body=media,
         fields="id,name,size",
         supportsAllDrives=True,
-    ).execute()
+    )
+    result = None
+    while result is None:
+        status, result = request.next_chunk()
+        if status:
+            print(
+                f"[Link2iOS] Upload {name}: {status.progress() * 100:.1f}%",
+                flush=True,
+            )
     size = path.stat().st_size
     if int(result.get("size", -1)) != size:
         fail(f"Drive upload size mismatch for {name}")
