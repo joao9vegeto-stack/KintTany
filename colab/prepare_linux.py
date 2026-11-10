@@ -164,7 +164,8 @@ def run_preparation(args) -> dict:
     shader_chain = module.chain_of(engine)
     require(bool(shader_chain), "NXNative shader chain header is missing after the Linux preparation")
     aoc = sorted((work / "aoc").glob("*.img")) if (work / "aoc").is_dir() else []
-    require(bool(aoc), "no DLC RomFS images were extracted; check the DLC NSPs.")
+    if not aoc:
+        print("[Link2iOS] No DLC NSP found; base game + update is a supported build input.")
 
     result = {
         "format": 1,
@@ -181,8 +182,9 @@ def run_preparation(args) -> dict:
         "romfs_relative_path": f"extract/{PACKAGE_VERSION}/RomFS.img",
         "romfs_id_relative_path": f"extract/{PACKAGE_VERSION}/RomFS.img.id",
         "aoc_relative_dir": "aoc",
+        "dlc_present": bool(aoc),
         "prepared_stages": [
-            "nsp_content_meta_scan", "base_update_dlc_extract", "romfs_extraction",
+            "nsp_content_meta_scan", "base_update_extract", "romfs_extraction",
             "aarch64_module_rewrite", "nvn_offline_shader_split", "profile_shader_table_validation",
         ],
         "deferred_stages": [
