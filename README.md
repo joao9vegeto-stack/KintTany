@@ -10,7 +10,7 @@ O notebook utiliza diretamente a pasta Google Drive compartilhada com a service 
 
 Na raiz dessa pasta, deixe `prod.keys`, `update.nsp`, `dlc1.nsp` e `dlc2.nsp` (os demais arquivos e pastas são ignorados; `prod.keys` continua obrigatório). O jogo base não precisa ficar no Drive antes da primeira execução.
 
-Na primeira execução, o notebook pede o link assinado do 7z por uma entrada protegida. O link não fica embutido no repositório público, não é impresso e não é gravado no Drive. O Colab baixa o 7z para seu armazenamento temporário, valida a assinatura, testa e extrai com 7-Zip. Exige exatamente um XCI com cabeçalho `HEAD` no offset `0x100` e envia somente esse XCI para uma pasta `BOTW_Base_XCI/` criada automaticamente no Drive. O 7z temporário e a extração local são apagados.
+Na primeira preparação, o notebook pede o link assinado do 7z por uma entrada protegida. O link não fica embutido no repositório público, não é impresso e não é gravado no Drive. O Colab baixa o 7z para seu armazenamento temporário, valida a assinatura, testa e extrai com 7-Zip. Exige exatamente um XCI com cabeçalho `HEAD` no offset `0x100` e envia somente esse XCI para uma pasta `BOTW_Base_XCI/` criada automaticamente no Drive. O 7z temporário e a extração local são apagados.
 
 O `prod.keys` e os três NSPs (update + duas DLCs) são baixados da raiz da pasta Drive para o runtime temporário do Colab e apagados após a preparação. O XCI base extraído permanece no Drive. Nas próximas execuções, o notebook reutiliza `BOTW_Base_XCI/` e não baixa o 7z novamente; o campo do link pode ficar vazio.
 
@@ -61,3 +61,10 @@ Existe apenas `.github/workflows/link2ios.yml`. Ele é acionado somente por `pus
 - NX2Apple: https://github.com/LNPANDY/NX2Apple/tree/v1.3.1-rc2
 - NXNative: https://github.com/seedds/nxnative/tree/81906931262fb25d774cce8bca2db8926439e5a2
 - Perfil BOTW: https://github.com/seedds/nxnative/tree/81906931262fb25d774cce8bca2db8926439e5a2/dm/games/01007EF00011E000
+
+
+## Retomada sem repetir a preparação
+
+Após uma preparação BOTW concluída, o notebook grava `handoff.json` dentro da pasta `Link2iOS_BOTW_*` no Drive. Em uma sessão nova, execute autenticação, clone e a célula **Recuperar preparação**. Ela filtra pelo projeto, Title ID `01007EF00011E000`, versão `v1114112` e presença de workspace/RomFS/AOC. Não baixa novamente XCI/NSPs nem repete a extração, reescrita de módulos ou shader split. Pastas de Kleo2iOS são ignoradas.
+
+Durante a primeira preparação, downloads exibem bytes efetivos, tamanho conferido e tempo decorrido. O runtime mantém o workspace parcial entre tentativas, e arquivos-fonte já transferidos são reutilizados quando tamanho e checksum do Drive correspondem.
