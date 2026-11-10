@@ -228,9 +228,8 @@ def prepare(args, api=None) -> None:
     keys_path = Path(source["keys_path"])
     print(
         f"[Link2iOS] Source ready: {source['package_count']} Switch packages "
-        f"({source['xci_count']} XCI base + {source['nsp_count']} NSPs: "
-        f"{source['update_nsp_count']} update + {source['dlc_nsp_count']} DLC) "
-        f"from {source['source_folder_name']}."
+        f"(1 {source['base_type']} base + {source['update_nsp_count']} update + "
+        f"{source['dlc_nsp_count']} DLC) from {source['source_folder_name']}."
     )
 
     install_linux_dependencies(root)
