@@ -114,8 +114,13 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
         if not (patched / f"{name}.fixups.tsv").is_file():
             fail(f"rewriter fixup table for {name} is missing.")
     aoc_images = sorted(aoc_dir.glob("*.img"))
-    if len(aoc_images) != int(prepared.get("aoc_count", -1)):
-        fail("restored AOC image count does not match the verified handoff.")
+    expected_aoc = {"1.img", "2.img"}
+    if {path.name for path in aoc_images} != expected_aoc:
+        fail("BOTW framework build requires both AOC images: 1.img and 2.img.")
+    if int(prepared.get("aoc_count", -1)) != 2:
+        fail("verified Actions handoff does not contain exactly two BOTW AOC images.")
+    if set(prepared.get("aoc_images", [])) != expected_aoc:
+        fail("Actions AOC image manifest does not match BOTW DLC Pack 1 and Pack 2.")
     if not romfs.is_file() or romfs.stat().st_size != int(prep.get("romfs_size", -1)):
         fail("restored RomFS image size differs from Colab's manifest.")
     try:
@@ -364,8 +369,13 @@ def main() -> None:
             "ipa": ipa.name,
             "ipa_size_bytes": ipa.stat().st_size,
             "build_architecture": {
-                "colab_linux": ["NSP scan", "base/update extraction (DLC optional)", "RomFS preparation",
-                                "AArch64 module rewrite", "NVN offline shader split"],
+                "colab_linux": [
+                    "NXNative build_ipa_from_nsp.py content-meta scan",
+                    "XCI base + update v1114112 extraction into merged RomFS.img",
+                    "DLC title 01007EF00011F001 extraction into aoc/1.img",
+                    "DLC title 01007EF00011F002 extraction into aoc/2.img",
+                    "AArch64 module rewrite", "NVN offline shader split",
+                ],
                 "macos": ["iOS Metal library compilation", "DM_FRAMEWORK_ONLY Route C framework",
                           "build_shell Shared Shell", "ad-hoc signing and IPA packaging"],
                 "mac_downloaded_original_nsp": False,
@@ -380,7 +390,11 @@ def main() -> None:
             "external_game_data": {
                 "drive_folder_url": prepared["game_data"]["folder_url"],
                 "romfs_size_bytes": prepared["game_data"]["romfs"]["size"],
-                "aoc_images": len(prepared["game_data"].get("aoc", [])),
+                "aoc_images": sorted(path.name for path in aoc_images),
+                "aoc_title_ids": {
+                    "1.img": "01007EF00011F001",
+                    "2.img": "01007EF00011F002",
+                },
                 "layout": f"games/{TITLE_ID}/romfs.img + games/{TITLE_ID}/aoc/",
             },
             "pipeline_archive": {
