@@ -93,7 +93,7 @@ if [ -n "${DM_SHELL_ICON_SOURCE:-}" ]; then
   printf '%s\n' '{"images":[{"filename":"AppIcon.png","idiom":"universal","platform":"ios","size":"1024x1024"}],"info":{"author":"xcode","version":1}}' > Gen/Assets.xcassets/AppIcon.appiconset/Contents.json || die "BOTW AppIcon manifest"
   t "Link2iOS: Shared Shell AppIcon uses the BOTW NACP game icon"
 fi
-'''.trimEnd();
+'''.strip();
     script_text = script_text.replace(anchor, anchor + "\n" + injection)
     script.write_text(script_text, encoding="utf-8")
     print("[Link2iOS] Shared Shell template now compiles the BOTW icon as AppIcon; generic NX2Apple icon resource removed.")
