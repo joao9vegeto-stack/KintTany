@@ -1,3 +1,2 @@
-Intentional audit trigger: PPC xrefs for async stream manager global at 0x835E004C.
-No native runtime or iOS IPA inputs are changed by this file.
-Capture the global constructor, class vtable, and virtual dispatch users.
+Audit-only trigger: inspect compressed XOWUE guest table static data and vtable references.
+No runtime, AOT, or IPA inputs are changed by this marker file.

@@ -10,6 +10,7 @@ on:
       - "audit/probe_xowue_stream_support.py"
       - "audit/probe_xowue_stream_field_xrefs.py"
       - "audit/probe_xowue_async_manager_xrefs.py"
+      - "audit/inspect_xowue_guest_tables.py"
       - "audit/xowue-stream-aot-audit.trigger"
       - "audit/xowue-stream-aot-audit.trigger"
 
@@ -113,6 +114,24 @@ jobs:
         with:
           name: XOWUE-Async-Stream-Manager-Xrefs
           path: ${{ runner.temp }}/xowue-async-stream-manager-xrefs.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
+
+      - name: Inspect compressed guest table for manager vtable data
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile audit/inspect_xowue_guest_tables.py
+          python3 audit/inspect_xowue_guest_tables.py
+          test -s xowue-guest-tables-inspection.json
+          python3 -m json.tool xowue-guest-tables-inspection.json >/dev/null
+
+      - name: Upload guest static-table inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: XOWUE-Guest-Static-Table-Inspection
+          path: xowue-guest-tables-inspection.json
           if-no-files-found: error
           retention-days: 30
           compression-level: 6
