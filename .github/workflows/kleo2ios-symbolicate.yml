@@ -40,8 +40,8 @@ jobs:
           python3 - <<'PY'
           import json, os
           d=json.load(open("symbolicate-request.json", encoding="utf-8"))
-          assert d.get("source_run_id") == 42571125251
-          assert d.get("source_artifact_name") == "Kleo2iOS-7"
+          assert d.get("source_run_id") == 42737308078
+          assert d.get("source_artifact_name") == "Kleo2iOS-9"
           assert d.get("title_id") == "040074A01BF12000"
           assert d.get("framework_binary", "").endswith("/DmGame040074A01BF12000")
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
