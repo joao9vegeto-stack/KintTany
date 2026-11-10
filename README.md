@@ -14,7 +14,7 @@ Na primeira preparação, o notebook pede o link assinado do 7z por uma entrada 
 
 O `prod.keys` e os três NSPs (update + duas DLCs) são baixados da raiz da pasta Drive para o runtime temporário do Colab e apagados após a preparação. O NSP base extraído permanece no Drive. Nas próximas execuções, o notebook reutiliza `BOTW_Base_NSP/` e não baixa o 7z novamente; também reconhece a pasta `BOTW_Base_XCI/` de execuções anteriores.
 
-A entrada desta execução é BOTW base NSP v0 + update 1.9.0 + dois DLCs, Title ID `01007EF00011E000`, package `v1114112`. O NXNative/NX2Apple identifica o NSP base, o NSP de update e os dois NSPs de DLC pelos metadados internos e os combina para preparar a versão solicitada. Os dois DLCs são obrigatórios e precisam gerar imagens AOC.
+A entrada desta execução é BOTW base NSP v0 + update 1.9.0 (`v1114112`) + dois DLCs, Title ID `01007EF00011E000`, package `v1114112`. O pipeline confere a versão do update pelos metadados internos antes de iniciar extração/rewrite: um update diferente (por exemplo `v786432`) não é aceito como se fosse 1.9.0. O NXNative/NX2Apple identifica o NSP base, o NSP de update e os dois NSPs de DLC pelos metadados internos e os combina para preparar a versão solicitada. Os dois DLCs são obrigatórios e precisam gerar imagens AOC.
 
 ## Fluxo completo
 
