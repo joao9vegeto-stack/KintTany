@@ -8,6 +8,7 @@ on:
       - ".github/workflows/xowue-stream-aot-audit.yml"
       - "tools/probe_xowue_stream_stall.py"
       - "audit/probe_xowue_stream_support.py"
+      - "audit/probe_xowue_stream_field_xrefs.py"
       - "audit/xowue-stream-aot-audit.trigger"
 
 concurrency:
@@ -70,6 +71,26 @@ jobs:
         with:
           name: XOWUE-Stream-Poll-Support-AOT-Source
           path: ${{ runner.temp }}/xowue-stream-support-aot-source.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
+
+      - name: Extract direct +168 field cross-references and wait implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile audit/probe_xowue_stream_field_xrefs.py
+          python3 audit/probe_xowue_stream_field_xrefs.py \
+            --ppc-dir "$RUNNER_TEMP/generated/ppc" \
+            --report "$RUNNER_TEMP/xowue-stream-field168-xrefs.json"
+          test -s "$RUNNER_TEMP/xowue-stream-field168-xrefs.json"
+          python3 -m json.tool "$RUNNER_TEMP/xowue-stream-field168-xrefs.json" >/dev/null
+
+      - name: Upload stream object +168 producer cross-references
+        uses: actions/upload-artifact@v4
+        with:
+          name: XOWUE-Stream-Field168-Xrefs
+          path: ${{ runner.temp }}/xowue-stream-field168-xrefs.json
           if-no-files-found: error
           retention-days: 30
           compression-level: 6
