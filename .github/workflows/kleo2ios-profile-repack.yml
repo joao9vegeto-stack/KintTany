@@ -46,7 +46,7 @@ jobs:
           assert d.get("mem_reserve") == "0x140000000"
           assert d.get("mem_alias") == "0x02000000"
           assert d.get("mem_stack") == "0x0c000000"
-          assert d.get("app_pool") == "0x121000000"
+          assert d.get("app_pool") == "0x122000000"
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write("source_run_id="+str(d["source_run_id"])+"\n")
               f.write("artifact_name="+d["source_artifact_name"]+"\n")
