@@ -1,0 +1,164 @@
+name: Link2iOS BOTW Upload Existing IPA to Drive
+
+on:
+  push:
+    branches:
+      - Link2iOS
+    paths:
+      - .github/workflows/link2ios-drive-upload.yml
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: link2ios-drive-upload
+  cancel-in-progress: false
+
+jobs:
+  upload-existing-ipa:
+    if: github.ref == 'refs/heads/Link2iOS'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      ARTIFACT_ID: "13802649444"
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+    steps:
+      - name: Checkout Link2iOS handoff
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate exact known-good IPA artifact and Drive destination
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/Link2iOS"
+          python - <<'PY'
+          import json, os
+          h=json.load(open("handoff.json", encoding="utf-8"))
+          assert h["project"] == "Link2iOS" and h["branch"] == "Link2iOS"
+          assert h["title_id"] == "01007EF00011E000"
+          assert h["drive_output_folder_id"] == "1LhyQMpGQo1vB3IIy0STycGkJ4UzGKbSR"
+          assert os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"), "GOOGLE_SERVICE_ACCOUNT_JSON secret is empty"
+          print("BOTW handoff and existing Actions service-account secret validated.")
+          print("Drive destination:", h["drive_output_folder_url"])
+          PY
+
+      - name: Download already-built GitHub Actions artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ipa-artifact"
+          curl --fail --location --retry 8 --retry-all-errors --retry-delay 3 --silent --show-error \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/joao9vegeto-stack/KintTany/actions/artifacts/$ARTIFACT_ID/zip" \
+            --output "$RUNNER_TEMP/Link2iOS-BOTW-Repacked-2.zip"
+          test -s "$RUNNER_TEMP/Link2iOS-BOTW-Repacked-2.zip"
+          python - <<'PY'
+          import zipfile, os
+          p=os.path.join(os.environ["RUNNER_TEMP"], "Link2iOS-BOTW-Repacked-2.zip")
+          with zipfile.ZipFile(p) as z:
+              names=z.namelist()
+              ipa=[n for n in names if n.lower().endswith(".ipa")]
+              reports=[n for n in names if n.endswith("build-report.json")]
+              assert len(ipa)==1, f"Expected exactly one IPA in artifact, found {ipa}"
+              assert len(reports)==1, f"Expected build report, found {reports}"
+              print("Artifact verified:", ipa[0], "| report:", reports[0])
+              z.extractall(os.path.join(os.environ["RUNNER_TEMP"], "ipa-artifact"))
+          PY
+
+      - name: Install Google Drive API client
+        run: python -m pip install --disable-pip-version-check google-api-python-client google-auth
+
+      - name: Resumable upload IPA to the existing BOTW Drive folder
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, pathlib, time
+          from google.oauth2 import service_account
+          from googleapiclient.discovery import build
+          from googleapiclient.http import MediaFileUpload
+
+          root = pathlib.Path(os.environ["RUNNER_TEMP"]) / "ipa-artifact"
+          ipa_files = list(root.rglob("*.ipa"))
+          assert len(ipa_files) == 1, f"Expected one extracted IPA, found {ipa_files}"
+          ipa = ipa_files[0]
+          size = ipa.stat().st_size
+          assert size > 100_000_000, f"IPA unexpectedly small: {size} bytes"
+
+          handoff = json.loads(pathlib.Path("handoff.json").read_text())
+          parent_id = handoff["drive_output_folder_id"]
+          creds_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
+          creds = service_account.Credentials.from_service_account_info(
+              creds_info, scopes=["https://www.googleapis.com/auth/drive"]
+          )
+          drive = build("drive", "v3", credentials=creds, cache_discovery=False)
+
+          def list_children(parent, name):
+              q = f"'{parent}' in parents and name = '{name}' and trashed = false"
+              result = drive.files().list(
+                  q=q, spaces="drive", fields="files(id,name,mimeType,size,md5Checksum,webViewLink)",
+                  pageSize=100, supportsAllDrives=True, includeItemsFromAllDrives=True
+              ).execute(num_retries=5)
+              return result.get("files", [])
+
+          folders = list_children(parent_id, "ipa")
+          if folders:
+              folder = next((x for x in folders if x.get("mimeType") == "application/vnd.google-apps.folder"), None)
+              assert folder, "A non-folder item named 'ipa' already exists in the destination."
+              folder_id = folder["id"]
+          else:
+              folder = drive.files().create(
+                  body={"name":"ipa","mimeType":"application/vnd.google-apps.folder","parents":[parent_id]},
+                  fields="id,name", supportsAllDrives=True
+              ).execute(num_retries=5)
+              folder_id = folder["id"]
+
+          md5 = hashlib.md5()
+          with ipa.open("rb") as f:
+              for block in iter(lambda:f.read(16*1024*1024), b""):
+                  md5.update(block)
+          md5_hex = md5.hexdigest()
+          filename = "Link2iOS-BOTW.ipa"
+          existing = list_children(folder_id, filename)
+          media = MediaFileUpload(
+              str(ipa), mimetype="application/octet-stream",
+              chunksize=64*1024*1024, resumable=True
+          )
+          metadata = {"name":filename, "mimeType":"application/octet-stream"}
+          if existing:
+              request = drive.files().update(
+                  fileId=existing[0]["id"], body=metadata, media_body=media,
+                  fields="id,name,size,md5Checksum,webViewLink", supportsAllDrives=True
+              )
+              print("Replacing existing IPA in Drive:", existing[0]["id"], flush=True)
+          else:
+              metadata["parents"] = [folder_id]
+              request = drive.files().create(
+                  body=metadata, media_body=media,
+                  fields="id,name,size,md5Checksum,webViewLink", supportsAllDrives=True
+              )
+          response = None
+          while response is None:
+              status, response = request.next_chunk(num_retries=8)
+              if status:
+                  print(f"Google Drive upload: {status.progress()*100:.1f}%", flush=True)
+
+          assert int(response.get("size", -1)) == size, (
+              f"Drive size mismatch: expected {size}, got {response.get('size')}"
+          )
+          assert response.get("md5Checksum", "").lower() == md5_hex, (
+              "Drive MD5 does not match the downloaded IPA"
+          )
+          print("UPLOAD_VERIFIED")
+          print("Drive file:", response["name"])
+          print("Bytes:", size)
+          print("MD5:", md5_hex)
+          print("Drive URL:", response.get("webViewLink") or f"https://drive.google.com/file/d/{response['id']}/view")
+          PY
