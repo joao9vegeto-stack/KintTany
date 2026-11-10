@@ -29,29 +29,21 @@ def fail(message: str) -> None:
     raise SystemExit("[Link2iOS] ERROR: " + message)
 
 
-def service_account_json() -> dict:
-    raw = os.environ.get("LINK2IOS_GOOGLE_SERVICE_ACCOUNT_JSON", "")
-    if not raw:
-        try:
-            from google.colab import userdata
-            raw = userdata.get("LINK2IOS_GOOGLE_SERVICE_ACCOUNT_JSON") or ""
-        except Exception:
-            raw = ""
-    if not raw:
-        fail("configure the Colab Secret LINK2IOS_GOOGLE_SERVICE_ACCOUNT_JSON.")
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as exc:
-        fail(f"service-account JSON is invalid: {exc}")
-
-
-def drive_api():
-    from google.oauth2 import service_account
+def drive_api(credentials=None):
+    """Build a Drive client using the Colab user's OAuth credentials (no Colab Secret)."""
     from googleapiclient.discovery import build
-    credentials = service_account.Credentials.from_service_account_info(
-        service_account_json(),
-        scopes=["https://www.googleapis.com/auth/drive"],
-    )
+    if credentials is None:
+        try:
+            import google.auth
+            credentials, _ = google.auth.default(
+                scopes=["https://www.googleapis.com/auth/drive"]
+            )
+        except Exception as exc:
+            fail(
+                "Google Drive não autenticado. Execute auth.authenticate_user() "
+                "no notebook antes da preparação. "
+                f"Detalhe: {type(exc).__name__}: {exc}"
+            )
     return build("drive", "v3", credentials=credentials, cache_discovery=False)
 
 
@@ -185,7 +177,7 @@ def install_linux_dependencies(root: Path) -> None:
     os.environ["PATH"] = str(dotnet_root) + os.pathsep + os.environ["PATH"]
 
 
-def prepare(args) -> None:
+def prepare(args, api=None) -> None:
     # Install the Drive client before the first API call in a fresh Colab runtime.
     subprocess.run([
         sys.executable, "-m", "pip", "install", "-q",
@@ -194,7 +186,7 @@ def prepare(args) -> None:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from prepare_linux import run_preparation
 
-    api = drive_api()
+    api = api or drive_api()
     request_id = str(uuid.uuid4())
     root = Path("/content/link2ios")
     shutil.rmtree(root, ignore_errors=True)
