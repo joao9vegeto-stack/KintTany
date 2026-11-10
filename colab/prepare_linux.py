@@ -68,10 +68,15 @@ def run_preparation(args) -> dict:
     package_files = module.files_with_suffix(nsp_dir, ".xci", ".nsp")
     xci_files = [path for path in package_files if path.suffix.lower() == ".xci"]
     nsp_files = [path for path in package_files if path.suffix.lower() == ".nsp"]
-    require(len(xci_files) == 1,
-            f"expected exactly one BOTW base XCI, found {len(xci_files)}")
-    require(len(nsp_files) == 3,
-            f"expected exactly three NSPs (one update plus two DLCs), found {len(nsp_files)}")
+    xci_layout = len(xci_files) == 1 and len(nsp_files) == 3
+    nsp_layout = len(xci_files) == 0 and len(nsp_files) == 4
+    require(
+        xci_layout or nsp_layout,
+        "expected either 1 base XCI + 3 NSPs (update and two DLCs), or "
+        f"1 base NSP + 3 NSPs (total 4 NSPs); found {len(xci_files)} XCI(s) "
+        f"and {len(nsp_files)} NSP(s).",
+    )
+    base_type = "XCI" if xci_layout else "NSP"
     for path in package_files:
         require(module.is_package(path),
                 f"invalid Switch package header in {path.name}; expected XCI HEAD or NSP PFS0")
@@ -188,6 +193,7 @@ def run_preparation(args) -> dict:
         "nx2apple_tag": "v1.3.1-rc2",
         "engine_pin": pin,
         "input_package_count": len(package_files),
+        "input_base_type": base_type,
         "input_xci_count": len(xci_files),
         "input_nsp_count": len(nsp_files),
         "profile_package": registered_package,
@@ -203,7 +209,7 @@ def run_preparation(args) -> dict:
         },
         "dlc_present": True,
         "prepared_stages": [
-            "nxnative_build_ipa_from_nsp_scan_nsps",
+            "nxnative_scan_base_update_and_dlc_by_content_meta",
             "nx_extract_base_plus_update_to_v1114112",
             "nx_extract_each_dlc_to_aoc_1_and_2",
             "romfs_image_and_identity",
