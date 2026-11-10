@@ -8,6 +8,60 @@ def run(cmd, cwd=None, env=None):
     print("+", " ".join(map(str, cmd)), flush=True)
     subprocess.run(list(map(str, cmd)), cwd=cwd, env=env, check=True)
 
+def apply_ios_memory_profile(framework: Path, title_id: str):
+    """Keep Bananza's alias region large enough on iOS without shrinking its tested 4.4375 GiB heap."""
+    if title_id.upper() != "040074A01BF12000":
+        return None
+    profile = framework / "profile.tsv"
+    if not profile.is_file():
+        raise SystemExit(f"Missing runtime game profile: {profile}")
+    # The previous device profile reserved 5 GiB but left only 64 MiB for the Switch 2
+    # alias region. NXNative documents 256 MiB for Bananza; undersizing this region can
+    # silently skip mapped resources and later crash at a null dereference.
+    # Grow the total reservation by 192 MiB, keeping the 256 MiB module prefix,
+    # 256 MiB stack and 4.4375 GiB heap/app pool unchanged.
+    values = {
+        "mem_reserve": "0x14c000000",
+        "mem_alias": "0x10000000",
+        "mem_stack": "0x10000000",
+        "app_pool": "0x11c000000",
+        "mem_used": "0x4000000",
+        "sys_resource": "0x0",
+    }
+    lines = profile.read_text(encoding="utf-8").splitlines()
+    found = set()
+    out = []
+    for line in lines:
+        stripped = line.strip()
+        key = stripped.split(None, 1)[0] if stripped and not stripped.startswith("#") else ""
+        if key in values:
+            out.append(f"{key}\\t{values[key]}")
+            found.add(key)
+        else:
+            out.append(line)
+    for key, value in values.items():
+        if key not in found:
+            out.append(f"{key}\\t{value}")
+    profile.write_text("\\n".join(out) + "\\n", encoding="utf-8")
+
+    parsed = {}
+    for line in out:
+        fields = line.split()
+        if len(fields) >= 2 and fields[0] in values:
+            parsed[fields[0]] = int(fields[1], 0)
+    reserve, alias, stack, pool = (parsed[k] for k in ("mem_reserve", "mem_alias", "mem_stack", "app_pool"))
+    heap_region = reserve - 0x10000000 - alias - stack
+    if heap_region != pool:
+        raise SystemExit(
+            f"Unsafe Bananza iOS memory partition: heap region {heap_region:#x} != app_pool {pool:#x}"
+        )
+    print(
+        "[Kleo2iOS] Bananza iOS profile: reserve=5.1875 GiB, alias=256 MiB, "
+        "stack=256 MiB, heap/app_pool=4.4375 GiB; preserved heap, expanded alias"
+    )
+    return {k: f"0x{parsed[k]:x}" for k in values}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--nx2apple-root", type=Path, required=True)
@@ -51,6 +105,7 @@ def main():
 
     framework_name = f"DmGame{title_id}.framework"
     framework = framework_root / framework_name
+    memory_profile = apply_ios_memory_profile(framework, title_id)
     # iOS 26 cannot open the Metal 4 pipeline archive produced by the iOS 27 SDK.
     # Keep the regular Metal shader libraries, but require the offline PSO archive to be absent.
     pso_dir = framework / "pso"
