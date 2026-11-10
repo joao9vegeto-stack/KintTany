@@ -702,7 +702,7 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
         static std::atomic<uint32_t> count{0u};
         return count.fetch_add(1u, std::memory_order_relaxed) < 64u;
     }
-    if (event.find("B138_STREAM_DISPATCH ") != std::string::npos) {
+    if (event.find("B140_STREAM_DISPATCH ") != std::string::npos) {
         static std::atomic<uint32_t> count{0u};
         return count.fetch_add(1u, std::memory_order_relaxed) < 120u;
     }
@@ -4412,65 +4412,85 @@ void xowue_dispatch_indirect(PPCContext &context, uint8_t *base, uint32_t target
         g_currentGuestThread->lastGuestLr.store(static_cast<uint32_t>(context.lr), std::memory_order_relaxed);
     }
 
-    // Build 138: expose the actual virtual targets at the Wolverine stream
-    // provider boundary. These samples are deliberately capped and never alter
-    // guest registers, completion fields, dispatch targets, or return values.
+    // Build 140: capture every native callback that decides whether the
+    // Wolverine stream consumer has received its requested bytes. In particular,
+    // sub_82575480 polls vtable+64 at both LR 0x825754E4 and 0x82575510.
+    // Telemetry is bounded and read-only: it never changes guest state.
     const uint32_t callSite = static_cast<uint32_t>(context.lr);
     auto streamSiteIndex = [](uint32_t lr) -> int {
         switch (lr) {
-            case 0x8257513Cu: return 0; // async class/service lookup
-            case 0x825751E4u: return 1; // chunk-buffer allocator
-            case 0x82575244u: return 2; // stream read submission callback
-            case 0x825753D0u: return 3; // stream provider lookup
-            case 0x82575474u: return 4; // stream provider completion/read callback
+            case 0x8257513Cu: return 0; // async class/service lookup, vtable+4
+            case 0x825751E4u: return 1; // chunk-buffer allocator, vtable+4
+            case 0x82575244u: return 2; // stream request submission, vtable+12
+            case 0x825753D0u: return 3; // stream service lookup, vtable+4
+            case 0x82575474u: return 4; // provider read/submit callback, vtable+8
+            case 0x825754E4u: return 5; // first availability poll, vtable+64
+            case 0x82575510u: return 6; // repeated availability poll, vtable+64
             default: return -1;
         }
     };
-    static std::array<std::atomic<uint32_t>, 5> streamDispatchSamples{};
+    static std::array<std::atomic<uint32_t>, 7> streamDispatchSamples{};
     const int streamSite = streamSiteIndex(callSite);
     const uint32_t sample = streamSite >= 0
         ? streamDispatchSamples[static_cast<size_t>(streamSite)].fetch_add(
               1u, std::memory_order_relaxed) + 1u
         : 0u;
-    const bool traceStreamDispatch = streamSite >= 0 && sample <= 12u;
+    // Seven sites x eight samples x enter/return = at most 112 records.
+    const bool traceStreamDispatch = streamSite >= 0 && sample <= 8u;
     const uint32_t threadId = g_currentGuestThread
         ? g_currentGuestThread->id : g_currentGuestThreadId;
     const uint32_t entryR3 = context.r3.u32;
-    const uint32_t entryR8 = context.r8.u32;
-    const uint32_t streamObject =
-        (callSite == 0x82575244u || callSite == 0x82575474u) &&
-        context.r4.u32 >= 116u
-            ? context.r4.u32 - 116u : 0u;
+    const uint32_t entryR4 = context.r4.u32;
+    uint32_t vtableOffset = 0u;
+    switch (callSite) {
+        case 0x8257513Cu:
+        case 0x825751E4u:
+        case 0x825753D0u: vtableOffset = 4u; break;
+        case 0x82575244u: vtableOffset = 12u; break;
+        case 0x82575474u: vtableOffset = 8u; break;
+        case 0x825754E4u:
+        case 0x82575510u: vtableOffset = 64u; break;
+        default: break;
+    }
+    const bool pollSite = callSite == 0x825754E4u || callSite == 0x82575510u;
+    const uint32_t streamObject = pollSite
+        ? entryR3
+        : ((callSite == 0x82575244u || callSite == 0x82575474u) && entryR4 >= 116u
+            ? entryR4 - 116u : 0u);
     const auto logStreamDispatch = [&](const char *phase, uint32_t result) {
         if (!traceStreamDispatch) return;
         uint32_t vtable = 0u, vtableSlot = 0u;
-        if (base && entryR3 != 0u &&
-            validGuestRange(entryR3, 4u)) {
+        if (base && entryR3 != 0u && validGuestRange(entryR3, 4u)) {
             vtable = loadGuestBe32(base, entryR3);
-            if (vtable != 0u && validGuestRange(vtable, 16u))
-                vtableSlot = loadGuestBe32(base, vtable + 8u);
+            if (vtable != 0u && vtableOffset != 0u &&
+                validGuestRange(vtable + vtableOffset, 4u))
+                vtableSlot = loadGuestBe32(base, vtable + vtableOffset);
         }
-        uint32_t a4 = 0u, a8 = 0u, chunkTable = 0u, counter = 0u;
+        uint32_t field136 = 0u, field140 = 0u, field148 = 0u;
+        uint32_t field156 = 0u, field164 = 0u, field168 = 0u, field172 = 0u;
         if (base && streamObject != 0u &&
-            validGuestRange(streamObject, 0xB0u)) {
-            a4 = loadGuestBe32(base, streamObject + 0xA4u);
-            a8 = loadGuestBe32(base, streamObject + 0xA8u);
-            chunkTable = loadGuestBe32(base, streamObject + 0xACu);
+            validGuestRange(streamObject + 136u, 40u)) {
+            field136 = loadGuestBe32(base, streamObject + 136u);
+            field140 = loadGuestBe32(base, streamObject + 140u);
+            field148 = loadGuestBe32(base, streamObject + 148u);
+            field156 = loadGuestBe32(base, streamObject + 156u);
+            field164 = loadGuestBe32(base, streamObject + 164u);
+            field168 = loadGuestBe32(base, streamObject + 168u);
+            field172 = loadGuestBe32(base, streamObject + 172u);
         }
-        if (base && callSite == 0x82575474u &&
-            validGuestRange(entryR8, 4u))
-            counter = loadGuestBe32(base, entryR8);
-        char event[512];
+        char event[640];
         std::snprintf(event, sizeof(event),
-            "B138_STREAM_DISPATCH phase=%s site=0x%08X target=0x%08X sample=%u "
-            "thread=%u result=0x%08X r3=0x%08X r4=0x%08X r5=0x%08X "
+            "B140_STREAM_DISPATCH phase=%s site=0x%08X target=0x%08X sample=%u "
+            "thread=%u result=0x%08X vtable=0x%08X vtable_offset=0x%X "
+            "vtable_slot=0x%08X r3=0x%08X r4=0x%08X r5=0x%08X "
             "r6=0x%08X r7=0x%08X r8=0x%08X r9=0x%08X r10=0x%08X "
-            "r11=0x%08X obj=0x%08X obj_a4=0x%08X obj_a8=0x%08X "
-            "chunk_table=0x%08X callback_counter=0x%08X",
-            phase, callSite, target, sample, threadId, result,
-            context.r3.u32, context.r4.u32, context.r5.u32, context.r6.u32,
-            context.r7.u32, context.r8.u32, context.r9.u32, context.r10.u32,
-            context.r11.u32, streamObject, a4, a8, chunkTable, counter);
+            "r11=0x%08X obj=0x%08X f136=0x%08X f140=0x%08X "
+            "f148=0x%08X f156=0x%08X f164=0x%08X f168=0x%08X f172=0x%08X",
+            phase, callSite, target, sample, threadId, result, vtable,
+            vtableOffset, vtableSlot, context.r3.u32, context.r4.u32,
+            context.r5.u32, context.r6.u32, context.r7.u32, context.r8.u32,
+            context.r9.u32, context.r10.u32, context.r11.u32, streamObject,
+            field136, field140, field148, field156, field164, field168, field172);
         recordRuntimeTrace(event);
     };
 

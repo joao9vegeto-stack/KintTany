@@ -439,3 +439,24 @@ assert 'g_runtimeTracePersistB84.fetch_add(1, std::memory_order_relaxed) < 128u'
 assert 'event.find("XOWUE_VDSWAP_PACKET_QUEUED")' in engine
 assert 'r5=0x%08X r6=0x%08X r7=0x%08X r8=0x%08X' in engine
 print("PASS: stream-stall caller/back-edge audit and VdSwap CP provenance")
+
+
+# Build 140: instrument both PPC callbacks that release the stream-reader poll loop.
+# The guest source at 0x82575480 calls vtable+64 at these exact link-register PCs.
+for poll_lr in ("0x825754E4u", "0x82575510u"):
+    assert poll_lr in engine, f"stream availability poll callback missing: {poll_lr}"
+assert "std::array<std::atomic<uint32_t>, 7> streamDispatchSamples" in engine
+assert "sample <= 8u" in engine
+assert 'event.find("B140_STREAM_DISPATCH ")' in engine
+assert "case 0x825754E4u:" in engine and "case 0x82575510u:" in engine
+assert "case 0x82575510u: return 6" in engine
+assert "case 0x825754E4u:" in engine and "vtableOffset = 64u" in engine
+assert "vtableOffset = 64u" in engine
+assert "const uint32_t streamObject = pollSite" in engine
+for field in ("136u", "140u", "148u", "156u", "164u", "168u", "172u"):
+    assert f"streamObject + {field}" in engine, f"stream field {field} not traced"
+for field in ("f136=", "f140=", "f148=", "f156=", "f164=", "f168=", "f172="):
+    assert field in engine, f"stream state field {field} missing from event"
+assert "vtable_offset=0x%X" in engine and "vtable_slot=0x%08X" in engine
+assert "function(context, base);" in engine
+print("PASS: Build 140 first/retry stream-poll targets, exact vtable+64 slot, object progress fields and bounded dispatch telemetry")
