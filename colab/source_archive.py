@@ -303,15 +303,30 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
 
     download_drive_file(api, key_item, local_keys)
 
-    def add_root_packages() -> None:
+    def add_root_packages() -> list[Path]:
+        package_paths = []
         update_local = local_package_dir / f"001_update_{safe_name(update_item['name'])}"
         download_drive_file(api, update_item, update_local)
+        package_paths.append(update_local)
         print(f"[Link2iOS] Update NSP incluído: {update_item['name']}")
         for index, expected in enumerate(("dlc1.nsp", "dlc2.nsp"), start=1):
             item = dlc_items[expected]
             local = local_package_dir / f"00{index + 1}_{safe_name(item['name'])}"
             download_drive_file(api, item, local)
+            package_paths.append(local)
             print(f"[Link2iOS] DLC NSP incluído: {expected}")
+        return package_paths
+
+    def prune_package_cache(keep: list[Path]) -> None:
+        keep_resolved = {path.resolve() for path in keep}
+        for cached in local_package_dir.iterdir():
+            if (
+                cached.is_file()
+                and cached.suffix.lower() in (".nsp", ".xci", ".nsz", ".xcz")
+                and cached.resolve() not in keep_resolved
+            ):
+                print(f"[Link2iOS] Removendo pacote antigo/duplicado do cache: {cached.name}")
+                cached.unlink()
 
     existing = existing_base_folder(api, drive_folder_id)
     if existing:
@@ -337,7 +352,8 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
                 print(f"[Link2iOS] Removendo cópia local duplicada do pacote base: {stale.name}")
                 stale.unlink()
         print(f"[Link2iOS] Reutilizando pacote base {base_type} do Drive: {folder['name']}/{item['name']}")
-        add_root_packages()
+        root_packages = add_root_packages()
+        prune_package_cache([local_base, *root_packages])
         return {
             "package_dir": str(local_package_dir), "keys_path": str(local_keys),
             "source_folder_id": folder["id"], "source_folder_name": folder["name"],
@@ -431,7 +447,8 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
         local_base = local_package_dir / filename
         shutil.copy2(base_package, local_base)
         upload_drive_file(api, local_base, folder["id"], filename)
-        add_root_packages()
+        root_packages = add_root_packages()
+        prune_package_cache([local_base, *root_packages])
         print(f"[Link2iOS] Pacote base {base_type} armazenado no Drive; update e DLC1/DLC2 são lidos diretamente da raiz.")
         print("[Link2iOS] Mantendo o 7z e a extração no armazenamento local do Colab para próximas tentativas:", temp_root)
         return {
