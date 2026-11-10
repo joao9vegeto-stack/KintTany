@@ -330,13 +330,13 @@ def main() -> int:
             # to the resource factory. Decode them from the embedded writable image.
             if main_data and main_text:
                 string_offsets = [0x1C105AB, 0x1C06CE7, 0x1C1E926, 0x1C317B4, 0x1BF375E, 0x1C1E944]
-                report.append("\\n[resource names passed by main+0x4010dc]")
+                report.append("\n[resource names passed by main+0x4010dc]")
                 with args.macho.open("rb") as data_fp:
                     for string_off in string_offsets:
                         local = string_off - main_text["size"]
                         if 0 <= local < main_data["size"]:
                             data_fp.seek(main_data["file_offset"] + local)
-                            raw = data_fp.read(160).split(b"\\0", 1)[0]
+                            raw = data_fp.read(160).split(b"\0", 1)[0]
                             report.append(f"  main+0x{string_off:x}: {raw!r} | {raw.decode('utf-8', errors='replace')}")
     except Exception as exc:
         # Optional audit only: do not fail the profile repack if one Mach-O variant cannot be decoded.
