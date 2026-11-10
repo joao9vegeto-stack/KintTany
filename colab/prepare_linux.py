@@ -164,8 +164,7 @@ def run_preparation(args) -> dict:
     shader_chain = module.chain_of(engine)
     require(bool(shader_chain), "NXNative shader chain header is missing after the Linux preparation")
     aoc = sorted((work / "aoc").glob("*.img")) if (work / "aoc").is_dir() else []
-    if not aoc:
-        print("[Link2iOS] No DLC NSP found; base game + update is a supported build input.")
+    require(bool(aoc), "DLC1/DLC2 NSPs were supplied but NX2Apple produced no AOC RomFS images.")
 
     result = {
         "format": 1,
