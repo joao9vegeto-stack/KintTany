@@ -254,7 +254,7 @@ def install_linux_dependencies(root: Path) -> None:
     else:
         runtimes = ""
 
-    if not re.search(r"^Microsoft\\.NETCore\\.App\\s+10\\.", runtimes, re.MULTILINE):
+    if not re.search(r"^Microsoft\.NETCore\.App\s+10\.", runtimes, re.MULTILINE):
         dotnet_root.mkdir(parents=True, exist_ok=True)
         install_script = root / "dotnet-install.sh"
         subprocess.run(["curl", "-fsSL", "https://dot.net/v1/dotnet-install.sh",
@@ -277,7 +277,7 @@ def install_linux_dependencies(root: Path) -> None:
 
     if not dotnet.is_file():
         fail(f".NET 10 não encontrado após a instalação: {dotnet}")
-    if not re.search(r"^Microsoft\\.NETCore\\.App\\s+10\\.", runtimes, re.MULTILINE):
+    if not re.search(r"^Microsoft\.NETCore\.App\s+10\.", runtimes, re.MULTILINE):
         fail(
             ".NET SDK foi instalado, mas o runtime Microsoft.NETCore.App 10.x "
             f"não aparece em dotnet --list-runtimes. Saída: {runtimes[-2000:]}"
@@ -293,11 +293,26 @@ def install_linux_dependencies(root: Path) -> None:
 
 
 def prepare(args, api=None) -> None:
-    # Install the Drive client before the first API call in a fresh Colab runtime.
-    subprocess.run([
-        sys.executable, "-m", "pip", "install", "-q",
-        "google-api-python-client", "google-auth", "requests",
-    ], check=True)
+    # Install only missing Drive client modules. Existing Colab packages are
+    # reused instead of running pip on every retry.
+    missing_drive_packages = []
+    for module_name, package_name in (
+        ("googleapiclient.discovery", "google-api-python-client"),
+        ("google.auth", "google-auth"),
+        ("requests", "requests"),
+    ):
+        try:
+            if importlib.util.find_spec(module_name) is None:
+                missing_drive_packages.append(package_name)
+        except (ImportError, ModuleNotFoundError, ValueError):
+            missing_drive_packages.append(package_name)
+    if missing_drive_packages:
+        subprocess.run([
+            sys.executable, "-m", "pip", "install", "-q",
+            *list(dict.fromkeys(missing_drive_packages)),
+        ], check=True)
+    else:
+        print("[Link2iOS] Google Drive/API modules já instalados; sem novo pip install.")
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from prepare_linux import run_preparation
 
