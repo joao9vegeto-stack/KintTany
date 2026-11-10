@@ -10,15 +10,15 @@ O notebook utiliza diretamente a pasta Google Drive compartilhada com a service 
 
 Na raiz dessa pasta, deixe `prod.keys`, `update.nsp`, `dlc1.nsp` e `dlc2.nsp` (os demais arquivos e pastas são ignorados; `prod.keys` continua obrigatório). O jogo base não precisa ficar no Drive antes da primeira execução.
 
-Na primeira preparação, o notebook pede o link assinado do 7z por uma entrada protegida. O link não fica embutido no repositório público, não é impresso e não é gravado no Drive. O Colab baixa o 7z para seu armazenamento temporário, valida a assinatura, testa e extrai com 7-Zip. Exige exatamente um XCI com cabeçalho `HEAD` no offset `0x100` e envia somente esse XCI para uma pasta `BOTW_Base_XCI/` criada automaticamente no Drive. O 7z temporário e a extração local são apagados.
+Na primeira preparação, o notebook pede o link assinado do 7z por uma entrada protegida. O link não fica embutido no repositório público, não é impresso e não é gravado no Drive. O Colab baixa o 7z para seu armazenamento temporário, valida a assinatura, testa e extrai com 7-Zip. Para esta entrada, exige exatamente um NSP base com cabeçalho `PFS0` no início e envia somente esse NSP para `BOTW_Base_NSP/` no Drive. O extrator também mantém compatibilidade com uma entrada XCI única (`HEAD` no offset `0x100`). Arquivos auxiliares como HTML e README dentro do 7z são ignorados. O 7z temporário e a extração local são apagados.
 
-O `prod.keys` e os três NSPs (update + duas DLCs) são baixados da raiz da pasta Drive para o runtime temporário do Colab e apagados após a preparação. O XCI base extraído permanece no Drive. Nas próximas execuções, o notebook reutiliza `BOTW_Base_XCI/` e não baixa o 7z novamente; o campo do link pode ficar vazio.
+O `prod.keys` e os três NSPs (update + duas DLCs) são baixados da raiz da pasta Drive para o runtime temporário do Colab e apagados após a preparação. O NSP base extraído permanece no Drive. Nas próximas execuções, o notebook reutiliza `BOTW_Base_NSP/` e não baixa o 7z novamente; também reconhece a pasta `BOTW_Base_XCI/` de execuções anteriores.
 
-A entrada desta execução é BOTW base XCI + update 1.9.0 + dois DLCs, Title ID `01007EF00011E000`, package `v1114112`. O NXNative/NX2Apple reconhece XCI diretamente e combina o XCI base com o NSP de update e os dois NSPs de DLC. Os dois DLCs são obrigatórios e precisam gerar imagens AOC.
+A entrada desta execução é BOTW base NSP v0 + update 1.9.0 + dois DLCs, Title ID `01007EF00011E000`, package `v1114112`. O NXNative/NX2Apple identifica o NSP base, o NSP de update e os dois NSPs de DLC pelos metadados internos e os combina para preparar a versão solicitada. Os dois DLCs são obrigatórios e precisam gerar imagens AOC.
 
 ## Fluxo completo
 
-**Colab/Linux:** acessa o Drive com OAuth da conta Google autenticada no Colab, obtém `prod.keys`, baixa e extrai o 7z com o XCI base (somente na primeira execução), identifica o XCI base e os NSPs de update/DLC, sincroniza NX2Apple v1.3.1-rc2 e o commit fixo do NXNative, verifica os pacotes, extrai os conteúdos, reescreve módulos AArch64 e prepara o pacote NVN de shaders. A execução para antes do estágio Metal/Xcode.
+**Colab/Linux:** acessa o Drive com OAuth da conta Google autenticada no Colab, obtém `prod.keys`, baixa e extrai o 7z com o NSP base (somente na primeira execução), identifica os quatro NSPs por seus metadados internos, sincroniza NX2Apple v1.3.1-rc2 e o commit fixo do NXNative, verifica os pacotes, extrai os conteúdos, reescreve módulos AArch64 e prepara o pacote NVN de shaders. A execução para antes do estágio Metal/Xcode.
 
 Em seguida, o Colab publica no Drive:
 - `pipeline/botw-work.tar.zst`: somente os arquivos necessários à continuação do build;
@@ -65,7 +65,7 @@ Existe apenas `.github/workflows/link2ios.yml`. Ele é acionado somente por `pus
 
 ## Retomada sem repetir a preparação
 
-Após uma preparação BOTW concluída, o notebook grava `handoff.json` dentro da pasta `Link2iOS_BOTW_*` no Drive. Em uma sessão nova, execute autenticação, clone e a célula **Recuperar preparação**. Ela filtra pelo projeto, Title ID `01007EF00011E000`, versão `v1114112` e presença de workspace/RomFS/AOC. Não baixa novamente XCI/NSPs nem repete a extração, reescrita de módulos ou shader split. Pastas de Kleo2iOS são ignoradas.
+Após uma preparação BOTW concluída, o notebook grava `handoff.json` dentro da pasta `Link2iOS_BOTW_*` no Drive. Em uma sessão nova, execute autenticação, clone e a célula **Recuperar preparação**. Ela filtra pelo projeto, Title ID `01007EF00011E000`, versão `v1114112` e presença de workspace/RomFS/AOC. Não baixa novamente o NSP base/NSPs nem repete a extração, reescrita de módulos ou shader split. Pastas de Kleo2iOS são ignoradas.
 
 Durante a primeira preparação, downloads exibem bytes efetivos, tamanho conferido e tempo decorrido. O runtime mantém o workspace parcial entre tentativas, e arquivos-fonte já transferidos são reutilizados quando tamanho e checksum do Drive correspondem.
 
