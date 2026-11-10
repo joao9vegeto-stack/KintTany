@@ -440,13 +440,9 @@ struct XenosFrontendState {
     uint32_t systemCommandBufferGpuAddress = 0;
     uint32_t graphicsInterruptCallback = 0;
     uint32_t graphicsInterruptContext = 0;
-    // VdSwap supplies the actual guest frontbuffer descriptor; shader fetch
-    // constants may instead describe geometry and must remain separate.
     std::array<uint32_t, 6> swapFetch{};
     uint8_t swapFetchMask = 0;
     bool swapFetchValid = false;
-    std::array<uint32_t, 6> vdSwapFetch{};
-    bool vdSwapFetchValid = false;
     uint64_t binMask = 0xFFFFFFFFull;
     uint64_t binSelect = 0xFFFFFFFFull;
     uint32_t latestFrontbufferAddress = 0;
@@ -4514,39 +4510,21 @@ static void swapXenosPixelEndian(uint8_t* pixel,uint32_t bytesPerPixel,
 extern "C" bool xowue_xenos_commit_resolved_rgba(
     uint32_t dest,uint32_t pitch,uint32_t height,uint32_t info,
     const uint8_t* rgba,size_t sourceBytes) {
-    static std::atomic<uint32_t> resolveRejectLogs{0u};
-    const auto reject = [&](const char* reason, uint32_t detail0, uint32_t detail1) {
-        if (resolveRejectLogs.fetch_add(1u, std::memory_order_relaxed) < 16u) {
-            char event[352];
-            std::snprintf(event, sizeof(event),
-                "XOWUE_GPU_GUEST_RESOLVE_REJECT reason=%s dest=%08X pitch=%u height=%u info=%08X bytes=%llu detail0=%08X detail1=%08X",
-                reason, dest, pitch, height, info,
-                static_cast<unsigned long long>(sourceBytes), detail0, detail1);
-            recordRuntimeTrace(event);
-        }
-        return false;
-    };
     if(!rgba || pitch==0u || height==0u || pitch>2048u || height>2048u ||
        ((info>>7u)&63u)!=6u || (uint64_t(pitch)*height*4u)!=sourceBytes)
-        return reject("readback_parameters", info, static_cast<uint32_t>(sourceBytes));
+        return false;
     std::array<uint32_t,6> fetch{};
-    uint32_t currentFrontbuffer = 0u, currentWidth = 0u, currentHeight = 0u;
     {
         std::lock_guard<std::mutex> lk(g_xenosMutex);
-        currentFrontbuffer = g_xenosFrontend.latestFrontbufferAddress;
-        currentWidth = g_xenosFrontend.latestWidth;
-        currentHeight = g_xenosFrontend.latestHeight;
-        // A VdSwap side descriptor is not CP state. Only a fetch descriptor
-        // consumed by executeGuestPM4Words may authorize a guest-memory resolve.
-        if(!g_xenosFrontend.swapFetchValid || currentFrontbuffer!=dest ||
-           currentWidth!=pitch || currentHeight!=height)
-            return reject("framebuffer_state_mismatch", currentFrontbuffer,
-                          ((currentWidth & 0xFFFFu) << 16u) | (currentHeight & 0xFFFFu));
-        fetch = g_xenosFrontend.swapFetch;
+        if(!g_xenosFrontend.swapFetchValid ||
+           g_xenosFrontend.latestFrontbufferAddress!=dest ||
+           g_xenosFrontend.latestWidth!=pitch ||
+           g_xenosFrontend.latestHeight!=height)
+            return false;
+        fetch=g_xenosFrontend.swapFetch;
     }
-    const uint32_t descriptorAddress = (((fetch[1]>>12u)&0xFFFFFu)<<12u);
-    if((fetch[1]&63u)!=6u || descriptorAddress!=dest)
-        return reject("fetch_descriptor_mismatch", fetch[1], descriptorAddress);
+    if((fetch[1]&63u)!=6u || (((fetch[1]>>12u)&0xFFFFFu)<<12u)!=dest)
+        return false;
     const uint32_t actualPitch=((fetch[0]>>22u)&0x1FFu)<<5u;
     const bool tiled=(fetch[0]>>31u)!=0u;
     const uint32_t pitchPixels=(actualPitch>=pitch)?actualPitch:
@@ -4554,7 +4532,7 @@ extern "C" bool xowue_xenos_commit_resolved_rgba(
     const uint32_t alignedPitch=(pitchPixels+31u)&~31u;
     const uint32_t endian=(fetch[1]>>6u)&3u;
     const auto memory=acquireGraphicsGuestMemory();
-    if(!memory || !memory->base)return reject("guest_memory_unavailable", 0u, 0u);
+    if(!memory || !memory->base)return false;
     // The fetch-constant swizzle controls texture sampling, not the memory
     // layout of a color render-target resolve. The Vulkan readback is already
     // RGBA8; applying the sampling swizzle here (or rejecting repeated
@@ -4566,8 +4544,7 @@ extern "C" bool xowue_xenos_commit_resolved_rgba(
         const uint64_t off=tiled?xenosTiledOffset2D(x,y,alignedPitch,2u):
             (uint64_t(y)*pitchPixels+x)*4u;
         const uint64_t addr=uint64_t(dest)+off;
-        if(addr>UINT32_MAX || !validGuestRange(uint32_t(addr),4u))
-            return reject("guest_memory_range", static_cast<uint32_t>(addr), (x << 16u) | y);
+        if(addr>UINT32_MAX || !validGuestRange(uint32_t(addr),4u))return false;
     }
     uint64_t committed=0u;
     for(uint32_t y=0;y<height;++y)for(uint32_t x=0;x<pitch;++x) {
@@ -4576,8 +4553,7 @@ extern "C" bool xowue_xenos_commit_resolved_rgba(
             (uint64_t(y)*pitchPixels+x)*4u;
         const uint64_t address=uint64_t(dest)+offset;
         if(address>UINT32_MAX || !validGuestRange(uint32_t(address),4u))
-            return reject("guest_memory_range_during_commit", static_cast<uint32_t>(address),
-                          (x << 16u) | y);
+            return false;
         const uint8_t* source=rgba+(size_t(y)*pitch+x)*4u;
         uint8_t pixel[4];
         std::memcpy(pixel,source,sizeof(pixel));
@@ -4587,7 +4563,7 @@ extern "C" bool xowue_xenos_commit_resolved_rgba(
     }
     char event[240];
     std::snprintf(event,sizeof(event),
-        "XENOS_GPU_GUEST_RESOLVE_COMMITTED dest=%08X %ux%u format=6 tiled=%u endian=%u fetch_source=cp_constants pixels=%llu",
+        "XENOS_GPU_GUEST_RESOLVE_COMMITTED dest=%08X %ux%u format=6 tiled=%u endian=%u pixels=%llu",
         dest,pitch,height,tiled?1u:0u,endian,
         static_cast<unsigned long long>(committed));
     recordRuntimeTrace(event);
@@ -7345,8 +7321,6 @@ void xowue_VdInitializeRingBuffer(PPCContext &context, uint8_t *base) {
         g_xenosFrontend.swapFetch = {};
         g_xenosFrontend.swapFetchMask = 0u;
         g_xenosFrontend.swapFetchValid = false;
-        g_xenosFrontend.vdSwapFetch = {};
-        g_xenosFrontend.vdSwapFetchValid = false;
     }
     context.r3.u32 = 0u;
     char event[112];
@@ -8445,63 +8419,26 @@ void xowue_VdSwap(PPCContext &context, uint8_t *base) {
     const uint32_t colorSpace = PPC_LOAD_U32(colorSpacePointer);
     const uint32_t requestedWidth = PPC_LOAD_U32(widthPointer);
     const uint32_t requestedHeight = PPC_LOAD_U32(heightPointer);
-    std::array<uint32_t, 6> fetchWords{};
+    uint32_t fetchWords[6]{};
     for (uint32_t i = 0u; i < 6u; ++i)
         fetchWords[i] = PPC_LOAD_U32(fetch + i * 4u);
     const uint32_t fetchWidth = (fetchWords[2] & 0x1FFFu) + 1u;
     const uint32_t fetchHeight = ((fetchWords[2] >> 13u) & 0x1FFFu) + 1u;
     const uint32_t width = fetchWidth > 1u ? fetchWidth : requestedWidth;
     const uint32_t height = fetchHeight > 1u ? fetchHeight : requestedHeight;
-    // Xenia's VdSwap contract treats fetchWords as the D3D9 texture-header
-    // descriptor, translates its base through the guest physical mapping, then
-    // emits that descriptor to CP fetch register 0 before PM4_XE_SWAP.
-    const uint32_t fetchVirtualAddress =
+    const uint32_t frontbufferPhysicalAddress =
         ((fetchWords[1] >> 12u) & 0xFFFFFu) << 12u;
-    // XOWUE's guest MmGetPhysicalAddress mapping is identity-mapped for the
-    // physical heap used by this title, matching the address in the frontbuffer
-    // pointer. Keep the descriptor base synchronized with that physical address.
-    const uint32_t frontbufferPhysicalAddress = frontbufferVirtualAddress;
-    if (frontbufferVirtualAddress != fetchVirtualAddress)
-        recordRuntimeTrace("VdSwap frontbuffer pointer differs from fetch base; translated pointer address retained");
-    std::array<uint32_t, 6> physicalFetchWords = fetchWords;
-    physicalFetchWords[1] = (physicalFetchWords[1] & 0x00000FFFu) |
-        (((frontbufferPhysicalAddress >> 12u) & 0x000FFFFFu) << 12u);
+    if (frontbufferVirtualAddress != frontbufferPhysicalAddress)
+        recordRuntimeTrace("VdSwap frontbuffer pointer differs from fetch base; fetch physical address retained");
 
-    // Keep the exact physical descriptor for resolve writeback and the CPU
-    // fallback. The same six words are also written into the real CP stream
-    // below, so the native Xenos command processor sees the same fetch state.
-    {
-        std::lock_guard<std::mutex> lock(g_xenosMutex);
-        g_xenosFrontend.vdSwapFetch = physicalFetchWords;
-        g_xenosFrontend.vdSwapFetchValid = true;
-    }
-    static std::atomic<uint32_t> vdSwapFetchTraceCount{0u};
-    if (vdSwapFetchTraceCount.fetch_add(1u, std::memory_order_relaxed) < 8u) {
-        char fetchEvent[320];
-        std::snprintf(fetchEvent, sizeof(fetchEvent),
-            "XOWUE_VDSWAP_FETCH dest=0x%08X size=%ux%u words=%08X,%08X,%08X,%08X,%08X,%08X",
-            frontbufferPhysicalAddress, width, height, physicalFetchWords[0], physicalFetchWords[1],
-            physicalFetchWords[2], physicalFetchWords[3], physicalFetchWords[4], physicalFetchWords[5]);
-        recordRuntimeTrace(fetchEvent);
-    }
-
-    constexpr uint32_t kFetchPacketHeader =
-        ((6u - 1u) << 16u) | kXenosShaderConstantFetchRegister;
-    constexpr uint32_t kSwapPacketHeader =
-        (3u << 30u) | (3u << 16u) | (kXenosPm4SwapOpcode << 8u);
     for (uint32_t i = 0u; i < kReservedDwords; ++i)
         PPC_STORE_U32(commandBuffer + i * 4u, kType2Nop);
-
-    // Match Xenia VdSwap_entry: write the six-dword frontbuffer texture fetch
-    // descriptor to XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0, then issue XE_SWAP.
-    PPC_STORE_U32(commandBuffer + 0u, kFetchPacketHeader);
-    for (uint32_t i = 0u; i < physicalFetchWords.size(); ++i)
-        PPC_STORE_U32(commandBuffer + (i + 1u) * 4u, physicalFetchWords[i]);
-    PPC_STORE_U32(commandBuffer + 28u, kSwapPacketHeader);
-    PPC_STORE_U32(commandBuffer + 32u, kSwapSignature);
-    PPC_STORE_U32(commandBuffer + 36u, frontbufferPhysicalAddress);
-    PPC_STORE_U32(commandBuffer + 40u, width);
-    PPC_STORE_U32(commandBuffer + 44u, height);
+    PPC_STORE_U32(commandBuffer + 0u,
+        (3u << 30u) | (3u << 16u) | (kXenosPm4SwapOpcode << 8u));
+    PPC_STORE_U32(commandBuffer + 4u, kSwapSignature);
+    PPC_STORE_U32(commandBuffer + 8u, frontbufferPhysicalAddress);
+    PPC_STORE_U32(commandBuffer + 12u, width);
+    PPC_STORE_U32(commandBuffer + 16u, height);
 
     uint32_t ringAddress = 0u;
     uint32_t ringSize = 0u;

@@ -140,21 +140,11 @@ assert "XDCollectPipelines(&localState)" in vulkan
 assert "xowue_xenos_commit_resolved_rgba" in engine
 assert "xowue_xenos_commit_resolved_rgba" in color
 assert "VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL" in color
-assert "std::array<uint32_t, 6> vdSwapFetch" in engine
-assert "g_xenosFrontend.vdSwapFetch = physicalFetchWords" in engine
-assert "XOWUE_VDSWAP_PACKET_QUEUED" in engine
-assert "commandBufferInsideRing" in engine
-resolve_start = engine.index('extern "C" bool xowue_xenos_commit_resolved_rgba')
-resolve_end = engine.index('\n}', resolve_start)
-resolve = engine[resolve_start:resolve_end]
-assert "if(!g_xenosFrontend.swapFetchValid" in resolve
-assert "fetch = g_xenosFrontend.swapFetch;" in resolve
-assert "fetchFromVdSwap" not in resolve
-assert 'fetch_source=cp_constants' in resolve
+assert "g_xd_guest_resolves_count=0" in color
+assert "xenosTiledOffset2D(x,y,alignedPitch,2u)" in engine
 assert 'const std::array<uint32_t, 6>& frameFetch = frontend.swapFetch;' in engine
 assert 'const bool frameFetchValid = frontend.swapFetchValid;' in engine
-assert 'frontend.vdSwapFetchValid ?' not in engine
-assert "XOWUE_GPU_GUEST_RESOLVE_REJECT" in engine
+assert "vdSwapFetch" not in engine
 assert "XENOS_GPU_GUEST_RESOLVE_COMMITTED" in engine
 assert "g_xd_guest_resolves_count=0" in color
 assert "xenosTiledOffset2D(x,y,alignedPitch,2u)" in engine
@@ -397,18 +387,13 @@ vd = engine[vd_start:vd_end]
 assert "XOWUE_VDSWAP_PACKET_QUEUED" in vd
 assert "decodeXenosSwapTexture" not in vd
 assert "xowue_vulkan_backend_guest_frame_rgba" not in vd
-assert "PPC_STORE_U32(commandBuffer + 32u, kSwapSignature)" in vd
+assert "PPC_STORE_U32(commandBuffer + 4u, kSwapSignature)" in vd
+assert "PPC_STORE_U32(commandBuffer + 8u, frontbufferPhysicalAddress)" in vd
+assert "PPC_STORE_U32(commandBuffer + 12u, width)" in vd
+assert "PPC_STORE_U32(commandBuffer + 16u, height)" in vd
 assert "context.r3.u32 = 0u" in vd
-assert "g_xenosFrontend.vdSwapFetch = physicalFetchWords" in vd
-assert "physicalFetchWords[1] = (physicalFetchWords[1] & 0x00000FFFu)" in vd
-assert "kXenosShaderConstantFetchRegister" in vd
-assert "PPC_STORE_U32(commandBuffer + 0u, kFetchPacketHeader)" in vd
-assert "for (uint32_t i = 0u; i < physicalFetchWords.size(); ++i)" in vd
-assert "commandBuffer + (i + 1u) * 4u" in vd
-assert "PPC_STORE_U32(commandBuffer + 28u, kSwapPacketHeader)" in vd
-assert "PPC_STORE_U32(commandBuffer + 32u, kSwapSignature)" in vd
-assert vd.index("PPC_STORE_U32(commandBuffer + 0u, kFetchPacketHeader)") < vd.index("PPC_STORE_U32(commandBuffer + 28u, kSwapPacketHeader)")
-assert "XOWUE_VDSWAP_FETCH" in vd
+assert "kFetchPacketHeader" not in vd
+assert "XOWUE_VDSWAP_FETCH" not in vd
 assert "last_guest_swap_count" in vulkan
 assert "guestSwapSerial == state->last_guest_swap_count" in vulkan
 assert "newGuestFrame = guest_frame_ready" in vulkan
