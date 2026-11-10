@@ -4,6 +4,6 @@
   "title_id": "040074A01BF12000",
   "framework_binary": "Payload/DmShell.app/Frameworks/DmGame040074A01BF12000.framework/DmGame040074A01BF12000",
   "framework_profile": "Payload/DmShell.app/Frameworks/DmGame040074A01BF12000.framework/profile.tsv",
-  "reason": "Disassemble the exact SIGSEGV PC/LR from log.txt using the already-built IPA; no game rebuild, shader rebuild, or profile mutation.",
-  "request_revision": "full-vtable-and-buffer-setup-v7"
+  "reason": "Analyze the actual iOS 26.5.1 5 GiB gameplay SIGSEGV at sdk+0x702920 with x0=0 and x2=0x60; preserve mem_reserve 0x140000000 and app_pool 0x110000000. Do not change the memory profile.",
+  "request_revision": "5gb-gameplay-null-deref-log-2026-11-09-v8"
 }
