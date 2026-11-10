@@ -7,6 +7,7 @@ import base64
 import datetime as dt
 import getpass
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -185,43 +186,98 @@ def build_work_archive(work: Path, destination: Path) -> None:
 
 
 def install_linux_dependencies(root: Path) -> None:
-    print("[Link2iOS] Installing Linux build dependencies...")
-    subprocess.run(["apt-get", "update", "-qq"], check=True)
-    subprocess.run([
-        "apt-get", "install", "-y", "-qq", "zstd", "git", "curl",
-        "build-essential", "cmake", "ninja-build", "pkg-config", "libssl-dev",
-    ], check=True)
-    subprocess.run([
-        sys.executable, "-m", "pip", "install", "-q", "--upgrade",
-        "lz4", "capstone>=5,<6", "fonttools", "zbic", "backports.zstd",
-        "google-api-python-client", "google-auth", "requests",
-    ], check=True)
-    dotnet_root = Path("/content/dotnet").resolve()
-    dotnet_root.mkdir(parents=True, exist_ok=True)
-    install_script = root / "dotnet-install.sh"
-    subprocess.run(["curl", "-fsSL", "https://dot.net/v1/dotnet-install.sh",
-                    "-o", str(install_script)], check=True)
-    subprocess.run(["bash", str(install_script), "--channel", "10.0",
-                    "--install-dir", str(dotnet_root)], check=True)
+    print("[Link2iOS] Verificando dependências locais do Colab...")
 
-    # nx_extract is a framework-dependent x64 apphost. Apphosts do not resolve
-    # their runtime from PATH; on Linux x64 they prefer DOTNET_ROOT_X64 over
-    # DOTNET_ROOT. Set both roots explicitly before NXNative snapshots tool_env().
+    apt_commands = ("zstd", "git", "curl", "cmake", "ninja", "pkg-config")
+    missing_commands = [name for name in apt_commands if shutil.which(name) is None]
+
+    def apt_package_installed(name: str) -> bool:
+        result = subprocess.run(
+            ["dpkg-query", "-W", "-f=${db:Status-Status}", name],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+        )
+        return result.returncode == 0 and result.stdout.strip() == "installed"
+
+    apt_packages = ("build-essential", "libssl-dev")
+    missing_packages = [name for name in apt_packages if not apt_package_installed(name)]
+    missing_apt = list(dict.fromkeys([*missing_commands, *missing_packages]))
+    if missing_apt:
+        print("[Link2iOS] Instalando pacotes ausentes:", ", ".join(missing_apt))
+        subprocess.run(["apt-get", "update", "-qq"], check=True)
+        subprocess.run([
+            "apt-get", "install", "-y", "-qq", *missing_apt,
+        ], check=True)
+    else:
+        print("[Link2iOS] Dependências APT já instaladas; pulando apt-get update/install.")
+
+    python_modules = (
+        ("lz4.block", "lz4"),
+        ("capstone", "capstone>=5,<6"),
+        ("fontTools", "fonttools"),
+        ("zbic", "zbic"),
+        ("backports.zstd", "backports.zstd"),
+        ("googleapiclient.discovery", "google-api-python-client"),
+        ("google.auth", "google-auth"),
+        ("requests", "requests"),
+    )
+    missing_pip = []
+    for module_name, package_name in python_modules:
+        try:
+            if importlib.util.find_spec(module_name) is None:
+                missing_pip.append(package_name)
+        except (ImportError, ModuleNotFoundError, ValueError):
+            missing_pip.append(package_name)
+    if missing_pip:
+        packages = list(dict.fromkeys(missing_pip))
+        print("[Link2iOS] Instalando módulos Python ausentes:", ", ".join(packages))
+        subprocess.run([
+            sys.executable, "-m", "pip", "install", "-q", *packages,
+        ], check=True)
+    else:
+        print("[Link2iOS] Módulos Python já instalados; pulando pip install.")
+
+    dotnet_root = Path("/content/dotnet").resolve()
     dotnet = dotnet_root / "dotnet"
-    if not dotnet.is_file():
-        fail(f".NET 10 install completed without the host executable: {dotnet}")
     runtime_env = os.environ.copy()
-    runtime_env.update({
-        "DOTNET_ROOT": str(dotnet_root),
-        "DOTNET_ROOT_X64": str(dotnet_root),
-        "DOTNET_HOST_PATH": str(dotnet),
-        "PATH": str(dotnet_root) + os.pathsep + runtime_env.get("PATH", ""),
-    })
-    runtimes = subprocess.run(
-        [str(dotnet), "--list-runtimes"], env=runtime_env,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=True,
-    ).stdout
-    if not re.search(r"^Microsoft\.NETCore\.App\s+10\.", runtimes, re.MULTILINE):
+    if dotnet.is_file():
+        runtime_env.update({
+            "DOTNET_ROOT": str(dotnet_root),
+            "DOTNET_ROOT_X64": str(dotnet_root),
+            "DOTNET_HOST_PATH": str(dotnet),
+            "PATH": str(dotnet_root) + os.pathsep + runtime_env.get("PATH", ""),
+        })
+        runtime_check = subprocess.run(
+            [str(dotnet), "--list-runtimes"], env=runtime_env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        runtimes = runtime_check.stdout if runtime_check.returncode == 0 else ""
+    else:
+        runtimes = ""
+
+    if not re.search(r"^Microsoft\\.NETCore\\.App\\s+10\\.", runtimes, re.MULTILINE):
+        dotnet_root.mkdir(parents=True, exist_ok=True)
+        install_script = root / "dotnet-install.sh"
+        subprocess.run(["curl", "-fsSL", "https://dot.net/v1/dotnet-install.sh",
+                        "-o", str(install_script)], check=True)
+        subprocess.run(["bash", str(install_script), "--channel", "10.0",
+                        "--install-dir", str(dotnet_root)], check=True)
+        runtime_env = os.environ.copy()
+        runtime_env.update({
+            "DOTNET_ROOT": str(dotnet_root),
+            "DOTNET_ROOT_X64": str(dotnet_root),
+            "DOTNET_HOST_PATH": str(dotnet),
+            "PATH": str(dotnet_root) + os.pathsep + runtime_env.get("PATH", ""),
+        })
+        runtimes = subprocess.run(
+            [str(dotnet), "--list-runtimes"], env=runtime_env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=True,
+        ).stdout
+    else:
+        print("[Link2iOS] .NET 10 já instalado; pulando download/instalação.")
+
+    if not dotnet.is_file():
+        fail(f".NET 10 não encontrado após a instalação: {dotnet}")
+    if not re.search(r"^Microsoft\\.NETCore\\.App\\s+10\\.", runtimes, re.MULTILINE):
         fail(
             ".NET SDK foi instalado, mas o runtime Microsoft.NETCore.App 10.x "
             f"não aparece em dotnet --list-runtimes. Saída: {runtimes[-2000:]}"
@@ -230,7 +286,7 @@ def install_linux_dependencies(root: Path) -> None:
         "DOTNET_ROOT": str(dotnet_root),
         "DOTNET_ROOT_X64": str(dotnet_root),
         "DOTNET_HOST_PATH": str(dotnet),
-        "PATH": runtime_env["PATH"],
+        "PATH": str(dotnet_root) + os.pathsep + os.environ.get("PATH", ""),
     })
     print("[Link2iOS] .NET 10 validado para apphost x64:")
     print(runtimes.strip())
@@ -349,8 +405,10 @@ def prepare(args, api=None) -> None:
     handoff_path = Path("/content/link2ios-handoff.json")
     handoff_path.write_text(json.dumps(handoff, indent=2) + "\n", encoding="utf-8")
     handoff_manifest = upload_drive_file(api, handoff_path, output_id, "handoff.json")
-    shutil.rmtree(input_dir, ignore_errors=True)
-    keys_path.unlink(missing_ok=True)
+    # Keep the source packages, keys, NX2Apple checkout and build workspace on
+    # Colab's local disk. Retrying a failed stage must not re-download multi-GB inputs.
+    package_cache_bytes = sum(p.stat().st_size for p in input_dir.iterdir() if p.is_file())
+    print(f"[Link2iOS] Cache de origem preservado em {input_dir} ({package_cache_bytes:,} bytes + prod.keys).")
     print("\n[Link2iOS] Linux preparation and Drive uploads completed.")
     print("Recovery manifest uploaded:", handoff_manifest["id"])
     print("Extracted source folder:", f"https://drive.google.com/drive/folders/{source['source_folder_id']}")
