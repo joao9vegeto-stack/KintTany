@@ -14,7 +14,7 @@ Na primeira execução, o notebook pede o link assinado do RAR por uma entrada p
 
 O `prod.keys` é baixado da raiz da pasta Drive para o runtime temporário do Colab e apagado após a preparação. Os NSPs extraídos permanecem no Drive. Nas próximas execuções, o notebook reutiliza `BOTW_Extracted/` e não baixa o RAR novamente; o campo do link pode ficar vazio.
 
-A entrada desta execução é o BOTW base + update 1.9.0, Title ID `01007EF00011E000`, package `v1114112`. **DLC é opcional**: sem DLC, o build segue sem imagens AOC e sem conteúdo de expansão.
+A entrada desta execução é o BOTW base + update 1.9.0 no RAR, Title ID `01007EF00011E000`, package `v1114112`, mais os dois DLCs `dlc1.nsp` e `dlc2.nsp` na raiz do Drive. Ambos são obrigatórios e precisam gerar imagens AOC.
 
 ## Fluxo completo
 
@@ -23,7 +23,7 @@ A entrada desta execução é o BOTW base + update 1.9.0, Title ID `01007EF00011
 Em seguida, o Colab publica no Drive:
 - `pipeline/botw-work.tar.zst`: somente os arquivos necessários à continuação do build;
 - `games/01007EF00011E000/romfs.img`;
-- `games/01007EF00011E000/aoc/<index>.img`, somente quando DLC tiver sido fornecido.
+- `games/01007EF00011E000/aoc/<index>.img`, geradas a partir de `dlc1.nsp` e `dlc2.nsp`.
 
 O workspace não contém RomFS/AOC, NSPs, `prod.keys`, caches NCA grandes, ferramentas Linux ou arquivos temporários. Ele mantém os módulos reescritos, o pacote NVN de shaders e sua chave de conteúdo.
 
@@ -39,7 +39,7 @@ RomFS e DLC (quando existentes) permanecem no Drive externo. O Shared Shell prec
 
 ## Configuração
 
-1. Mantenha `prod.keys` na raiz da pasta Drive já compartilhada com a service account.
+1. Mantenha `prod.keys`, `dlc1.nsp` e `dlc2.nsp` na raiz da pasta Drive já compartilhada com a service account.
 2. No Colab, configure o Secret `LINK2IOS_GOOGLE_SERVICE_ACCOUNT_JSON`.
 3. Em GitHub → Settings → Secrets and variables → Actions, configure `GOOGLE_SERVICE_ACCOUNT_JSON` com a credencial de leitura do Drive.
 4. Gere um Fine-grained PAT restrito a este repositório com **Contents: Read and write**.
