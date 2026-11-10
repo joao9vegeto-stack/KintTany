@@ -300,6 +300,13 @@ def main() -> None:
         fail("gen_build.py did not produce the iOS compiler settings:\n" + p.stdout[-4000:] + "\n" + p.stderr[-4000:])
     cfg.write_text(p.stdout.rstrip() + "\nOTHER_LDFLAGS = $(inherited) $(DM_FRAMEWORKS) " + " ".join(segment_flags) + "\n", encoding="utf-8")
 
+    # XcodeGen validates all targets in the spec, even though this job builds only DmShellGame.
+    (gen / "Assets.xcassets").mkdir(parents=True, exist_ok=True)
+    (gen / "Assets.xcassets/Contents.json").write_text(
+        json.dumps({"info": {"author": "xcode", "version": 1}}) + "\n", encoding="utf-8")
+    (gen / "framework.xcconfig").write_text(
+        "OTHER_LDFLAGS = $(inherited) " + " ".join(segment_flags) + "\n", encoding="utf-8")
+
     run(["xcodegen", "generate", "-q", "--spec", "project-framework.yml"], cwd=ios, env=env)
     products = work / "products"
     objects = work / "objects"
