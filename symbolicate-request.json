@@ -1,9 +1,9 @@
 {
-  "source_run_id": 42571125251,
-  "source_artifact_name": "Kleo2iOS-7",
+  "source_run_id": 42737308078,
+  "source_artifact_name": "Kleo2iOS-9",
   "title_id": "040074A01BF12000",
   "framework_binary": "Payload/DmShell.app/Frameworks/DmGame040074A01BF12000.framework/DmGame040074A01BF12000",
   "framework_profile": "Payload/DmShell.app/Frameworks/DmGame040074A01BF12000.framework/profile.tsv",
-  "reason": "Analyze the actual iOS 26.5.1 5 GiB gameplay SIGSEGV at sdk+0x702920 with x0=0 and x2=0x60; preserve mem_reserve 0x140000000 and app_pool 0x110000000. Do not change the memory profile.",
-  "request_revision": "5gb-gameplay-null-deref-log-2026-11-09-v8"
+  "reason": "Disassemble the actual IPA #9 binary from the iPhone crash on 2026-11-10: SIGSEGV addr=0xc8 at main+0x40115c, LR main+0x401150, x0=0 and x1=0xb0e00000. The runtime log confirms profile reserve=0x14c000000, alias=0x10000000, stack=0x10000000, app_pool=0x11c000000. Do not change the memory profile; identify the exact allocator and caller on this binary.",
+  "request_revision": "ipa9-groundlevel-or-voxel-resource-allocation-crash-2026-11-10-v12"
 }
