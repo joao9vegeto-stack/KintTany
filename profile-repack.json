@@ -1,11 +1,11 @@
 {
-  "source_run_id": 42571125251,
-  "source_artifact_name": "Kleo2iOS-7",
+  "source_run_id": 42737308078,
+  "source_artifact_name": "Kleo2iOS-9",
   "title_id": "040074A01BF12000",
-  "mem_reserve": "0x140000000",
-  "mem_alias": "0x02000000",
-  "app_pool": "0x122000000",
-  "reason": "Keep mem_reserve at exactly 5 GiB. The crash disassembly shows VoxelSceneHeap requests 0xb0e00000 (2,830 MiB), and the allocator returns NULL; the caller then performs an atomic access at null+0xc8. Rebalance the same 5 GiB guest reservation: fixed front 256 MiB + alias 32 MiB + stack 192 MiB + app_pool 4,640 MiB. This reclaims 96 MiB from the previous 64 MiB alias + 256 MiB stack reservations for the app heap; no increase to mem_reserve and no shader/framework rebuild.",
-  "request_revision": "ios26-5gb-heap-rebalance-4640m-alias32m-stack192m-v11",
-  "mem_stack": "0x0c000000"
+  "mem_reserve": "0x180000000",
+  "mem_alias": "0x10000000",
+  "app_pool": "0x150000000",
+  "reason": "Use the exact IPA #9 that crashed as the source; do not rebuild the host, framework or shaders. Its actual iOS profile gave the game only 4.4375 GiB app_pool although upstream NXNative's Mac profile allocates 9 GiB for Bananza. The crash occurs when the game's default allocator returns NULL for VoxelSceneHeap (0xb0e00000 = 2830 MiB); the resource-size table in the crash dump totals about 4.09 GiB across six heaps. Repack the same IPA with the largest single guest reservation documented by NXNative for iOS (6 GiB): 256 MiB front + 5.25 GiB heap/app_pool + 256 MiB stack + 256 MiB alias. mem_used stays 64 MiB for the loaded modules. Guest file backing remains enabled automatically because this 5.25 GiB pool exceeds available process memory. This is a max-capacity test; it does not claim iOS Bananza has already been proven.",
+  "request_revision": "ios26-max6g-reserve-5250m-app-pool-alias256-stack256-source-ipa9-v13",
+  "mem_stack": "0x10000000"
 }
