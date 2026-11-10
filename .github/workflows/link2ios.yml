@@ -52,8 +52,11 @@ jobs:
           assert p.get("shader_chain")
           assert p.get("romfs_relative_path") == d.get("game_data", {}).get("romfs_relative_path")
           assert d.get("game_data", {}).get("romfs", {}).get("id")
-          assert d.get("game_data", {}).get("aoc")
-          assert all(x.get("id") and x.get("size") and x.get("sha256") for x in d["game_data"]["aoc"])
+          aoc=d.get("game_data", {}).get("aoc")
+          assert isinstance(aoc, list), "game_data.aoc must be a list; empty is valid when no DLC is supplied"
+          assert all(x.get("id") and x.get("size") and x.get("sha256") for x in aoc)
+          assert isinstance(p.get("aoc_images"), list)
+          assert len(p["aoc_images"]) == len(aoc)
           print("Link2iOS handoff validated:", d["request_id"])
           PY
 
