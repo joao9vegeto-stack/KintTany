@@ -319,10 +319,52 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
         download_7z(url, archive)
         sevenzip = install_7zip()
         extract_7z(archive, extracted, sevenzip)
-        xcis = sorted(path for path in extracted.rglob("*")
-                      if path.is_file() and path.suffix.lower() == ".xci")
+        extracted_files = sorted(path for path in extracted.rglob("*") if path.is_file())
+        xcis = [path for path in extracted_files if path.suffix.lower() == ".xci"]
+
+        # Large Switch dumps are sometimes stored as contiguous split-XCI parts
+        # (.xc0, .xc1, ...). 7-Zip extracts those as several files, not one .xci.
+        # Reassemble only a single, unambiguous, gap-free sequence.
+        if not xcis:
+            split_groups: dict[str, list[tuple[int, Path]]] = {}
+            for path in extracted_files:
+                match = re.match(r"^(.*)\.xc(\d+)$", path.name, flags=re.IGNORECASE)
+                if match:
+                    split_groups.setdefault(match.group(1).lower(), []).append(
+                        (int(match.group(2)), path)
+                    )
+            valid_groups = []
+            for group_name, parts in split_groups.items():
+                parts.sort(key=lambda item: item[0])
+                indices = [index for index, _ in parts]
+                if len(parts) >= 2 and indices == list(range(indices[0], indices[0] + len(indices))):
+                    valid_groups.append((group_name, parts))
+            if len(valid_groups) == 1:
+                group_name, parts = valid_groups[0]
+                source_xci = extracted / (parts[0][1].stem + ".xci")
+                print(
+                    f"[Link2iOS] XCI dividido detectado: {len(parts)} partes "
+                    f"({', '.join(part.name for _, part in parts)}). Reconstituindo em disco..."
+                )
+                with source_xci.open("wb") as output:
+                    for index, part in parts:
+                        print(f"[Link2iOS] Unindo parte XC{index}: {part.stat().st_size:,} bytes")
+                        with part.open("rb") as input_stream:
+                            shutil.copyfileobj(input_stream, output, length=64 * 1024 * 1024)
+                print(f"[Link2iOS] XCI reconstituído: {source_xci.stat().st_size:,} bytes.")
+                xcis = [source_xci]
+            elif len(valid_groups) > 1:
+                fail("o 7z contém mais de um conjunto XCI dividido; não é possível escolher a base com segurança.")
+
         if len(xcis) != 1:
-            fail(f"o 7z precisa conter exatamente um XCI de base; encontrados: {len(xcis)}.")
+            listing = "; ".join(
+                f"{path.relative_to(extracted).as_posix()} ({path.stat().st_size:,} bytes)"
+                for path in extracted_files
+            )
+            fail(
+                f"o 7z precisa conter um XCI único ou um conjunto .xc0/.xc1/... contínuo; "
+                f"encontrados {len(xcis)} XCI(s). Arquivos extraídos: {listing or '(nenhum)'}."
+            )
         source_xci = xcis[0]
         validate_xci(source_xci)
 
