@@ -279,7 +279,8 @@ def main() -> int:
             ("main", 0x40115C, "CURRENT CRASH PC (SIGSEGV addr=0xc8)", 0x180, 0x240),
             ("main", 0x401150, "CURRENT LR / return from resource-object factory", 0x180, 0x100),
             ("main", 0x4010DC, "CURRENT failing initializer function entry", 0x80, 0x500),
-            ("main", 0x202024, "CURRENT resource-object factory returning NULL", 0x300, 0x1800),
+            ("main", 0x202024, "CURRENT resource-object factory thunk", 0x80, 0x80),
+            ("main", 0x64CEBC, "CURRENT resource-object factory implementation target", 0x300, 0x1800),
             ("main", 0x401670, "CURRENT post-factory resource registration helper", 0x180, 0x700),
             ("main", 0x401C40, "CURRENT resource allocation helper", 0x180, 0x900),
             ("main", 0x401660, "CURRENT resource allocation helper variant", 0x180, 0x700),
@@ -323,8 +324,20 @@ def main() -> int:
                 ))
             if main_text:
                 report.extend(direct_callers(
-                    fp, main_text, {0x1761C0, 0x176518, 0x176A70, 0x178500, 0x231DB8, 0x231F5C, 0x28BA40, 0x17A2E0, 0x1A0860, 0x1B7AE50, 0x4A9918, 0x48A65C, 0x202024, 0x401670, 0x401C40, 0x401660}, md
+                    fp, main_text, {0x1761C0, 0x176518, 0x176A70, 0x178500, 0x231DB8, 0x231F5C, 0x28BA40, 0x17A2E0, 0x1A0860, 0x1B7AE50, 0x4A9918, 0x48A65C, 0x202024, 0x64CEBC, 0x401670, 0x401C40, 0x401660}, md
                 ))
+            # The crashing initializer passes these module-relative string pointers
+            # to the resource factory. Decode them from the embedded writable image.
+            if main_data and main_text:
+                string_offsets = [0x1C105AB, 0x1C06CE7, 0x1C1E926, 0x1C317B4, 0x1BF375E, 0x1C1E944]
+                report.append("\\n[resource names passed by main+0x4010dc]")
+                with args.macho.open("rb") as data_fp:
+                    for string_off in string_offsets:
+                        local = string_off - main_text["size"]
+                        if 0 <= local < main_data["size"]:
+                            data_fp.seek(main_data["file_offset"] + local)
+                            raw = data_fp.read(160).split(b"\\0", 1)[0]
+                            report.append(f"  main+0x{string_off:x}: {raw!r} | {raw.decode('utf-8', errors='replace')}")
     except Exception as exc:
         # Optional audit only: do not fail the profile repack if one Mach-O variant cannot be decoded.
         report.extend(["", f"SYMBOLICATION_UNAVAILABLE: {type(exc).__name__}: {exc}"])
