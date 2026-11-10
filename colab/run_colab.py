@@ -247,8 +247,8 @@ def prepare(args, api=None) -> None:
     run_preparation(argparse.Namespace(
         nx2apple_root=nx, nsp_dir=input_dir, keys=keys_path, work_dir=work
     ))
-    shutil.rmtree(input_dir, ignore_errors=True)
-    keys_path.unlink(missing_ok=True)
+    # Keep downloaded packages and keys until the Drive checkpoint is fully uploaded.
+    # If a later upload fails, the next cell retry can reuse the same local inputs.
     prep = json.loads((work / "link2ios-linux-prep.json").read_text(encoding="utf-8"))
     if prep["title_id"] != TITLE_ID or prep["package_version"] != PACKAGE_VERSION:
         fail("the prepared package is not the supported BOTW 1.9.0 profile.")
@@ -303,6 +303,8 @@ def prepare(args, api=None) -> None:
     handoff_path = Path("/content/link2ios-handoff.json")
     handoff_path.write_text(json.dumps(handoff, indent=2) + "\n", encoding="utf-8")
     handoff_manifest = upload_drive_file(api, handoff_path, output_id, "handoff.json")
+    shutil.rmtree(input_dir, ignore_errors=True)
+    keys_path.unlink(missing_ok=True)
     print("\n[Link2iOS] Linux preparation and Drive uploads completed.")
     print("Recovery manifest uploaded:", handoff_manifest["id"])
     print("Extracted source folder:", f"https://drive.google.com/drive/folders/{source['source_folder_id']}")
