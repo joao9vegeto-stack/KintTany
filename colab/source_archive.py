@@ -307,18 +307,25 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
             "update_nsp_count": 1, "dlc_nsp_count": 2, "source_reused": True,
         }
 
-    url = os.environ.get("LINK2IOS_DOWNLOAD_URL", "").strip()
-    if not url:
-        fail("a pasta ainda não tem BOTW_Base_XCI. Cole o link assinado do 7z no campo protegido do notebook.")
     temp_root = runtime_root / "7z-temporary"
     archive = temp_root / "botw-base.7z"
     extracted = temp_root / "extracted"
-    shutil.rmtree(temp_root, ignore_errors=True)
     temp_root.mkdir(parents=True, exist_ok=True)
     try:
-        download_7z(url, archive)
+        # Preserve the large download and extracted files after a validation
+        # failure so a corrected notebook run does not download 13+ GiB again.
+        if not archive.is_file():
+            url = os.environ.get("LINK2IOS_DOWNLOAD_URL", "").strip()
+            if not url:
+                fail("a pasta ainda não tem BOTW_Base_XCI. Cole o link assinado do 7z no campo protegido do notebook.")
+            download_7z(url, archive)
+        else:
+            print(f"[Link2iOS] Reutilizando 7z já baixado: {archive.stat().st_size:,} bytes.")
         sevenzip = install_7zip()
-        extract_7z(archive, extracted, sevenzip)
+        if not any(extracted.rglob("*")):
+            extract_7z(archive, extracted, sevenzip)
+        else:
+            print("[Link2iOS] Reutilizando a extração temporária já existente.")
         extracted_files = sorted(path for path in extracted.rglob("*") if path.is_file())
         xcis = [path for path in extracted_files if path.suffix.lower() == ".xci"]
 
@@ -381,13 +388,12 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
         upload_drive_file(api, local_xci, folder["id"], filename)
         add_root_packages()
         print("[Link2iOS] XCI base armazenado no Drive; update e DLC1/DLC2 são lidos diretamente da raiz.")
+        archive.unlink(missing_ok=True)
+        shutil.rmtree(extracted, ignore_errors=True)
+        shutil.rmtree(temp_root, ignore_errors=True)
         return {
             "package_dir": str(local_package_dir), "keys_path": str(local_keys),
             "source_folder_id": folder["id"], "source_folder_name": folder_name,
             "package_count": 4, "xci_count": 1, "nsp_count": 3,
             "update_nsp_count": 1, "dlc_nsp_count": 2, "source_reused": False,
         }
-    finally:
-        archive.unlink(missing_ok=True)
-        shutil.rmtree(extracted, ignore_errors=True)
-        shutil.rmtree(temp_root, ignore_errors=True)
