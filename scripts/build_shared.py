@@ -161,6 +161,9 @@ def main() -> None:
     profile, version_dir, romfs, aoc_dir, patched, prep = validate_workspace(
         prepared, work, nx, builder, game_profiles
     )
+    # validate_workspace verifies that both BOTW AOC images exist. Rebind the
+    # list in main's scope because the build report below records their names.
+    aoc_images = sorted(aoc_dir.glob("*.img"))
     logs = work / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     (work / "tmp").mkdir(parents=True, exist_ok=True)
