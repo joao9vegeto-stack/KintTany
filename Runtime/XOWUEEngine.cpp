@@ -706,6 +706,10 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
         static std::atomic<uint32_t> count{0u};
         return count.fetch_add(1u, std::memory_order_relaxed) < 64u;
     }
+    if (event.find("B138_STREAM_DISPATCH ") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 120u;
+    }
     // Keep the exact event lifetime and wait transitions that decide whether
     // asynchronous movie/file work can unblock its guest consumer.
     if (event.find("B98_") != std::string::npos) {
@@ -4411,7 +4415,78 @@ void xowue_dispatch_indirect(PPCContext &context, uint8_t *base, uint32_t target
         g_currentGuestThread->lastR31.store(context.r31.u32, std::memory_order_relaxed);
         g_currentGuestThread->lastGuestLr.store(static_cast<uint32_t>(context.lr), std::memory_order_relaxed);
     }
-    xowue_lookup_indirect(context, base, target)(context, base);
+
+    // Build 138: expose the actual virtual targets at the Wolverine stream
+    // provider boundary. These samples are deliberately capped and never alter
+    // guest registers, completion fields, dispatch targets, or return values.
+    const uint32_t callSite = static_cast<uint32_t>(context.lr);
+    auto streamSiteIndex = [](uint32_t lr) -> int {
+        switch (lr) {
+            case 0x8257513Cu: return 0; // async class/service lookup
+            case 0x825751E4u: return 1; // chunk-buffer allocator
+            case 0x82575244u: return 2; // stream read submission callback
+            case 0x825753D0u: return 3; // stream provider lookup
+            case 0x82575474u: return 4; // stream provider completion/read callback
+            default: return -1;
+        }
+    };
+    static std::array<std::atomic<uint32_t>, 5> streamDispatchSamples{};
+    const int streamSite = streamSiteIndex(callSite);
+    const uint32_t sample = streamSite >= 0
+        ? streamDispatchSamples[static_cast<size_t>(streamSite)].fetch_add(
+              1u, std::memory_order_relaxed) + 1u
+        : 0u;
+    const bool traceStreamDispatch = streamSite >= 0 && sample <= 12u;
+    const uint32_t threadId = g_currentGuestThread
+        ? g_currentGuestThread->id : g_currentGuestThreadId;
+    const uint32_t entryR3 = context.r3.u32;
+    const uint32_t entryR8 = context.r8.u32;
+    const uint32_t streamObject =
+        (callSite == 0x82575244u || callSite == 0x82575474u) &&
+        context.r4.u32 >= 116u
+            ? context.r4.u32 - 116u : 0u;
+    const auto logStreamDispatch = [&](const char *phase, uint32_t result) {
+        if (!traceStreamDispatch) return;
+        uint32_t vtable = 0u, vtableSlot = 0u;
+        if (base && entryR3 != 0u &&
+            validGuestRange(entryR3, 4u)) {
+            vtable = loadGuestBe32(base, entryR3);
+            if (vtable != 0u && validGuestRange(vtable, 16u))
+                vtableSlot = loadGuestBe32(base, vtable + 8u);
+        }
+        uint32_t a4 = 0u, a8 = 0u, chunkTable = 0u, counter = 0u;
+        if (base && streamObject != 0u &&
+            validGuestRange(streamObject, 0xB0u)) {
+            a4 = loadGuestBe32(base, streamObject + 0xA4u);
+            a8 = loadGuestBe32(base, streamObject + 0xA8u);
+            chunkTable = loadGuestBe32(base, streamObject + 0xACu);
+        }
+        if (base && callSite == 0x82575474u &&
+            validGuestRange(entryR8, 4u))
+            counter = loadGuestBe32(base, entryR8);
+        char event[512];
+        std::snprintf(event, sizeof(event),
+            "B138_STREAM_DISPATCH phase=%s site=0x%08X target=0x%08X sample=%u "
+            "thread=%u result=0x%08X r3=0x%08X r4=0x%08X r5=0x%08X "
+            "r6=0x%08X r7=0x%08X r8=0x%08X r9=0x%08X r10=0x%08X "
+            "r11=0x%08X obj=0x%08X obj_a4=0x%08X obj_a8=0x%08X "
+            "chunk_table=0x%08X callback_counter=0x%08X",
+            phase, callSite, target, sample, threadId, result,
+            context.r3.u32, context.r4.u32, context.r5.u32, context.r6.u32,
+            context.r7.u32, context.r8.u32, context.r9.u32, context.r10.u32,
+            context.r11.u32, streamObject, a4, a8, chunkTable, counter);
+        recordRuntimeTrace(event);
+    };
+
+    if (traceStreamDispatch) logStreamDispatch("enter", 0u);
+    PPCFunc *function = xowue_lookup_indirect(context, base, target);
+    try {
+        function(context, base);
+    } catch (...) {
+        if (traceStreamDispatch) logStreamDispatch("throw", 0xFFFFFFFFu);
+        throw;
+    }
+    if (traceStreamDispatch) logStreamDispatch("return", context.r3.u32);
 }
 
 // Physical Xenos readback uses the active guest memory mapping; no synthetic data.
