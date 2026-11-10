@@ -195,51 +195,16 @@ def prepare(args) -> None:
     from prepare_linux import run_preparation
 
     api = drive_api()
-    root_items = list_children(api, args.drive_folder_id)
-    folders = {
-        item["name"].lower(): item for item in root_items
-        if item.get("mimeType") == "application/vnd.google-apps.folder"
-    }
-    base_folder = folders.get("base")
-    update_folder = folders.get("update") or folders.get("updates")
-    dlc_folder = folders.get("dlc")
-    for label, folder in (("base", base_folder), ("update", update_folder), ("dlc", dlc_folder)):
-        if folder is None:
-            fail(f"Drive input must contain the '{label}/' folder.")
-
-    keys_item = by_name(root_items, "prod.keys")
-    if keys_item is None and folders.get("keys"):
-        keys_item = by_name(list_children(api, folders["keys"]["id"]), "prod.keys")
-    if keys_item is None:
-        fail("put prod.keys in the input folder root or its keys/ subfolder.")
-
-    source_items = []
-    for category, folder in (("base", base_folder), ("update", update_folder), ("dlc", dlc_folder)):
-        packages = [
-            item for item in list_children(api, folder["id"])
-            if item.get("mimeType") != "application/vnd.google-apps.folder"
-            and item.get("name", "").lower().endswith(".nsp")
-        ]
-        if not packages:
-            fail(f"the Drive folder '{category}/' contains no .nsp package.")
-        source_items.extend((category, item) for item in packages)
-
     request_id = str(uuid.uuid4())
     root = Path("/content/link2ios")
     shutil.rmtree(root, ignore_errors=True)
-    input_dir = root / "input-nsps"
-    input_dir.mkdir(parents=True)
-    keys_path = root / "keys" / "prod.keys"
+    root.mkdir(parents=True, exist_ok=True)
 
-    print("[Link2iOS] Downloading base/update/DLC NSPs from Drive...")
-    source_manifest = []
-    for index, (category, item) in enumerate(source_items, start=1):
-        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", item["name"]).strip("._") or f"package_{index}.nsp"
-        local = input_dir / f"{category}_{index:02d}_{safe}"
-        record = download_drive_file(api, item, local)
-        record["category"] = category
-        source_manifest.append(record)
-    download_drive_file(api, keys_item, keys_path)
+    from source_archive import prepare_source
+    source = prepare_source(api, args.drive_folder_id, root)
+    input_dir = Path(source["nsp_dir"])
+    keys_path = Path(source["keys_path"])
+    print(f"[Link2iOS] Source ready: {source['nsp_count']} NSP package(s) from {source['source_folder_name']}.")
 
     install_linux_dependencies(root)
     nx = root / "NX2Apple"
@@ -257,25 +222,31 @@ def prepare(args) -> None:
     run_preparation(argparse.Namespace(
         nx2apple_root=nx, nsp_dir=input_dir, keys=keys_path, work_dir=work
     ))
+    shutil.rmtree(input_dir, ignore_errors=True)
+    keys_path.unlink(missing_ok=True)
     prep = json.loads((work / "link2ios-linux-prep.json").read_text(encoding="utf-8"))
     if prep["title_id"] != TITLE_ID or prep["package_version"] != PACKAGE_VERSION:
         fail("the prepared package is not the supported BOTW 1.9.0 profile.")
     romfs = work / prep["romfs_relative_path"]
-    aoc_files = sorted((work / "aoc").glob("*.img"))
-    if not romfs.is_file() or not aoc_files:
-        fail("RomFS or DLC AOC images are missing after Linux preparation.")
+    aoc_dir = work / "aoc"
+    aoc_dir.mkdir(parents=True, exist_ok=True)
+    aoc_files = sorted(aoc_dir.glob("*.img"))
+    if not romfs.is_file():
+        fail("RomFS image is missing after Linux preparation.")
+    if not aoc_files:
+        print("[Link2iOS] No DLC was supplied. BOTW base game + update will be built without AOC content.")
 
     output_id = create_folder(api, f"Link2iOS_BOTW_{request_id[:8]}", args.drive_folder_id)
     pipeline_id = create_folder(api, "pipeline", output_id)
     games_id = create_folder(api, "games", output_id)
     game_id = create_folder(api, TITLE_ID, games_id)
-    aoc_id = create_folder(api, "aoc", game_id)
+    aoc_id = create_folder(api, "aoc", game_id) if aoc_files else None
 
-    print("[Link2iOS] Uploading the external RomFS and DLC images...")
+    print("[Link2iOS] Uploading external RomFS and any available DLC images...")
     romfs_record = upload_drive_file(api, romfs, game_id, "romfs.img")
     aoc_records = [
         upload_drive_file(api, path, aoc_id, path.name) for path in aoc_files
-    ]
+    ] if aoc_id else []
 
     archive = root / "botw-work.tar.zst"
     print("[Link2iOS] Archiving build-only workspace; excluding RomFS, AOC, NSPs and Linux tools...")
@@ -305,6 +276,7 @@ def prepare(args) -> None:
     handoff_path = Path("/content/link2ios-handoff.json")
     handoff_path.write_text(json.dumps(handoff, indent=2) + "\n", encoding="utf-8")
     print("\n[Link2iOS] Linux preparation and Drive uploads completed.")
+    print("Extracted source folder:", f"https://drive.google.com/drive/folders/{source['source_folder_id']}")
     print("Game data folder:", handoff["game_data"]["folder_url"])
     print("RomFS:", f"{romfs_record['size']:,} bytes; SHA-256 {romfs_record['sha256']}")
     print("AOC images:", len(aoc_records))
