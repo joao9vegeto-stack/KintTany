@@ -164,8 +164,11 @@ def main() -> int:
     ap.add_argument("--output", type=Path, required=True, help="text report path")
     args = ap.parse_args()
     report = [
-        "NXNative embedded ARM64 crash-site disassembly",
-        "Crash: SIGSEGV addr=0, PC=sdk+0x702920, LR=main+0x48a5d8, x0=0, x2=0x60.",
+        "NXNative embedded ARM64 crash-site disassembly — exact device IPA #9",
+        "Crash from iPhone 17 Pro / iOS 26.5.1: SIGSEGV addr=0xc8, PC=main+0x40115c, LR=main+0x401150.",
+        "Registers: x0=0 (factory returned NULL), x1=0xb0e00000 (request size), x2=8, x3=8; x8=0xc8 at fault.",
+        "Runtime profile loaded: reserve=0x14c000000, alias=0x10000000, stack=0x10000000, app_pool=0x11c000000.",
+        "Device reached frame 1019 at ~60 fps before this crash; do not infer a shader or initial boot failure.",
         "gen_embed.py places original module text at module offset 0 in __TEXT,__dm<module>x0.",
         f"Mach-O: {args.macho}",
     ]
