@@ -33,7 +33,7 @@ The final IPA is inspected to reject `romfs.img`, AOC paths, NSPs, `prod.keys` a
 
 ## Credentials
 
-- Colab Secret: `LINK2IOS_GOOGLE_SERVICE_ACCOUNT_JSON`, Drive access to the shared folder.
+- Colab: interactive Google OAuth via `auth.authenticate_user()`; the signed-in account must have access to the configured Drive folder. No Colab service-account Secret is required.
 - GitHub Actions secret: `GOOGLE_SERVICE_ACCOUNT_JSON`, Drive read-only.
 - Fine-grained PAT: used only by the last Colab cell to commit `handoff.json`; repository Contents read/write only.
 - The signed 7z URL is supplied at runtime and is never stored in Git.
