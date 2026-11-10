@@ -67,7 +67,9 @@ Existe apenas `.github/workflows/link2ios.yml`. Ele é acionado somente por `pus
 
 Após uma preparação BOTW concluída, o notebook grava `handoff.json` dentro da pasta `Link2iOS_BOTW_*` no Drive. Em uma sessão nova, execute autenticação, clone e a célula **Recuperar preparação**. Ela filtra pelo projeto, Title ID `01007EF00011E000`, versão `v1114112` e presença de workspace/RomFS/AOC. Não baixa novamente o NSP base/NSPs nem repete a extração, reescrita de módulos ou shader split. Pastas de Kleo2iOS são ignoradas.
 
-Durante a primeira preparação, downloads exibem bytes efetivos, tamanho conferido e tempo decorrido. O runtime mantém o workspace parcial entre tentativas, e arquivos-fonte já transferidos são reutilizados quando tamanho e checksum do Drive correspondem.
+Durante a primeira preparação, downloads exibem bytes efetivos, tamanho conferido e tempo decorrido. O Colab mantém em `/content/link2ios` o 7z original, a extração, os quatro NSPs, `prod.keys`, o checkout NX2Apple/NXNative e o workspace de build. Retentativas na mesma sessão conectada reutilizam esses dados; o código remove apenas pacotes NSP/XCI duplicados ou obsoletos da pasta de entrada. APT, módulos Python e .NET 10 também são verificados antes de instalar, evitando reinstalações quando já estão presentes.
+
+**Limite do armazenamento local:** os 225 GB do runtime do Colab são temporários. Eles sobrevivem a novas execuções de células enquanto o mesmo runtime continuar ativo, mas não a um runtime desconectado, reciclado ou substituído. A cópia de recuperação dos pacotes continua no Google Drive; após um runtime novo, os arquivos podem ser copiados novamente do Drive, mas o 7z original não precisa ser baixado de sua URL se a pasta `BOTW_Base_NSP` já existir.
 
 
 ### Validação obrigatória das duas DLCs BOTW
