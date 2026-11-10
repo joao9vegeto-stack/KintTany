@@ -264,10 +264,20 @@ def prepare(args, api=None) -> None:
     aoc_dir = work / "aoc"
     aoc_dir.mkdir(parents=True, exist_ok=True)
     aoc_files = sorted(aoc_dir.glob("*.img"))
-    if not romfs.is_file():
-        fail("RomFS image is missing after Linux preparation.")
-    if not aoc_files:
-        fail("DLC1/DLC2 NSPs were supplied, but NX2Apple produced no AOC RomFS images.")
+    expected_aoc = {"1.img", "2.img"}
+    actual_aoc = {path.name for path in aoc_files}
+    if not romfs.is_file() or not romfs.stat().st_size:
+        fail("RomFS image is missing or empty after Linux preparation.")
+    if actual_aoc != expected_aoc or any(path.stat().st_size <= 0 for path in aoc_files):
+        fail(
+            "BOTW requires both DLC outputs: aoc/1.img (01007EF00011F001) and "
+            f"aoc/2.img (01007EF00011F002); NX2Native produced {sorted(actual_aoc)}."
+        )
+    if prep.get("aoc_title_ids") != {
+        "1.img": "01007EF00011F001",
+        "2.img": "01007EF00011F002",
+    }:
+        fail("Colab preparation manifest does not identify both BOTW DLC content IDs.")
 
     output_id = create_folder(api, f"Link2iOS_BOTW_{request_id[:8]}", args.drive_folder_id)
     pipeline_id = create_folder(api, "pipeline", output_id)
@@ -363,13 +373,25 @@ def recover(args, api=None) -> dict | None:
             continue
         aoc = handoff.get("game_data", {}).get("aoc", [])
         prep_aoc = handoff.get("prepared", {}).get("aoc_images", [])
+        expected_aoc = {"1.img", "2.img"}
+        aoc_names = {Path(item.get("name", "")).name for item in aoc}
+        prep_names = {Path(item.get("name", "")).name for item in prep_aoc}
         if not handoff.get("work_archive", {}).get("id"):
             destination.unlink(missing_ok=True)
             continue
         if not handoff.get("game_data", {}).get("romfs", {}).get("id"):
             destination.unlink(missing_ok=True)
             continue
-        if not aoc or len(aoc) != len(prep_aoc):
+        if (
+            aoc_names != expected_aoc
+            or prep_names != expected_aoc
+            or len(aoc) != 2
+            or len(prep_aoc) != 2
+            or handoff.get("prepared", {}).get("aoc_title_ids") != {
+                "1.img": "01007EF00011F001",
+                "2.img": "01007EF00011F002",
+            }
+        ):
             destination.unlink(missing_ok=True)
             continue
         print("[Link2iOS] PREPARAÇÃO BOTW EXISTENTE RECUPERADA.")
@@ -377,7 +399,7 @@ def recover(args, api=None) -> dict | None:
         print("Drive run:", handoff.get("drive_output_folder_url", folder.get("webViewLink", folder["id"])))
         print("Workspace archive:", handoff["work_archive"].get("size"), "bytes")
         print("RomFS:", handoff["game_data"]["romfs"].get("size"), "bytes")
-        print("AOC images:", len(aoc))
+        print("AOC images:", ", ".join(sorted(aoc_names)))
         print("Nenhum XCI/NSP foi baixado; nenhuma extração, rewrite ou shader split foi executado.")
         print("Handoff local:", destination)
         return handoff
