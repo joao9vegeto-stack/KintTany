@@ -202,9 +202,14 @@ def prepare(args) -> None:
 
     from source_archive import prepare_source
     source = prepare_source(api, args.drive_folder_id, root)
-    input_dir = Path(source["nsp_dir"])
+    input_dir = Path(source["package_dir"])
     keys_path = Path(source["keys_path"])
-    print(f"[Link2iOS] Source ready: {source['nsp_count']} NSP package(s) from {source['source_folder_name']}.")
+    print(
+        f"[Link2iOS] Source ready: {source['package_count']} Switch packages "
+        f"({source['xci_count']} XCI base + {source['nsp_count']} NSPs: "
+        f"{source['update_nsp_count']} update + {source['dlc_nsp_count']} DLC) "
+        f"from {source['source_folder_name']}."
+    )
 
     install_linux_dependencies(root)
     nx = root / "NX2Apple"
@@ -234,7 +239,7 @@ def prepare(args) -> None:
     if not romfs.is_file():
         fail("RomFS image is missing after Linux preparation.")
     if not aoc_files:
-        print("[Link2iOS] No DLC was supplied. BOTW base game + update will be built without AOC content.")
+        fail("DLC1/DLC2 NSPs were supplied, but NX2Apple produced no AOC RomFS images.")
 
     output_id = create_folder(api, f"Link2iOS_BOTW_{request_id[:8]}", args.drive_folder_id)
     pipeline_id = create_folder(api, "pipeline", output_id)
