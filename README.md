@@ -8,7 +8,7 @@ O notebook utiliza diretamente a pasta Google Drive compartilhada com a service 
 
 `https://drive.google.com/drive/folders/19HXEJCK-26NfBVKeUP3wqFxMFpoF3ykm`
 
-Deixe `prod.keys` na raiz dessa pasta. Não crie pastas `base/`, `update/` ou `dlc/`.
+Deixe `prod.keys`, `dlc1.nsp` e `dlc2.nsp` na raiz dessa pasta. Não crie pastas `base/`, `update/` ou `dlc/`.
 
 Na primeira execução, o notebook pede o link assinado do RAR por uma entrada protegida. O link não fica embutido no repositório público, não é impresso e não é gravado no Drive. O Colab baixa o RAR para seu armazenamento temporário, valida e extrai com 7-Zip, procura os NSPs recursivamente e envia apenas os NSPs extraídos para uma pasta `BOTW_Extracted/` criada automaticamente no Drive. O RAR temporário é apagado.
 
