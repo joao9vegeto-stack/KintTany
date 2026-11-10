@@ -1,2 +1,1 @@
-Audit-only trigger: capture PPC context/config headers containing guest memory load/store ABI.
-No runtime or IPA source is changed.
+Audit-only trigger: export ppc_context.h and ppc_config.h as standalone files for targeted store instrumentation.
