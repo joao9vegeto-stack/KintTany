@@ -2,6 +2,7 @@
 """Fetch a BOTW base-game 7z archive, extract its XCI, and stage update/DLC NSPs."""
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -26,7 +27,7 @@ def list_children(api, parent_id: str) -> list[dict]:
             pageSize=1000,
             pageToken=token,
             orderBy="name",
-            fields="nextPageToken,files(id,name,mimeType,size,modifiedTime)",
+            fields="nextPageToken,files(id,name,mimeType,size,modifiedTime,md5Checksum)",
             supportsAllDrives=True,
             includeItemsFromAllDrives=True,
         ).execute()
@@ -75,6 +76,7 @@ def download_7z(url: str, target: Path) -> None:
     partial = target.with_suffix(".7z.part")
     total = 0
     last_report = 0
+    started = time.monotonic()
     try:
         with requests.get(url, stream=True, allow_redirects=True, timeout=(30, 180)) as response:
             if response.status_code >= 400:
@@ -99,7 +101,12 @@ def download_7z(url: str, target: Path) -> None:
         if signature != SEVEN_Z_SIGNATURE:
             fail("o link não retornou um arquivo 7z válido; pode ter expirado ou retornado uma página de erro.")
         partial.replace(target)
-        print(f"[Link2iOS] Arquivo 7z baixado: {total:,} bytes.")
+        elapsed = max(time.monotonic() - started, 0.001)
+        print(
+            f"[Link2iOS] 7z concluído: {total:,} bytes "
+            f"({total / 1024**3:.2f} GiB) em {elapsed:.1f}s; "
+            f"média {total / elapsed / 1024**2:.1f} MiB/s."
+        )
     except SystemExit:
         partial.unlink(missing_ok=True)
         raise
@@ -135,6 +142,7 @@ def extract_7z(archive: Path, destination: Path, sevenzip: str) -> None:
             fail(f"o 7z contém caminho inseguro e não será extraído: {raw}")
     if "Symbolic Link =" in listing or "Hard Link =" in listing:
         fail("o 7z contém links simbólicos/duros; a extração foi interrompida.")
+    print("[Link2iOS] Testando integridade do 7z...")
     tested = subprocess.run(
         [sevenzip, "t", str(archive)],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -143,21 +151,42 @@ def extract_7z(archive: Path, destination: Path, sevenzip: str) -> None:
         fail("o 7-Zip detectou arquivo danificado, incompleto ou protegido por senha.")
     shutil.rmtree(destination, ignore_errors=True)
     destination.mkdir(parents=True, exist_ok=True)
+    print("[Link2iOS] Extraindo o XCI do 7z; esta etapa depende do tamanho e da velocidade do armazenamento...")
     extracted = subprocess.run(
         [sevenzip, "x", str(archive), f"-o{destination}", "-y"],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
     if extracted.returncode:
         fail("falha ao extrair o 7z: " + extracted.stdout[-2000:])
-    print("[Link2iOS] 7z validado e extraído no armazenamento temporário do Colab.")
+    files = [p for p in destination.rglob("*") if p.is_file()]
+    total_bytes = sum(p.stat().st_size for p in files)
+    print(
+        f"[Link2iOS] Extração concluída: {len(files)} arquivo(s), "
+        f"{total_bytes:,} bytes ({total_bytes / 1024**3:.2f} GiB) extraídos."
+    )
 
 
 def download_drive_file(api, item: dict, destination: Path) -> None:
     from googleapiclient.http import MediaIoBaseDownload
 
     destination.parent.mkdir(parents=True, exist_ok=True)
+    expected = int(item.get("size") or 0)
+    expected_md5 = str(item.get("md5Checksum") or "").lower()
+    if destination.is_file() and expected and destination.stat().st_size == expected:
+        if expected_md5:
+            digest = hashlib.md5()
+            with destination.open("rb") as stream:
+                for block in iter(lambda: stream.read(16 * 1024 * 1024), b""):
+                    digest.update(block)
+            if digest.hexdigest().lower() == expected_md5:
+                print(f"[Link2iOS] Reutilizando {item['name']}: {expected:,} bytes verificados (MD5 Drive).")
+                return
+        else:
+            print(f"[Link2iOS] Reutilizando {item['name']}: {expected:,} bytes (tamanho conferido).")
+            return
     partial = destination.with_suffix(destination.suffix + ".part")
     request = api.files().get_media(fileId=item["id"], supportsAllDrives=True)
+    started = time.monotonic()
     with partial.open("wb") as output:
         downloader = MediaIoBaseDownload(output, request, chunksize=CHUNK)
         done = False
@@ -165,7 +194,6 @@ def download_drive_file(api, item: dict, destination: Path) -> None:
             status, done = downloader.next_chunk()
             if status:
                 print(f"[Link2iOS] Drive {item['name']}: {status.progress() * 100:.1f}%")
-    expected = int(item.get("size") or 0)
     if expected and partial.stat().st_size != expected:
         partial.unlink(missing_ok=True)
         fail(f"tamanho incorreto ao baixar {item['name']} do Drive.")
@@ -173,6 +201,13 @@ def download_drive_file(api, item: dict, destination: Path) -> None:
         partial.unlink(missing_ok=True)
         fail(f"o arquivo {item['name']} baixado do Drive está vazio.")
     partial.replace(destination)
+    elapsed = max(time.monotonic() - started, 0.001)
+    size = destination.stat().st_size
+    print(
+        f"[Link2iOS] Download concluído: {item['name']} — {size:,} bytes "
+        f"({size / 1024**3:.2f} GiB), {elapsed:.1f}s, "
+        f"{size / elapsed / 1024**2:.1f} MiB/s."
+    )
 
 
 def upload_drive_file(api, path: Path, parent_id: str, name: str) -> dict:
@@ -208,10 +243,11 @@ def existing_base_folder(api, root_id: str) -> tuple[dict, dict] | None:
 
 
 def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
-    """Reuse the extracted base XCI and always download one update plus both DLC NSPs."""
+    """Reuse the extracted base XCI and cached package downloads across notebook retries."""
     local_package_dir = runtime_root / "input-packages"
     local_keys = runtime_root / "keys" / "prod.keys"
-    shutil.rmtree(local_package_dir, ignore_errors=True)
+    # Keep already downloaded inputs in this Colab runtime. download_drive_file
+    # reuses matching Drive sizes/MD5 instead of transferring the same multi-GB files again.
     local_package_dir.mkdir(parents=True, exist_ok=True)
     local_keys.parent.mkdir(parents=True, exist_ok=True)
 
