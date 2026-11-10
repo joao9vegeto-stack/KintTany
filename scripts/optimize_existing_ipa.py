@@ -282,7 +282,7 @@ def main() -> None:
         "DM_TEAM_ID": str(fw_info.get("DEVELOPMENT_TEAM", "0000000000")),
         "DM_SCHEME_NAME": "DmIOS",
         "DM_APP_CATEGORY": str(app_info.get("LSApplicationCategoryType", "public.app-category.adventure-games")),
-        "DM_SHOW_FPS": "YES" if app_info.get("DMShowFPS", True) else "NO",
+        "DM_SHOW_FPS": "YES" if str(app_info.get("DMShowFPS", "YES")).upper() in ("YES", "1", "TRUE") else "NO",
         "DM_LANG": str(app_info.get("DMLanguage", "pt-BR")),
     })
 
@@ -337,7 +337,9 @@ def main() -> None:
     new_sections = otool_sections(new_binary)
     old_sections = otool_sections(old_binary)
     for key in old_sections:
-        if (key[1].startswith("__dm") or key[0].startswith("__DM")) and key in new_sections:
+        if key[1].startswith("__dm") or key[0].startswith("__DM"):
+            if key not in new_sections:
+                fail(f"rebuilt framework lost embedded module section {key[0]},{key[1]}")
             if old_sections[key]["size"] != new_sections[key]["size"]:
                 fail(f"embedded source section size changed for {key[0]},{key[1]}")
     required_exports = ("_dm_glue_version", "_dm_glue_start_game", "_dm_glue_present_game", "_dm_glue_focus_event")
