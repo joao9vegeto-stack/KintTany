@@ -11,6 +11,9 @@ OWNERS = (
     0x82575250,  # stream range / chunk update callback
     0x82575480,  # polling wrapper with vtable completion loop
     0x82575108,  # chunk request helper
+    0x82574348,  # virtual stream-provider read submission callback (observed in Build 138)
+    0x82573620,  # async stream-manager setup/use path
+    0x82573AE8,  # async stream-manager setup/use path
     0x822A0160,  # stream metadata helper
     0x822A00C0,  # stream metadata helper
     0x82C3C4D8,  # timebase helper
@@ -46,7 +49,10 @@ def main():
                 "inner_return_test":"0x82575510",
                 "inner_retry_branch":"0x82575514",
                 "yield_call":"0x825754F0",
-                "stream_dispatch_calls":["0x825753D0","0x82575474"]
+                "stream_dispatch_calls":["0x825753D0","0x82575474"],
+                "observed_submission_callback":"0x82574348",
+                "observed_submission_site":"0x82575244",
+                "expected_completion_site":"0x82575474"
             }}
     args.report.parent.mkdir(parents=True,exist_ok=True)
     args.report.write_text(json.dumps(result,indent=2),encoding="utf-8")
@@ -55,7 +61,9 @@ def main():
                   "instruction_comments":f["instruction_comment_count"],
                   "body_chars":len(f["body"])} for f in result["functions"]],
         "missing":missing}))
-    if 0x82575480 not in found or 0x82575108 not in found:
-        raise SystemExit("Required stream poll / chunk helper source missing")
+    required=(0x82575480,0x82575108,0x82574348)
+    missing_required=[f"0x{x:08X}" for x in required if x not in found]
+    if missing_required:
+        raise SystemExit("Required stream poll / callback source missing: "+", ".join(missing_required))
 
 if __name__=="__main__": main()
