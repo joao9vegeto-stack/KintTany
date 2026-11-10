@@ -9,7 +9,7 @@ on:
       - "tools/probe_xowue_stream_stall.py"
 
 concurrency:
-  group: xowue-stream-aot-audit-\${{ github.ref }}
+  group: xowue-stream-aot-audit-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -33,7 +33,10 @@ jobs:
           set -euo pipefail
           test "$(git branch --show-current)" = "XOWUE"
           cat dist/XOWUE-AOT-source.part* > "$RUNNER_TEMP/XOWUE-AOT-source.tar.gz"
-          shasum -a 256 -c dist/SHA256SUMS
+          expected="$(awk '$2=="dist/XOWUE-AOT-source.tar.gz"{print $1}' dist/SHA256SUMS)"
+          actual="$(shasum -a 256 "$RUNNER_TEMP/XOWUE-AOT-source.tar.gz" | awk '{print $1}')"
+          test -n "$expected"
+          test "$actual" = "$expected"
           mkdir -p "$RUNNER_TEMP/generated"
           tar -xzf "$RUNNER_TEMP/XOWUE-AOT-source.tar.gz" -C "$RUNNER_TEMP/generated"
           test -s "$RUNNER_TEMP/generated/ppc/ppc_recomp.64.cpp"
@@ -53,7 +56,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: XOWUE-Startup-Stream-AOT-Source
-          path: \${{ runner.temp }}/xowue-stream-stall-aot-source.json
+          path: ${{ runner.temp }}/xowue-stream-stall-aot-source.json
           if-no-files-found: error
           retention-days: 30
           compression-level: 6
