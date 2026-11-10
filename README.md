@@ -18,7 +18,7 @@ A entrada desta execução é BOTW base XCI + update 1.9.0 + dois DLCs, Title ID
 
 ## Fluxo completo
 
-**Colab/Linux:** acessa o Drive com service account, obtém `prod.keys`, baixa e extrai o 7z com o XCI base (somente na primeira execução), identifica o XCI base e os NSPs de update/DLC, sincroniza NX2Apple v1.3.1-rc2 e o commit fixo do NXNative, verifica os pacotes, extrai os conteúdos, reescreve módulos AArch64 e prepara o pacote NVN de shaders. A execução para antes do estágio Metal/Xcode.
+**Colab/Linux:** acessa o Drive com OAuth da conta Google autenticada no Colab, obtém `prod.keys`, baixa e extrai o 7z com o XCI base (somente na primeira execução), identifica o XCI base e os NSPs de update/DLC, sincroniza NX2Apple v1.3.1-rc2 e o commit fixo do NXNative, verifica os pacotes, extrai os conteúdos, reescreve módulos AArch64 e prepara o pacote NVN de shaders. A execução para antes do estágio Metal/Xcode.
 
 Em seguida, o Colab publica no Drive:
 - `pipeline/botw-work.tar.zst`: somente os arquivos necessários à continuação do build;
@@ -39,8 +39,8 @@ RomFS e as imagens AOC dos dois DLCs permanecem no Drive externo. O Shared Shell
 
 ## Configuração
 
-1. Mantenha `prod.keys`, `update.nsp`, `dlc1.nsp` e `dlc2.nsp` (ignore os demais itens) na raiz da pasta Drive já compartilhada com a service account.
-2. No Colab, configure o Secret `LINK2IOS_GOOGLE_SERVICE_ACCOUNT_JSON`.
+1. Mantenha `prod.keys`, `update.nsp`, `dlc1.nsp` e `dlc2.nsp` na raiz da pasta Drive. Para o GitHub Actions, a pasta também precisa estar compartilhada com a service account configurada nos Secrets do repositório; os demais itens da raiz são ignorados.
+2. No Colab, autentique sua própria conta Google na primeira célula do notebook (`auth.authenticate_user()`). Não é necessário configurar Secret de service account no Colab.
 3. Em GitHub → Settings → Secrets and variables → Actions, configure `GOOGLE_SERVICE_ACCOUNT_JSON` com a credencial de leitura do Drive.
 4. Gere um Fine-grained PAT restrito a este repositório com **Contents: Read and write**.
 5. Abra o [notebook Link2iOS_BOTW.ipynb no Google Colab](https://colab.research.google.com/github/joao9vegeto-stack/KintTany/blob/Link2iOS/colab/Link2iOS_BOTW.ipynb), cole o link do 7z quando solicitado e execute as células em ordem.
