@@ -233,7 +233,7 @@ def main() -> None:
     report["memory_profile"] = {
         "source": profile_rel,
         "loaded_by": "DM_PROFILE (NX2Apple Route C EngineLaunchPlan)",
-        "mode": "ios26_5gb_rebalanced_4437m_heap_64m_alias_256m_stack_test",
+        "mode": "ios26_5gb_rebalanced_4640m_heap_32m_alias_192m_stack_test",
         "changes": memory_changes,
         "shader_rebuild": False,
         "framework_rebuild": False,
