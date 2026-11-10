@@ -12,6 +12,7 @@ import argparse
 import importlib.util
 import json
 import os
+import plistlib
 import re
 import shutil
 import subprocess
@@ -33,6 +34,69 @@ def run(command, cwd=None, env=None) -> None:
     command = list(map(str, command))
     print("+", " ".join(command), flush=True)
     subprocess.run(command, cwd=cwd, env=env, check=True)
+
+
+def patch_botw_handheld_profile(engine: Path) -> None:
+    """Use BOTW's handheld render path as Link2iOS's default while preserving 60 FPS."""
+    path = engine / "dm" / "games" / TITLE_ID / "game.tsv"
+    if not path.is_file():
+        fail(f"pinned BOTW profile is missing: {path}")
+    lines = path.read_text(encoding="utf-8").splitlines()
+    fps_rows = [i for i, line in enumerate(lines) if line.split("\t", 1)[0] == "fps_target"]
+    if len(fps_rows) != 1 or lines[fps_rows[0]].split("\t") != ["fps_target", "60"]:
+        fail("BOTW profile must have exactly one fps_target=60 row; refusing an unexpected profile.")
+    op_rows = [i for i, line in enumerate(lines) if line.split("\t", 1)[0] == "op_mode"]
+    if len(op_rows) > 1:
+        fail("BOTW profile has duplicate op_mode rows.")
+    if op_rows:
+        fields = lines[op_rows[0]].split("\t")
+        if len(fields) != 2 or fields[1] not in ("console", "handheld"):
+            fail("BOTW profile has an unexpected op_mode value.")
+        lines[op_rows[0]] = "op_mode\thandheld"
+    else:
+        lines.insert(fps_rows[0] + 1, "op_mode\thandheld")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print("[Link2iOS] BOTW defaults: handheld 1280x720, fps_target=60; adaptive frame-step protection remains enabled.")
+
+
+def patch_shell_icon_pipeline(engine: Path) -> None:
+    """Compile BOTW's NACP game icon as the Shared Shell's Home Screen AppIcon."""
+    project = engine / "dm" / "ios" / "project-shell.yml"
+    script = engine / "dm" / "ios" / "tools" / "build_shell.sh"
+    if not project.is_file() or not script.is_file():
+        fail("pinned NX2Apple Route C shell sources are missing; cannot customize the BOTW app icon.")
+    project_text = project.read_text(encoding="utf-8")
+    icon_line = "      - path: ${DM_SHELL_PACKAGE}/AppIcon.icon"
+    if icon_line in project_text:
+        rows = project_text.splitlines()
+        rows = [row for row in rows if not row.startswith(icon_line)]
+        project.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    elif "AppIcon.icon" in project_text:
+        fail("Shared Shell AppIcon resource line differs from the pinned template; refusing an unsafe icon edit.")
+    script_text = script.read_text(encoding="utf-8")
+    marker = "# Link2iOS BOTW icon asset injection"
+    if marker in script_text:
+        return
+    anchor = next((line for line in script_text.splitlines()
+                   if line.startswith("mkdir -p Gen/Assets.xcassets && printf ")), None)
+    if anchor is None:
+        fail("build_shell.sh no longer creates Gen/Assets.xcassets at the expected point.")
+    injection = r'''
+# Link2iOS BOTW icon asset injection
+if [ -n "${DM_SHELL_ICON_SOURCE:-}" ]; then
+  [ -f "$DM_SHELL_ICON_SOURCE" ] || die "BOTW game icon is missing: $DM_SHELL_ICON_SOURCE"
+  dims=$(sips -g pixelWidth -g pixelHeight "$DM_SHELL_ICON_SOURCE" 2>/dev/null | awk '/pixelWidth/{w=$2}/pixelHeight/{h=$2}END{print w, h}')
+  set -- $dims
+  [ "$#" -eq 2 ] && [ "$1" = "$2" ] || die "BOTW NACP icon must be square, got: $dims"
+  mkdir -p Gen/Assets.xcassets/AppIcon.appiconset || die "BOTW AppIcon asset set"
+  sips -s format png -z 1024 1024 "$DM_SHELL_ICON_SOURCE" --out Gen/Assets.xcassets/AppIcon.appiconset/AppIcon.png >/dev/null || die "convert BOTW game icon"
+  printf '%s\n' '{"images":[{"filename":"AppIcon.png","idiom":"universal","platform":"ios","size":"1024x1024"}],"info":{"author":"xcode","version":1}}' > Gen/Assets.xcassets/AppIcon.appiconset/Contents.json || die "BOTW AppIcon manifest"
+  t "Link2iOS: Shared Shell AppIcon uses the BOTW NACP game icon"
+fi
+'''.trimEnd();
+    script_text = script_text.replace(anchor, anchor + "\n" + injection)
+    script.write_text(script_text, encoding="utf-8")
+    print("[Link2iOS] Shared Shell template now compiles the BOTW icon as AppIcon; generic NX2Apple icon resource removed.")
 
 
 def load_builder(engine: Path):
@@ -86,6 +150,10 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
     profile = game_profiles.by_title(int(TITLE_ID, 16))
     if profile is None or profile.get("package") != PACKAGE_VERSION:
         fail("pinned NXNative does not expose the BOTW 1.9.0 profile.")
+    if profile.get("op_mode") != "handheld":
+        fail("Link2iOS BOTW profile default did not resolve to handheld.")
+    if str(profile.get("fps_target")) != "60":
+        fail("Link2iOS BOTW profile lost its 60 FPS target.")
     version_dir = work / "extract" / PACKAGE_VERSION
     exefs = version_dir / "ExeFS"
     romfs = version_dir / "RomFS.img"
@@ -157,6 +225,9 @@ def main() -> None:
     output.mkdir(parents=True, exist_ok=True)
 
     engine = nx / "engine"
+    # Build-local customizations to the pinned checkout; no shared upstream source is committed.
+    patch_botw_handheld_profile(engine)
+    patch_shell_icon_pipeline(engine)
     builder, game_profiles, nacp, pg = load_builder(engine)
     profile, version_dir, romfs, aoc_dir, patched, prep = validate_workspace(
         prepared, work, nx, builder, game_profiles
@@ -223,7 +294,7 @@ def main() -> None:
         language = builder.game_language("en-US", False, nacp.languages(control))
         icon = version_dir / "icon.jpg"
         if not icon.is_file():
-            icon = None
+            fail(f"BOTW NACP icon is missing; cannot build the requested game-specific app icon: {icon}")
 
         framework_root = output / "frameworks"
         shutil.rmtree(framework_root, ignore_errors=True)
@@ -304,6 +375,7 @@ def main() -> None:
             "DM_XCODE_DERIVED_DATA": str(shell_derived_data),
             "FONT_PY": py,
             "STD_FONT": "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+            "DM_SHELL_ICON_SOURCE": str(icon),
         })
         print("[Link2iOS] Building the NX2Apple Shared Shell around the prepared BOTW framework...")
         run(["bash", str(engine / "dm/ios/tools/build_shell.sh"), "--build"], cwd=engine, env=shell_env)
@@ -311,6 +383,14 @@ def main() -> None:
         app = shell_derived_data / "Build" / "Products" / "Release-iphoneos" / "DmShell.app"
         if not (app / "DmShell").is_file():
             fail(f"Shared Shell app was not built: {app}")
+        if not (app / "Assets.car").is_file():
+            fail("Shared Shell did not compile the BOTW AppIcon asset catalog (Assets.car is missing).")
+        if not (shell_dir / "Gen" / "Assets.xcassets" / "AppIcon.appiconset" / "AppIcon.png").is_file():
+            fail("Shared Shell project did not stage the BOTW AppIcon PNG.")
+        shell_info = plistlib.loads((app / "Info.plist").read_bytes())
+        primary_icon = shell_info.get("CFBundleIcons", {}).get("CFBundlePrimaryIcon", {})
+        if primary_icon.get("CFBundleIconName") != "AppIcon":
+            fail("Shared Shell Info.plist does not point to the custom BOTW AppIcon.")
         entitlements = shell_dir / "Gen" / "DmShell.entitlements"
         if not entitlements.is_file():
             fail("build_shell.sh did not generate DmShell.entitlements.")
@@ -412,6 +492,13 @@ def main() -> None:
             },
             "signature": "ad-hoc; sideloading re-sign is required",
             "entitlement": "com.apple.developer.kernel.increased-memory-limit",
+            "runtime_defaults": {
+                "op_mode": "handheld",
+                "resolution_mode": "1280x720 before DM_RENDER_SCALE",
+                "fps_target": 60,
+                "adaptive_frame_step": "enabled; frames may step down if the GPU misses 60 FPS deadlines",
+            },
+            "home_screen_icon": "BOTW NACP icon.jpg compiled into DmShell.app/Assets.car as AppIcon",
         }
         (output / "build-report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print(json.dumps(report, indent=2))
