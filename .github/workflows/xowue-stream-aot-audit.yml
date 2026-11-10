@@ -1,0 +1,59 @@
+name: XOWUE Startup Stream AOT Audit
+
+on:
+  push:
+    branches:
+      - XOWUE
+    paths:
+      - ".github/workflows/xowue-stream-aot-audit.yml"
+      - "tools/probe_xowue_stream_stall.py"
+
+concurrency:
+  group: xowue-stream-aot-audit-\${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  extract-native-source:
+    name: Extract Wolverine stream-stall AOT source
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - name: Checkout XOWUE only
+        uses: actions/checkout@v4
+        with:
+          ref: XOWUE
+
+      - name: Verify branch and reconstruct pinned PPC AOT archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "XOWUE"
+          cat dist/XOWUE-AOT-source.part* > "$RUNNER_TEMP/XOWUE-AOT-source.tar.gz"
+          shasum -a 256 -c dist/SHA256SUMS
+          mkdir -p "$RUNNER_TEMP/generated"
+          tar -xzf "$RUNNER_TEMP/XOWUE-AOT-source.tar.gz" -C "$RUNNER_TEMP/generated"
+          test -s "$RUNNER_TEMP/generated/ppc/ppc_recomp.64.cpp"
+
+      - name: Extract exact native AOT function and callsite windows
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/probe_xowue_stream_stall.py
+          python3 tools/probe_xowue_stream_stall.py \
+            --ppc-dir "$RUNNER_TEMP/generated/ppc" \
+            --report "$RUNNER_TEMP/xowue-stream-stall-aot-source.json"
+          test -s "$RUNNER_TEMP/xowue-stream-stall-aot-source.json"
+          python3 -m json.tool "$RUNNER_TEMP/xowue-stream-stall-aot-source.json" >/dev/null
+
+      - name: Upload native stream-stall source evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: XOWUE-Startup-Stream-AOT-Source
+          path: \${{ runner.temp }}/xowue-stream-stall-aot-source.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
