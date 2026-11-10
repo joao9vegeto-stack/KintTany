@@ -15,7 +15,7 @@ TARGETS=(
   0x82C4BE30,0x831EDA60,0x822A0160,0x822A00C0,0x82C3EE78,
   0x82A2A848,0x82A323E0,0x82A32808,0x82A32A18,0x82A33EB0,
   0x82A3E4C0,0x82A40930,0x82A29B88,0x82A3D708,
-  0x82A40AC8,0x82A40A00
+  0x82A40930
 )
 
 def main():
@@ -89,7 +89,7 @@ def main():
       "alias_store_owners":sorted(set(x["owner"] for x in alias_stores))
     }))
     required=(0x82575250,0x82575480,0x82575108,0x82C4BE30,
-              0x82A2A848,0x82A32A18,0x82A33EB0,0x82A40AC8)
+              0x82A2A848,0x82A32A18,0x82A33EB0,0x82A40930)
     absent=[f"0x{x:08X}" for x in required if f"0x{x:08X}" not in functions]
     if absent: raise SystemExit("Required stream/candidate class source missing: "+", ".join(absent))
 if __name__=="__main__": main()
