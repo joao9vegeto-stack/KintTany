@@ -68,3 +68,8 @@ Existe apenas `.github/workflows/link2ios.yml`. Ele é acionado somente por `pus
 Após uma preparação BOTW concluída, o notebook grava `handoff.json` dentro da pasta `Link2iOS_BOTW_*` no Drive. Em uma sessão nova, execute autenticação, clone e a célula **Recuperar preparação**. Ela filtra pelo projeto, Title ID `01007EF00011E000`, versão `v1114112` e presença de workspace/RomFS/AOC. Não baixa novamente XCI/NSPs nem repete a extração, reescrita de módulos ou shader split. Pastas de Kleo2iOS são ignoradas.
 
 Durante a primeira preparação, downloads exibem bytes efetivos, tamanho conferido e tempo decorrido. O runtime mantém o workspace parcial entre tentativas, e arquivos-fonte já transferidos são reutilizados quando tamanho e checksum do Drive correspondem.
+
+
+### Validação obrigatória das duas DLCs BOTW
+
+O construtor NXNative identifica os conteúdos pelos metadados internos, não pelos nomes dos arquivos. Para BOTW, os IDs de DLC são `01007EF00011F001` e `01007EF00011F002`; o builder escreve seus RomFS como `aoc/1.img` e `aoc/2.img` (índice = title ID − base title ID − `0x1000`). O pipeline exige exatamente esses dois arquivos não vazios antes de enviar o handoff ao Actions. Uma preparação com apenas uma DLC não é aceita.
