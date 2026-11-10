@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import shutil
 import subprocess
 import tarfile
+import time
 from pathlib import Path, PurePosixPath
 
 
@@ -30,11 +32,35 @@ def download_drive_file(api, item: dict, destination: Path) -> None:
     request = api.files().get_media(fileId=item["id"], supportsAllDrives=True)
     digest = hashlib.sha256()
     total = 0
+    # Smaller ranged requests reduce the amount retransmitted when Drive drops
+    # a response. IncompleteRead is raised before MediaIoBaseDownload advances
+    # its range cursor, so retrying next_chunk() on the same downloader safely
+    # requests the exact missing range rather than restarting the whole file.
     with temp.open("wb") as stream:
-        downloader = MediaIoBaseDownload(stream, request, chunksize=64 * 1024 * 1024)
+        downloader = MediaIoBaseDownload(stream, request, chunksize=8 * 1024 * 1024)
         done = False
+        retries = 0
         while not done:
-            status, done = downloader.next_chunk()
+            try:
+                status, done = downloader.next_chunk()
+                retries = 0
+            except (http.client.IncompleteRead, TimeoutError, ConnectionError, OSError) as exc:
+                retries += 1
+                if retries > 10:
+                    raise RuntimeError(
+                        f"Drive transfer failed after {retries - 1} retries at "
+                        f"{downloader._progress}/{item['size']} bytes: {exc}"
+                    ) from exc
+                delay = min(2 ** min(retries, 5), 30)
+                print(
+                    f"[Link2iOS] Transient Drive interruption for "
+                    f"{item.get('name', item['id'])} at "
+                    f"{downloader._progress}/{item['size']} bytes; "
+                    f"retry {retries}/10 in {delay}s ({type(exc).__name__})",
+                    flush=True,
+                )
+                time.sleep(delay)
+                continue
             if status:
                 print(f"Drive: {item.get('name', item['id'])} {status.progress() * 100:.1f}%", flush=True)
     with temp.open("rb") as stream:
