@@ -340,7 +340,7 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
         if not archive.is_file():
             url = os.environ.get("LINK2IOS_DOWNLOAD_URL", "").strip()
             if not url:
-                fail("a pasta ainda não tem BOTW_Base_XCI. Cole o link assinado do 7z no campo protegido do notebook.")
+                fail("a pasta ainda não tem BOTW_Base_NSP/XCI. Cole o link assinado do 7z no campo protegido do notebook.")
             download_7z(url, archive)
         else:
             print(f"[Link2iOS] Reutilizando 7z já baixado: {archive.stat().st_size:,} bytes.")
@@ -408,7 +408,7 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
                     for item in list_children(api, drive_folder_id)
                     if item.get("mimeType") == FOLDER_MIME}
         if folder_name.lower() in occupied:
-            folder_name = f"BOTW_Base_XCI_{time.strftime('%Y%m%d_%H%M%S')}"
+            folder_name = f"{folder_name}_{time.strftime('%Y%m%d_%H%M%S')}"
         folder = create_folder(api, folder_name, drive_folder_id)
         filename = f"000_base_{safe_name(base_package.name)}"
         local_base = local_package_dir / filename
