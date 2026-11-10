@@ -50,7 +50,7 @@ diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
  static uint64_t rep_ticks(const post_op *o, seg_clk *sc, uint32_t last, uint64_t c0, uint64_t c1) {   // the time a counter report records (614.4 MHz); c0 / c1: the last segment's GPU start / end on the guest clock
      int top = o->type == 0x10; uint64_t ns = 0;
      uint32_t bi = o->seg + !top;
-@@ -2088,10 +2111,10 @@ static void vis_take(void) {
+@@ -2088,9 +2111,9 @@ static void vis_take(void) {
          // A stamp from before the submission began is a slot it did not write, the ring's last value there: an encoder with no work writes no relaxed timestamp (Ocarina of Time's
          // frame-start TIMESTAMP_TOP, alone in its submission, read 1.7 s early and its dynamic resolution kept its floor). Its segment's feedback time stands instead
          if (ns && sc->begin && ns + 500000 < sc->begin) ns = 0;
@@ -91,7 +91,7 @@ diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
              g_ts_heap = [g_dev newCounterHeapWithDescriptor:hd error:&er];
              if (g_ts_heap) g_ts_state = 1; else MLOG("[RED] counter timestamps: no counter heap (%s): every segment boundary stays a commit", er.description.UTF8String); } }
      return g_ts_state > 0;
-@@ -14640,13 +14664,14 @@ static void sub_cut(void) {
+@@ -14640,8 +14664,8 @@ static void sub_cut(void) {
      up_flush();
      uint64_t f = atomic_load(&g_cur_frame); gpu_tag_begin(f);
      uint32_t k = g_seg++; seg_clk *sc = NULL;   // reports encoded so far keep this segment's GPU times (seg_ts)
