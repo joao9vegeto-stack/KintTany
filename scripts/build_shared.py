@@ -35,14 +35,14 @@ def apply_ios_memory_profile(framework: Path, title_id: str):
         stripped = line.strip()
         key = stripped.split(None, 1)[0] if stripped and not stripped.startswith("#") else ""
         if key in values:
-            out.append(f"{key}\\t{values[key]}")
+            out.append(f"{key}\t{values[key]}")
             found.add(key)
         else:
             out.append(line)
     for key, value in values.items():
         if key not in found:
-            out.append(f"{key}\\t{value}")
-    profile.write_text("\\n".join(out) + "\\n", encoding="utf-8")
+            out.append(f"{key}\t{value}")
+    profile.write_text("\n".join(out) + "\n", encoding="utf-8")
 
     parsed = {}
     for line in out:
