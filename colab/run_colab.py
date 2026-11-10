@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -55,7 +56,7 @@ def list_children(api, parent_id: str) -> list[dict]:
             pageSize=1000,
             pageToken=token,
             orderBy="name",
-            fields="nextPageToken,files(id,name,mimeType,size,md5Checksum)",
+            fields="nextPageToken,files(id,name,mimeType,size,md5Checksum,modifiedTime)",
             supportsAllDrives=True,
             includeItemsFromAllDrives=True,
         ).execute()
@@ -89,9 +90,14 @@ def sha256_file(path: Path) -> str:
 def download_drive_file(api, item: dict, destination: Path) -> dict:
     from googleapiclient.http import MediaIoBaseDownload
     destination.parent.mkdir(parents=True, exist_ok=True)
+    expected = int(item.get("size") or 0)
+    if destination.is_file() and expected and destination.stat().st_size == expected:
+        print(f"[Link2iOS] Reusing {item.get('name', item['id'])}: {expected:,} bytes already present.")
+        return
     temp = destination.with_suffix(destination.suffix + ".part")
     request = api.files().get_media(fileId=item["id"], supportsAllDrives=True)
     digest, total = hashlib.sha256(), 0
+    started = time.monotonic()
     with temp.open("wb") as stream:
         downloader = MediaIoBaseDownload(stream, request, chunksize=CHUNK)
         done = False
@@ -108,11 +114,21 @@ def download_drive_file(api, item: dict, destination: Path) -> dict:
         temp.unlink(missing_ok=True)
         fail(f"Drive size mismatch for {item['name']}: expected {expected}, got {total}")
     temp.replace(destination)
+    elapsed = max(time.monotonic() - started, 0.001)
+    print(
+        f"[Link2iOS] Download verified: {item.get('name', item['id'])} — "
+        f"{total:,} bytes ({total / 1024**3:.2f} GiB) in {elapsed:.1f}s "
+        f"({total / elapsed / 1024**2:.1f} MiB/s).",
+        flush=True,
+    )
     return {"name": item["name"], "id": item["id"], "size": total, "sha256": digest.hexdigest()}
 
 
 def upload_drive_file(api, path: Path, parent_id: str, name: str) -> dict:
     from googleapiclient.http import MediaFileUpload
+    started = time.monotonic()
+    size = path.stat().st_size
+    print(f"[Link2iOS] Enviando {name}: {size:,} bytes ({size / 1024**3:.2f} GiB)...", flush=True)
     media = MediaFileUpload(str(path), mimetype="application/octet-stream",
                             chunksize=CHUNK, resumable=True)
     result = api.files().create(
@@ -124,6 +140,12 @@ def upload_drive_file(api, path: Path, parent_id: str, name: str) -> dict:
     size = path.stat().st_size
     if int(result.get("size", -1)) != size:
         fail(f"Drive upload size mismatch for {name}")
+    elapsed = max(time.monotonic() - started, 0.001)
+    print(
+        f"[Link2iOS] Upload verificado: {name} — {size:,} bytes em {elapsed:.1f}s "
+        f"({size / elapsed / 1024**2:.1f} MiB/s).",
+        flush=True,
+    )
     return {"name": name, "id": result["id"], "size": size, "sha256": sha256_file(path)}
 
 
@@ -189,8 +211,8 @@ def prepare(args, api=None) -> None:
     api = api or drive_api()
     request_id = str(uuid.uuid4())
     root = Path("/content/link2ios")
-    shutil.rmtree(root, ignore_errors=True)
     root.mkdir(parents=True, exist_ok=True)
+    print("[Link2iOS] Runtime workspace preserved. Existing partial work/downloads will be reused where their fingerprints match.")
 
     from source_archive import prepare_source
     source = prepare_source(api, args.drive_folder_id, root)
@@ -205,12 +227,18 @@ def prepare(args, api=None) -> None:
 
     install_linux_dependencies(root)
     nx = root / "NX2Apple"
-    subprocess.run([
-        "git", "clone", "--depth", "1", "--branch", NX2APPLE_TAG,
-        "https://github.com/LNPANDY/NX2Apple.git", str(nx),
-    ], check=True)
-    subprocess.run([sys.executable, str(nx / "tools" / "engine.py"), "sync"],
-                   cwd=nx, check=True)
+    pinned_file = nx / ".upstream-ref"
+    if not nx.is_dir() or not pinned_file.is_file() or pinned_file.read_text(encoding="utf-8").strip() != ENGINE_PIN:
+        shutil.rmtree(nx, ignore_errors=True)
+        print(f"[Link2iOS] Clonando NX2Apple {NX2APPLE_TAG} e fixando NXNative {ENGINE_PIN}...")
+        subprocess.run([
+            "git", "clone", "--depth", "1", "--branch", NX2APPLE_TAG,
+            "https://github.com/LNPANDY/NX2Apple.git", str(nx),
+        ], check=True)
+        subprocess.run([sys.executable, str(nx / "tools" / "engine.py"), "sync"],
+                       cwd=nx, check=True)
+    else:
+        print(f"[Link2iOS] Reutilizando NX2Apple/NXNative já fixado em {ENGINE_PIN}.")
     pin = (nx / ".upstream-ref").read_text(encoding="utf-8").strip()
     if pin != ENGINE_PIN:
         fail(f"NX2Apple release resolved to engine {pin}, expected {ENGINE_PIN}.")
@@ -259,6 +287,8 @@ def prepare(args, api=None) -> None:
         "package_version": PACKAGE_VERSION,
         "nx2apple_tag": NX2APPLE_TAG,
         "engine_pin": ENGINE_PIN,
+        "drive_output_folder_id": output_id,
+        "drive_output_folder_url": f"https://drive.google.com/drive/folders/{output_id}",
         "work_archive": archive_record,
         "game_data": {
             "folder_id": game_id,
@@ -272,7 +302,9 @@ def prepare(args, api=None) -> None:
     }
     handoff_path = Path("/content/link2ios-handoff.json")
     handoff_path.write_text(json.dumps(handoff, indent=2) + "\n", encoding="utf-8")
+    handoff_manifest = upload_drive_file(api, handoff_path, output_id, "handoff.json")
     print("\n[Link2iOS] Linux preparation and Drive uploads completed.")
+    print("Recovery manifest uploaded:", handoff_manifest["id"])
     print("Extracted source folder:", f"https://drive.google.com/drive/folders/{source['source_folder_id']}")
     print("Game data folder:", handoff["game_data"]["folder_url"])
     print("RomFS:", f"{romfs_record['size']:,} bytes; SHA-256 {romfs_record['sha256']}")
@@ -280,6 +312,69 @@ def prepare(args, api=None) -> None:
     print("Build workspace:", f"{archive_record['size']:,} bytes; SHA-256 {archive_record['sha256']}")
     print("Handoff file:", handoff_path)
     print("Next: execute the notebook's final cell to commit handoff.json and trigger Link2iOS Actions.")
+
+
+def recover(args, api=None) -> dict | None:
+    """Restore a completed BOTW handoff manifest from Drive without downloading/rebuilding game data."""
+    from googleapiclient.http import MediaIoBaseDownload
+
+    api = api or drive_api()
+    root_items = list_children(api, args.drive_folder_id)
+    run_folders = [
+        item for item in root_items
+        if item.get("mimeType") == "application/vnd.google-apps.folder"
+        and item.get("name", "").startswith("Link2iOS_BOTW_")
+    ]
+    run_folders.sort(key=lambda item: item.get("modifiedTime", ""), reverse=True)
+
+    for folder in run_folders:
+        manifest = next((
+            item for item in list_children(api, folder["id"])
+            if item.get("mimeType") != "application/vnd.google-apps.folder"
+            and item.get("name", "").lower() == "handoff.json"
+        ), None)
+        if manifest is None:
+            continue
+        destination = Path("/content/link2ios-handoff.json")
+        temp = destination.with_suffix(".json.part")
+        request = api.files().get_media(fileId=manifest["id"], supportsAllDrives=True)
+        with temp.open("wb") as output:
+            downloader = MediaIoBaseDownload(output, request, chunksize=1024 * 1024)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+        temp.replace(destination)
+        handoff = json.loads(destination.read_text(encoding="utf-8"))
+        if handoff.get("project") != "Link2iOS" or handoff.get("branch") != BRANCH:
+            destination.unlink(missing_ok=True)
+            continue
+        if handoff.get("title_id") != TITLE_ID or handoff.get("package_version") != PACKAGE_VERSION:
+            destination.unlink(missing_ok=True)
+            continue
+        aoc = handoff.get("game_data", {}).get("aoc", [])
+        prep_aoc = handoff.get("prepared", {}).get("aoc_images", [])
+        if not handoff.get("work_archive", {}).get("id"):
+            destination.unlink(missing_ok=True)
+            continue
+        if not handoff.get("game_data", {}).get("romfs", {}).get("id"):
+            destination.unlink(missing_ok=True)
+            continue
+        if not aoc or len(aoc) != len(prep_aoc):
+            destination.unlink(missing_ok=True)
+            continue
+        print("[Link2iOS] PREPARAÇÃO BOTW EXISTENTE RECUPERADA.")
+        print("Request:", handoff.get("request_id"))
+        print("Drive run:", handoff.get("drive_output_folder_url", folder.get("webViewLink", folder["id"])))
+        print("Workspace archive:", handoff["work_archive"].get("size"), "bytes")
+        print("RomFS:", handoff["game_data"]["romfs"].get("size"), "bytes")
+        print("AOC images:", len(aoc))
+        print("Nenhum XCI/NSP foi baixado; nenhuma extração, rewrite ou shader split foi executado.")
+        print("Handoff local:", destination)
+        return handoff
+
+    print("[Link2iOS] Nenhuma preparação BOTW 1.9.0 completa foi encontrada no Drive.")
+    print("[Link2iOS] A recuperação ignorou as pastas e arquivos de Kleo2iOS/ outros projetos.")
+    return None
 
 
 def dispatch(args) -> None:
@@ -327,6 +422,9 @@ def main() -> None:
     p_prepare = sub.add_parser("prepare", help="download XCI/NSP packages, run Linux stages and upload outputs to Drive")
     p_prepare.add_argument("--drive-folder-id", required=True)
     p_prepare.set_defaults(func=prepare)
+    p_recover = sub.add_parser("recover", help="restore the latest completed BOTW handoff from Drive without rebuilding")
+    p_recover.add_argument("--drive-folder-id", required=True)
+    p_recover.set_defaults(func=recover)
     p_dispatch = sub.add_parser("dispatch", help="commit handoff.json and trigger the Link2iOS workflow")
     p_dispatch.add_argument("--handoff", type=Path, default=Path("/content/link2ios-handoff.json"))
     p_dispatch.set_defaults(func=dispatch)
