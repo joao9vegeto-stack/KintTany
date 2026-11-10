@@ -6,7 +6,7 @@ The Colab notebook is preconfigured for Drive folder `19HXEJCK-26NfBVKeUP3wqFxMF
 
 For the first run, the notebook collects the signed 7z URL through a masked prompt. The URL is not committed to this public repository, echoed, or copied to Drive. Colab downloads the archive to temporary runtime storage, validates the 7z signature and archive paths, tests it, and extracts it with 7-Zip. It requires exactly one XCI with the XCI `HEAD` magic at offset `0x100`, then uploads only that XCI to a generated `BOTW_Base_XCI/` folder in Drive. The original 7z and extracted staging directory are removed from the Colab runtime.
 
-Colab downloads `prod.keys` and the three NSPs (one update and two DLCs) from the Drive root into temporary runtime storage. The key is used to read the XCI/NSP content metadata and decrypt NCAs; all four runtime inputs are removed after Linux preparation. The extracted base XCI remains in `BOTW_Base_XCI/`; subsequent runs reuse it without downloading the 7z again.
+Colab downloads `prod.keys` and the three NSPs (one update and two DLCs) from the Drive root into temporary runtime storage. The key is used to read the XCI/NSP content metadata and decrypt NCAs; the XCI, three NSPs and key are removed from the Colab runtime after Linux preparation. The extracted base XCI remains in `BOTW_Base_XCI/`; subsequent runs reuse it without downloading the 7z again.
 
 The input is BOTW base XCI + update 1.9.0 + `dlc1.nsp` + `dlc2.nsp`, Title ID `01007EF00011E000`, package `v1114112`. The pinned NXNative builder supports XCI directly and scans it together with the update/DLC NSPs; no XCI-to-NSP conversion is performed. Both DLC NSPs are required, and NX2Apple must produce AOC RomFS images or preparation fails.
 
@@ -21,7 +21,7 @@ The input is BOTW base XCI + update 1.9.0 + `dlc1.nsp` + `dlc2.nsp`, Title ID `0
 
 Colab invokes the pinned XCI/NSP package builder and stops exactly before `dm/ios/tools/build_ipa.sh`. Linux does not compile Metal, run Xcode, generate PSO archives, use Mac-host runtime shader capture, or emulate the game.
 
-The work archive excludes the large `RomFS.img`, DLC AOC images, original NSPs, `prod.keys`, cached NCA inputs, Linux tools and temporary files. It retains rewritten modules, extracted ExeFS/control data, the NVN shader package, profile tables, fingerprints, and the exact shader-package content key and Metal chain.
+The work archive excludes the large `RomFS.img`, DLC AOC images, original XCI/NSP packages, `prod.keys`, cached NCA inputs, Linux tools and temporary files. It retains rewritten modules, extracted ExeFS/control data, the NVN shader package, profile tables, fingerprints, and the exact shader-package content key and Metal chain.
 
 Colab uploads `romfs.img` to Drive independently. It uploads the AOC images produced from both root-level DLC NSPs; an empty AOC result is rejected. GitHub Actions restores the workspace and RomFS, plus AOC images when present. NSPs and `prod.keys` never enter the Actions runner. The `RomFS.img.id` sidecar produced by NX2Apple's image-identity patch remains beside the restored image.
 
@@ -36,6 +36,6 @@ The final IPA is inspected to reject `romfs.img`, AOC paths, NSPs, `prod.keys` a
 - Colab Secret: `LINK2IOS_GOOGLE_SERVICE_ACCOUNT_JSON`, Drive access to the shared folder.
 - GitHub Actions secret: `GOOGLE_SERVICE_ACCOUNT_JSON`, Drive read-only.
 - Fine-grained PAT: used only by the last Colab cell to commit `handoff.json`; repository Contents read/write only.
-- The signed RAR URL is supplied at runtime and is never stored in Git.
+- The signed 7z URL is supplied at runtime and is never stored in Git.
 
 Neither credential, `prod.keys` nor game data is stored in Git.
