@@ -132,7 +132,6 @@ def main() -> None:
         if not framework_root.startswith(app_root + "/Frameworks/"):
             raise SystemExit(f"Unexpected framework location: {framework_root}")
         manifest = json.loads(zf.read(manifest_name))
-        manifest = json.loads(zf.read(manifest_name))
         executable_name = str(manifest.get("framework_executable", ""))
         required = [
             app_root + "/DmShell",
