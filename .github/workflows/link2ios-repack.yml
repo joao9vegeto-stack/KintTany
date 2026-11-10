@@ -30,6 +30,11 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
+      - name: Select Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Validate runner and install XcodeGen
         shell: bash
         run: |
@@ -38,6 +43,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -d "$DEVELOPER_DIR"
           xcodebuild -version
+          python -m pip install --upgrade pip
+          python -m pip install fonttools
           brew list --formula xcodegen >/dev/null 2>&1 || brew install xcodegen
           xcrun --sdk iphoneos --show-sdk-version
 
