@@ -2,13 +2,13 @@
 
 ## Fixed source input
 
-The Colab notebook is preconfigured for Drive folder `19HXEJCK-26NfBVKeUP3wqFxMFpoF3ykm`. `prod.keys` stays at the root of that folder. No manual `base/`, `update/`, or `dlc/` directories are required.
+The Colab notebook is preconfigured for Drive folder `19HXEJCK-26NfBVKeUP3wqFxMFpoF3ykm`. `prod.keys`, `dlc1.nsp` and `dlc2.nsp` stay at the root of that folder. No manual `base/`, `update/`, or `dlc/` directories are required.
 
 For the first run, the notebook collects the signed RAR URL through a masked prompt. The URL is not committed to this public repository, echoed, or copied to Drive. Colab downloads the archive to temporary runtime storage, checks the RAR signature and archive paths, tests it, and extracts it with 7-Zip. It scans recursively for NSP files and uploads only those extracted NSPs to a generated `BOTW_Extracted/` folder in Drive. The original RAR and the extracted staging directory are removed from the Colab runtime.
 
 Colab downloads `prod.keys` from the Drive root into temporary runtime storage. The key is used for NSP decryption and removed after Linux preparation. The extracted NSPs remain in `BOTW_Extracted/`; subsequent runs reuse them without downloading the RAR again.
 
-The input is BOTW base game + update 1.9.0, Title ID `01007EF00011E000`, package `v1114112`. DLC is optional. When no DLC NSP is supplied, the pipeline records an empty AOC list, does not upload an AOC folder, sets the Route C `AOC` environment variable to an empty string, and continues with the base game + update.
+The input is BOTW base game + update 1.9.0 in the RAR, Title ID `01007EF00011E000`, package `v1114112`, plus `dlc1.nsp` and `dlc2.nsp` from the Drive root. Both DLC NSPs are required. Colab downloads them into the temporary NSP input directory alongside the extracted base/update NSPs; NX2Apple must produce AOC RomFS images or preparation fails.
 
 ## Upstream pins
 - NX2Apple: `v1.3.1-rc2`
@@ -23,7 +23,7 @@ Colab invokes the pinned NSP builder and stops exactly before `dm/ios/tools/buil
 
 The work archive excludes the large `RomFS.img`, DLC AOC images, original NSPs, `prod.keys`, cached NCA inputs, Linux tools and temporary files. It retains rewritten modules, extracted ExeFS/control data, the NVN shader package, profile tables, fingerprints, and the exact shader-package content key and Metal chain.
 
-Colab uploads `romfs.img` to Drive independently. It uploads `aoc/<index>.img` only if AOC images exist. GitHub Actions restores the workspace and RomFS, plus AOC images when present. NSPs and `prod.keys` never enter the Actions runner. The `RomFS.img.id` sidecar produced by NX2Apple's image-identity patch remains beside the restored image.
+Colab uploads `romfs.img` to Drive independently. It uploads the AOC images produced from both root-level DLC NSPs; an empty AOC result is rejected. GitHub Actions restores the workspace and RomFS, plus AOC images when present. NSPs and `prod.keys` never enter the Actions runner. The `RomFS.img.id` sidecar produced by NX2Apple's image-identity patch remains beside the restored image.
 
 ## IPA contract
 
