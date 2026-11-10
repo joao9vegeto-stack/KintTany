@@ -138,16 +138,20 @@ def run_preparation(args) -> dict:
         app, family = original_scan_nsps(nsp_dir, contents_of, want)
         if app == int(TITLE_ID, 16):
             base_version = int(family.get("base_version", 0))
-            update_versions = sorted({int(version) for version, _ in family.get("updates", [])})
+            updates = [(int(version), Path(path).name) for version, path in family.get("updates", [])]
+            update_versions = sorted({version for version, _ in updates})
             required_version = int(PACKAGE_VERSION.removeprefix("v"))
             if required_version not in update_versions:
-                available = [f"v{base_version}", *(f"v{version}" for version in update_versions)]
+                available = [
+                    f"base v{base_version}",
+                    *(f"update v{version} ({name})" for version, name in updates),
+                ]
                 raise module.BuildError(
                     f"BOTW profile requires update {PACKAGE_VERSION} (1.9.0), "
-                    f"but the supplied base/update packages contain: {', '.join(available)}. "
+                    f"but NXNative read: {', '.join(available)}. "
                     "The current update.nsp is not the profile's 1.9.0 update. "
                     "Replace only update.nsp in the shared Drive folder with the correct "
-                    "1.9.0 package; the base NSP and DLC cache can be reused."
+                    "1.9.0 package; the base NSP and both DLC caches can be reused."
                 )
         return app, family
 
