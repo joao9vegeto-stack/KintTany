@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch a BOTW base-game 7z archive, extract its XCI, and stage update/DLC NSPs."""
+"""Fetch a BOTW base-game 7z archive, extract its XCI or NSP, and stage update/DLC NSPs."""
 from __future__ import annotations
 
 import hashlib
@@ -39,7 +39,7 @@ def list_children(api, parent_id: str) -> list[dict]:
 
 def safe_name(name: str) -> str:
     name = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(name).name).strip("._")
-    return name or "game.xci"
+    return name or "game.nsp"
 
 
 def create_folder(api, name: str, parent_id: str) -> dict:
@@ -125,6 +125,27 @@ def validate_xci(path: Path) -> None:
         fail(f"{path.name} não tem o cabeçalho XCI esperado (HEAD no offset 0x100).")
 
 
+def validate_nsp(path: Path) -> None:
+    if not path.is_file() or path.stat().st_size < 4:
+        fail(f"NSP vazio ou truncado: {path.name}")
+    with path.open("rb") as stream:
+        magic = stream.read(4)
+    if magic != b"PFS0":
+        fail(f"{path.name} não tem o cabeçalho NSP esperado (PFS0 no offset 0).")
+
+
+def validate_base_package(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix == ".xci":
+        validate_xci(path)
+        return "XCI"
+    if suffix == ".nsp":
+        validate_nsp(path)
+        return "NSP"
+    fail(f"formato de pacote base não suportado: {path.name}")
+    raise AssertionError("unreachable")
+
+
 def extract_7z(archive: Path, destination: Path, sevenzip: str) -> None:
     listing = subprocess.run(
         [sevenzip, "l", "-slt", str(archive)],
@@ -151,7 +172,7 @@ def extract_7z(archive: Path, destination: Path, sevenzip: str) -> None:
         fail("o 7-Zip detectou arquivo danificado, incompleto ou protegido por senha.")
     shutil.rmtree(destination, ignore_errors=True)
     destination.mkdir(parents=True, exist_ok=True)
-    print("[Link2iOS] Extraindo o XCI do 7z; esta etapa depende do tamanho e da velocidade do armazenamento...")
+    print("[Link2iOS] Extraindo o pacote base do 7z; esta etapa depende do tamanho e da velocidade do armazenamento...")
     extracted = subprocess.run(
         [sevenzip, "x", str(archive), f"-o{destination}", "-y"],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -229,26 +250,26 @@ def upload_drive_file(api, path: Path, parent_id: str, name: str) -> dict:
     size = path.stat().st_size
     if int(item.get("size", -1)) != size:
         fail(f"tamanho incorreto após enviar {name} ao Drive.")
-    print(f"[Link2iOS] XCI base salvo no Drive: {name} ({size:,} bytes)")
+    print(f"[Link2iOS] Pacote base salvo no Drive: {name} ({size:,} bytes)")
     return {"id": item["id"], "name": item["name"], "size": size}
 
 
 def existing_base_folder(api, root_id: str) -> tuple[dict, dict] | None:
     folders = [item for item in list_children(api, root_id)
                if item.get("mimeType") == FOLDER_MIME
-               and item.get("name", "").lower().startswith("botw_base_xci")]
+               and item.get("name", "").lower().startswith(("botw_base_nsp", "botw_base_xci"))]
     folders.sort(key=lambda item: item.get("modifiedTime", ""), reverse=True)
     for folder in folders:
-        xcis = [item for item in list_children(api, folder["id"])
-                if item.get("mimeType") != FOLDER_MIME
-                and item.get("name", "").lower().endswith(".xci")]
-        if len(xcis) == 1:
-            return folder, xcis[0]
+        packages = [item for item in list_children(api, folder["id"])
+                    if item.get("mimeType") != FOLDER_MIME
+                    and item.get("name", "").lower().endswith((".nsp", ".xci"))]
+        if len(packages) == 1:
+            return folder, packages[0]
     return None
 
 
 def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
-    """Reuse the extracted base XCI and cached package downloads across notebook retries."""
+    """Reuse the extracted base XCI/NSP and cached package downloads across notebook retries."""
     local_package_dir = runtime_root / "input-packages"
     local_keys = runtime_root / "keys" / "prod.keys"
     # Keep already downloaded inputs in this Colab runtime. download_drive_file
@@ -295,15 +316,17 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
     existing = existing_base_folder(api, drive_folder_id)
     if existing:
         folder, item = existing
-        local_xci = local_package_dir / f"000_base_{safe_name(item['name'])}"
-        download_drive_file(api, item, local_xci)
-        validate_xci(local_xci)
-        print(f"[Link2iOS] Reutilizando XCI base do Drive: {folder['name']}/{item['name']}")
+        local_base = local_package_dir / f"000_base_{safe_name(item['name'])}"
+        download_drive_file(api, item, local_base)
+        base_type = validate_base_package(local_base)
+        print(f"[Link2iOS] Reutilizando pacote base {base_type} do Drive: {folder['name']}/{item['name']}")
         add_root_packages()
         return {
             "package_dir": str(local_package_dir), "keys_path": str(local_keys),
             "source_folder_id": folder["id"], "source_folder_name": folder["name"],
-            "package_count": 4, "xci_count": 1, "nsp_count": 3,
+            "package_count": 4, "base_type": base_type,
+            "xci_count": int(base_type == "XCI"), "base_nsp_count": int(base_type == "NSP"),
+            "nsp_count": 3 + int(base_type == "NSP"),
             "update_nsp_count": 1, "dlc_nsp_count": 2, "source_reused": True,
         }
 
@@ -329,9 +352,9 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
         extracted_files = sorted(path for path in extracted.rglob("*") if path.is_file())
         xcis = [path for path in extracted_files if path.suffix.lower() == ".xci"]
 
-        # Large Switch dumps are sometimes stored as contiguous split-XCI parts
-        # (.xc0, .xc1, ...). 7-Zip extracts those as several files, not one .xci.
-        # Reassemble only a single, unambiguous, gap-free sequence.
+        # Support split XCI archives as well as a single base NSP. The HTML/readme
+        # sidecar files from download sites are ignored; package metadata is
+        # validated by NXNative later using prod.keys and the requested Title ID.
         if not xcis:
             split_groups: dict[str, list[tuple[int, Path]]] = {}
             for path in extracted_files:
@@ -347,7 +370,7 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
                 if len(parts) >= 2 and indices == list(range(indices[0], indices[0] + len(indices))):
                     valid_groups.append((group_name, parts))
             if len(valid_groups) == 1:
-                group_name, parts = valid_groups[0]
+                _, parts = valid_groups[0]
                 source_xci = extracted / (parts[0][1].stem + ".xci")
                 print(
                     f"[Link2iOS] XCI dividido detectado: {len(parts)} partes "
@@ -363,41 +386,48 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
             elif len(valid_groups) > 1:
                 fail("o 7z contém mais de um conjunto XCI dividido; não é possível escolher a base com segurança.")
 
-        if len(xcis) != 1:
+        nsps = [path for path in extracted_files if path.suffix.lower() == ".nsp"]
+        if len(xcis) == 1 and not nsps:
+            base_package = xcis[0]
+        elif not xcis and len(nsps) == 1:
+            base_package = nsps[0]
+        else:
             listing = "; ".join(
                 f"{path.relative_to(extracted).as_posix()} ({path.stat().st_size:,} bytes)"
                 for path in extracted_files
             )
             fail(
-                f"o 7z precisa conter um XCI único ou um conjunto .xc0/.xc1/... contínuo; "
-                f"encontrados {len(xcis)} XCI(s). Arquivos extraídos: {listing or '(nenhum)'}."
+                "o 7z precisa conter exatamente um pacote base (um XCI ou um NSP); "
+                f"encontrados {len(xcis)} XCI(s) e {len(nsps)} NSP(s). "
+                f"Arquivos extraídos: {listing or '(nenhum)'}."
             )
-        source_xci = xcis[0]
-        validate_xci(source_xci)
+        base_type = validate_base_package(base_package)
 
-        folder_name = "BOTW_Base_XCI"
+        folder_name = "BOTW_Base_NSP" if base_type == "NSP" else "BOTW_Base_XCI"
         occupied = {item.get("name", "").lower()
                     for item in list_children(api, drive_folder_id)
                     if item.get("mimeType") == FOLDER_MIME}
         if folder_name.lower() in occupied:
             folder_name = f"BOTW_Base_XCI_{time.strftime('%Y%m%d_%H%M%S')}"
         folder = create_folder(api, folder_name, drive_folder_id)
-        filename = f"000_base_{safe_name(source_xci.name)}"
-        local_xci = local_package_dir / filename
-        shutil.copy2(source_xci, local_xci)
-        upload_drive_file(api, local_xci, folder["id"], filename)
+        filename = f"000_base_{safe_name(base_package.name)}"
+        local_base = local_package_dir / filename
+        shutil.copy2(base_package, local_base)
+        upload_drive_file(api, local_base, folder["id"], filename)
         add_root_packages()
-        print("[Link2iOS] XCI base armazenado no Drive; update e DLC1/DLC2 são lidos diretamente da raiz.")
+        print(f"[Link2iOS] Pacote base {base_type} armazenado no Drive; update e DLC1/DLC2 são lidos diretamente da raiz.")
         archive.unlink(missing_ok=True)
         shutil.rmtree(extracted, ignore_errors=True)
         shutil.rmtree(temp_root, ignore_errors=True)
         return {
             "package_dir": str(local_package_dir), "keys_path": str(local_keys),
             "source_folder_id": folder["id"], "source_folder_name": folder_name,
-            "package_count": 4, "xci_count": 1, "nsp_count": 3,
+            "package_count": 4, "base_type": base_type,
+            "xci_count": int(base_type == "XCI"), "base_nsp_count": int(base_type == "NSP"),
+            "nsp_count": 3 + int(base_type == "NSP"),
             "update_nsp_count": 1, "dlc_nsp_count": 2, "source_reused": False,
         }
     except BaseException:
         # Keep the archive and extracted payload intact so the next Colab run can retry.
-        print("[Link2iOS] Falha na validação/preparação do XCI; 7z e extração foram preservados em:", temp_root)
+        print("[Link2iOS] Falha na validação/preparação do pacote base; 7z e extração foram preservados em:", temp_root)
         raise
