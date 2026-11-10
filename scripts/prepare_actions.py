@@ -146,6 +146,18 @@ def main() -> None:
     romfs_path = work.joinpath(*romfs_rel.parts)
     romfs_id_path = work.joinpath(*romfs_id_rel.parts)
     game_data = handoff.get("game_data") or {}
+    expected_aoc = {"1.img", "2.img"}
+    handoff_aoc = game_data.get("aoc", [])
+    manifest_aoc = prep.get("aoc_images", [])
+    if {Path(item.get("name", "")).name for item in handoff_aoc} != expected_aoc:
+        fail("Drive handoff must contain both BOTW AOC images 1.img and 2.img.")
+    if {Path(item.get("name", "")).name for item in manifest_aoc} != expected_aoc:
+        fail("Colab workspace manifest must record both BOTW AOC images 1.img and 2.img.")
+    if prep.get("aoc_title_ids") != {
+        "1.img": "01007EF00011F001",
+        "2.img": "01007EF00011F002",
+    }:
+        fail("Colab manifest AOC title IDs do not match BOTW DLC Pack 1 and Pack 2.")
     if game_data.get("romfs_relative_path") != prep["romfs_relative_path"]:
         fail("Drive handoff RomFS path differs from Colab preparation.")
     if not romfs_id_path.is_file():
@@ -161,6 +173,8 @@ def main() -> None:
             fail(f"unexpected AOC image name: {filename}")
         download_drive_file(api, item, aoc_dir / filename)
     restored_aoc = sorted(aoc_dir.glob("*.img"))
+    if {path.name for path in restored_aoc} != expected_aoc:
+        fail("restored AOC files are not exactly 1.img and 2.img.")
     if len(restored_aoc) != len(game_data.get("aoc", [])):
         fail("restored AOC count does not match the Drive handoff.")
     if len(restored_aoc) != len(prep.get("aoc_images", [])):
@@ -180,6 +194,7 @@ def main() -> None:
         "romfs_id_path": str(romfs_id_path),
         "aoc_dir": str(aoc_dir),
         "aoc_count": len(restored_aoc),
+        "aoc_images": sorted(path.name for path in restored_aoc),
         "modules": prep["modules"],
         "shader_package_key": prep["shader_package_key"],
         "shader_chain": prep["shader_chain"],
