@@ -273,8 +273,23 @@ def main() -> int:
             ("main", 0x4A9918, "object setup helper 3 (extended through all fallback branches)", 0x180, 0x900),
             ("main", 0x453B10, "object setup helper 4", 0x100, 0x500),
             ("main", 0x288EA0, "guest allocator entry", 0x100, 0x240),
-            ("sdk", 0x702920, "CRASH PC", 0x40, 0x40),
-            ("main", 0x48A5D8, "LR return address", 0x40, 0x28),
+            # Current device crash from log.txt (5 GiB guest reservation):
+            # SIGSEGV addr=0xc8, PC=main+0x40115c, LR=main+0x401150.
+            # This is a different code path from the earlier null-memcpy crash.
+            ("main", 0x40115C, "CURRENT CRASH PC (SIGSEGV addr=0xc8)", 0x180, 0x240),
+            ("main", 0x401150, "CURRENT CRASH LR / likely callsite", 0x180, 0x100),
+            ("main", 0x3FEFFC, "CURRENT backtrace frame 0", 0x180, 0x240),
+            ("main", 0x3D3104, "CURRENT backtrace frame 1", 0x180, 0x240),
+            ("main", 0x3C7D10, "CURRENT backtrace frame 2", 0x180, 0x240),
+            ("main", 0x6908C0, "CURRENT backtrace frame 3", 0x180, 0x240),
+            ("main", 0x828C2C, "CURRENT backtrace frame 4", 0x180, 0x240),
+            ("main", 0x5FE9CC, "CURRENT backtrace frame 5", 0x180, 0x240),
+            ("main", 0x158B680, "CURRENT backtrace frame 6", 0x180, 0x240),
+            ("sdk", 0x149CD0, "CURRENT backtrace SDK frame 7", 0x80, 0x100),
+            ("sdk", 0x150818, "CURRENT backtrace SDK frame 8", 0x80, 0x100),
+            # Previous run's null memcpy crash is retained for comparison.
+            ("sdk", 0x702920, "PREVIOUS CRASH PC", 0x40, 0x40),
+            ("main", 0x48A5D8, "PREVIOUS LR return address", 0x40, 0x28),
             ("main", 0x48909C, "backtrace return address", 0x20, 0x10),
             ("main", 0x4811C4, "backtrace return address", 0x10, 0x08),
             ("main", 0x47E260, "backtrace return address", 0x10, 0x08),
