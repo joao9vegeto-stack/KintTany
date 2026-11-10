@@ -196,15 +196,44 @@ def install_linux_dependencies(root: Path) -> None:
         "lz4", "capstone>=5,<6", "fonttools", "zbic", "backports.zstd",
         "google-api-python-client", "google-auth", "requests",
     ], check=True)
-    dotnet_root = Path("/content/dotnet")
-    dotnet_root.mkdir(exist_ok=True)
+    dotnet_root = Path("/content/dotnet").resolve()
+    dotnet_root.mkdir(parents=True, exist_ok=True)
     install_script = root / "dotnet-install.sh"
     subprocess.run(["curl", "-fsSL", "https://dot.net/v1/dotnet-install.sh",
                     "-o", str(install_script)], check=True)
     subprocess.run(["bash", str(install_script), "--channel", "10.0",
                     "--install-dir", str(dotnet_root)], check=True)
-    os.environ["DOTNET_ROOT"] = str(dotnet_root)
-    os.environ["PATH"] = str(dotnet_root) + os.pathsep + os.environ["PATH"]
+
+    # nx_extract is a framework-dependent x64 apphost. Apphosts do not resolve
+    # their runtime from PATH; on Linux x64 they prefer DOTNET_ROOT_X64 over
+    # DOTNET_ROOT. Set both roots explicitly before NXNative snapshots tool_env().
+    dotnet = dotnet_root / "dotnet"
+    if not dotnet.is_file():
+        fail(f".NET 10 install completed without the host executable: {dotnet}")
+    runtime_env = os.environ.copy()
+    runtime_env.update({
+        "DOTNET_ROOT": str(dotnet_root),
+        "DOTNET_ROOT_X64": str(dotnet_root),
+        "DOTNET_HOST_PATH": str(dotnet),
+        "PATH": str(dotnet_root) + os.pathsep + runtime_env.get("PATH", ""),
+    })
+    runtimes = subprocess.run(
+        [str(dotnet), "--list-runtimes"], env=runtime_env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=True,
+    ).stdout
+    if not re.search(r"^Microsoft\\.NETCore\\.App\\s+10\\.", runtimes, re.MULTILINE):
+        fail(
+            ".NET SDK foi instalado, mas o runtime Microsoft.NETCore.App 10.x "
+            f"não aparece em dotnet --list-runtimes. Saída: {runtimes[-2000:]}"
+        )
+    os.environ.update({
+        "DOTNET_ROOT": str(dotnet_root),
+        "DOTNET_ROOT_X64": str(dotnet_root),
+        "DOTNET_HOST_PATH": str(dotnet),
+        "PATH": runtime_env["PATH"],
+    })
+    print("[Link2iOS] .NET 10 validado para apphost x64:")
+    print(runtimes.strip())
 
 
 def prepare(args, api=None) -> None:
