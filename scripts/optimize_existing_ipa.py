@@ -290,6 +290,26 @@ def main() -> None:
     run(["git", "apply", "--check", patch], cwd=engine)
     run(["git", "apply", patch], cwd=engine)
 
+    # BOTW's current profile uses full draw-pass barriers. Use NVN's game-barrier
+    # ordering: the next pass may overlap its vertex stage with the previous
+    # pass's fragments, while explicit NVN barriers and copy/compute dependencies
+    # still serialize. This does not change shaders, render scale or visual assets.
+    # Keep this BOTW-only in the pinned tree and verify the generated compile-time flag.
+    game_profile_path = engine / "dm/games" / TITLE_ID / "game.tsv"
+    if not game_profile_path.is_file():
+        fail("pinned NX2Apple tree lacks the BOTW game profile")
+    profile_lines = game_profile_path.read_text(encoding="utf-8").splitlines()
+    dbr_rows = [i for i, line in enumerate(profile_lines) if line.split("\\t", 1)[0] == "draw_barriers"]
+    if len(dbr_rows) > 1:
+        fail("BOTW game profile has duplicate draw_barriers keys")
+    if dbr_rows:
+        profile_lines[dbr_rows[0]] = "draw_barriers\\tgame"
+    else:
+        profile_lines += ["", "# iOS GPU overlap trial: keep NVN's explicit game barriers; overlap independent pass stages",
+                          "draw_barriers\\tgame"]
+    game_profile_path.write_text("\\n".join(profile_lines) + "\\n", encoding="utf-8")
+    log("BOTW GPU ordering: draw_barriers=game (explicit game barriers retained; no render-scale or shader changes)")
+
     # Recreate the host's normal iOS compile settings from its Makefile, without touching game assets.
     cfg = gen / "dm.xcconfig"
     p = subprocess.run([sys.executable, str(ios / "tools/gen_build.py"), str(host), str(gen)],
