@@ -215,7 +215,8 @@ def main() -> None:
     rec_source = engine / "dm/gfx/nvn/nvn_rec.h"
     mtl_source = engine / "dm/gfx/nvn/nvn_mtl.m"
     fstep_source = engine / "dm/gfx/nvn/nvn_fstep.h"
-    for required in (game_profile_source, settings_source, rec_source, mtl_source, fstep_source):
+    hle_nvn_source = engine / "dm/gfx/nvn/hle_nvn.c"
+    for required in (game_profile_source, settings_source, rec_source, mtl_source, fstep_source, hle_nvn_source):
         if not required.is_file():
             fail("missing source required for the BOTW frame-pacing audit: " + str(required))
     game_rows = game_profile_source.read_text(encoding="utf-8").splitlines()
@@ -232,9 +233,15 @@ def main() -> None:
     if not all(token in mtl_text for token in ("rec_own_begin", "rec_own_push", "post_complete", "g_post_mu")):
         fail("the snapshot/encode path or corrected fast-wake completion code is missing from the pinned Metal source")
     fstep_text = fstep_source.read_text(encoding="utf-8")
-    if "DM_FPS_HOLD" not in fstep_text or "fstep_hold" not in fstep_text or "!fstep_hold()" not in fstep_text:
-        fail("the host frame-hold controller could not be audited")
-    log("present/encode audit passed: snapshot copy uses encode-thread own-record path; corrected PR #158 fast wake is present")
+    hle_nvn_text = hle_nvn_source.read_text(encoding="utf-8")
+    if "nvn_fstep_next" not in fstep_text or "FSTEP_LATE" not in fstep_text:
+        fail("the shared frame-step algorithm could not be audited")
+    if not all(token in hle_nvn_text for token in (
+        "static int fstep_hold(void)", "DM_FPS_HOLD", "!fstep_hold()",
+        "static int fps_step_cap(void)", "dm_movie_playing()", "thermal ? 30 : 60"
+    )):
+        fail("the host frame-hold controller or independent thermal/movie caps could not be audited")
+    log("present/encode and frame-step audit passed: own-record snapshot path, optional hold switch, and independent thermal/movie caps are present")
 
     output.mkdir(parents=True, exist_ok=True)
     shutil.rmtree(work, ignore_errors=True)
@@ -393,7 +400,26 @@ def main() -> None:
     # Remove any carried override and keep the pinned upstream default.
     for profile_path in (game_profile_path, runtime_profile_path):
         update_profile(profile_path, profile_updates, remove_keys=("draw_barriers",))
-    log("BOTW frame pacing: fps_target=60, fps_hold=off; present_snap+encode_thread on; no quality/resolution changes")
+
+    # The Xcode staging profile lives under ios/Gen, but pack_ipa.py later reads
+    # the already-unpacked app directory. Synchronize the profile into that
+    # preserved framework before codesigning/repacking, or the source IPA's
+    # fps_hold=on value would survive in the delivered bundle.
+    app_runtime_profile_path = fw / "profile.tsv"
+    if not app_runtime_profile_path.is_file():
+        fail("source app framework profile.tsv is missing before runtime-profile sync")
+    shutil.copy2(runtime_profile_path, app_runtime_profile_path)
+    app_runtime_lines = app_runtime_profile_path.read_text(encoding="utf-8").splitlines()
+    required_runtime_rows = (
+        "op_mode\thandheld", "fps_target\t60", "fps_hold\toff",
+        "present_snap\ton", "enc_thread\ton",
+    )
+    for row in required_runtime_rows:
+        if row not in app_runtime_lines:
+            fail("preserved app framework profile.tsv is missing " + row)
+    if any(line.split("\t", 1)[0] == "draw_barriers" for line in app_runtime_lines):
+        fail("preserved app framework profile.tsv still carries the unproven draw_barriers experiment")
+    log("BOTW frame pacing: fps_target=60, fps_hold=off; present_snap+encode_thread on; runtime profile synced into packaged framework; no quality/resolution changes")
 
     # Recreate the host's normal iOS compile settings from its Makefile, without touching game assets.
     cfg = gen / "dm.xcconfig"
