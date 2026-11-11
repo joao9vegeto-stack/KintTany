@@ -714,6 +714,10 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
         static std::atomic<uint32_t> count{0u};
         return count.fetch_add(1u, std::memory_order_relaxed) < 240u;
     }
+    if (event.find("B146_STREAM_MEMSET_") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 96u;
+    }
     // Keep the exact event lifetime and wait transitions that decide whether
     // asynchronous movie/file work can unblock its guest consumer.
     if (event.find("B98_") != std::string::npos) {
@@ -4540,6 +4544,71 @@ PPCFunc *xowue_lookup_indirect(PPCContext &context, uint8_t *base, uint32_t targ
         failPpcIndirectDispatch(context, target, slotFunction, "dispatch slot does not match linked AOT map");
 
     return mapped->second;
+}
+
+
+void xowue_trace_stream_memset(PPCContext &ctx, uint8_t *base, uint32_t phase) {
+    // Build 146: instrument the direct generated-AOT call at 0x82573E64.
+    // This observer is deliberately read-only; it does not modify PPCContext,
+    // guest memory, the descriptor, or the memset arguments.
+    static std::atomic<uint32_t> sampleCounter{0u};
+    static thread_local uint32_t activeSample = 0u;
+    const uint32_t threadId = g_currentGuestThread
+        ? g_currentGuestThread->id : g_currentGuestThreadId;
+
+    if (phase == 0u) {
+        activeSample = sampleCounter.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        if (activeSample > 32u) {
+            activeSample = 0u;
+            return;
+        }
+        const uint32_t descriptor = ctx.r29.u32;
+        const bool descriptorValid = base != nullptr &&
+            validGuestRange(descriptor, 48u);
+        const uint32_t descriptorSize = descriptorValid
+            ? loadGuestBe32(base, descriptor + 40u) : 0xFFFFFFFFu;
+        const uint32_t descriptorDestination = descriptorValid
+            ? loadGuestBe32(base, descriptor + 44u) : 0xFFFFFFFFu;
+        const uint64_t statusAddress64 = static_cast<uint64_t>(ctx.r1.u32) + 80u;
+        const uint32_t ioStatus = base != nullptr && statusAddress64 <= UINT32_MAX &&
+            validGuestRange(static_cast<uint32_t>(statusAddress64), 4u)
+                ? loadGuestBe32(base, static_cast<uint32_t>(statusAddress64))
+                : 0xFFFFFFFFu;
+        const bool destinationRangeValid = base != nullptr &&
+            validGuestRange(ctx.r3.u32, static_cast<uint64_t>(ctx.r5.u32));
+        char event[640];
+        std::snprintf(event, sizeof(event),
+            "B146_STREAM_MEMSET_BEGIN sample=%u thread=%u lr=0x%08X "
+            "descriptor=0x%08X status=0x%08X dst=0x%08X fill=0x%08X size=0x%08X "
+            "descriptor_dst=0x%08X descriptor_size=0x%08X "
+            "descriptor_valid=%u destination_range_valid=%u args_match=%u "
+            "r1=0x%08X r29=0x%08X",
+            activeSample, threadId, static_cast<uint32_t>(ctx.lr), descriptor,
+            ioStatus, ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, descriptorDestination,
+            descriptorSize, descriptorValid ? 1u : 0u,
+            destinationRangeValid ? 1u : 0u,
+            descriptorValid && descriptorDestination == ctx.r3.u32 &&
+                descriptorSize == ctx.r5.u32 ? 1u : 0u,
+            ctx.r1.u32, ctx.r29.u32);
+        recordRuntimeTrace(event);
+        return;
+    }
+
+    if (phase == 1u && activeSample != 0u) {
+        const uint32_t sample = activeSample;
+        activeSample = 0u;
+        const uint64_t statusAddress64 = static_cast<uint64_t>(ctx.r1.u32) + 80u;
+        const uint32_t ioStatus = base != nullptr && statusAddress64 <= UINT32_MAX &&
+            validGuestRange(static_cast<uint32_t>(statusAddress64), 4u)
+                ? loadGuestBe32(base, static_cast<uint32_t>(statusAddress64))
+                : 0xFFFFFFFFu;
+        char event[256];
+        std::snprintf(event, sizeof(event),
+            "B146_STREAM_MEMSET_END sample=%u thread=%u status=0x%08X "
+            "r3=0x%08X r4=0x%08X r5=0x%08X",
+            sample, threadId, ioStatus, ctx.r3.u32, ctx.r4.u32, ctx.r5.u32);
+        recordRuntimeTrace(event);
+    }
 }
 
 void xowue_dispatch_indirect(PPCContext &context, uint8_t *base, uint32_t target) {
