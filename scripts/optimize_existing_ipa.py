@@ -22,6 +22,7 @@ from pathlib import Path, PurePosixPath
 TITLE_ID = "01007EF00011E000"
 FRAMEWORK_NAME = f"DmGame{TITLE_ID}.framework"
 IGNORED_SOURCE_RUN_NUMBERS = {6}
+LEGACY_SOURCE_HASH_RUN_NUMBERS = {4}
 ENGINE_PIN = "81906931262fb25d774cce8bca2db8926439e5a2"
 UPSTREAM_OPTIMIZATION = "3304d6a0d7edebc4bb5b57c73e6d7b431721c8f5"
 
@@ -270,7 +271,9 @@ def main() -> None:
 
     old_hash = sha256(old_binary)
     if old_hash != prior_hash:
-        fail("source framework executable SHA-256 does not match the previous optimized build report; lineage is broken")
+        if args.source_run_number not in LEGACY_SOURCE_HASH_RUN_NUMBERS:
+            fail("source framework executable SHA-256 does not match the previous optimized build report; lineage is broken")
+        log("run #4 uses the pre-final-signing SHA-256 convention; its optimized artifact is accepted once, and this build records the post-signing hash")
 
     # Reset Gen before writing the Mach-O assembly: otherwise the cleanup would delete embed.S.
     gen = ios / "Gen"
@@ -402,8 +405,6 @@ def main() -> None:
     symbols = run(["nm", "-gU", new_binary], capture=True).stdout
     if not all(sym in symbols for sym in required_exports):
         fail("rebuilt framework is missing one or more required Route-C glue exports")
-    new_hash = sha256(new_binary)
-
     # Replace only the host framework executable. Keep the original framework resources, Metal libraries,
     # pipeline tables, icon and guest modules exactly as they were.
     shutil.copy2(new_binary, old_binary)
@@ -413,6 +414,9 @@ def main() -> None:
     run(["codesign", "--force", "--sign", "-", "--entitlements", entitlements_path,
          "--timestamp=none", app])
     run(["codesign", "--verify", "--deep", "--strict", app])
+    # Hash the exact framework executable as it will be delivered inside the IPA.
+    # Future runs can compare this post-signing hash to the source report byte-for-byte.
+    new_hash = sha256(old_binary)
 
     optimized_ipa = output / "Link2iOS-BOTW-Optimized.ipa"
     packer = engine / "dm/ios/tools/pack_ipa.py"
@@ -456,6 +460,7 @@ def main() -> None:
         "reused_shader_libraries": True,
         "reused_pipeline_archive": True,
         "source_framework_executable_sha256": old_hash,
+        "source_reported_optimized_framework_executable_sha256": prior_hash,
         "optimized_framework_executable_sha256": new_hash,
         "module_list": manifest["modules"],
         "profile_preserved": {"op_mode": "handheld", "fps_target": 60},
