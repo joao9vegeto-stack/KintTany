@@ -32,6 +32,13 @@ OWNERS = (
     0x832681D8,  # Bink decoder worker transition handler
     0x82C410D0,  # Bink decoder worker completion/reset helper
     0x82690DC8,  # actual video thread body behind the entry thunk
+    0x82573398,  # per-item stream worker dispatcher called by sub_82573090
+    0x82573000,  # worker item ready/poll helper
+    0x82494A60,  # item cache/request transition helper
+    0x82499150,  # per-priority queue callback builder
+    0x825734B8,  # worker's second queue poll helper
+    0x824AD010,  # worker's final queue poll/dispatch helper
+    0x831EDA60,  # global async stream manager initializer
 )
 
 def main():
@@ -79,7 +86,14 @@ def main():
                 "stream_worker_queue_item":"0x82573090",
                 "decoder_worker_transition":"0x832681D8",
                 "decoder_worker_completion":"0x82C410D0",
-                "video_thread_body":"0x82690DC8"
+                "video_thread_body":"0x82690DC8",
+                "stream_worker_item_dispatch":"0x82573398",
+                "stream_worker_item_poll":"0x82573000",
+                "stream_cache_request_transition":"0x82494A60",
+                "stream_priority_queue_builder":"0x82499150",
+                "stream_worker_secondary_poll":"0x825734B8",
+                "stream_worker_final_poll":"0x824AD010",
+                "async_stream_manager_initializer":"0x831EDA60"
             }}
     args.report.parent.mkdir(parents=True,exist_ok=True)
     args.report.write_text(json.dumps(result,indent=2),encoding="utf-8")
@@ -88,7 +102,7 @@ def main():
                   "instruction_comments":f["instruction_comment_count"],
                   "body_chars":len(f["body"])} for f in result["functions"]],
         "missing":missing}))
-    required=(0x82575480,0x82575108,0x82574348,0x82573CB0,0x824A7DF0,0x8257D290,0x822A0608,0x82574508,0x82573B80,0x82C4BE30,0x82690DC0,0x83268358,0x82573090,0x832681D8,0x82C410D0,0x82690DC8)
+    required=(0x82575480,0x82575108,0x82574348,0x82573CB0,0x824A7DF0,0x8257D290,0x822A0608,0x82574508,0x82573B80,0x82C4BE30,0x82690DC0,0x83268358,0x82573090,0x832681D8,0x82C410D0,0x82690DC8,0x82573398,0x82573000,0x82494A60,0x82499150,0x825734B8,0x824AD010,0x831EDA60)
     missing_required=[f"0x{x:08X}" for x in required if x not in found]
     if missing_required:
         raise SystemExit("Required stream poll / callback source missing: "+", ".join(missing_required))
