@@ -3821,7 +3821,7 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
     }
     if (guestAddress == 0x82370500u || guestAddress == 0x82427940u || guestAddress == 0x826CF060u || guestAddress == 0x825F91D8u || guestAddress == 0x824ACBF8u ||
         guestAddress == 0x824793E0u || guestAddress == 0x824792E0u ||
-        guestAddress == 0x82575250u) {
+        guestAddress == 0x82575250u || guestAddress == 0x82C2A1F0u) {
         xowue_trace_hot_guest_entry(guestAddress, ctx);
     }
 uint32_t lr=static_cast<uint32_t>(ctx.lr);if(g_currentGuestThread){g_currentGuestThread->lastGuestLr.store(lr,std::memory_order_relaxed);g_currentGuestThread->lastR3.store(ctx.r3.u32,std::memory_order_relaxed);g_currentGuestThread->lastR4.store(ctx.r4.u32,std::memory_order_relaxed);g_currentGuestThread->lastR11.store(ctx.r11.u32,std::memory_order_relaxed);g_currentGuestThread->lastR30.store(ctx.r30.u32,std::memory_order_relaxed);g_currentGuestThread->lastR31.store(ctx.r31.u32,std::memory_order_relaxed);}else{uint32_t prev=g_mainThreadLastPc.exchange(guestAddress);if(prev!=guestAddress)g_mainThreadPrevFn.store(prev);g_mainThreadGuestLr.store(lr);g_mainThreadLastR3.store(ctx.r3.u32);g_mainThreadLastR4.store(ctx.r4.u32);g_mainThreadLastR11.store(ctx.r11.u32);g_mainThreadLastR30.store(ctx.r30.u32);g_mainThreadLastR31.store(ctx.r31.u32);uint32_t i=g_mainThreadRecentAotIdx.fetch_add(1);g_mainThreadRecentAotFns[i&15u].store(guestAddress);}xowue_thread_checkpoint(guestAddress);}
@@ -4185,6 +4185,23 @@ static void __xowue_sub_83847AC0_init(PPCContext &ctx, uint8_t *base) {
 static void __xowue_sub_83847AC4_free(PPCContext &ctx, uint8_t *) { ctx.r3.u64=0ull; }
 
 static void xowue_trace_hot_guest_entry(uint32_t guestAddress, PPCContext &ctx) {
+    // Build 143: the final Build 142.1 snapshot caught worker T9 inside this
+    // guest memset, called by sub_82573DE0 with (destination, zero, size).
+    // Capture the original PPC arguments once per call; do not change memory.
+    if (guestAddress == 0x82C2A1F0u) {
+        static std::atomic<uint32_t> s_memsetSamples{0u};
+        const uint32_t n = s_memsetSamples.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        if (n <= 16u) {
+            char ev[256];
+            std::snprintf(ev, sizeof(ev),
+                "XOWUE_MEMSET_ENTRY sample=%u thread=%u dst=0x%08X value=0x%08X size=0x%08X "
+                "lr=0x%08X dst_size_valid=%u",
+                n, static_cast<uint32_t>(g_currentGuestThreadId), ctx.r3.u32, ctx.r4.u32,
+                ctx.r5.u32, static_cast<uint32_t>(ctx.lr),
+                validGuestRange(ctx.r3.u32, static_cast<size_t>(ctx.r5.u32)) ? 1u : 0u);
+            recordRuntimeTrace(ev);
+        }
+    }
     // Build 81: stream-cache poll state for 0x82575250 (vtable+64 used by 0x82575480).
     if (guestAddress == 0x82575250u) {
         static std::atomic<uint32_t> s_b81Polls{0u};
