@@ -210,6 +210,32 @@ def main() -> None:
     if not (engine / "dm/gfx/nvn/nvn_mtl.m").is_file():
         fail("the NXNative Metal NVN source is missing")
 
+    game_profile_source = engine / "dm/games" / TITLE_ID / "game.tsv"
+    settings_source = engine / "dm/games/settings.tsv"
+    rec_source = engine / "dm/gfx/nvn/nvn_rec.h"
+    mtl_source = engine / "dm/gfx/nvn/nvn_mtl.m"
+    fstep_source = engine / "dm/gfx/nvn/nvn_fstep.h"
+    for required in (game_profile_source, settings_source, rec_source, mtl_source, fstep_source):
+        if not required.is_file():
+            fail("missing source required for the BOTW frame-pacing audit: " + str(required))
+    game_rows = game_profile_source.read_text(encoding="utf-8").splitlines()
+    if "present_snap\ton" not in game_rows:
+        fail("the pinned BOTW profile does not enable present snapshots")
+    settings_rows = settings_source.read_text(encoding="utf-8").splitlines()
+    encode_row = next((line for line in settings_rows if line.startswith("DM_NVN_ENC_THREAD\t")), "")
+    if "1|DM_GAME_ENC_THREAD" not in encode_row:
+        fail("the pinned iOS encode-thread default is not verified as on")
+    rec_text = rec_source.read_text(encoding="utf-8")
+    if not all(token in rec_text for token in ("rec_own_begin", "rec_own_push")):
+        fail("the encode thread's own-record path required by present snapshots is missing")
+    mtl_text = mtl_source.read_text(encoding="utf-8")
+    if not all(token in mtl_text for token in ("rec_own_begin", "rec_own_push", "post_complete", "g_post_mu")):
+        fail("the snapshot/encode path or corrected fast-wake completion code is missing from the pinned Metal source")
+    fstep_text = fstep_source.read_text(encoding="utf-8")
+    if "DM_FPS_HOLD" not in fstep_text or "fstep_hold" not in fstep_text or "!fstep_hold()" not in fstep_text:
+        fail("the host frame-hold controller could not be audited")
+    log("present/encode audit passed: snapshot copy uses encode-thread own-record path; corrected PR #158 fast wake is present")
+
     output.mkdir(parents=True, exist_ok=True)
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
@@ -318,73 +344,56 @@ def main() -> None:
     run(["git", "apply", "--check", patch], cwd=engine)
     run(["git", "apply", patch], cwd=engine)
 
-    # BOTW's current profile uses full draw-pass barriers. Use NVN's game-barrier
-    # ordering: the next pass may overlap its vertex stage with the previous
-    # pass's fragments, while explicit NVN barriers and copy/compute dependencies
-    # still serialize. This does not change shaders, render scale or visual assets.
-    # Keep this BOTW-only in the pinned tree and verify the generated compile-time flag.
-    game_profile_path = engine / "dm/games" / TITLE_ID / "game.tsv"
-    if not game_profile_path.is_file():
-        fail("pinned NX2Apple tree lacks the BOTW game profile")
-    profile_lines = game_profile_path.read_text(encoding="utf-8").splitlines()
-    dbr_rows = [i for i, line in enumerate(profile_lines) if line.split("\t", 1)[0] == "draw_barriers"]
-    if len(dbr_rows) > 1:
-        fail("BOTW game profile has duplicate draw_barriers keys")
-    if dbr_rows:
-        profile_lines[dbr_rows[0]] = "draw_barriers\tgame"
-    else:
-        profile_lines += ["", "# iOS GPU overlap trial: keep NVN's explicit game barriers; overlap independent pass stages",
-                          "draw_barriers\tgame"]
-    game_profile_path.write_text("\n".join(profile_lines) + "\n", encoding="utf-8")
+    # Device logs show the host frame-step controller repeatedly changing hold
+    # from one to two/three VSyncs after three late frames. With fps_hold=on, this
+    # deliberately extends presentation; the lower rate then reduces GPU activity,
+    # and later 60 Hz probes fail at the lower clock. No game-fixed step was logged.
+    # fps_hold=off prevents only the optional extra hold. The 60 Hz target stays;
+    # serious-thermal and movie hard caps in fps_step_cap() remain active.
+    # No render scale, resolution, texture, shader, or pass-quality setting changes.
+    def update_profile(path, updates, remove_keys=()):
+        path = Path(path)
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for key in remove_keys:
+            indexes = [i for i, line in enumerate(lines) if line.split("\t", 1)[0] == key]
+            if len(indexes) > 1:
+                fail(f"{path}: duplicate {key} rows")
+            if indexes:
+                lines.pop(indexes[0])
+        for key, value in updates.items():
+            indexes = [i for i, line in enumerate(lines) if line.split("\t", 1)[0] == key]
+            if len(indexes) > 1:
+                fail(f"{path}: duplicate {key} rows")
+            row = f"{key}\t{value}"
+            if indexes:
+                lines[indexes[0]] = row
+            else:
+                lines.append(row)
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        check = path.read_text(encoding="utf-8").splitlines()
+        for key, value in updates.items():
+            if f"{key}\t{value}" not in check:
+                fail(f"{path}: failed to set {key}={value}")
+        for key in remove_keys:
+            if any(line.split("\t", 1)[0] == key for line in check):
+                fail(f"{path}: failed to remove {key} override")
 
-    # The runtime framework carries its own profile.tsv, copied from the source IPA
-    # before the host rebuild. Keep it in sync with the compile-time game.tsv:
-    # otherwise the rebuilt binary can still use draw_barriers=full at runtime.
+    game_profile_path = engine / "dm/games" / TITLE_ID / "game.tsv"
     runtime_profile_path = gen / "framework" / "profile.tsv"
     if not runtime_profile_path.is_file():
-        fail("copied runtime profile.tsv is missing; refusing ambiguous draw-barrier defaults")
-    runtime_lines = runtime_profile_path.read_text(encoding="utf-8").splitlines()
-    runtime_dbr_rows = [i for i, line in enumerate(runtime_lines)
-                        if line.split("\t", 1)[0].strip() == "draw_barriers"]
-    if len(runtime_dbr_rows) > 1:
-        fail("runtime profile.tsv has duplicate draw_barriers keys")
-    if runtime_dbr_rows:
-        # This optimizer deliberately overrides the source IPA's BOTW runtime
-        # ordering. Older profile schemas can carry legacy/unknown values, so
-        # normalize the entire row instead of rejecting a value we immediately
-        # replace. Duplicate keys remain fatal because their precedence is
-        # ambiguous to the runtime parser.
-        source_row = runtime_lines[runtime_dbr_rows[0]]
-        source_fields = source_row.split("\t", 1)
-        source_value = source_fields[1].strip() if len(source_fields) == 2 else "<missing>"
-        if source_value != "game":
-            log(f"normalizing runtime draw_barriers={source_value!r} to 'game'")
-        runtime_lines[runtime_dbr_rows[0]] = "draw_barriers\tgame"
-    else:
-        runtime_lines.append("draw_barriers\tgame")
-    runtime_profile_path.write_text("\n".join(runtime_lines) + "\n", encoding="utf-8")
-    normalized_runtime_lines = runtime_profile_path.read_text(encoding="utf-8").splitlines()
-    normalized_dbr_rows = [line.split("\t", 1) for line in normalized_runtime_lines
-                           if line.split("\t", 1)[0].strip() == "draw_barriers"]
-    if len(normalized_dbr_rows) != 1 or normalized_dbr_rows[0] != ["draw_barriers", "game"]:
-        fail("runtime staging profile.tsv did not retain exactly one draw_barriers=game key/value")
-
-    # Xcode builds from Gen/framework, but this optimizer replaces only the
-    # executable in the already-unpacked app framework. The IPA packer later
-    # reads that original app directory, so copy the normalized runtime profile
-    # back into it before codesigning and repacking; otherwise the old value
-    # (draw_barriers=0) survives in the delivered IPA.
-    app_runtime_profile_path = fw / "profile.tsv"
-    if not app_runtime_profile_path.is_file():
-        fail("source app framework profile.tsv is missing before runtime-profile sync")
-    shutil.copy2(runtime_profile_path, app_runtime_profile_path)
-    app_runtime_lines = app_runtime_profile_path.read_text(encoding="utf-8").splitlines()
-    app_runtime_dbr_rows = [line.split("\t", 1) for line in app_runtime_lines
-                            if line.split("\t", 1)[0].strip() == "draw_barriers"]
-    if len(app_runtime_dbr_rows) != 1 or app_runtime_dbr_rows[0] != ["draw_barriers", "game"]:
-        fail("preserved app framework profile.tsv did not receive draw_barriers=game")
-
-    log("BOTW GPU ordering: draw_barriers=game in compile-time profile, Xcode staging profile, and preserved app runtime profile (explicit NVN barriers retained; no render-scale or shader changes)")
+        fail("copied runtime profile.tsv is missing")
+    profile_updates = {
+        "op_mode": "handheld",
+        "fps_target": "60",
+        "fps_hold": "off",
+        "present_snap": "on",
+        "enc_thread": "on",
+    }
+    # draw_barriers=game was an unmeasured experiment; upstream BotW notes no gain.
+    # Remove any carried override and keep the pinned upstream default.
+    for profile_path in (game_profile_path, runtime_profile_path):
+        update_profile(profile_path, profile_updates, remove_keys=("draw_barriers",))
+    log("BOTW frame pacing: fps_target=60, fps_hold=off; present_snap+encode_thread on; no quality/resolution changes")
 
     # Recreate the host's normal iOS compile settings from its Makefile, without touching game assets.
     cfg = gen / "dm.xcconfig"
@@ -396,8 +405,19 @@ def main() -> None:
         fail("gen_build.py did not produce the iOS compiler settings:\n" + p.stdout[-4000:] + "\n" + p.stderr[-4000:])
 
     profile_header = host / "gen" / TITLE_ID / "game_profile.h"
-    if not profile_header.is_file() or "#define DM_GAME_DRAW_BARRIERS_GAME 1" not in profile_header.read_text(encoding="utf-8"):
-        fail("generated game_profile.h does not enable BOTW draw_barriers=game; refusing to build an unchanged renderer")
+    if not profile_header.is_file():
+        fail("generated BOTW game_profile.h is missing")
+    generated_profile = profile_header.read_text(encoding="utf-8")
+    required_profile_macros = (
+        "#define DM_GAME_FPS_TARGET 60",
+        "#define DM_GAME_FPS_HOLD 0",
+        "#define DM_GAME_PRESENT_SNAP 1",
+        "#define DM_GAME_ENC_THREAD 1",
+        "#define DM_GAME_OPMODE 0",
+    )
+    for macro in required_profile_macros:
+        if macro not in generated_profile:
+            fail("generated BOTW game_profile.h is missing " + macro)
     cfg.write_text(p.stdout.rstrip() + "\nOTHER_LDFLAGS = $(inherited) $(DM_FRAMEWORKS) " + " ".join(segment_flags) + "\n", encoding="utf-8")
 
     # XcodeGen validates all targets in the spec, even though this job builds only DmShellGame.
@@ -485,10 +505,13 @@ def main() -> None:
         if final_manifest.get("title_id") != TITLE_ID or final_manifest.get("loader") != "FH":
             fail("optimized IPA game manifest verification failed")
         final_profile = z.read(f"Payload/DmShell.app/Frameworks/{FRAMEWORK_NAME}/profile.tsv").decode()
-        if "fps_target\t60" not in final_profile:
-            fail("optimized IPA no longer has the 60 FPS game profile")
-        if "draw_barriers\tgame" not in final_profile.splitlines():
-            fail("optimized IPA runtime profile does not enable BOTW draw_barriers=game")
+        final_rows = final_profile.splitlines()
+        for row in ("fps_target\t60", "fps_hold\toff", "op_mode\thandheld",
+                    "present_snap\ton", "enc_thread\ton"):
+            if row not in final_rows:
+                fail("optimized IPA runtime profile is missing " + row)
+        if any(line.split("\t", 1)[0] == "draw_barriers" for line in final_rows):
+            fail("optimized IPA still carries the unproven draw_barriers experiment")
 
     report = {
         "project": "Link2iOS",
@@ -502,6 +525,7 @@ def main() -> None:
         "engine_pin": ENGINE_PIN,
         "upstream_optimization_commit": UPSTREAM_OPTIMIZATION,
         "modified_host_source": ["dm/gfx/nvn/nvn_mtl.m"],
+        "modified_game_profile": ["fps_hold=off", "present_snap=on", "enc_thread=on", "draw_barriers=upstream-default"],
         "rebuilt_host_framework": True,
         "rebuilt_shared_shell": False,
         "recompiled_game_framework": False,
@@ -513,10 +537,35 @@ def main() -> None:
         "source_reported_optimized_framework_executable_sha256": prior_hash,
         "optimized_framework_executable_sha256": new_hash,
         "module_list": manifest["modules"],
-        "profile_preserved": {"op_mode": "handheld", "fps_target": 60, "draw_barriers": "game"},
+        "profile_effective": {
+            "op_mode": "handheld", "fps_target": 60, "fps_hold": "off",
+            "present_snap": "on", "enc_thread": "on",
+            "present_interval": "game (unchanged)", "draw_barriers": "upstream-default"
+        },
+        "present_snapshot_encode_thread_audit": {
+            "present_snap": "on",
+            "ring": "two host textures; each present is copied and the game texture is released",
+            "encode_thread": "on",
+            "encode_thread_ios_default": "1|DM_GAME_ENC_THREAD",
+            "own_record_path": "rec_own_begin/rec_own_push",
+            "fast_wake": "already present in the pinned engine (corrected post_complete/g_post_mu path)",
+            "device_log_confirmed": {
+                "DM_PRESENT_SNAP": "1",
+                "DM_NVN_ENC_THREAD": "1",
+                "present_snapshot_ring": "2 host textures",
+                "metal_encode_thread": "separate thread"
+            }
+        },
+        "frame_pacing_correction": {
+            "fps_hold": "off",
+            "reason": "prevent the host from turning three late frames into a deliberate 2/3-VSync hold at a 60 Hz target",
+            "late_frame_policy": "keep one-VSync cadence; late frames may be missed rather than forcing a persistent half-rate",
+            "thermal_and_movie_caps": "preserved"
+        },
+        "render_scale_modified": False,
         "render_quality_reduced": False,
         "resolution_changed": False,
-        "frame_pacing_settings_changed": False,
+        "frame_pacing_settings_changed": True,
         "memory_entitlements_preserved": bool(entitlements.get("com.apple.developer.kernel.increased-memory-limit")),
         "ipa_size_bytes": optimized_ipa.stat().st_size,
     }
