@@ -478,3 +478,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+# Build-chain policy: run #4 is the one-time legacy parent; run #6 is excluded.
