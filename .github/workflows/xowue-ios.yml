@@ -501,6 +501,18 @@ jobs:
           test -s "$GITHUB_WORKSPACE/artifacts/xowue-aot-arm64-semantics.json"
           python3 -m json.tool "$GITHUB_WORKSPACE/artifacts/xowue-aot-arm64-semantics.json" >/dev/null
 
+      - name: Instrument the direct PPC stream memset callsite
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/patch_xowue_stream_memset_probe.py
+          python3 tools/patch_xowue_stream_memset_probe.py --self-test
+          python3 tools/patch_xowue_stream_memset_probe.py \
+            --ppc-dir "$GITHUB_WORKSPACE/generated/ppc"
+          grep -Fq 'xowue_trace_stream_memset(ctx, base, 0u);' \
+            "$GITHUB_WORKSPACE/generated/ppc/ppc_recomp.64.cpp"
+          grep -Fq 'xowue_trace_stream_memset(ctx, base, 1u);' \
+            "$GITHUB_WORKSPACE/generated/ppc/ppc_recomp.64.cpp"
+
       - name: Install KosmicKrisp iOS cross-build prerequisites
         run: |
           set -euxo pipefail
