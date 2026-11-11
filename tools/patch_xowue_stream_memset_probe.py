@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 
 FUNCTION = re.compile(
-    r"PPC_FUNC_IMPL\\(__imp__(sub_[0-9A-Fa-f]{8})\\)\\s*\\{"
+    r"PPC_FUNC_IMPL\(__imp__(sub_[0-9A-Fa-f]{8})\)\s*\{"
 )
 FUNCTION_NAME = "sub_82573DE0"
 DECLARATION = (
@@ -16,15 +16,16 @@ DECLARATION = (
 )
 CALL_SITE = re.compile(
     r"(?P<prefix>"
-    r"(?m)^\\s*// li r4,0\\s*\\n"
-    r"\\s*ctx\\.r4\\.s64 = 0;\\s*\\n"
-    r"\\s*// lwz r5,40\\(r29\\)\\s*\\n"
-    r"\\s*ctx\\.r5\\.u64 = PPC_LOAD_U32\\(ctx\\.r29\\.u32 \\+ 40\\);\\s*\\n"
-    r"\\s*// lwz r3,44\\(r29\\)\\s*\\n"
-    r"\\s*ctx\\.r3\\.u64 = PPC_LOAD_U32\\(ctx\\.r29\\.u32 \\+ 44\\);\\s*\\n"
-    r"\\s*// bl 0x82c2a1f0\\s*\\n"
-    r"\\s*ctx\\.lr = 0x82573E64;\\s*\\n"
-    r")(?P<call>\\s*sub_82C2A1F0\\(ctx, base\\);)"
+    r"^\s*// li r4,0\s*\n"
+    r"\s*ctx\.r4\.s64 = 0;\s*\n"
+    r"\s*// lwz r5,40\(r29\)\s*\n"
+    r"\s*ctx\.r5\.u64 = PPC_LOAD_U32\(ctx\.r29\.u32 \+ 40\);\s*\n"
+    r"\s*// lwz r3,44\(r29\)\s*\n"
+    r"\s*ctx\.r3\.u64 = PPC_LOAD_U32\(ctx\.r29\.u32 \+ 44\);\s*\n"
+    r"\s*// bl 0x82c2a1f0\s*\n"
+    r"\s*ctx\.lr = 0x82573E64;\s*\n"
+    r")(?P<call>\s*sub_82C2A1F0\(ctx, base\);)",
+    re.MULTILINE,
 )
 
 
@@ -62,9 +63,9 @@ def patch_source(source: str) -> tuple[str, dict[str, int]]:
     direct_call = call.group("call")
     injected = (
         prefix
-        + "        xowue_trace_stream_memset(ctx, base, 0u);\\n"
+        + "        xowue_trace_stream_memset(ctx, base, 0u);\n"
         + direct_call
-        + "\\n        xowue_trace_stream_memset(ctx, base, 1u);"
+        + "\n        xowue_trace_stream_memset(ctx, base, 1u);"
     )
     patched_body = body[:call.start()] + injected + body[call.end():]
     patched = source[:start] + patched_body + source[end:]
@@ -73,7 +74,7 @@ def patch_source(source: str) -> tuple[str, dict[str, int]]:
         marker = "PPC_FUNC_IMPL(__imp__sub_82573DE0)"
         if patched.count(marker) != 1:
             raise RuntimeError("could not find unique target function marker for probe declaration")
-        patched = patched.replace(marker, DECLARATION + "\\n\\n" + marker, 1)
+        patched = patched.replace(marker, DECLARATION + "\n\n" + marker, 1)
     if patched.count(DECLARATION) != 1:
         raise RuntimeError("stream memset probe declaration is duplicated")
     if patched.count("xowue_trace_stream_memset(ctx, base, 0u);") != 1:
@@ -133,7 +134,7 @@ def main() -> int:
     patched, result = patch_source(original)
     if patched != original:
         temporary = path.with_suffix(path.suffix + ".stream-probe.tmp")
-        temporary.write_text(patched, encoding="utf-8", newline="\\n")
+        temporary.write_text(patched, encoding="utf-8", newline="\n")
         temporary.replace(path)
     report = {"source": path.name, "guest_function": "0x82573DE0",
               "guest_call_pc": "0x82573E64", "callee": "0x82C2A1F0",
