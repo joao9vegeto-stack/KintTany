@@ -445,7 +445,11 @@ print("PASS: stream-stall caller/back-edge audit and VdSwap CP provenance")
 # The guest source at 0x82575480 calls vtable+64 at these exact link-register PCs.
 for poll_lr in ("0x825754E4u", "0x82575510u"):
     assert poll_lr in engine, f"stream availability poll callback missing: {poll_lr}"
-assert "std::array<std::atomic<uint32_t>, 7> streamDispatchSamples" in engine
+assert "std::array<std::atomic<uint32_t>, 10> streamDispatchSamples" in engine
+assert "case 0x82573DB8u: return 7" in engine
+assert "case 0x82573B28u: return 8" in engine
+assert "case 0x82573B40u: return 9" in engine
+assert "B144_STREAM_WORKER_ENTRY" in engine and "B144_STREAM_QUEUE_WAKE" in engine
 assert "sample <= 8u" in engine
 assert 'event.find("B140_STREAM_DISPATCH ")' in engine
 assert "case 0x825754E4u:" in engine and "case 0x82575510u:" in engine
@@ -459,7 +463,7 @@ for field in ("f136=", "f140=", "f148=", "f156=", "f164=", "f168=", "f172="):
     assert field in engine, f"stream state field {field} missing from event"
 assert "vtable_offset=0x%X" in engine and "vtable_slot=0x%08X" in engine
 assert "function(context, base);" in engine
-print("PASS: Build 140 first/retry stream-poll targets, exact vtable+64 slot, object progress fields and bounded dispatch telemetry")
+print("PASS: Build 140/144 stream-poll, queue-wake and worker-queue telemetry targets, vtable slots, object progress fields and bounded dispatch")
 
 # Build 140 root-cause fix: the shader translator packs absolute c-register
 # references, so the draw packet must preserve per-stage masks and the host
