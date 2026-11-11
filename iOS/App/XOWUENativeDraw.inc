@@ -3,6 +3,7 @@
 // draws are counted only after vkQueueSubmit succeeds; rejected combinations
 // are visible in the diagnostic instead of being replaced by synthetic pixels.
 #include "Graphics/Xenos/XOWUEGuestDraw.h"
+#include "Graphics/Xenos/XOWUEConstantPacking.h"
 #define XD(n) ((PFN_vk##n)state->GetDeviceProcAddr(state->device, "vk" #n))
 enum { XD_GUEST_BYTES = 0x20000000u };
 typedef struct {
@@ -504,8 +505,12 @@ static uint32_t XDProcessDraws(KKVulkanState *state, uint32_t image_index,
          continue;
       }
       const VkDeviceSize offset=g_xd.constant_stride*(VkDeviceSize)i;
-      memcpy((uint8_t*)g_xd.constants.mapped+offset,draw->constants,
-             sizeof(draw->constants));
+      if (!xowue_prepare_guest_draw_constants(draw,
+             (uint32_t*)((uint8_t*)g_xd.constants.mapped+offset),
+             XOWUE_GPU_CONSTANT_WORDS)) {
+         xowue_xenos_record_rejected(1,"XENOS_CONSTANT_UPLOAD_FAILED");
+         continue;
+      }
       XDPush push={0};
       push.vsBase=0;
       push.psBase=256;

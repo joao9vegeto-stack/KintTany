@@ -257,6 +257,8 @@ jobs:
           set -euo pipefail
           python3 -m py_compile tools/test_xowue_gpu_wiring.py
           python3 tools/test_xowue_gpu_wiring.py
+          clang -std=c11 -Wall -Wextra -Werror -pedantic Runtime/Graphics/Xenos/XOWUEConstantPackingSmoke.c -IRuntime/Graphics/Xenos -o "$RUNNER_TEMP/xowue-constant-packing-smoke"
+          "$RUNNER_TEMP/xowue-constant-packing-smoke"
           python3 -m py_compile tools/test_xowue_build95_interventions.py
           python3 tools/test_xowue_build95_interventions.py
           python3 -m py_compile tools/test_xowue_build97_video_diagnostics.py

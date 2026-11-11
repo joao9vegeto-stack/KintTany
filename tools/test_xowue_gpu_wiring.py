@@ -460,3 +460,21 @@ for field in ("f136=", "f140=", "f148=", "f156=", "f164=", "f168=", "f172="):
 assert "vtable_offset=0x%X" in engine and "vtable_slot=0x%08X" in engine
 assert "function(context, base);" in engine
 print("PASS: Build 140 first/retry stream-poll targets, exact vtable+64 slot, object progress fields and bounded dispatch telemetry")
+
+# Build 140 root-cause fix: the shader translator packs absolute c-register
+# references, so the draw packet must preserve per-stage masks and the host
+# must pack the actual VS/PS UBO data before upload.
+packing=Path("Runtime/Graphics/Xenos/XOWUEConstantPacking.h").read_text()
+assert "constPacked = false" in bridge and "constUsed[4]" in bridge
+assert "entry.constPacked = shader.constPacked" in bridge
+assert "std::memcpy(entry.constUsed, shader.constUsed" in bridge
+assert "packet.vs_const_packed=vs->second.constPacked?1u:0u" in bridge
+assert "packet.ps_const_packed=ps->second.constPacked?1u:0u" in bridge
+assert "std::memcpy(packet.vs_const_used,vs->second.constUsed" in bridge
+assert "std::memcpy(packet.ps_const_used,ps->second.constUsed" in bridge
+assert "xowue_prepare_guest_draw_constants" in packing
+assert "xowue_prepare_guest_draw_constants(draw," in renderer
+assert "XOWUEConstantPacking.h" in renderer
+assert "uint32_t vs_const_packed, ps_const_packed;" in header
+assert "uint64_t vs_const_used[4], ps_const_used[4];" in header
+print("PASS: per-stage Xenos packed constants match translator remap before Vulkan UBO upload")

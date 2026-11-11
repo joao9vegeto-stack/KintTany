@@ -22,6 +22,10 @@ typedef struct XOWUEGuestDraw {
   uint32_t vertex_memexport, pixel_memexport, color_target_mask;
   uint32_t fetch_used[3];
   uint32_t fetch_strides[96], fetch_extents[96];
+  // Translation may compact absolute stage constants; preserve the exact
+  // per-shader masks with each draw so the host uploads the same layout.
+  uint32_t vs_const_packed, ps_const_packed;
+  uint64_t vs_const_used[4], ps_const_used[4];
   uint32_t constants[XOWUE_GPU_CONSTANT_WORDS];
 } XOWUEGuestDraw;
 size_t xowue_xenos_take_draws(XOWUEGuestDraw *out, size_t capacity);

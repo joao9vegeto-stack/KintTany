@@ -29,6 +29,8 @@ struct ShaderRecord {
   uint32_t texture2DMask = 0, texture3DMask = 0, textureCubeMask = 0;
   bool usesMemExport = false;
   uint32_t fetchUsed[3]{}, fetchStrides[96]{}, fetchExtents[96]{};
+  bool constPacked = false;
+  uint64_t constUsed[4]{};
 };
 std::mutex stateMutex;
 std::array<uint32_t, 0x5003> registers{};
@@ -211,6 +213,8 @@ ShaderResult LoadShader(uint32_t stage, const uint32_t* words, size_t count) {
       entry.texture2DMask = shader.texture2DMask;
       entry.texture3DMask = shader.texture3DMask;
       entry.textureCubeMask = shader.textureCubeMask;
+      entry.constPacked = shader.constPacked;
+      std::memcpy(entry.constUsed, shader.constUsed, sizeof(entry.constUsed));
       for (uint32_t i = 0; i < 3u; ++i) entry.fetchUsed[i] = shader.vertexFetchConstants[i];
       for (uint32_t i = 0; i < 96u; ++i) {
         entry.fetchStrides[i] = shader.vertexStride[i];
@@ -353,6 +357,8 @@ void QueueDraw(uint32_t initiator, uint32_t indexCount,
   packet.viewport_register_bits[2] = registers[0x2111u]; // YSCALE
   packet.viewport_register_bits[3] = registers[0x2112u]; // YOFFSET
   if(validVS && !copyMode) {
+    packet.vs_const_packed=vs->second.constPacked?1u:0u;
+    std::memcpy(packet.vs_const_used,vs->second.constUsed,sizeof(packet.vs_const_used));
     packet.vertex_fetch_mask=vs->second.vertexFetchMask;
     packet.vertex_memexport=vs->second.usesMemExport?1u:0u;
     packet.texture_2d_mask=vs->second.texture2DMask;
@@ -365,6 +371,8 @@ void QueueDraw(uint32_t initiator, uint32_t indexCount,
     }
   }
   if(validPS && !depthOnly && !copyMode) {
+    packet.ps_const_packed=ps->second.constPacked?1u:0u;
+    std::memcpy(packet.ps_const_used,ps->second.constUsed,sizeof(packet.ps_const_used));
     packet.texture_2d_mask|=ps->second.texture2DMask;
     packet.texture_3d_mask|=ps->second.texture3DMask;
     packet.texture_cube_mask|=ps->second.textureCubeMask;
