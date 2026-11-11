@@ -704,7 +704,11 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     }
     if (event.find("B140_STREAM_DISPATCH ") != std::string::npos) {
         static std::atomic<uint32_t> count{0u};
-        return count.fetch_add(1u, std::memory_order_relaxed) < 120u;
+        return count.fetch_add(1u, std::memory_order_relaxed) < 180u;
+    }
+    if (event.find("B144_") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 160u;
     }
     // Keep the exact event lifetime and wait transitions that decide whether
     // asynchronous movie/file work can unblock its guest consumer.
@@ -3821,7 +3825,11 @@ void xowue_thread_checkpoint(uint32_t guestAddress,PPCContext &ctx){
     }
     if (guestAddress == 0x82370500u || guestAddress == 0x82427940u || guestAddress == 0x826CF060u || guestAddress == 0x825F91D8u || guestAddress == 0x824ACBF8u ||
         guestAddress == 0x824793E0u || guestAddress == 0x824792E0u ||
-        guestAddress == 0x82575250u || guestAddress == 0x82C2A1F0u) {
+        guestAddress == 0x82575250u || guestAddress == 0x82C2A1F0u ||
+        guestAddress == 0x82573CB0u || guestAddress == 0x8257D290u ||
+        guestAddress == 0x82573AE8u || guestAddress == 0x82573B80u ||
+        guestAddress == 0x82573090u || guestAddress == 0x82573DE0u ||
+        guestAddress == 0x82573398u) {
         xowue_trace_hot_guest_entry(guestAddress, ctx);
     }
 uint32_t lr=static_cast<uint32_t>(ctx.lr);if(g_currentGuestThread){g_currentGuestThread->lastGuestLr.store(lr,std::memory_order_relaxed);g_currentGuestThread->lastR3.store(ctx.r3.u32,std::memory_order_relaxed);g_currentGuestThread->lastR4.store(ctx.r4.u32,std::memory_order_relaxed);g_currentGuestThread->lastR11.store(ctx.r11.u32,std::memory_order_relaxed);g_currentGuestThread->lastR30.store(ctx.r30.u32,std::memory_order_relaxed);g_currentGuestThread->lastR31.store(ctx.r31.u32,std::memory_order_relaxed);}else{uint32_t prev=g_mainThreadLastPc.exchange(guestAddress);if(prev!=guestAddress)g_mainThreadPrevFn.store(prev);g_mainThreadGuestLr.store(lr);g_mainThreadLastR3.store(ctx.r3.u32);g_mainThreadLastR4.store(ctx.r4.u32);g_mainThreadLastR11.store(ctx.r11.u32);g_mainThreadLastR30.store(ctx.r30.u32);g_mainThreadLastR31.store(ctx.r31.u32);uint32_t i=g_mainThreadRecentAotIdx.fetch_add(1);g_mainThreadRecentAotFns[i&15u].store(guestAddress);}xowue_thread_checkpoint(guestAddress);}
@@ -4225,6 +4233,89 @@ static void xowue_trace_hot_guest_entry(uint32_t guestAddress, PPCContext &ctx) 
             recordRuntimeTrace(ev);
         }
     }
+    // Build 144: follow the two-level stream work queues without changing them.
+    // The request queue is embedded at manager+72 (64-byte entries); the worker
+    // task queue is the global object at 0x835EF47C (104-byte entries).
+    {
+        static std::array<std::atomic<uint32_t>, 9> s_workerEntrySamples{};
+        uint32_t index = 9u;
+        switch (guestAddress) {
+            case 0x82573CB0u: index = 0u; break;
+            case 0x8257D290u: index = 1u; break;
+            case 0x82573AE8u: index = 2u; break;
+            case 0x82573B80u: index = 3u; break;
+            case 0x82573090u: index = 4u; break;
+            case 0x82573DE0u: index = 5u; break;
+            case 0x82573398u: index = 6u; break;
+            default: break;
+        }
+        if (index < s_workerEntrySamples.size()) {
+            const uint32_t n = s_workerEntrySamples[index].fetch_add(
+                1u, std::memory_order_relaxed) + 1u;
+            if (n <= 48u) {
+                auto mem = g_activeGuestMemory.lock();
+                const uint8_t *b = mem ? mem->base : nullptr;
+                constexpr uint32_t kWorkerQueue = 0x835EF47Cu;
+                constexpr uint32_t kAsyncManagerGlobal = 0x835E004Cu;
+                uint32_t workerData = 0u, workerCount = 0u, workerCapacity = 0u;
+                uint32_t asyncManager = 0u, asyncVtable = 0u;
+                if (b && validGuestRange(kWorkerQueue, 12u)) {
+                    workerData = loadGuestBe32(b, kWorkerQueue);
+                    workerCount = loadGuestBe32(b, kWorkerQueue + 4u);
+                    workerCapacity = loadGuestBe32(b, kWorkerQueue + 8u);
+                }
+                if (b && validGuestRange(kAsyncManagerGlobal, 4u)) {
+                    asyncManager = loadGuestBe32(b, kAsyncManagerGlobal);
+                    if (asyncManager && validGuestRange(asyncManager, 4u))
+                        asyncVtable = loadGuestBe32(b, asyncManager);
+                }
+                uint32_t requestData = 0u, requestCount = 0u, requestCapacity = 0u;
+                uint32_t requestScheduler = 0u, schedulerVtable = 0u;
+                const uint32_t manager = ctx.r3.u32;
+                if (b && manager >= 0x10000u && validGuestRange(manager, 88u) &&
+                    (guestAddress == 0x82573CB0u || guestAddress == 0x8257D290u)) {
+                    const uint32_t queue = guestAddress == 0x82573CB0u
+                        ? manager + 72u : manager;
+                    if (validGuestRange(queue, 12u)) {
+                        requestData = loadGuestBe32(b, queue);
+                        requestCount = loadGuestBe32(b, queue + 4u);
+                        requestCapacity = loadGuestBe32(b, queue + 8u);
+                    }
+                    if (guestAddress == 0x82573CB0u) {
+                        requestScheduler = loadGuestBe32(b, manager + 84u);
+                        if (requestScheduler && validGuestRange(requestScheduler, 4u))
+                            schedulerVtable = loadGuestBe32(b, requestScheduler);
+                    }
+                }
+                char event[640];
+                std::snprintf(event, sizeof(event),
+                    "B144_STREAM_WORKER_ENTRY fn=0x%08X sample=%u tid=%u lr=0x%08X "
+                    "r3=0x%08X r4=0x%08X r5=0x%08X r29=0x%08X r30=0x%08X r31=0x%08X "
+                    "req_data=0x%08X req_count=%u req_capacity=%u req_scheduler=0x%08X "
+                    "scheduler_vtable=0x%08X worker_data=0x%08X worker_count=%u "
+                    "worker_capacity=%u async_manager=0x%08X async_vtable=0x%08X",
+                    guestAddress, n, static_cast<uint32_t>(g_currentGuestThreadId),
+                    static_cast<uint32_t>(ctx.lr), ctx.r3.u32, ctx.r4.u32, ctx.r5.u32,
+                    ctx.r29.u32, ctx.r30.u32, ctx.r31.u32, requestData, requestCount,
+                    requestCapacity, requestScheduler, schedulerVtable, workerData,
+                    workerCount, workerCapacity, asyncManager, asyncVtable);
+                recordRuntimeTrace(event);
+                if ((guestAddress == 0x82573B80u || guestAddress == 0x82573090u) &&
+                    b && workerCount != 0u && workerData != 0u &&
+                    validGuestRange(workerData, 16u)) {
+                    char head[320];
+                    std::snprintf(head, sizeof(head),
+                        "B144_STREAM_WORKER_HEAD fn=0x%08X data=0x%08X "
+                        "w0=0x%08X w1=0x%08X w2=0x%08X w3=0x%08X",
+                        guestAddress, workerData, loadGuestBe32(b, workerData),
+                        loadGuestBe32(b, workerData + 4u),
+                        loadGuestBe32(b, workerData + 8u),
+                        loadGuestBe32(b, workerData + 12u));
+                    recordRuntimeTrace(head);
+                }
+            }
+        }
+    }
     // Build 81: stream-cache poll state for 0x82575250 (vtable+64 used by 0x82575480).
     if (guestAddress == 0x82575250u) {
         static std::atomic<uint32_t> s_b81Polls{0u};
@@ -4466,16 +4557,19 @@ void xowue_dispatch_indirect(PPCContext &context, uint8_t *base, uint32_t target
             case 0x82575474u: return 4; // provider read/submit callback, vtable+8
             case 0x825754E4u: return 5; // first availability poll, vtable+64
             case 0x82575510u: return 6; // repeated availability poll, vtable+64
+            case 0x82573DB8u: return 7; // notify/schedule newly enqueued 64-byte request
+            case 0x82573B28u: return 8; // resolve async task manager
+            case 0x82573B40u: return 9; // run async task-manager stage
             default: return -1;
         }
     };
-    static std::array<std::atomic<uint32_t>, 7> streamDispatchSamples{};
+    static std::array<std::atomic<uint32_t>, 10> streamDispatchSamples{};
     const int streamSite = streamSiteIndex(callSite);
     const uint32_t sample = streamSite >= 0
         ? streamDispatchSamples[static_cast<size_t>(streamSite)].fetch_add(
               1u, std::memory_order_relaxed) + 1u
         : 0u;
-    // Seven sites x eight samples x enter/return = at most 112 records.
+    // Ten sites x eight samples x enter/return = at most 160 records.
     const bool traceStreamDispatch = streamSite >= 0 && sample <= 8u;
     const uint32_t threadId = g_currentGuestThread
         ? g_currentGuestThread->id : g_currentGuestThreadId;
@@ -4487,7 +4581,10 @@ void xowue_dispatch_indirect(PPCContext &context, uint8_t *base, uint32_t target
         case 0x825751E4u:
         case 0x825753D0u: vtableOffset = 4u; break;
         case 0x82575244u: vtableOffset = 12u; break;
-        case 0x82575474u: vtableOffset = 8u; break;
+        case 0x82575474u:
+        case 0x82573DB8u: vtableOffset = 8u; break;
+        case 0x82573B28u: vtableOffset = 4u; break;
+        case 0x82573B40u: vtableOffset = 36u; break;
         case 0x825754E4u:
         case 0x82575510u: vtableOffset = 64u; break;
         default: break;
@@ -4534,7 +4631,43 @@ void xowue_dispatch_indirect(PPCContext &context, uint8_t *base, uint32_t target
         recordRuntimeTrace(event);
     };
 
+    const bool traceQueueWake = callSite == 0x82573DB8u ||
+        callSite == 0x82573B28u || callSite == 0x82573B40u;
+    const auto logQueueWake = [&](const char *phase, uint32_t result) {
+        if (!traceQueueWake || sample > 8u) return;
+        uint32_t manager = context.r31.u32;
+        uint32_t requestData = 0u, requestCount = 0u, requestCapacity = 0u;
+        uint32_t scheduler = 0u, workerData = 0u, workerCount = 0u, workerCapacity = 0u;
+        if (base && manager >= 0x10000u && validGuestRange(manager, 88u)) {
+            if (callSite == 0x82573DB8u) {
+                scheduler = loadGuestBe32(base, manager + 84u);
+                if (validGuestRange(manager + 72u, 12u)) {
+                    requestData = loadGuestBe32(base, manager + 72u);
+                    requestCount = loadGuestBe32(base, manager + 76u);
+                    requestCapacity = loadGuestBe32(base, manager + 80u);
+                }
+            }
+        }
+        constexpr uint32_t kWorkerQueue = 0x835EF47Cu;
+        if (base && validGuestRange(kWorkerQueue, 12u)) {
+            workerData = loadGuestBe32(base, kWorkerQueue);
+            workerCount = loadGuestBe32(base, kWorkerQueue + 4u);
+            workerCapacity = loadGuestBe32(base, kWorkerQueue + 8u);
+        }
+        char event[448];
+        std::snprintf(event, sizeof(event),
+            "B144_STREAM_QUEUE_WAKE phase=%s site=0x%08X target=0x%08X sample=%u "
+            "tid=%u result=0x%08X manager=0x%08X scheduler=0x%08X "
+            "req_data=0x%08X req_count=%u req_capacity=%u "
+            "worker_data=0x%08X worker_count=%u worker_capacity=%u "
+            "r3=0x%08X r4=0x%08X r5=0x%08X",
+            phase, callSite, target, sample, threadId, result, manager, scheduler,
+            requestData, requestCount, requestCapacity, workerData, workerCount,
+            workerCapacity, context.r3.u32, context.r4.u32, context.r5.u32);
+        recordRuntimeTrace(event);
+    };
     if (traceStreamDispatch) logStreamDispatch("enter", 0u);
+    logQueueWake("enter", 0u);
     PPCFunc *function = xowue_lookup_indirect(context, base, target);
     try {
         function(context, base);
@@ -4543,6 +4676,7 @@ void xowue_dispatch_indirect(PPCContext &context, uint8_t *base, uint32_t target
         throw;
     }
     if (traceStreamDispatch) logStreamDispatch("return", context.r3.u32);
+    logQueueWake("return", context.r3.u32);
 }
 
 // Physical Xenos readback uses the active guest memory mapping; no synthetic data.
