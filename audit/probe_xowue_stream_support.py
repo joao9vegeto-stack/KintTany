@@ -63,10 +63,11 @@ OWNERS = (
     0x82C3C5D0,  # immediate timebase helper called by the T11 hot loop
     0x83269920,  # additional hot worker helper sampled on T11
     0x82C25840,  # additional host/guest scheduler helper sampled on T11
+    0x82B53FA8,  # timing/pacing wait routine called by the hot T11 function
 )
 
 # Resolve a runtime PC to the actual generated AOT function containing it.
-PC_TARGETS = (0x824E72B4,)
+PC_TARGETS = (0x824E72B4, 0x82573E64)
 
 def main():
     ap=argparse.ArgumentParser()
@@ -145,7 +146,7 @@ def main():
                                  "instruction_index":f["instruction_index"]}
                                 for f in result["containing_functions"]],
         "missing":missing,"missing_pc_targets":result["missing_pc_targets"]}))
-    required=(0x82575480,0x82575108,0x82574348,0x82573CB0,0x824A7DF0,0x8257D290,0x822A0608,0x82574508,0x82573B80,0x82C4BE30,0x82690DC0,0x83268358,0x82573090,0x832681D8,0x82C410D0,0x82690DC8,0x82573398,0x82573000,0x82494A60,0x82499150,0x825734B8,0x824AD010,0x831EDA60,0x82494EB8,0x82495770,0x82495DC8,0x82496160,0x824969E0,0x82495F50,0x82496338,0x824970B0,0x824972B0,0x82494E20,0x82497450,0x82494978,0x824989F0,0x824B3F18,0x8243C750,0x824B4CD8,0x82C40F70,0x82C45080,0x82C3FC70,0x82B45838,0x82B3C6D8,0x82C3C5D0,0x83269920,0x82C25840)
+    required=(0x82575480,0x82575108,0x82574348,0x82573CB0,0x824A7DF0,0x8257D290,0x822A0608,0x82574508,0x82573B80,0x82C4BE30,0x82690DC0,0x83268358,0x82573090,0x832681D8,0x82C410D0,0x82690DC8,0x82573398,0x82573000,0x82494A60,0x82499150,0x825734B8,0x824AD010,0x831EDA60,0x82494EB8,0x82495770,0x82495DC8,0x82496160,0x824969E0,0x82495F50,0x82496338,0x824970B0,0x824972B0,0x82494E20,0x82497450,0x82494978,0x824989F0,0x824B3F18,0x8243C750,0x824B4CD8,0x82C40F70,0x82C45080,0x82C3FC70,0x82B45838,0x82B3C6D8,0x82C3C5D0,0x83269920,0x82C25840,0x82B53FA8)
     missing_required=[f"0x{x:08X}" for x in required if x not in found]
     if missing_required:
         raise SystemExit("Required stream poll / callback source missing: "+", ".join(missing_required))
