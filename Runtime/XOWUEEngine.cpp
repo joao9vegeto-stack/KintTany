@@ -716,7 +716,7 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     }
     if (event.find("B146_STREAM_MEMSET_") != std::string::npos) {
         static std::atomic<uint32_t> count{0u};
-        return count.fetch_add(1u, std::memory_order_relaxed) < 96u;
+        return count.fetch_add(1u, std::memory_order_relaxed) < 160u;
     }
     // Keep the exact event lifetime and wait transitions that decide whether
     // asynchronous movie/file work can unblock its guest consumer.
@@ -4558,7 +4558,7 @@ void xowue_trace_stream_memset(PPCContext &ctx, uint8_t *base, uint32_t phase) {
 
     if (phase == 0u) {
         activeSample = sampleCounter.fetch_add(1u, std::memory_order_relaxed) + 1u;
-        if (activeSample > 32u) {
+        if (activeSample > 64u) {
             activeSample = 0u;
             return;
         }
