@@ -449,7 +449,7 @@ assert "std::array<std::atomic<uint32_t>, 10> streamDispatchSamples" in engine
 assert "case 0x82573DB8u: return 7" in engine
 assert "case 0x82573B28u: return 8" in engine
 assert "case 0x82573B40u: return 9" in engine
-assert "B144_STREAM_WORKER_ENTRY" in engine and "B144_STREAM_QUEUE_WAKE" in engine
+assert "B144_STREAM_WORKER_ENTRY" in engine and "B145_STREAM_QUEUE_WAKE" in engine
 assert "const uint32_t kWorkerQueue = 0x835FF47Cu" in engine
 assert "workerCount <= workerCapacity" in engine
 assert "B145_STREAM_QUEUE_WAKE" in engine and "B145_STREAM_WORKER_QUEUE_HEAD" in engine
