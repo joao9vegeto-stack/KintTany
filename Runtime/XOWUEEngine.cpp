@@ -708,7 +708,11 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
     }
     if (event.find("B144_") != std::string::npos) {
         static std::atomic<uint32_t> count{0u};
-        return count.fetch_add(1u, std::memory_order_relaxed) < 160u;
+        return count.fetch_add(1u, std::memory_order_relaxed) < 320u;
+    }
+    if (event.find("B145_") != std::string::npos) {
+        static std::atomic<uint32_t> count{0u};
+        return count.fetch_add(1u, std::memory_order_relaxed) < 240u;
     }
     // Keep the exact event lifetime and wait transitions that decide whether
     // asynchronous movie/file work can unblock its guest consumer.
@@ -4255,7 +4259,9 @@ static void xowue_trace_hot_guest_entry(uint32_t guestAddress, PPCContext &ctx) 
             if (n <= 48u) {
                 auto mem = g_activeGuestMemory.lock();
                 const uint8_t *b = mem ? mem->base : nullptr;
-                constexpr uint32_t kWorkerQueue = 0x835EF47Cu;
+                // sub_82573B80 derives this queue as lis r11,-31904; addi r31,r11,-2948.
+                // Exact guest address: 0x83000000 - 0x0B84 = 0x82FFF47C.
+                constexpr uint32_t kWorkerQueue = 0x82FFF47Cu;
                 constexpr uint32_t kAsyncManagerGlobal = 0x835E004Cu;
                 uint32_t workerData = 0u, workerCount = 0u, workerCapacity = 0u;
                 uint32_t asyncManager = 0u, asyncVtable = 0u;
@@ -4302,15 +4308,21 @@ static void xowue_trace_hot_guest_entry(uint32_t guestAddress, PPCContext &ctx) 
                 recordRuntimeTrace(event);
                 if ((guestAddress == 0x82573B80u || guestAddress == 0x82573090u) &&
                     b && workerCount != 0u && workerData != 0u &&
-                    validGuestRange(workerData, 16u)) {
-                    char head[320];
+                    workerCount <= workerCapacity && workerCapacity <= 4096u &&
+                    validGuestRange(workerData, 104u)) {
+                    char head[480];
                     std::snprintf(head, sizeof(head),
                         "B144_STREAM_WORKER_HEAD fn=0x%08X data=0x%08X "
-                        "w0=0x%08X w1=0x%08X w2=0x%08X w3=0x%08X",
+                        "w0=0x%08X w1=0x%08X w2=0x%08X w3=0x%08X "
+                        "w4=0x%08X w5=0x%08X w6=0x%08X w7=0x%08X",
                         guestAddress, workerData, loadGuestBe32(b, workerData),
                         loadGuestBe32(b, workerData + 4u),
                         loadGuestBe32(b, workerData + 8u),
-                        loadGuestBe32(b, workerData + 12u));
+                        loadGuestBe32(b, workerData + 12u),
+                        loadGuestBe32(b, workerData + 16u),
+                        loadGuestBe32(b, workerData + 20u),
+                        loadGuestBe32(b, workerData + 24u),
+                        loadGuestBe32(b, workerData + 28u));
                     recordRuntimeTrace(head);
                 }
             }
@@ -4634,7 +4646,8 @@ void xowue_dispatch_indirect(PPCContext &context, uint8_t *base, uint32_t target
     const bool traceQueueWake = callSite == 0x82573DB8u ||
         callSite == 0x82573B28u || callSite == 0x82573B40u;
     const auto logQueueWake = [&](const char *phase, uint32_t result) {
-        if (!traceQueueWake || sample > 8u) return;
+        const uint32_t maxSamples = callSite == 0x82573DB8u ? 64u : 8u;
+        if (!traceQueueWake || sample > maxSamples) return;
         uint32_t manager = context.r31.u32;
         uint32_t requestData = 0u, requestCount = 0u, requestCapacity = 0u;
         uint32_t scheduler = 0u, workerData = 0u, workerCount = 0u, workerCapacity = 0u;
@@ -4648,23 +4661,40 @@ void xowue_dispatch_indirect(PPCContext &context, uint8_t *base, uint32_t target
                 }
             }
         }
-        constexpr uint32_t kWorkerQueue = 0x835EF47Cu;
+        constexpr uint32_t kWorkerQueue = 0x82FFF47Cu;
         if (base && validGuestRange(kWorkerQueue, 12u)) {
             workerData = loadGuestBe32(base, kWorkerQueue);
             workerCount = loadGuestBe32(base, kWorkerQueue + 4u);
             workerCapacity = loadGuestBe32(base, kWorkerQueue + 8u);
         }
-        char event[448];
+        const bool workerHeaderValid = base && workerCount <= workerCapacity &&
+            workerCapacity <= 4096u &&
+            (workerCount == 0u || (workerData != 0u && validGuestRange(workerData, 104u)));
+        char event[512];
         std::snprintf(event, sizeof(event),
-            "B144_STREAM_QUEUE_WAKE phase=%s site=0x%08X target=0x%08X sample=%u "
+            "B145_STREAM_QUEUE_WAKE phase=%s site=0x%08X target=0x%08X sample=%u "
             "tid=%u result=0x%08X manager=0x%08X scheduler=0x%08X "
             "req_data=0x%08X req_count=%u req_capacity=%u "
-            "worker_data=0x%08X worker_count=%u worker_capacity=%u "
-            "r3=0x%08X r4=0x%08X r5=0x%08X",
+            "worker_queue=0x%08X worker_data=0x%08X worker_count=%u "
+            "worker_capacity=%u worker_valid=%u r3=0x%08X r4=0x%08X r5=0x%08X",
             phase, callSite, target, sample, threadId, result, manager, scheduler,
-            requestData, requestCount, requestCapacity, workerData, workerCount,
-            workerCapacity, context.r3.u32, context.r4.u32, context.r5.u32);
+            requestData, requestCount, requestCapacity, kWorkerQueue, workerData,
+            workerCount, workerCapacity, workerHeaderValid ? 1u : 0u,
+            context.r3.u32, context.r4.u32, context.r5.u32);
         recordRuntimeTrace(event);
+        if (workerHeaderValid && workerCount != 0u && sample <= 64u) {
+            char head[400];
+            std::snprintf(head, sizeof(head),
+                "B145_STREAM_WORKER_QUEUE_HEAD sample=%u data=0x%08X "
+                "w0=0x%08X w1=0x%08X w2=0x%08X w3=0x%08X "
+                "w4=0x%08X w5=0x%08X w6=0x%08X w7=0x%08X",
+                sample, workerData, loadGuestBe32(base, workerData),
+                loadGuestBe32(base, workerData + 4u), loadGuestBe32(base, workerData + 8u),
+                loadGuestBe32(base, workerData + 12u), loadGuestBe32(base, workerData + 16u),
+                loadGuestBe32(base, workerData + 20u), loadGuestBe32(base, workerData + 24u),
+                loadGuestBe32(base, workerData + 28u));
+            recordRuntimeTrace(head);
+        }
     };
     if (traceStreamDispatch) logStreamDispatch("enter", 0u);
     logQueueWake("enter", 0u);
