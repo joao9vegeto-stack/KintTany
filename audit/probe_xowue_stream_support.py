@@ -39,6 +39,25 @@ OWNERS = (
     0x825734B8,  # worker's second queue poll helper
     0x824AD010,  # worker's final queue poll/dispatch helper
     0x831EDA60,  # global async stream manager initializer
+    0x82494EB8,  # async scheduler task stage 1
+    0x82495770,  # async scheduler task stage 2
+    0x82495DC8,  # async scheduler task stage 4
+    0x82496160,  # async scheduler task stage 5
+    0x824969E0,  # async scheduler task stage 6
+    0x82495F50,  # async scheduler task stage 7
+    0x82496338,  # async scheduler task stage 8
+    0x824970B0,  # async scheduler task stage 9
+    0x824972B0,  # async scheduler task stage 10
+    0x82494E20,  # async scheduler post-stage check
+    0x82497450,  # async scheduler finalize helper
+    0x82494978,  # async event/work object factory
+    0x824989F0,  # stream task descriptor builder
+    0x824B3F18,  # synchronization object allocator
+    0x8243C750,  # synchronization object release
+    0x824B4CD8,  # scheduler notification helper
+    0x82C40F70,  # decoder work batch selector
+    0x82C45080,  # mutant release exception path
+    0x82C3FC70,  # video thread completion helper
 )
 
 def main():
@@ -93,7 +112,11 @@ def main():
                 "stream_priority_queue_builder":"0x82499150",
                 "stream_worker_secondary_poll":"0x825734B8",
                 "stream_worker_final_poll":"0x824AD010",
-                "async_stream_manager_initializer":"0x831EDA60"
+                "async_stream_manager_initializer":"0x831EDA60",
+                "scheduler_task_stages":["0x82494EB8","0x82495770","0x82495BF8","0x82495DC8","0x82496160","0x824969E0","0x82495F50","0x82496338","0x824970B0","0x824972B0"],
+                "scheduler_post_stage":["0x82494E20","0x82497450"],
+                "decoder_work_batch":"0x82C40F70",
+                "video_thread_completion":"0x82C3FC70"
             }}
     args.report.parent.mkdir(parents=True,exist_ok=True)
     args.report.write_text(json.dumps(result,indent=2),encoding="utf-8")
@@ -102,7 +125,7 @@ def main():
                   "instruction_comments":f["instruction_comment_count"],
                   "body_chars":len(f["body"])} for f in result["functions"]],
         "missing":missing}))
-    required=(0x82575480,0x82575108,0x82574348,0x82573CB0,0x824A7DF0,0x8257D290,0x822A0608,0x82574508,0x82573B80,0x82C4BE30,0x82690DC0,0x83268358,0x82573090,0x832681D8,0x82C410D0,0x82690DC8,0x82573398,0x82573000,0x82494A60,0x82499150,0x825734B8,0x824AD010,0x831EDA60)
+    required=(0x82575480,0x82575108,0x82574348,0x82573CB0,0x824A7DF0,0x8257D290,0x822A0608,0x82574508,0x82573B80,0x82C4BE30,0x82690DC0,0x83268358,0x82573090,0x832681D8,0x82C410D0,0x82690DC8,0x82573398,0x82573000,0x82494A60,0x82499150,0x825734B8,0x824AD010,0x831EDA60,0x82494EB8,0x82495770,0x82495DC8,0x82496160,0x824969E0,0x82495F50,0x82496338,0x824970B0,0x824972B0,0x82494E20,0x82497450,0x82494978,0x824989F0,0x824B3F18,0x8243C750,0x824B4CD8,0x82C40F70,0x82C45080,0x82C3FC70)
     missing_required=[f"0x{x:08X}" for x in required if x not in found]
     if missing_required:
         raise SystemExit("Required stream poll / callback source missing: "+", ".join(missing_required))
