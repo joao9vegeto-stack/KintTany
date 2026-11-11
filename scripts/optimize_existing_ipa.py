@@ -367,9 +367,24 @@ def main() -> None:
     normalized_dbr_rows = [line.split("\t", 1) for line in normalized_runtime_lines
                            if line.split("\t", 1)[0].strip() == "draw_barriers"]
     if len(normalized_dbr_rows) != 1 or normalized_dbr_rows[0] != ["draw_barriers", "game"]:
-        fail("runtime profile.tsv did not retain exactly one draw_barriers=game key/value")
+        fail("runtime staging profile.tsv did not retain exactly one draw_barriers=game key/value")
 
-    log("BOTW GPU ordering: draw_barriers=game in compile-time and runtime profiles (explicit NVN barriers retained; no render-scale or shader changes)")
+    # Xcode builds from Gen/framework, but this optimizer replaces only the
+    # executable in the already-unpacked app framework. The IPA packer later
+    # reads that original app directory, so copy the normalized runtime profile
+    # back into it before codesigning and repacking; otherwise the old value
+    # (draw_barriers=0) survives in the delivered IPA.
+    app_runtime_profile_path = fw / "profile.tsv"
+    if not app_runtime_profile_path.is_file():
+        fail("source app framework profile.tsv is missing before runtime-profile sync")
+    shutil.copy2(runtime_profile_path, app_runtime_profile_path)
+    app_runtime_lines = app_runtime_profile_path.read_text(encoding="utf-8").splitlines()
+    app_runtime_dbr_rows = [line.split("\t", 1) for line in app_runtime_lines
+                            if line.split("\t", 1)[0].strip() == "draw_barriers"]
+    if len(app_runtime_dbr_rows) != 1 or app_runtime_dbr_rows[0] != ["draw_barriers", "game"]:
+        fail("preserved app framework profile.tsv did not receive draw_barriers=game")
+
+    log("BOTW GPU ordering: draw_barriers=game in compile-time profile, Xcode staging profile, and preserved app runtime profile (explicit NVN barriers retained; no render-scale or shader changes)")
 
     # Recreate the host's normal iOS compile settings from its Makefile, without touching game assets.
     cfg = gen / "dm.xcconfig"
