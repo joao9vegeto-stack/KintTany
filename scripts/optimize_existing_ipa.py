@@ -345,18 +345,18 @@ def main() -> None:
         fail("copied runtime profile.tsv is missing; refusing ambiguous draw-barrier defaults")
     runtime_lines = runtime_profile_path.read_text(encoding="utf-8").splitlines()
     runtime_dbr_rows = [i for i, line in enumerate(runtime_lines)
-                        if line.split("\\t", 1)[0] == "draw_barriers"]
+                        if line.split("\t", 1)[0] == "draw_barriers"]
     if len(runtime_dbr_rows) > 1:
         fail("runtime profile.tsv has duplicate draw_barriers keys")
     if runtime_dbr_rows:
-        runtime_fields = runtime_lines[runtime_dbr_rows[0]].split("\\t", 1)
+        runtime_fields = runtime_lines[runtime_dbr_rows[0]].split("\t", 1)
         if len(runtime_fields) != 2 or runtime_fields[1] not in ("full", "game"):
             fail("runtime profile.tsv has an unexpected draw_barriers value")
-        runtime_lines[runtime_dbr_rows[0]] = "draw_barriers\\tgame"
+        runtime_lines[runtime_dbr_rows[0]] = "draw_barriers\tgame"
     else:
-        runtime_lines.append("draw_barriers\\tgame")
-    runtime_profile_path.write_text("\\n".join(runtime_lines) + "\\n", encoding="utf-8")
-    if "draw_barriers\\tgame" not in runtime_profile_path.read_text(encoding="utf-8").splitlines():
+        runtime_lines.append("draw_barriers\tgame")
+    runtime_profile_path.write_text("\n".join(runtime_lines) + "\n", encoding="utf-8")
+    if "draw_barriers\tgame" not in runtime_profile_path.read_text(encoding="utf-8").splitlines():
         fail("runtime profile.tsv did not retain draw_barriers=game")
 
     log("BOTW GPU ordering: draw_barriers=game in compile-time and runtime profiles (explicit NVN barriers retained; no render-scale or shader changes)")
