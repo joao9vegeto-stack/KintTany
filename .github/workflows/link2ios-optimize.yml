@@ -62,7 +62,6 @@ jobs:
           python3 - <<'PY'
           import json
           import os
-          import pathlib
           import urllib.request
 
           repo = os.environ["GITHUB_REPOSITORY"]
@@ -112,18 +111,6 @@ jobs:
           number, source_run, artifact = max(candidates, key=lambda item: item[0])
           if number == 6:
               raise SystemExit("Run #6 is explicitly excluded from the source chain")
-          out = pathlib.Path(os.environ["RUNNER_TEMP"]) / "Link2iOS-BOTW-previous-optimized.zip"
-          request = urllib.request.Request(
-              f"{api}/actions/artifacts/{artifact['id']}/zip", headers=headers
-          )
-          with urllib.request.urlopen(request, timeout=180) as response, out.open("wb") as target:
-              while True:
-                  chunk = response.read(16 * 1024 * 1024)
-                  if not chunk:
-                      break
-                  target.write(chunk)
-          if out.stat().st_size < 1024:
-              raise SystemExit("Downloaded previous optimized IPA artifact is empty or truncated")
           output = os.environ["GITHUB_OUTPUT"]
           with open(output, "a", encoding="utf-8") as stream:
               stream.write(f"source_artifact_id={artifact['id']}\n")
@@ -134,8 +121,22 @@ jobs:
           print(f"SOURCE_RUN_ID={source_run['id']}")
           print(f"SOURCE_ARTIFACT_ID={artifact['id']}")
           print(f"SOURCE_ARTIFACT_NAME={artifact['name']}")
-          print(f"SOURCE_ARTIFACT_SIZE={out.stat().st_size}")
           PY
+
+      - name: Download the selected optimized IPA archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_ARTIFACT_ID: ${{ steps.select-source.outputs.source_artifact_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 5 --retry-all-errors --silent --show-error \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$SOURCE_ARTIFACT_ID/zip" \
+            --output "$RUNNER_TEMP/Link2iOS-BOTW-previous-optimized.zip"
+          test -s "$RUNNER_TEMP/Link2iOS-BOTW-previous-optimized.zip"
+          echo "PREVIOUS_OPTIMIZED_IPA_ARTIFACT_BYTES=$(stat -f%z "$RUNNER_TEMP/Link2iOS-BOTW-previous-optimized.zip")"
 
       - name: Rebuild only DmShellGame host framework
         shell: bash
