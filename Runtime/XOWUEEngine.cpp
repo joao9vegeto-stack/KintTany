@@ -4264,8 +4264,8 @@ static void xowue_trace_hot_guest_entry(uint32_t guestAddress, PPCContext &ctx) 
                 auto mem = g_activeGuestMemory.lock();
                 const uint8_t *b = mem ? mem->base : nullptr;
                 // sub_82573B80 derives this queue as lis r11,-31904; addi r31,r11,-2948.
-                // Exact guest address: 0x83000000 - 0x0B84 = 0x82FFF47C.
-                constexpr uint32_t kWorkerQueue = 0x82FFF47Cu;
+                // Exact guest address: 0x83600000 - 0x0B84 = 0x835FF47C.
+                constexpr uint32_t kWorkerQueue = 0x835FF47Cu;
                 constexpr uint32_t kAsyncManagerGlobal = 0x835E004Cu;
                 uint32_t workerData = 0u, workerCount = 0u, workerCapacity = 0u;
                 uint32_t asyncManager = 0u, asyncVtable = 0u;
@@ -4730,7 +4730,7 @@ void xowue_dispatch_indirect(PPCContext &context, uint8_t *base, uint32_t target
                 }
             }
         }
-        constexpr uint32_t kWorkerQueue = 0x82FFF47Cu;
+        constexpr uint32_t kWorkerQueue = 0x835FF47Cu;
         if (base && validGuestRange(kWorkerQueue, 12u)) {
             workerData = loadGuestBe32(base, kWorkerQueue);
             workerCount = loadGuestBe32(base, kWorkerQueue + 4u);
