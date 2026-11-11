@@ -4185,20 +4185,43 @@ static void __xowue_sub_83847AC0_init(PPCContext &ctx, uint8_t *base) {
 static void __xowue_sub_83847AC4_free(PPCContext &ctx, uint8_t *) { ctx.r3.u64=0ull; }
 
 static void xowue_trace_hot_guest_entry(uint32_t guestAddress, PPCContext &ctx) {
-    // Build 143: the final Build 142.1 snapshot caught worker T9 inside this
-    // guest memset, called by sub_82573DE0 with (destination, zero, size).
-    // Capture the original PPC arguments once per call; do not change memory.
-    if (guestAddress == 0x82C2A1F0u) {
+    // Build 143: the Build 142.1 worker snapshot ended inside sub_82C2A1F0,
+    // called only from this observed error path in sub_82573DE0. Log its exact
+    // descriptor fields and the status saved at [r1+80]; never alter memory.
+    if (guestAddress == 0x82C2A1F0u &&
+        static_cast<uint32_t>(ctx.lr) == 0x82573E64u) {
         static std::atomic<uint32_t> s_memsetSamples{0u};
         const uint32_t n = s_memsetSamples.fetch_add(1u, std::memory_order_relaxed) + 1u;
-        if (n <= 16u) {
-            char ev[256];
+        if (n <= 64u) {
+            auto mem = g_activeGuestMemory.lock();
+            const uint8_t *guestBase = mem ? mem->base : nullptr;
+            const uint32_t descriptor = ctx.r29.u32;
+            const bool descriptorValid = guestBase != nullptr &&
+                validGuestRange(descriptor, 48u);
+            const uint32_t descriptorSize = descriptorValid
+                ? loadGuestBe32(guestBase, descriptor + 40u) : 0xFFFFFFFFu;
+            const uint32_t descriptorDestination = descriptorValid
+                ? loadGuestBe32(guestBase, descriptor + 44u) : 0xFFFFFFFFu;
+            const uint64_t statusAddress64 = static_cast<uint64_t>(ctx.r1.u32) + 80u;
+            const uint32_t ioStatus = guestBase != nullptr &&
+                statusAddress64 <= UINT32_MAX &&
+                validGuestRange(static_cast<uint32_t>(statusAddress64), 4u)
+                    ? loadGuestBe32(guestBase, static_cast<uint32_t>(statusAddress64))
+                    : 0xFFFFFFFFu;
+            const bool rangeValid = validGuestRange(ctx.r3.u32,
+                                                    static_cast<size_t>(ctx.r5.u32));
+            char ev[448];
             std::snprintf(ev, sizeof(ev),
-                "XOWUE_MEMSET_ENTRY sample=%u thread=%u dst=0x%08X value=0x%08X size=0x%08X "
-                "lr=0x%08X dst_size_valid=%u",
-                n, static_cast<uint32_t>(g_currentGuestThreadId), ctx.r3.u32, ctx.r4.u32,
-                ctx.r5.u32, static_cast<uint32_t>(ctx.lr),
-                validGuestRange(ctx.r3.u32, static_cast<size_t>(ctx.r5.u32)) ? 1u : 0u);
+                "XOWUE_MEMSET_STREAM_ERROR sample=%u thread=%u descriptor=0x%08X "
+                "io_status=0x%08X dst=0x%08X value=0x%08X size=0x%08X "
+                "descriptor_dst=0x%08X descriptor_size=0x%08X lr=0x%08X "
+                "descriptor_valid=%u range_valid=%u args_match=%u",
+                n, static_cast<uint32_t>(g_currentGuestThreadId), descriptor, ioStatus,
+                ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, descriptorDestination,
+                descriptorSize, static_cast<uint32_t>(ctx.lr),
+                descriptorValid ? 1u : 0u, rangeValid ? 1u : 0u,
+                descriptorValid && descriptorDestination == ctx.r3.u32 &&
+                    descriptorSize == ctx.r5.u32 ? 1u : 0u);
             recordRuntimeTrace(ev);
         }
     }
