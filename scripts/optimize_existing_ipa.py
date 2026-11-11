@@ -345,19 +345,29 @@ def main() -> None:
         fail("copied runtime profile.tsv is missing; refusing ambiguous draw-barrier defaults")
     runtime_lines = runtime_profile_path.read_text(encoding="utf-8").splitlines()
     runtime_dbr_rows = [i for i, line in enumerate(runtime_lines)
-                        if line.split("\t", 1)[0] == "draw_barriers"]
+                        if line.split("\t", 1)[0].strip() == "draw_barriers"]
     if len(runtime_dbr_rows) > 1:
         fail("runtime profile.tsv has duplicate draw_barriers keys")
     if runtime_dbr_rows:
-        runtime_fields = runtime_lines[runtime_dbr_rows[0]].split("\t", 1)
-        if len(runtime_fields) != 2 or runtime_fields[1] not in ("full", "game"):
-            fail("runtime profile.tsv has an unexpected draw_barriers value")
+        # This optimizer deliberately overrides the source IPA's BOTW runtime
+        # ordering. Older profile schemas can carry legacy/unknown values, so
+        # normalize the entire row instead of rejecting a value we immediately
+        # replace. Duplicate keys remain fatal because their precedence is
+        # ambiguous to the runtime parser.
+        source_row = runtime_lines[runtime_dbr_rows[0]]
+        source_fields = source_row.split("\t", 1)
+        source_value = source_fields[1].strip() if len(source_fields) == 2 else "<missing>"
+        if source_value != "game":
+            log(f"normalizing runtime draw_barriers={source_value!r} to 'game'")
         runtime_lines[runtime_dbr_rows[0]] = "draw_barriers\tgame"
     else:
         runtime_lines.append("draw_barriers\tgame")
     runtime_profile_path.write_text("\n".join(runtime_lines) + "\n", encoding="utf-8")
-    if "draw_barriers\tgame" not in runtime_profile_path.read_text(encoding="utf-8").splitlines():
-        fail("runtime profile.tsv did not retain draw_barriers=game")
+    normalized_runtime_lines = runtime_profile_path.read_text(encoding="utf-8").splitlines()
+    normalized_dbr_rows = [line.split("\t", 1) for line in normalized_runtime_lines
+                           if line.split("\t", 1)[0].strip() == "draw_barriers"]
+    if len(normalized_dbr_rows) != 1 or normalized_dbr_rows[0] != ["draw_barriers", "game"]:
+        fail("runtime profile.tsv did not retain exactly one draw_barriers=game key/value")
 
     log("BOTW GPU ordering: draw_barriers=game in compile-time and runtime profiles (explicit NVN barriers retained; no render-scale or shader changes)")
 
