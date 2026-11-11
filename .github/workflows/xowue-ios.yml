@@ -427,6 +427,50 @@ jobs:
               decl = 'extern "C" bool xowue_82dc2390_guard(struct PPCContext& ctx, uint8_t* base);\n' + marker
               if h.count(marker) != 1: raise SystemExit("Build 65 guard declaration insertion point changed")
               h = h.replace(marker,decl,1)
+          # The host FPCR uses a different encoding order from x86 MXCSR.
+          # Keep independent host->guest tables and prove all four round trips.
+          global_host_to_guest = (
+              "    static constexpr size_t HostToGuest[] = { PPC_ROUND_NEAREST, "
+              "PPC_ROUND_DOWN, PPC_ROUND_UP, PPC_ROUND_TOWARD_ZERO };"
+          )
+          if h.count(global_host_to_guest) != 1:
+              raise SystemExit("FPSCR global HostToGuest table changed or is not unique")
+          h = h.replace(global_host_to_guest + "\n", "", 1)
+
+          x86_flush = (
+              "    static constexpr size_t FlushMask = "
+              "SIMDE_MM_FLUSH_ZERO_MASK | _MM_DENORMALS_ZERO_MASK;\n"
+          )
+          x86_rounding = (
+              "    static constexpr size_t HostToGuest[] = { PPC_ROUND_NEAREST, "
+              "PPC_ROUND_DOWN, PPC_ROUND_UP, PPC_ROUND_TOWARD_ZERO };\n"
+              "    static_assert(HostToGuest[(GuestToHost[0] & RoundMask) >> RoundShift] == PPC_ROUND_NEAREST);\n"
+              "    static_assert(HostToGuest[(GuestToHost[1] & RoundMask) >> RoundShift] == PPC_ROUND_TOWARD_ZERO);\n"
+              "    static_assert(HostToGuest[(GuestToHost[2] & RoundMask) >> RoundShift] == PPC_ROUND_UP);\n"
+              "    static_assert(HostToGuest[(GuestToHost[3] & RoundMask) >> RoundShift] == PPC_ROUND_DOWN);\n"
+          )
+          if h.count(x86_flush) != 1:
+              raise SystemExit("FPSCR x86 insertion point changed or is not unique")
+          h = h.replace(x86_flush, x86_flush + x86_rounding, 1)
+
+          arm_guest_to_host = (
+              "    static constexpr size_t GuestToHost[] = { 0 << RoundShift, "
+              "3 << RoundShift, 1 << RoundShift, 2 << RoundShift };\n"
+          )
+          arm_rounding = (
+              "    static constexpr size_t HostToGuest[] = { PPC_ROUND_NEAREST, "
+              "PPC_ROUND_UP, PPC_ROUND_DOWN, PPC_ROUND_TOWARD_ZERO };\n"
+              "    static_assert(HostToGuest[(GuestToHost[0] & RoundMask) >> RoundShift] == PPC_ROUND_NEAREST);\n"
+              "    static_assert(HostToGuest[(GuestToHost[1] & RoundMask) >> RoundShift] == PPC_ROUND_TOWARD_ZERO);\n"
+              "    static_assert(HostToGuest[(GuestToHost[2] & RoundMask) >> RoundShift] == PPC_ROUND_UP);\n"
+              "    static_assert(HostToGuest[(GuestToHost[3] & RoundMask) >> RoundShift] == PPC_ROUND_DOWN);\n"
+          )
+          if h.count(arm_guest_to_host) != 1:
+              raise SystemExit("FPSCR ARM64 insertion point changed or is not unique")
+          h = h.replace(arm_guest_to_host, arm_guest_to_host + arm_rounding, 1)
+
+          if h.count("HostToGuest[] =") != 2:
+              raise SystemExit("FPSCR must have exactly one x86 and one ARM64 read-back table")
           context.write_text(h)
           PY
           cp "$PPC_CONTEXT" "$AOT_PPC_CONTEXT"
