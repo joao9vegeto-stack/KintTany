@@ -458,6 +458,8 @@ memset_patcher=Path("tools/patch_xowue_stream_memset_probe.py").read_text()
 workflow=Path(".github/workflows/xowue-ios.yml").read_text()
 assert "void xowue_trace_stream_memset(PPCContext &ctx, uint8_t *base, uint32_t phase)" in engine
 assert "B146_STREAM_MEMSET_BEGIN" in engine and "B146_STREAM_MEMSET_END" in engine
+assert "if (activeSample > 64u)" in engine
+assert 'return count.fetch_add(1u, std::memory_order_relaxed) < 160u;' in engine
 assert "validGuestRange(ctx.r3.u32, static_cast<uint64_t>(ctx.r5.u32))" in engine
 assert "0x82573E64" in memset_patcher and "sub_82C2A1F0(ctx, base);" in memset_patcher
 assert "patch_xowue_stream_memset_probe.py --self-test" in workflow
