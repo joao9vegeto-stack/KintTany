@@ -21,7 +21,7 @@ from pathlib import Path, PurePosixPath
 
 TITLE_ID = "01007EF00011E000"
 FRAMEWORK_NAME = f"DmGame{TITLE_ID}.framework"
-SOURCE_ARTIFACT_ID = 13802649444
+IGNORED_SOURCE_RUN_NUMBERS = {6}
 ENGINE_PIN = "81906931262fb25d774cce8bca2db8926439e5a2"
 UPSTREAM_OPTIMIZATION = "3304d6a0d7edebc4bb5b57c73e6d7b431721c8f5"
 
@@ -175,10 +175,21 @@ def extract_entitlements(executable: Path, output: Path) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--artifact-zip", type=Path, required=True)
+    ap.add_argument("--source-artifact-id", type=int, required=True)
+    ap.add_argument("--source-artifact-name", required=True)
+    ap.add_argument("--source-run-id", type=int, required=True)
+    ap.add_argument("--source-run-number", type=int, required=True)
     ap.add_argument("--nx2apple-root", type=Path, required=True)
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--work", type=Path, required=True)
     args = ap.parse_args()
+    if args.source_artifact_id <= 0 or args.source_run_id <= 0 or args.source_run_number <= 0:
+        fail("source artifact/run identifiers must be positive integers")
+    if args.source_run_number in IGNORED_SOURCE_RUN_NUMBERS:
+        fail(f"source run #{args.source_run_number} is explicitly excluded from the optimization chain")
+    expected_source_name = f"Link2iOS-BOTW-Optimized-{args.source_run_number}"
+    if args.source_artifact_name != expected_source_name:
+        fail(f"source artifact name does not match its run number: {args.source_artifact_name!r}")
 
     artifact_zip = args.artifact_zip.resolve()
     nx = args.nx2apple_root.resolve()
@@ -213,7 +224,19 @@ def main() -> None:
         source_report = json.loads(report_tmp.read_text(encoding="utf-8"))
         if source_report.get("project") != "Link2iOS" or source_report.get("title_id") != TITLE_ID:
             fail("source artifact report does not identify the expected Link2iOS BOTW build")
+        if source_report.get("engine_pin") != ENGINE_PIN:
+            fail("source IPA was not produced from the exact pinned NX2Apple engine revision")
+        if source_report.get("rebuilt_host_framework") is not True or source_report.get("reused_game_modules_verbatim") is not True:
+            fail("source artifact is not a prior host-optimized IPA with the original BOTW modules preserved")
+        if source_report.get("recompiled_game_framework") is not False:
+            fail("source artifact report does not prove that BOTW game modules were reused")
+        if source_report.get("render_quality_reduced") is not False or source_report.get("resolution_changed") is not False:
+            fail("source artifact report indicates a graphics-quality or resolution reduction")
+        prior_hash = source_report.get("optimized_framework_executable_sha256", "")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(prior_hash)):
+            fail("source artifact report lacks a valid optimized framework SHA-256; refusing to restart from an unoptimized IPA")
         copy_zip_member(z, ipas[0], source_ipa)
+    log(f"source chain: run #{args.source_run_number}, run_id={args.source_run_id}, artifact={args.source_artifact_id} ({args.source_artifact_name})")
     log(f"source IPA verified: {source_ipa.stat().st_size:,} bytes; no game assets will be rebuilt")
 
     unpack = work / "unpacked"
@@ -246,6 +269,8 @@ def main() -> None:
         fail("source game profile must preserve Handheld mode and the 60 FPS target")
 
     old_hash = sha256(old_binary)
+    if old_hash != prior_hash:
+        fail("source framework executable SHA-256 does not match the previous optimized build report; lineage is broken")
 
     # Reset Gen before writing the Mach-O assembly: otherwise the cleanup would delete embed.S.
     gen = ios / "Gen"
@@ -415,7 +440,10 @@ def main() -> None:
         "project": "Link2iOS",
         "game": "The Legend of Zelda: Breath of the Wild",
         "title_id": TITLE_ID,
-        "source_artifact_id": SOURCE_ARTIFACT_ID,
+        "source_artifact_id": args.source_artifact_id,
+        "source_artifact_name": args.source_artifact_name,
+        "source_run_id": args.source_run_id,
+        "source_run_number": args.source_run_number,
         "source_run": source_report.get("source_run"),
         "engine_pin": ENGINE_PIN,
         "upstream_optimization_commit": UPSTREAM_OPTIMIZATION,

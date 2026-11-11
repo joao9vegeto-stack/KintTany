@@ -52,26 +52,101 @@ jobs:
           git -C engine apply --check "$GITHUB_WORKSPACE/scripts/patches/botw-metal4-encode-thread.patch"
           echo "PATCH_APPLIES_TO_PINNED_ENGINE=1"
 
-      - name: Download existing repacked IPA artifact (no game-data rebuild)
+      - name: Select and download the previous optimized IPA (skip run #6)
+        id: select-source
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --location --retry 5 --retry-all-errors --silent --show-error \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/joao9vegeto-stack/KintTany/actions/artifacts/13802649444/zip" \
-            --output "$RUNNER_TEMP/Link2iOS-BOTW-existing.zip"
-          test -s "$RUNNER_TEMP/Link2iOS-BOTW-existing.zip"
-          echo "EXISTING_IPA_ARTIFACT_DOWNLOADED=$(stat -f%z "$RUNNER_TEMP/Link2iOS-BOTW-existing.zip")"
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import urllib.request
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          branch = "Link2iOS"
+          current_run_number = int(os.environ["GITHUB_RUN_NUMBER"])
+          workflow_id = 413938550
+          ignored_run_numbers = {6}
+          api = f"https://api.github.com/repos/{repo}"
+          headers = {
+              "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "User-Agent": "Link2iOS-Artifact-Chain",
+          }
+
+          def get_json(url):
+              request = urllib.request.Request(url, headers=headers)
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  return json.loads(response.read().decode("utf-8"))
+
+          runs = get_json(f"{api}/actions/runs?branch={branch}&per_page=100")
+          candidates = []
+          for run in runs.get("workflow_runs", []):
+              number = int(run.get("run_number", 0))
+              if (run.get("workflow_id") != workflow_id
+                      or run.get("path") != ".github/workflows/link2ios-optimize.yml"
+                      or run.get("head_branch") != branch
+                      or run.get("event") != "push"
+                      or run.get("status") != "completed"
+                      or run.get("conclusion") != "success"
+                      or number >= current_run_number
+                      or number in ignored_run_numbers):
+                  continue
+              artifacts = get_json(f"{api}/actions/runs/{run['id']}/artifacts")
+              expected_name = f"Link2iOS-BOTW-Optimized-{number}"
+              matches = [
+                  item for item in artifacts.get("artifacts", [])
+                  if item.get("name") == expected_name and not item.get("expired", False)
+              ]
+              if len(matches) == 1:
+                  candidates.append((number, run, matches[0]))
+              elif len(matches) > 1:
+                  raise SystemExit(f"Ambiguous output artifacts for run #{number}")
+
+          if not candidates:
+              raise SystemExit("No previous successful optimized IPA artifact found; refusing to use the original/base IPA")
+          number, source_run, artifact = max(candidates, key=lambda item: item[0])
+          if number == 6:
+              raise SystemExit("Run #6 is explicitly excluded from the source chain")
+          out = pathlib.Path(os.environ["RUNNER_TEMP"]) / "Link2iOS-BOTW-previous-optimized.zip"
+          request = urllib.request.Request(
+              f"{api}/actions/artifacts/{artifact['id']}/zip", headers=headers
+          )
+          with urllib.request.urlopen(request, timeout=180) as response, out.open("wb") as target:
+              while True:
+                  chunk = response.read(16 * 1024 * 1024)
+                  if not chunk:
+                      break
+                  target.write(chunk)
+          if out.stat().st_size < 1024:
+              raise SystemExit("Downloaded previous optimized IPA artifact is empty or truncated")
+          output = os.environ["GITHUB_OUTPUT"]
+          with open(output, "a", encoding="utf-8") as stream:
+              stream.write(f"source_artifact_id={artifact['id']}\n")
+              stream.write(f"source_artifact_name={artifact['name']}\n")
+              stream.write(f"source_run_id={source_run['id']}\n")
+              stream.write(f"source_run_number={number}\n")
+          print(f"SOURCE_RUN_NUMBER={number}")
+          print(f"SOURCE_RUN_ID={source_run['id']}")
+          print(f"SOURCE_ARTIFACT_ID={artifact['id']}")
+          print(f"SOURCE_ARTIFACT_NAME={artifact['name']}")
+          print(f"SOURCE_ARTIFACT_SIZE={out.stat().st_size}")
+          PY
 
       - name: Rebuild only DmShellGame host framework
         shell: bash
         run: |
           set -euo pipefail
           python scripts/optimize_existing_ipa.py \
-            --artifact-zip "$RUNNER_TEMP/Link2iOS-BOTW-existing.zip" \
+            --artifact-zip "$RUNNER_TEMP/Link2iOS-BOTW-previous-optimized.zip" \
+            --source-artifact-id "${{ steps.select-source.outputs.source_artifact_id }}" \
+            --source-artifact-name "${{ steps.select-source.outputs.source_artifact_name }}" \
+            --source-run-id "${{ steps.select-source.outputs.source_run_id }}" \
+            --source-run-number "${{ steps.select-source.outputs.source_run_number }}" \
             --nx2apple-root "$RUNNER_TEMP/NX2Apple" \
             --output "$RUNNER_TEMP/link2ios-optimized-output" \
             --work "$RUNNER_TEMP/link2ios-optimized-work"
