@@ -81,18 +81,18 @@ def main():
         entries=list(FUNC.finditer(src))
         for i,entry in enumerate(entries):
             owner=int(entry.group(1)[4:],16)
-            if owner not in wanted: continue
             end=entries[i+1].start() if i+1<len(entries) else len(src)
             body=src[entry.end():end]
-            comments=COMMENT.findall(body)
+            comment_count=len(COMMENT.findall(body))
             for pc in PC_TARGETS:
-                if owner <= pc < owner + len(comments) * 4:
+                if owner <= pc < owner + comment_count * 4:
                     found_pcs[pc]={"requested_pc":f"0x{pc:08X}","owner":f"0x{owner:08X}",
                                    "name":f"sub_{owner:08X}","file":file.name,
                                    "instruction_index":(pc-owner)//4,"body":body}
-            found[owner]={"name":f"sub_{owner:08X}","file":file.name,
-                          "instruction_comment_count":len(COMMENT.findall(body)),
-                          "body":body}
+            if owner in wanted:
+                found[owner]={"name":f"sub_{owner:08X}","file":file.name,
+                              "instruction_comment_count":comment_count,
+                              "body":body}
     missing=[f"0x{x:08X}" for x in OWNERS if x not in found]
     result={"purpose":"Verbatim generated AOT bodies for stream polling and read completion investigation.",
             "functions":[found[x] for x in OWNERS if x in found],
