@@ -299,15 +299,15 @@ def main() -> None:
     if not game_profile_path.is_file():
         fail("pinned NX2Apple tree lacks the BOTW game profile")
     profile_lines = game_profile_path.read_text(encoding="utf-8").splitlines()
-    dbr_rows = [i for i, line in enumerate(profile_lines) if line.split("\\t", 1)[0] == "draw_barriers"]
+    dbr_rows = [i for i, line in enumerate(profile_lines) if line.split("\t", 1)[0] == "draw_barriers"]
     if len(dbr_rows) > 1:
         fail("BOTW game profile has duplicate draw_barriers keys")
     if dbr_rows:
-        profile_lines[dbr_rows[0]] = "draw_barriers\\tgame"
+        profile_lines[dbr_rows[0]] = "draw_barriers\tgame"
     else:
         profile_lines += ["", "# iOS GPU overlap trial: keep NVN's explicit game barriers; overlap independent pass stages",
-                          "draw_barriers\\tgame"]
-    game_profile_path.write_text("\\n".join(profile_lines) + "\\n", encoding="utf-8")
+                          "draw_barriers\tgame"]
+    game_profile_path.write_text("\n".join(profile_lines) + "\n", encoding="utf-8")
     log("BOTW GPU ordering: draw_barriers=game (explicit game barriers retained; no render-scale or shader changes)")
 
     # Recreate the host's normal iOS compile settings from its Makefile, without touching game assets.
@@ -318,6 +318,10 @@ def main() -> None:
         fail("gen_build.py failed:\n" + (p.stderr or p.stdout)[-12000:])
     if not p.stdout.strip() or "HEADER_SEARCH_PATHS =" not in p.stdout:
         fail("gen_build.py did not produce the iOS compiler settings:\n" + p.stdout[-4000:] + "\n" + p.stderr[-4000:])
+
+    profile_header = host / "gen" / TITLE_ID / "game_profile.h"
+    if not profile_header.is_file() or "#define DM_GAME_DRAW_BARRIERS_GAME 1" not in profile_header.read_text(encoding="utf-8"):
+        fail("generated game_profile.h does not enable BOTW draw_barriers=game; refusing to build an unchanged renderer")
     cfg.write_text(p.stdout.rstrip() + "\nOTHER_LDFLAGS = $(inherited) $(DM_FRAMEWORKS) " + " ".join(segment_flags) + "\n", encoding="utf-8")
 
     # XcodeGen validates all targets in the spec, even though this job builds only DmShellGame.
