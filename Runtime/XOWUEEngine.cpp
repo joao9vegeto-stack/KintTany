@@ -4611,6 +4611,87 @@ void xowue_trace_stream_memset(PPCContext &ctx, uint8_t *base, uint32_t phase) {
     }
 }
 
+void xowue_trace_chunk_entry(PPCContext &ctx, uint8_t *base) {
+    // Build 147: inspect the UE3 chunk entry before sub_82575108 mutates state.
+    static std::atomic<uint32_t> s_chunkEntrySamples{0u};
+    static std::atomic<uint32_t> s_invalidChunkEntryExtraLogs{0u};
+
+    const uint32_t sample =
+        s_chunkEntrySamples.fetch_add(1u, std::memory_order_relaxed) + 1u;
+    const uint32_t object = ctx.r3.u32;
+    const uint32_t index = ctx.r4.u32;
+    const uint32_t slot = ctx.r5.u32;
+
+    uint32_t ptr = 0xFFFFFFFFu;
+    uint32_t data = 0xFFFFFFFFu;
+    uint32_t count = 0xFFFFFFFFu;
+    uint32_t w0 = 0xFFFFFFFFu;
+    uint32_t w1 = 0xFFFFFFFFu;
+    uint32_t w2 = 0xFFFFFFFFu;
+    uint32_t w3 = 0xFFFFFFFFu;
+    uint64_t entryAddress64 = 0xFFFFFFFFull;
+    bool ptrValid = false;
+    bool dataValid = false;
+    bool entryRangeValid = false;
+
+    const uint64_t ptrField64 = static_cast<uint64_t>(object) + 172u;
+    if (base != nullptr && ptrField64 <= UINT32_MAX &&
+        validGuestRange(static_cast<uint32_t>(ptrField64), 4u)) {
+        ptr = loadGuestBe32(base, static_cast<uint32_t>(ptrField64));
+        ptrValid = ptr != 0u && validGuestRange(ptr, 8u);
+    }
+    if (ptrValid) {
+        data = loadGuestBe32(base, ptr);
+        count = loadGuestBe32(base, ptr + 4u);
+        dataValid = data != 0u && validGuestRange(data, 32u);
+        entryAddress64 = static_cast<uint64_t>(data) +
+                         static_cast<uint64_t>(index) * 16u;
+        entryRangeValid = data != 0u && index < count &&
+            entryAddress64 <= UINT32_MAX &&
+            validGuestRange(static_cast<uint32_t>(entryAddress64), 16u);
+    }
+    if (entryRangeValid) {
+        const uint32_t entryAddress = static_cast<uint32_t>(entryAddress64);
+        w0 = loadGuestBe32(base, entryAddress);
+        w1 = loadGuestBe32(base, entryAddress + 4u);
+        w2 = loadGuestBe32(base, entryAddress + 8u);
+        w3 = loadGuestBe32(base, entryAddress + 12u);
+    }
+
+    const bool entryValid = entryRangeValid && w1 != 0u && w1 <= 0x400000u;
+    char dataHex[65];
+    if (dataValid) {
+        constexpr char kHex[] = "0123456789ABCDEF";
+        for (uint32_t i = 0u; i < 32u; ++i) {
+            const uint8_t value = base[data + i];
+            dataHex[i * 2u] = kHex[value >> 4u];
+            dataHex[i * 2u + 1u] = kHex[value & 0x0Fu];
+        }
+        dataHex[64] = '\0';
+    } else {
+        std::snprintf(dataHex, sizeof(dataHex), "unavailable");
+    }
+
+    bool shouldLog = sample <= 32u;
+    if (!entryValid && sample > 32u) {
+        const uint32_t invalidExtra =
+            s_invalidChunkEntryExtraLogs.fetch_add(1u, std::memory_order_relaxed);
+        shouldLog = invalidExtra < 16u;
+    }
+    if (!shouldLog) return;
+
+    char event[560];
+    std::snprintf(event, sizeof(event),
+        "B147_CHUNK_ENTRY sample=%u obj=0x%08X idx=%u slot=0x%08X "
+        "ptr=0x%08X data=0x%08X count=%u entry=0x%08llX "
+        "w0=0x%08X w1=0x%08X w2=0x%08X w3=0x%08X "
+        "entry_valid=%u data32=%s",
+        sample, object, index, slot, ptr, data, count,
+        static_cast<unsigned long long>(entryAddress64),
+        w0, w1, w2, w3, entryValid ? 1u : 0u, dataHex);
+    recordRuntimeTrace(event);
+}
+
 void xowue_dispatch_indirect(PPCContext &context, uint8_t *base, uint32_t target) {
     // Build 90: retain callback telemetry without replacing native PPC return values.
     if (target == 0x82DC2390u && xowue_82dc2390_observe(context, base)) return;
@@ -12337,8 +12418,73 @@ void xowue_NtAllocateVirtualMemory(PPCContext &context, uint8_t *base) {
         }
     }
 
-    if (commit && (allocationType & 0x00800000u) == 0) {
-        std::memset(base + address, 0, adjustedSize);
+    if (commit) {
+        // NT MEM_COMMIT preserves bytes in pages that are already committed.
+        // Form the union of the existing commit intersections, then zero only
+        // the uncovered sub-ranges of this request.
+        std::vector<std::pair<uint64_t, uint64_t>> coveredIntervals;
+        coveredIntervals.reserve(g_virtualCommits.size());
+        for (const auto &existingCommit : g_virtualCommits) {
+            const uint64_t existingStart = existingCommit.address;
+            const uint64_t existingEnd = existingStart + existingCommit.size;
+            const uint64_t overlapStart = std::max<uint64_t>(address, existingStart);
+            const uint64_t overlapEnd = std::min<uint64_t>(allocationEnd, existingEnd);
+            if (overlapStart < overlapEnd)
+                coveredIntervals.emplace_back(overlapStart, overlapEnd);
+        }
+        std::sort(coveredIntervals.begin(), coveredIntervals.end(),
+                  [](const auto &left, const auto &right) {
+                      return left.first < right.first ||
+                             (left.first == right.first && left.second < right.second);
+                  });
+
+        std::vector<std::pair<uint64_t, uint64_t>> mergedCovered;
+        mergedCovered.reserve(coveredIntervals.size());
+        for (const auto &interval : coveredIntervals) {
+            if (mergedCovered.empty() || interval.first > mergedCovered.back().second) {
+                mergedCovered.push_back(interval);
+            } else if (interval.second > mergedCovered.back().second) {
+                mergedCovered.back().second = interval.second;
+            }
+        }
+
+        uint64_t bytesAlreadyCommitted = 0u;
+        for (const auto &interval : mergedCovered)
+            bytesAlreadyCommitted += interval.second - interval.first;
+
+        if (bytesAlreadyCommitted != 0u) {
+            static std::atomic<uint32_t> s_vmRecommitLogs{0u};
+            const uint32_t sample =
+                s_vmRecommitLogs.fetch_add(1u, std::memory_order_relaxed);
+            if (sample < 64u) {
+                char event[224];
+                std::snprintf(event, sizeof(event),
+                    "B147_VM_RECOMMIT address=0x%08X size=0x%08X bytes_ja_commitados=%llu",
+                    address, adjustedSize,
+                    static_cast<unsigned long long>(bytesAlreadyCommitted));
+                recordRuntimeTrace(event);
+            }
+        }
+
+        // MEM_RESET (0x00800000) deliberately retains its existing special
+        // handling; ordinary commits clear only ranges not previously committed.
+        if ((allocationType & 0x00800000u) == 0) {
+            uint64_t zeroCursor = address;
+            for (const auto &interval : mergedCovered) {
+                if (interval.first > zeroCursor) {
+                    const uint64_t zeroSize = interval.first - zeroCursor;
+                    std::memset(base + static_cast<uint32_t>(zeroCursor), 0,
+                                static_cast<size_t>(zeroSize));
+                }
+                if (interval.second > zeroCursor)
+                    zeroCursor = interval.second;
+            }
+            if (zeroCursor < allocationEnd) {
+                const uint64_t zeroSize = allocationEnd - zeroCursor;
+                std::memset(base + static_cast<uint32_t>(zeroCursor), 0,
+                            static_cast<size_t>(zeroSize));
+            }
+        }
     }
 
     PPC_STORE_U32(basePointer, address);
@@ -12428,12 +12574,27 @@ void xowue_NtFreeVirtualMemory(PPCContext &context, uint8_t *base) {
             failWith(kNtStatusInvalidParameter);
             return;
         }
+        const uint32_t nextVirtualBefore = g_nextVirtualAllocation;
         g_virtualAllocations.erase(allocation);
         if (static_cast<uint64_t>(allocationAddress) + allocationSize == g_nextVirtualAllocation) {
             g_nextVirtualAllocation = allocationAddress;
         }
+        const uint32_t nextVirtualAfter = g_nextVirtualAllocation;
         std::memset(base + allocationAddress, 0, allocationSize);
         resultSize = 0;
+
+        static std::atomic<uint32_t> s_vmReleaseLogs{0u};
+        const uint32_t releaseSample =
+            s_vmReleaseLogs.fetch_add(1u, std::memory_order_relaxed);
+        if (releaseSample < 64u) {
+            char event[240];
+            std::snprintf(event, sizeof(event),
+                "B147_VM_RELEASE address=0x%08X size=0x%08X "
+                "g_nextVirtualAllocation_before=0x%08X "
+                "g_nextVirtualAllocation_after=0x%08X",
+                allocationAddress, allocationSize, nextVirtualBefore, nextVirtualAfter);
+            recordRuntimeTrace(event);
+        }
     } else {
         failWith(kNtStatusInvalidParameter);
         return;

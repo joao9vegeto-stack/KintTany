@@ -512,6 +512,31 @@ jobs:
             "$GITHUB_WORKSPACE/generated/ppc/ppc_recomp.64.cpp"
           grep -Fq 'xowue_trace_stream_memset(ctx, base, 1u);' \
             "$GITHUB_WORKSPACE/generated/ppc/ppc_recomp.64.cpp"
+          grep -R -Fq 'xowue_trace_chunk_entry(ctx, base);' \
+            "$GITHUB_WORKSPACE/generated/ppc"/ppc_recomp.*.cpp
+
+      - name: Verify B147 requirements and run all XOWUE source tests
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re, glob
+          src = open("Runtime/XOWUEEngine.cpp", errors="replace").read()
+          for tag in ("B147_VM_RECOMMIT", "B147_VM_RELEASE", "B147_CHUNK_ENTRY"):
+              print(tag, "presente" if tag in src else "AUSENTE")
+          print("memset de commit ainda incondicional:",
+                bool(re.search(r"if \(commit && \(allocationType & 0x00800000u\) == 0\) \{\s*std::memset\(base \+ address, 0, adjustedSize\);", src)))
+          assert all(tag in src for tag in ("B147_VM_RECOMMIT", "B147_VM_RELEASE", "B147_CHUNK_ENTRY"))
+          assert not re.search(r"if \(commit && \(allocationType & 0x00800000u\) == 0\) \{\s*std::memset\(base \+ address, 0, adjustedSize\);", src)
+          PY
+          test_count=0
+          for test in tools/test_xowue_*.py; do
+            echo "=== RUN $test ==="
+            python3 "$test"
+            test_count=$((test_count + 1))
+          done
+          echo "XOWUE_SOURCE_TESTS_PASSED count=$test_count"
+          test "$test_count" -gt 0
+
 
       - name: Install KosmicKrisp iOS cross-build prerequisites
         run: |

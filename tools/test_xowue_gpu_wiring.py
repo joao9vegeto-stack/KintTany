@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Enforce native Xenos draw-path wiring before expensive iOS packaging."""
 from pathlib import Path
+import re
 engine=Path("Runtime/XOWUEEngine.cpp").read_text()
 bridge=Path("Runtime/Graphics/Xenos/XOWUEGpuBridge.cpp").read_text()
 renderer=Path("iOS/App/XOWUENativeDraw.inc").read_text()
@@ -464,6 +465,29 @@ assert "validGuestRange(ctx.r3.u32, static_cast<uint64_t>(ctx.r5.u32))" in engin
 assert "0x82573E64" in memset_patcher and "sub_82C2A1F0(ctx, base);" in memset_patcher
 assert "patch_xowue_stream_memset_probe.py --self-test" in workflow
 assert "patch_xowue_stream_memset_probe.py" in workflow
+
+# Build 147: preserve NT committed pages on MEM_COMMIT recommit, track MEM_RELEASE
+# cursor movement, and inspect the exact chunk entry before the AOT body executes.
+assert "B147_VM_RECOMMIT" in engine
+assert "B147_VM_RELEASE" in engine
+assert "B147_CHUNK_ENTRY" in engine
+assert "bytesAlreadyCommitted" in engine and "mergedCovered" in engine
+assert "g_nextVirtualAllocation_before" in engine
+assert "g_nextVirtualAllocation_after" in engine
+assert "entry_valid=%u data32=%s" in engine
+assert "w1 != 0u && w1 <= 0x400000u" in engine
+assert "static_cast<uint64_t>(object) + 172u" in engine
+assert "data + static_cast<uint64_t>(index) * 16u" not in engine  # overflow-safe entry address is computed separately
+assert "xowue_trace_chunk_entry(PPCContext &ctx, uint8_t *base)" in engine
+assert "xowue_trace_chunk_entry(ctx, base);" in memset_patcher
+assert "sub_82575108" in memset_patcher
+assert "B147_CHUNK_ENTRY" in engine
+assert not re.search(
+    r"if \(commit && \(allocationType & 0x00800000u\) == 0\) \{\s*"
+    r"std::memset\(base \+ address, 0, adjustedSize\);",
+    engine,
+)
+
 
 assert "sample <= 8u" in engine
 assert 'event.find("B140_STREAM_DISPATCH ")' in engine

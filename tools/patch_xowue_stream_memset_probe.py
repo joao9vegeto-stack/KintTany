@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Instrument the direct stream-worker memset call in generated native PPC AOT."""
+"""Instrument exact XOWUE stream-worker and chunk-entry AOT callsites."""
 from __future__ import annotations
 
 import argparse
@@ -10,10 +10,17 @@ from pathlib import Path
 FUNCTION = re.compile(
     r"PPC_FUNC_IMPL\(__imp__(sub_[0-9A-Fa-f]{8})\)\s*\{"
 )
-FUNCTION_NAME = "sub_82573DE0"
-DECLARATION = (
+MEMSET_FUNCTION = "sub_82573DE0"
+CHUNK_FUNCTION = "sub_82575108"
+MEMSET_DECLARATION = (
     "void xowue_trace_stream_memset(PPCContext &ctx, uint8_t *base, uint32_t phase);"
 )
+CHUNK_DECLARATION = (
+    "void xowue_trace_chunk_entry(PPCContext &ctx, uint8_t *base);"
+)
+MEMSET_BEGIN = "xowue_trace_stream_memset(ctx, base, 0u);"
+MEMSET_END = "xowue_trace_stream_memset(ctx, base, 1u);"
+CHUNK_CALL = "xowue_trace_chunk_entry(ctx, base);"
 CALL_SITE = re.compile(
     r"(?P<prefix>"
     r"^\s*// li r4,0\s*\n"
@@ -29,26 +36,43 @@ CALL_SITE = re.compile(
 )
 
 
-def patch_source(source: str) -> tuple[str, dict[str, int]]:
+def _function_span(source: str, function_name: str):
     matches = list(FUNCTION.finditer(source))
-    target = None
-    for index, match in enumerate(matches):
-        if match.group(1) != FUNCTION_NAME:
-            continue
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(source)
-        target = (match.start(), end)
-        break
-    if target is None:
-        raise RuntimeError(f"{FUNCTION_NAME} missing from generated AOT source")
+    found = [i for i, match in enumerate(matches) if match.group(1) == function_name]
+    if len(found) > 1:
+        raise RuntimeError(f"{function_name} appears more than once in one AOT source")
+    if not found:
+        return None
+    index = found[0]
+    match = matches[index]
+    end = matches[index + 1].start() if index + 1 < len(matches) else len(source)
+    return match.start(), end, match
 
-    start, end = target
+
+def _ensure_declaration(source: str, marker: str, declaration: str) -> str:
+    count = source.count(declaration)
+    if count == 1:
+        return source
+    if count != 0:
+        raise RuntimeError(f"duplicated declaration: {declaration}")
+    if source.count(marker) != 1:
+        raise RuntimeError(f"could not find unique declaration anchor: {marker}")
+    return source.replace(marker, declaration + "\n\n" + marker, 1)
+
+
+def _patch_memset_probe(source: str) -> tuple[str, bool, bool]:
+    span = _function_span(source, MEMSET_FUNCTION)
+    if span is None:
+        return source, False, False
+    start, end, _ = span
     body = source[start:end]
-    existing_begin = body.count("xowue_trace_stream_memset(ctx, base, 0u);")
-    existing_end = body.count("xowue_trace_stream_memset(ctx, base, 1u);")
+    existing_begin = body.count(MEMSET_BEGIN)
+    existing_end = body.count(MEMSET_END)
     if existing_begin == 1 and existing_end == 1:
-        if source.count(DECLARATION) != 1:
-            raise RuntimeError("probe call exists but its declaration is missing or duplicated")
-        return source, {"declaration": 1, "begin": 1, "end": 1, "inserted": 0}
+        patched = _ensure_declaration(
+            source, f"PPC_FUNC_IMPL(__imp__{MEMSET_FUNCTION})", MEMSET_DECLARATION
+        )
+        return patched, True, False
     if existing_begin or existing_end:
         raise RuntimeError("partial/duplicated stream memset probe detected; refusing to patch")
 
@@ -57,31 +81,59 @@ def patch_source(source: str) -> tuple[str, dict[str, int]]:
         raise RuntimeError(
             f"expected exactly one direct memset call at 0x82573E64, found {len(call_matches)}"
         )
-
     call = call_matches[0]
-    prefix = call.group("prefix")
-    direct_call = call.group("call")
     injected = (
-        prefix
-        + "        xowue_trace_stream_memset(ctx, base, 0u);\n"
-        + direct_call
-        + "\n        xowue_trace_stream_memset(ctx, base, 1u);"
+        call.group("prefix")
+        + "        " + MEMSET_BEGIN + "\n"
+        + call.group("call")
+        + "\n        " + MEMSET_END
     )
     patched_body = body[:call.start()] + injected + body[call.end():]
     patched = source[:start] + patched_body + source[end:]
+    patched = _ensure_declaration(
+        patched, f"PPC_FUNC_IMPL(__imp__{MEMSET_FUNCTION})", MEMSET_DECLARATION
+    )
+    if patched.count(MEMSET_BEGIN) != 1 or patched.count(MEMSET_END) != 1:
+        raise RuntimeError("stream memset probe call count is not exactly one")
+    return patched, True, True
 
-    if patched.count(DECLARATION) == 0:
-        marker = "PPC_FUNC_IMPL(__imp__sub_82573DE0)"
-        if patched.count(marker) != 1:
-            raise RuntimeError("could not find unique target function marker for probe declaration")
-        patched = patched.replace(marker, DECLARATION + "\n\n" + marker, 1)
-    if patched.count(DECLARATION) != 1:
-        raise RuntimeError("stream memset probe declaration is duplicated")
-    if patched.count("xowue_trace_stream_memset(ctx, base, 0u);") != 1:
-        raise RuntimeError("stream memset begin probe count is not exactly one")
-    if patched.count("xowue_trace_stream_memset(ctx, base, 1u);") != 1:
-        raise RuntimeError("stream memset end probe count is not exactly one")
-    return patched, {"declaration": 1, "begin": 1, "end": 1, "inserted": 1}
+
+def _patch_chunk_entry_probe(source: str) -> tuple[str, bool, bool]:
+    span = _function_span(source, CHUNK_FUNCTION)
+    if span is None:
+        return source, False, False
+    start, end, match = span
+    body = source[start:end]
+    existing = body.count(CHUNK_CALL)
+    if existing == 1:
+        patched = _ensure_declaration(
+            source, f"PPC_FUNC_IMPL(__imp__{CHUNK_FUNCTION})", CHUNK_DECLARATION
+        )
+        return patched, True, False
+    if existing:
+        raise RuntimeError("duplicated chunk-entry probe detected; refusing to patch")
+
+    # The probe runs immediately after the generated function's opening brace,
+    # before its first translated PPC instruction can overwrite r3/r4/r5.
+    insertion = match.end()
+    patched = source[:insertion] + "\n    " + CHUNK_CALL + source[insertion:]
+    patched = _ensure_declaration(
+        patched, f"PPC_FUNC_IMPL(__imp__{CHUNK_FUNCTION})", CHUNK_DECLARATION
+    )
+    if patched.count(CHUNK_CALL) != 1:
+        raise RuntimeError("chunk-entry probe call count is not exactly one")
+    return patched, True, True
+
+
+def patch_source(source: str) -> tuple[str, dict[str, int]]:
+    patched, has_memset, inserted_memset = _patch_memset_probe(source)
+    patched, has_chunk, inserted_chunk = _patch_chunk_entry_probe(patched)
+    return patched, {
+        "memset_function": int(has_memset),
+        "memset_inserted": int(inserted_memset),
+        "chunk_function": int(has_chunk),
+        "chunk_inserted": int(inserted_chunk),
+    }
 
 
 def self_test() -> None:
@@ -99,19 +151,28 @@ PPC_FUNC_IMPL(__imp__sub_82573DE0) {
     ctx.lr = 0x82573E64;
     sub_82C2A1F0(ctx, base);
 }
+
+PPC_FUNC_IMPL(__imp__sub_82575108) {
+    // first translated instruction
+    ctx.r3.u64 = ctx.r3.u32;
+}
 """
     patched, result = patch_source(fixture)
-    assert result == {"declaration": 1, "begin": 1, "end": 1, "inserted": 1}
-    assert patched.index("xowue_trace_stream_memset(ctx, base, 0u);") < patched.index(
-        "sub_82C2A1F0(ctx, base);"
-    )
-    assert patched.index("sub_82C2A1F0(ctx, base);") < patched.index(
-        "xowue_trace_stream_memset(ctx, base, 1u);"
-    )
+    assert result == {
+        "memset_function": 1, "memset_inserted": 1,
+        "chunk_function": 1, "chunk_inserted": 1,
+    }
+    assert patched.index(MEMSET_BEGIN) < patched.index("sub_82C2A1F0(ctx, base);")
+    assert patched.index("sub_82C2A1F0(ctx, base);") < patched.index(MEMSET_END)
+    chunk_marker = "PPC_FUNC_IMPL(__imp__sub_82575108) {"
+    assert patched.index(CHUNK_CALL) == patched.index(chunk_marker) + len(chunk_marker) + 5
     repeated, repeated_result = patch_source(patched)
     assert repeated == patched
-    assert repeated_result["inserted"] == 0
-    print("XOWUE_STREAM_MEMSET_AOT_PROBE_SELF_TEST_OK pc=0x82573E64 direct_call=1 idempotent=1")
+    assert repeated_result["memset_inserted"] == 0
+    assert repeated_result["chunk_inserted"] == 0
+    assert patched.count(MEMSET_BEGIN) == 1 and patched.count(MEMSET_END) == 1
+    assert patched.count(CHUNK_CALL) == 1
+    print("XOWUE_B146_B147_AOT_PROBE_SELF_TEST_OK memset_pc=0x82573E64 chunk_entry=0x82575108 idempotent=1")
 
 
 def main() -> int:
@@ -127,20 +188,46 @@ def main() -> int:
     if not args.ppc_dir:
         parser.error("--ppc-dir is required unless --self-test is selected")
 
-    path = args.ppc_dir / "ppc_recomp.64.cpp"
-    if not path.is_file():
-        raise SystemExit(f"missing generated AOT source: {path}")
-    original = path.read_text(encoding="utf-8")
-    patched, result = patch_source(original)
-    if patched != original:
-        temporary = path.with_suffix(path.suffix + ".stream-probe.tmp")
-        temporary.write_text(patched, encoding="utf-8", newline="\n")
-        temporary.replace(path)
-    report = {"source": path.name, "guest_function": "0x82573DE0",
-              "guest_call_pc": "0x82573E64", "callee": "0x82C2A1F0",
-              "probe": "read-only begin/end around direct AOT call",
-              **result}
-    print("XOWUE_STREAM_MEMSET_AOT_PROBE " + json.dumps(report, sort_keys=True))
+    paths = sorted(args.ppc_dir.glob("ppc_recomp.*.cpp"))
+    if not paths:
+        raise SystemExit(f"no generated ppc_recomp.*.cpp files in {args.ppc_dir}")
+
+    found = {"memset_function": 0, "chunk_function": 0}
+    inserted = {"memset_inserted": 0, "chunk_inserted": 0}
+    patched_files = []
+    for path in paths:
+        original = path.read_text(encoding="utf-8")
+        patched, result = patch_source(original)
+        for key in found:
+            found[key] += result[key]
+        for key in inserted:
+            inserted[key] += result[key]
+        if patched != original:
+            temporary = path.with_suffix(path.suffix + ".b147-probe.tmp")
+            temporary.write_text(patched, encoding="utf-8", newline="\n")
+            temporary.replace(path)
+            patched_files.append(path.name)
+
+    if found["memset_function"] != 1:
+        raise SystemExit(
+            f"expected exactly one {MEMSET_FUNCTION} in generated AOT, found {found['memset_function']}"
+        )
+    if found["chunk_function"] != 1:
+        raise SystemExit(
+            f"expected exactly one {CHUNK_FUNCTION} in generated AOT, found {found['chunk_function']}"
+        )
+
+    report = {
+        "memset_guest_function": "0x82573DE0",
+        "memset_guest_call_pc": "0x82573E64",
+        "memset_callee": "0x82C2A1F0",
+        "chunk_entry_guest_function": "0x82575108",
+        "probe": "B146 direct memset begin/end plus B147 entry hook before PPC instructions",
+        "found": found,
+        "inserted": inserted,
+        "patched_files": patched_files,
+    }
+    print("XOWUE_B146_B147_AOT_PROBES " + json.dumps(report, sort_keys=True))
     return 0
 
 
