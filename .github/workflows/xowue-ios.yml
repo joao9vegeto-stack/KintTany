@@ -1,4 +1,5 @@
 name: XOWUE iOS IPA
+# B147 consolidated retry: preserve the full fix set and run from XOWUE push.
 # Build 112: validate the launcher, touch-edge and native-exit lifecycle changes in the same IPA workflow.
 
 on:
