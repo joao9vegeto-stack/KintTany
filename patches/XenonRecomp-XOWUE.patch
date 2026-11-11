@@ -589,4 +589,38 @@ diff --git a/XenonUtils/ppc_context.h b/XenonUtils/ppc_context.h
 +void xowue_dispatch_indirect(struct PPCContext& ctx, uint8_t* base, uint32_t target);
 +void xowue_note_scratch_reg4_write(uint32_t address, uint32_t value);
 +void xowue_note_guest_store(uint8_t* base, uint32_t address, uint32_t width, uint64_t value);
+
+diff --git a/XenonUtils/ppc_context.h b/XenonUtils/ppc_context.h
+--- a/XenonUtils/ppc_context.h
++++ b/XenonUtils/ppc_context.h
+@@ -216,5 +216,3 @@ struct PPCFPSCRRegister
+     uint32_t csr;
  
+-    static constexpr size_t HostToGuest[] = { PPC_ROUND_NEAREST, PPC_ROUND_DOWN, PPC_ROUND_UP, PPC_ROUND_TOWARD_ZERO };
+-
+     // simde does not handle denormal flags, so we need to implement per-arch.
+@@ -221,5 +219,10 @@ struct PPCFPSCRRegister
+ #if defined(__x86_64__) || defined(_M_X64)
+     static constexpr size_t RoundShift = 13;
+     static constexpr size_t RoundMask = SIMDE_MM_ROUND_MASK;
+     static constexpr size_t FlushMask = SIMDE_MM_FLUSH_ZERO_MASK | _MM_DENORMALS_ZERO_MASK;
++    static constexpr size_t HostToGuest[] = { PPC_ROUND_NEAREST, PPC_ROUND_DOWN, PPC_ROUND_UP, PPC_ROUND_TOWARD_ZERO };
+     static constexpr size_t GuestToHost[] = { SIMDE_MM_ROUND_NEAREST, SIMDE_MM_ROUND_TOWARD_ZERO, SIMDE_MM_ROUND_UP, SIMDE_MM_ROUND_DOWN };
++    static_assert(HostToGuest[(GuestToHost[0] & RoundMask) >> RoundShift] == PPC_ROUND_NEAREST);
++    static_assert(HostToGuest[(GuestToHost[1] & RoundMask) >> RoundShift] == PPC_ROUND_TOWARD_ZERO);
++    static_assert(HostToGuest[(GuestToHost[2] & RoundMask) >> RoundShift] == PPC_ROUND_UP);
++    static_assert(HostToGuest[(GuestToHost[3] & RoundMask) >> RoundShift] == PPC_ROUND_DOWN);
+@@ -236,8 +239,13 @@ struct PPCFPSCRRegister
+ #elif defined(__aarch64__) || defined(_M_ARM64)
+     // RMode
+     static constexpr size_t RoundShift = 22;
+     static constexpr size_t RoundMask = 3 << RoundShift;
+     // FZ and FZ16
+     static constexpr size_t FlushMask = (1 << 19) | (1 << 24);
+     // Nearest, Zero, -Infinity, -Infinity
+     static constexpr size_t GuestToHost[] = { 0 << RoundShift, 3 << RoundShift, 1 << RoundShift, 2 << RoundShift };
++    static constexpr size_t HostToGuest[] = { PPC_ROUND_NEAREST, PPC_ROUND_UP, PPC_ROUND_DOWN, PPC_ROUND_TOWARD_ZERO };
++    static_assert(HostToGuest[(GuestToHost[0] & RoundMask) >> RoundShift] == PPC_ROUND_NEAREST);
++    static_assert(HostToGuest[(GuestToHost[1] & RoundMask) >> RoundShift] == PPC_ROUND_TOWARD_ZERO);
++    static_assert(HostToGuest[(GuestToHost[2] & RoundMask) >> RoundShift] == PPC_ROUND_UP);
++    static_assert(HostToGuest[(GuestToHost[3] & RoundMask) >> RoundShift] == PPC_ROUND_DOWN);

@@ -445,6 +445,18 @@ jobs:
 
           echo "XENONRECOMP_ROOT=$RUNNER_TEMP/XenonRecomp" >> "$GITHUB_ENV"
 
+      - name: Restore ARM64 PPC memory and wait semantics in generated AOT
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/patch_xowue_aot_semantics.py
+          python3 tools/patch_xowue_aot_semantics.py --self-test
+          python3 tools/patch_xowue_aot_semantics.py \
+            --ppc-dir "$GITHUB_WORKSPACE/generated/ppc" \
+            --fpscr-header "$GITHUB_WORKSPACE/generated/ppc/ppc_context.h" \
+            --report "$GITHUB_WORKSPACE/artifacts/xowue-aot-arm64-semantics.json"
+          test -s "$GITHUB_WORKSPACE/artifacts/xowue-aot-arm64-semantics.json"
+          python3 -m json.tool "$GITHUB_WORKSPACE/artifacts/xowue-aot-arm64-semantics.json" >/dev/null
+
       - name: Install KosmicKrisp iOS cross-build prerequisites
         run: |
           set -euxo pipefail
@@ -806,6 +818,15 @@ jobs:
             artifacts/xowue-global-native-pc.json
             artifacts/xowue-global-callsite-audit.json
             tools/patch_xowue_global_native.py
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload ARM64 AOT semantic patch report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: XOWUE-ARM64-AOT-Semantics
+          path: artifacts/xowue-aot-arm64-semantics.json
           if-no-files-found: warn
           retention-days: 30
 
