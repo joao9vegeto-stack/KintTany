@@ -28,6 +28,10 @@ OWNERS = (
     0x82C4BE30,  # wait helper reached from Bink video worker threads
     0x82690DC0,  # XOWUE_BINK_VIDEO_THREAD_START entry
     0x83268358,  # XOWUE_BINK_DECODER_THREAD_START entry
+    0x82573090,  # worker queue item processor called by sub_82573B80
+    0x832681D8,  # Bink decoder worker transition handler
+    0x82C410D0,  # Bink decoder worker completion/reset helper
+    0x82690DC8,  # actual video thread body behind the entry thunk
 )
 
 def main():
@@ -71,7 +75,11 @@ def main():
                 "decoder_thread_entry":"0x83268358",
                 "video_thread_wait_helper":"0x82C4BE30",
                 "stream_worker_init":"0x82573B80",
-                "video_thread_wait_return_lr":"0x824E72B4"
+                "video_thread_wait_return_lr":"0x824E72B4",
+                "stream_worker_queue_item":"0x82573090",
+                "decoder_worker_transition":"0x832681D8",
+                "decoder_worker_completion":"0x82C410D0",
+                "video_thread_body":"0x82690DC8"
             }}
     args.report.parent.mkdir(parents=True,exist_ok=True)
     args.report.write_text(json.dumps(result,indent=2),encoding="utf-8")
@@ -80,7 +88,7 @@ def main():
                   "instruction_comments":f["instruction_comment_count"],
                   "body_chars":len(f["body"])} for f in result["functions"]],
         "missing":missing}))
-    required=(0x82575480,0x82575108,0x82574348,0x82573CB0,0x824A7DF0,0x8257D290,0x822A0608,0x82574508,0x82573B80,0x82C4BE30,0x82690DC0,0x83268358)
+    required=(0x82575480,0x82575108,0x82574348,0x82573CB0,0x824A7DF0,0x8257D290,0x822A0608,0x82574508,0x82573B80,0x82C4BE30,0x82690DC0,0x83268358,0x82573090,0x832681D8,0x82C410D0,0x82690DC8)
     missing_required=[f"0x{x:08X}" for x in required if x not in found]
     if missing_required:
         raise SystemExit("Required stream poll / callback source missing: "+", ".join(missing_required))
