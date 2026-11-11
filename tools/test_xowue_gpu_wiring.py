@@ -454,6 +454,15 @@ assert "const uint32_t kWorkerQueue = 0x82FFF47Cu" in engine
 assert "workerCount <= workerCapacity" in engine
 assert "B145_STREAM_QUEUE_WAKE" in engine and "B145_STREAM_WORKER_QUEUE_HEAD" in engine
 assert 'callSite == 0x82573DB8u ? 64u : 8u' in engine
+memset_patcher=Path("tools/patch_xowue_stream_memset_probe.py").read_text()
+workflow=Path(".github/workflows/xowue-ios.yml").read_text()
+assert "void xowue_trace_stream_memset(PPCContext &ctx, uint8_t *base, uint32_t phase)" in engine
+assert "B146_STREAM_MEMSET_BEGIN" in engine and "B146_STREAM_MEMSET_END" in engine
+assert "validGuestRange(ctx.r3.u32, static_cast<uint64_t>(ctx.r5.u32))" in engine
+assert "0x82573E64" in memset_patcher and "sub_82C2A1F0(ctx, base);" in memset_patcher
+assert "patch_xowue_stream_memset_probe.py --self-test" in workflow
+assert "patch_xowue_stream_memset_probe.py" in workflow
+
 assert "sample <= 8u" in engine
 assert 'event.find("B140_STREAM_DISPATCH ")' in engine
 assert "case 0x825754E4u:" in engine and "case 0x82575510u:" in engine
