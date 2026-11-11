@@ -43,12 +43,6 @@ def patch_source(source: str) -> tuple[str, dict[str, int]]:
 
     start, end = target
     body = source[start:end]
-    call_matches = list(CALL_SITE.finditer(body))
-    if len(call_matches) != 1:
-        raise RuntimeError(
-            f"expected exactly one direct memset call at 0x82573E64, found {len(call_matches)}"
-        )
-
     existing_begin = body.count("xowue_trace_stream_memset(ctx, base, 0u);")
     existing_end = body.count("xowue_trace_stream_memset(ctx, base, 1u);")
     if existing_begin == 1 and existing_end == 1:
@@ -57,6 +51,12 @@ def patch_source(source: str) -> tuple[str, dict[str, int]]:
         return source, {"declaration": 1, "begin": 1, "end": 1, "inserted": 0}
     if existing_begin or existing_end:
         raise RuntimeError("partial/duplicated stream memset probe detected; refusing to patch")
+
+    call_matches = list(CALL_SITE.finditer(body))
+    if len(call_matches) != 1:
+        raise RuntimeError(
+            f"expected exactly one direct memset call at 0x82573E64, found {len(call_matches)}"
+        )
 
     call = call_matches[0]
     prefix = call.group("prefix")
