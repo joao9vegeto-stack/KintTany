@@ -96,7 +96,7 @@ def main():
     shutil.rmtree(work,ignore_errors=True); shutil.rmtree(incoming,ignore_errors=True)
     work.mkdir(parents=True); incoming.mkdir(parents=True)
     out=args.output; out.mkdir(parents=True,exist_ok=True)
-    drive=drive_client()
+    drive=drive_client() if os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON","").strip() else None
     nup=incoming/"game.nup"
     romfs=work/"extract"/f"v{VERSION}"/"RomFS.img"
     overlay=out/"res_overlay"/"Pack"/"Bootup.Nin_Ounce_NVN2.pack.zs"
@@ -128,16 +128,19 @@ def main():
     report_path=out/"build-report.json"
     report_path.write_text(json.dumps(report,indent=2),encoding="utf-8")
     try:
-        dest=ensure_folder(drive,h["drive"]["run_folder_id"],
-            f"actions-run-{os.environ.get('GITHUB_RUN_NUMBER','manual')}")
-        report["drive_upload"]={"folder_id":dest["id"],
-            "ipa":upload_drive(drive,ipa,dest["id"],ipa.name),
-            "overlay":upload_drive(drive,overlay,dest["id"],overlay.name)}
-        # Upload a report after adding IPA/overlay Drive IDs so report contains links.
-        report_path.write_text(json.dumps(report,indent=2),encoding="utf-8")
-        report["drive_upload"]["report"]=upload_drive(drive,report_path,dest["id"],report_path.name)
-        report_path.write_text(json.dumps(report,indent=2),encoding="utf-8")
-        print("[HookLink2iOS] IPA/overlay/report enviados ao Google Drive.",flush=True)
+        if drive is None:
+            print("[HookLink2iOS] Sem credencial de serviço no Actions; IPA será publicada como artifact GitHub.",flush=True)
+        else:
+            dest=ensure_folder(drive,h["drive"]["run_folder_id"],
+                f"actions-run-{os.environ.get('GITHUB_RUN_NUMBER','manual')}")
+            report["drive_upload"]={"folder_id":dest["id"],
+                "ipa":upload_drive(drive,ipa,dest["id"],ipa.name),
+                "overlay":upload_drive(drive,overlay,dest["id"],overlay.name)}
+            # Upload a report after adding IPA/overlay Drive IDs so report contains links.
+            report_path.write_text(json.dumps(report,indent=2),encoding="utf-8")
+            report["drive_upload"]["report"]=upload_drive(drive,report_path,dest["id"],report_path.name)
+            report_path.write_text(json.dumps(report,indent=2),encoding="utf-8")
+            print("[HookLink2iOS] IPA/overlay/report enviados ao Google Drive.",flush=True)
     except Exception as e:
         report["drive_upload_warning"]=str(e)[:1000]
         report_path.write_text(json.dumps(report,indent=2),encoding="utf-8")
