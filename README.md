@@ -43,7 +43,11 @@ Layout no Google Drive:
     │   └── <NUP validado e reutilizável>
     └── HookLink2iOS-<request_id>/
         ├── romfs.img
-        └── Bootup.Nin_Ounce_NVN2.pack.zs
+        ├── Bootup.Nin_Ounce_NVN2.pack.zs
+        └── actions-<run_number>-<run_id>/
+            ├── OcarinaOfTime-HookLink2iOS.ipa
+            ├── Bootup.Nin_Ounce_NVN2.pack.zs
+            └── build-report.json
 ```
 
 ### 2. GitHub Actions: build nativo iOS
@@ -62,7 +66,7 @@ O commit do handoff aciona `.github/workflows/hooklink2ios.yml`. O workflow:
 
 ### 3. Retorno da IPA ao Drive
 
-Depois do build, o notebook identifica a execução pelo **commit exato** do handoff, baixa apenas o artifact HookLink2iOS correspondente, confere o digest do ZIP e valida a IPA contra o `build-report.json`. Em seguida, envia a IPA, o overlay e o relatório à pasta daquela execução no Drive. O upload final é feito pelo OAuth do Colab e validado por tamanho/MD5.
+Depois do build, o notebook identifica a execução pelo **commit exato** do handoff, baixa apenas o artifact HookLink2iOS correspondente, confere o digest do ZIP e valida a IPA contra o `build-report.json`, inclusive o commit reportado. Em seguida, cria uma subpasta `actions-<run_number>-<run_id>` dentro da pasta de preparação e envia para ela a IPA, o overlay e o relatório. Cada tentativa mantém seus próprios resultados, sem sobrescrever builds anteriores. O upload final é feito pelo OAuth do Colab e validado por tamanho/MD5.
 
 O notebook solicita um Fine-grained PAT restrito a este repositório com:
 - `Contents: Read and write` — publicar o handoff;
@@ -103,7 +107,7 @@ O script upstream incluído em `hooklink/scripts/push_romfs.sh` automatiza a tra
 
 ## Retomada
 
-Se o Colab desconectar depois que NUP/RomFS/overlay forem enviados, abra novamente o notebook, autentique o Drive, cole a mesma URL (ou uma URL assinada renovada para o mesmo caminho) e execute as células. O notebook procura primeiro o handoff e os arquivos persistidos no Drive e não repete o download/preparação quando encontra uma combinação íntegra. Se o Actions já concluiu, recupera a execução ligada àquele commit e transfere o artifact correspondente.
+Se o Colab desconectar depois que NUP/RomFS/overlay forem enviados, abra novamente o notebook, autentique o Drive, cole a mesma URL (ou uma URL assinada renovada para o mesmo caminho) e execute as células. Se existir um handoff íntegro para essa origem, o notebook verifica os arquivos no Drive, reutiliza NUP/RomFS/overlay e publica um novo identificador de tentativa para iniciar um **novo build iOS**, sem repetir download, extração ou preparação Linux. O resultado é arquivado na subpasta da nova execução do Actions.
 
 ## Upstream e licenças
 
