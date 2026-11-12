@@ -6,6 +6,7 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import parse_qs, unquote, urlsplit
 import requests
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+from googleapiclient.errors import HttpError
 
 REPO = "joao9vegeto-stack/KintTany"
 BRANCH = "HookLink2iOS"
@@ -19,6 +20,27 @@ VERSION = 131072
 GPU = "g18p"  # iPhone 17 / 17 Pro A19 family; change only after validating the target GPU.
 CHUNK = 64 * 1024 * 1024
 FOLDER = "application/vnd.google-apps.folder"
+
+def drive_execute(request, label="Google Drive API", retries=12):
+    """Retry transient Drive API failures (429/5xx) with exponential backoff."""
+    for attempt in range(retries + 1):
+        try:
+            return request.execute(num_retries=0)
+        except HttpError as exc:
+            status=int(getattr(exc.resp, "status", 0) or 0)
+            if status not in (408, 429, 500, 502, 503, 504) or attempt >= retries:
+                raise
+            delay=min(90, 2 ** min(attempt + 1, 6))
+            print(f"[HookLink2iOS] {label}: HTTP {status}; nova tentativa "
+                  f"{attempt + 1}/{retries} em {delay}s.", flush=True)
+            time.sleep(delay)
+        except (BrokenPipeError, ConnectionError, TimeoutError, OSError) as exc:
+            if attempt >= retries:
+                raise
+            delay=min(90, 2 ** min(attempt + 1, 6))
+            print(f"[HookLink2iOS] {label}: conexão instável; nova tentativa "
+                  f"{attempt + 1}/{retries} em {delay}s ({type(exc).__name__}).", flush=True)
+            time.sleep(delay)
 
 def run(cmd, cwd=None):
     print("[HookLink2iOS] $", " ".join(map(str, cmd)), flush=True)
@@ -214,7 +236,7 @@ def prepare(*,source_url,drive_parent_folder_id,drive,github_token,repo_root,
     inp=work_root/"input"; extracted=work_root/"unpacked"
     engine=work_root/"nxnative"; build=work_root/"linux-build"
     inp.mkdir(parents=True,exist_ok=True); work_root.mkdir(parents=True,exist_ok=True)
-    parent=drive.files().get(fileId=drive_parent_folder_id,fields="id,mimeType",supportsAllDrives=True).execute()
+    parent=drive_execute(drive.files().get(fileId=drive_parent_folder_id,fields="id,mimeType",supportsAllDrives=True), "consulta da pasta raiz")
     if parent.get("mimeType")!=FOLDER: raise ValueError("DRIVE_FOLDER_ID não é uma pasta.")
     project=ensure_folder(drive,drive_parent_folder_id,"HookLink2iOS")
     inputs=ensure_folder(drive,project["id"],"Inputs")
