@@ -178,36 +178,6 @@ def download_verified_nup(drive,record,destination):
     part.replace(destination)
     return {"id":record["id"],"name":record["name"],**h,"web_view_url":record.get("webViewLink")}
 
-def set_github_actions_secret(token, secret_name, secret_value):
-    """Encrypt a temporary OAuth credential and store it as a repository Actions secret."""
-    from nacl.public import PublicKey, SealedBox
-    headers=github_headers(token)
-    base=f"https://api.github.com/repos/{REPO}/actions/secrets"
-    key_response=requests.get(base+"/public-key",headers=headers,timeout=(30,90))
-    if key_response.status_code in (401,403):
-        raise PermissionError(
-            "O PAT não tem acesso para gravar Secrets do GitHub. "
-            "Adicione 'Secrets: Read and write' (Secrets: write) ao Fine-grained PAT "
-            "restrito a este repositório e execute novamente."
-        )
-    key_response.raise_for_status()
-    key=key_response.json()
-    encrypted=SealedBox(PublicKey(base64.b64decode(key["key"]))).encrypt(secret_value.encode("utf-8"))
-    payload={"encrypted_value":base64.b64encode(encrypted).decode("ascii"),"key_id":key["key_id"]}
-    response=requests.put(f"{base}/{secret_name}",headers=headers,json=payload,timeout=(30,90))
-    if response.status_code not in (201,204):
-        raise RuntimeError(f"Não foi possível configurar o secret temporário {secret_name}: HTTP {response.status_code}: {response.text[:600]}")
-    print(f"[HookLink2iOS] Secret temporário {secret_name} configurado (valor criptografado no GitHub).")
-
-def delete_github_actions_secret(token, secret_name):
-    """Delete the temporary OAuth secret after the Actions run is finished."""
-    response=requests.delete(
-        f"https://api.github.com/repos/{REPO}/actions/secrets/{secret_name}",
-        headers=github_headers(token),timeout=(30,90))
-    if response.status_code not in (204,404):
-        raise RuntimeError(f"Não foi possível apagar secret temporário {secret_name}: HTTP {response.status_code}: {response.text[:500]}")
-    print(f"[HookLink2iOS] Secret temporário {secret_name} removido do repositório.")
-
 def publish(token,handoff):
     if not token: raise ValueError("GitHub PAT obrigatório.")
     url=f"https://api.github.com/repos/{REPO}/contents/{HANDOFF}"
