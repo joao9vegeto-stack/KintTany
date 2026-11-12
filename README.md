@@ -107,7 +107,7 @@ O script upstream incluído em `hooklink/scripts/push_romfs.sh` automatiza a tra
 
 ## Retomada
 
-Se o Colab desconectar depois que NUP/RomFS/overlay forem enviados, abra novamente o notebook, autentique o Drive, cole a mesma URL (ou uma URL assinada renovada para o mesmo caminho) e execute as células. Se existir um handoff íntegro para essa origem, o notebook verifica os arquivos no Drive, reutiliza NUP/RomFS/overlay e publica um novo identificador de tentativa para iniciar um **novo build iOS**, sem repetir download, extração ou preparação Linux. O resultado é arquivado na subpasta da nova execução do Actions.
+Se o Colab desconectar depois que NUP/RomFS/overlay forem enviados, abra novamente o notebook, autentique o Drive, cole a mesma URL (ou uma URL assinada renovada para o mesmo caminho) e execute as células. Se existir um handoff íntegro para essa origem, o notebook verifica os arquivos no Drive e identifica o Actions correspondente ao commit. Se estiver em fila/em execução ou tiver concluído com sucesso, reutiliza esse run e apenas acompanha/baixa o artifact — sem novo commit, sem cancelar a compilação e sem repetir as etapas pesadas. Um novo build só é publicado quando não há execução reutilizável ou a anterior falhou/cancelou.
 
 ## Upstream e licenças
 
