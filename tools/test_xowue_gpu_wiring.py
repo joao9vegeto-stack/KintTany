@@ -522,25 +522,31 @@ assert "uint32_t vs_const_packed, ps_const_packed;" in header
 assert "uint64_t vs_const_used[4], ps_const_used[4];" in header
 print("PASS: per-stage Xenos packed constants match translator remap before Vulkan UBO upload")
 
-# Build 148 experimental diagnostics: EOF poll state/guest LR chain, bounded chunk
-# table indexes (out-of-range reads are suppressed), and host stat for zero-byte I/O.
+# Retain all B148 diagnostic tags. B149 preserves B148 EOF/file reads and changes
+# the chunk OOB hook to logging only so the original PPC path continues.
 for tag in ("B148_STREAM_EOF_POLL", "B148_CHUNK_IDX_OOB", "B148_READ_ZERO"):
-    assert tag in engine, f"missing B148 diagnostic tag {tag}"
-assert "void xowue_trace_stream_eof_poll(PPCContext &ctx, uint8_t *base)" in engine
-assert "bool xowue_trace_chunk_idx_oob(PPCContext &ctx, uint8_t *base)" in engine
-assert "cursor >= totalSize" in engine
-assert "static_cast<uint64_t>(cursor) == lastWindowEnd64" in engine
-assert "last_entry=%s" in engine and "lr_chain=%s" in engine
-assert "sample > 16u" in engine
-assert "idx=%u count=%u" in engine
-assert "action=read_suppressed experimental=1" in engine
-assert "::stat(file->path.c_str(), &hostStat)" in engine
-assert "hostStat.st_size" in engine and "sample <= 32u" in engine
-assert "xowue_trace_stream_eof_poll(ctx, base);" in memset_patcher
-assert "if (xowue_trace_chunk_idx_oob(ctx, base)) return;" in memset_patcher
-assert "sub_82575480" in memset_patcher
-assert "Math.max(completedIPAs + 2, 148)" in workflow
-assert "XOWUEExperimentalBuild" in workflow
-assert "-EXPERIMENTAL.ipa" in workflow
-print("PASS: Build 148 experimental EOF poll stack, OOB read suppression, zero-byte host-stat diagnostics")
+    assert tag in engine, f"missing retained B148 diagnostic tag {tag}"
+assert "void xowue_trace_chunk_idx_oob(PPCContext &ctx, uint8_t *base)" in engine
+assert "action=read_continues experimental=1" in engine
+assert "if (xowue_trace_chunk_idx_oob(ctx, base)) return;" not in memset_patcher
+assert "xowue_trace_chunk_idx_oob(ctx, base);" in memset_patcher
+
+for tag in ("B149_STREAM_EOF_POLL", "B149_STREAM_LAST_READS", "B149_CHUNK_IDX_OOB"):
+    assert tag in engine, f"missing B149 diagnostic tag {tag}"
+assert "void xowue_trace_stream_eof_poll_b149(PPCContext &ctx, uint8_t *base)" in engine
+assert "static thread_local ReadHistory s_recentReads" in engine
+assert "readField(object, 148u, currentWindowEnd)" in engine
+assert "cursor < currentWindowEnd || windowCoversRequest" in engine
+assert "last_entry16=%s" in engine and "guest_return_chain=%s" in engine
+assert "sample > 16u" in engine and "std::array<ReadPair, 8>" in engine
+assert "B149_STREAM_LAST_READS sample=%u" in engine
+assert "B149_CHUNK_IDX_OOB sample=%u obj=0x%08X idx=%u count=%u" in engine
+assert "xowue_trace_stream_eof_poll_b149(ctx, base);" in memset_patcher
+assert 'Math.max(completedIPAs + 2, 149)' in workflow
+assert 'includes("[B149]")' in workflow
+assert "referencias a 149:" in workflow
+print("PASS: retained B148 diagnostics and B149 window EOF, eight-read history, log-only chunk OOB")
+
+
+print("PASS: retained B148 diagnostics and B149 window/history/log-only probes")
 

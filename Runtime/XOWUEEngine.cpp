@@ -4728,19 +4728,19 @@ void xowue_trace_stream_eof_poll(PPCContext &ctx, uint8_t *base) {
     recordRuntimeTrace(event);
 }
 
-bool xowue_trace_chunk_idx_oob(PPCContext &ctx, uint8_t *base) {
+void xowue_trace_chunk_idx_oob(PPCContext &ctx, uint8_t *base) {
     static std::atomic<uint32_t> s_b148ChunkIdxOobLogs{0u};
 
     const uint32_t object = ctx.r3.u32;
     const uint32_t index = ctx.r4.u32;
     const uint64_t tableField64 = static_cast<uint64_t>(object) + 172u;
     if (object == 0u || base == nullptr || tableField64 > UINT32_MAX ||
-        !validGuestRange(static_cast<uint32_t>(tableField64), 4u)) return false;
+        !validGuestRange(static_cast<uint32_t>(tableField64), 4u)) return;
 
     const uint32_t table = loadGuestBe32(base, static_cast<uint32_t>(tableField64));
-    if (table == 0u || !validGuestRange(table, 8u)) return false;
+    if (table == 0u || !validGuestRange(table, 8u)) return;
     const uint32_t count = loadGuestBe32(base, table + 4u);
-    if (index < count) return false;
+    if (index < count) return;
 
     const uint32_t sample =
         s_b148ChunkIdxOobLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
@@ -4748,12 +4748,203 @@ bool xowue_trace_chunk_idx_oob(PPCContext &ctx, uint8_t *base) {
         char event[240];
         std::snprintf(event, sizeof(event),
             "B148_CHUNK_IDX_OOB sample=%u obj=0x%08X idx=%u count=%u "
-            "action=read_suppressed experimental=1",
+            "action=read_continues experimental=1",
+            sample, object, index, count);
+        recordRuntimeTrace(event);
+
+        std::snprintf(event, sizeof(event),
+            "B149_CHUNK_IDX_OOB sample=%u obj=0x%08X idx=%u count=%u "
+            "action=log_only",
             sample, object, index, count);
         recordRuntimeTrace(event);
     }
-    return true;
 }
+
+void xowue_trace_stream_eof_poll_b149(PPCContext &ctx, uint8_t *base) {
+    struct ReadPair {
+        uint32_t cursor = 0xFFFFFFFFu;
+        uint32_t requested = 0u;
+    };
+    struct ReadHistory {
+        std::array<ReadPair, 8> pairs{};
+        uint32_t next = 0u;
+        uint32_t count = 0u;
+    };
+    static thread_local ReadHistory s_recentReads{};
+    static std::atomic<uint32_t> s_b149StreamEofPollLogs{0u};
+
+    const uint32_t object = ctx.r3.u32;
+    const uint32_t destination = ctx.r4.u32;
+    const uint32_t requested = ctx.r5.u32;
+    uint32_t cursor = 0xFFFFFFFFu;
+    uint32_t streamSize = 0xFFFFFFFFu;
+    uint32_t currentWindowEnd = 0xFFFFFFFFu;
+    uint32_t table = 0xFFFFFFFFu;
+    uint32_t data = 0xFFFFFFFFu;
+    uint32_t count = 0xFFFFFFFFu;
+
+    auto readField = [&](uint32_t guestObject, uint32_t offset, uint32_t &value) -> bool {
+        const uint64_t address64 = static_cast<uint64_t>(guestObject) + offset;
+        if (guestObject == 0u || base == nullptr || address64 > UINT32_MAX ||
+            !validGuestRange(static_cast<uint32_t>(address64), 4u)) return false;
+        value = loadGuestBe32(base, static_cast<uint32_t>(address64));
+        return true;
+    };
+
+    const bool cursorValid = readField(object, 136u, cursor);
+    const bool sizeValid = readField(object, 128u, streamSize);
+    const bool windowEndValid = readField(object, 148u, currentWindowEnd);
+
+    // Per-host-thread rolling history: include the current (cursor, requested) pair.
+    s_recentReads.pairs[s_recentReads.next] = {cursor, requested};
+    s_recentReads.next = (s_recentReads.next + 1u) % 8u;
+    s_recentReads.count = std::min<uint32_t>(s_recentReads.count + 1u, 8u);
+
+    const uint64_t tableField64 = static_cast<uint64_t>(object) + 172u;
+    if (object == 0u || base == nullptr || tableField64 > UINT32_MAX ||
+        !validGuestRange(static_cast<uint32_t>(tableField64), 4u)) return;
+    table = loadGuestBe32(base, static_cast<uint32_t>(tableField64));
+    if (table == 0u || !validGuestRange(table, 8u)) return;
+    data = loadGuestBe32(base, table);
+    count = loadGuestBe32(base, table + 4u);
+
+    // Bound the guest count and require the full array to be readable before
+    // claiming that no table window covers the requested stream interval.
+    constexpr uint32_t kB149MaxChunkEntries = 65536u;
+    if (count > kB149MaxChunkEntries) return;
+    if (count != 0u) {
+        const uint64_t tableBytes = static_cast<uint64_t>(count) * 16u;
+        if (data == 0u || tableBytes / 16u != count ||
+            !validGuestRange(data, tableBytes)) return;
+    }
+
+    bool windowCoversRequest = false;
+    bool lastEntryValid = false;
+    uint64_t lastEntryAddress64 = 0xFFFFFFFFFFFFFFFFull;
+    uint32_t lastW0 = 0xFFFFFFFFu;
+    uint32_t lastW1 = 0xFFFFFFFFu;
+    uint32_t lastW2 = 0xFFFFFFFFu;
+    uint32_t lastW3 = 0xFFFFFFFFu;
+    const uint64_t requestEnd64 =
+        static_cast<uint64_t>(cursor) + static_cast<uint64_t>(requested);
+
+    for (uint32_t entryIndex = 0u; entryIndex < count; ++entryIndex) {
+        const uint64_t entryAddress64 =
+            static_cast<uint64_t>(data) + static_cast<uint64_t>(entryIndex) * 16u;
+        if (entryAddress64 > UINT32_MAX ||
+            !validGuestRange(static_cast<uint32_t>(entryAddress64), 16u)) continue;
+        const uint32_t entryAddress = static_cast<uint32_t>(entryAddress64);
+        const uint32_t w0 = loadGuestBe32(base, entryAddress);
+        const uint32_t w1 = loadGuestBe32(base, entryAddress + 4u);
+        const uint32_t w2 = loadGuestBe32(base, entryAddress + 8u);
+        const uint32_t w3 = loadGuestBe32(base, entryAddress + 12u);
+        if (w1 == 0u || w1 > 0x400000u) continue;
+
+        // The last valid 16-byte record in table order is the one reported.
+        lastEntryValid = true;
+        lastEntryAddress64 = entryAddress64;
+        lastW0 = w0;
+        lastW1 = w1;
+        lastW2 = w2;
+        lastW3 = w3;
+
+        const uint64_t windowStart = static_cast<uint64_t>(w0);
+        const uint64_t windowEnd = windowStart + static_cast<uint64_t>(w1);
+        if (cursorValid && requestEnd64 >= static_cast<uint64_t>(cursor) &&
+            static_cast<uint64_t>(cursor) >= windowStart &&
+            requestEnd64 <= windowEnd) {
+            windowCoversRequest = true;
+        }
+    }
+
+    if (!cursorValid || !windowEndValid ||
+        cursor < currentWindowEnd || windowCoversRequest) return;
+
+    const uint32_t sample =
+        s_b149StreamEofPollLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
+    if (sample > 16u) return;
+
+    char lastEntryHex[33];
+    if (lastEntryValid) {
+        constexpr char kHex[] = "0123456789ABCDEF";
+        const uint32_t entryAddress = static_cast<uint32_t>(lastEntryAddress64);
+        for (uint32_t i = 0u; i < 16u; ++i) {
+            const uint8_t value = base[entryAddress + i];
+            lastEntryHex[i * 2u] = kHex[value >> 4u];
+            lastEntryHex[i * 2u + 1u] = kHex[value & 0x0Fu];
+        }
+        lastEntryHex[32] = '\0';
+    } else {
+        std::snprintf(lastEntryHex, sizeof(lastEntryHex), "unavailable");
+    }
+
+    char recentReads[320];
+    recentReads[0] = '\0';
+    size_t recentLength = 0u;
+    const uint32_t firstPair =
+        (s_recentReads.next + 8u - s_recentReads.count) % 8u;
+    for (uint32_t i = 0u; i < s_recentReads.count; ++i) {
+        const uint32_t pairIndex = (firstPair + i) % 8u;
+        const ReadPair &pair = s_recentReads.pairs[pairIndex];
+        const int written = std::snprintf(
+            recentReads + recentLength, sizeof(recentReads) - recentLength,
+            "%s0x%08X/0x%08X", i == 0u ? "" : ",",
+            pair.cursor, pair.requested);
+        if (written > 0) recentLength += std::min<size_t>(
+            static_cast<size_t>(written), sizeof(recentReads) - recentLength - 1u);
+    }
+    if (recentReads[0] == '\0')
+        std::snprintf(recentReads, sizeof(recentReads), "unavailable");
+
+    char returnChain[192];
+    returnChain[0] = '\0';
+    size_t chainLength = 0u;
+    uint32_t frame = ctx.r1.u32;
+    uint32_t framesCaptured = 0u;
+    for (uint32_t i = 0u; i < 8u; ++i) {
+        if (frame == 0u || frame > UINT32_MAX - 12u ||
+            !validGuestRange(frame, 12u)) {
+            const int written = std::snprintf(
+                returnChain + chainLength, sizeof(returnChain) - chainLength,
+                "%s<invalid>", chainLength == 0u ? "" : ",");
+            if (written > 0) chainLength += std::min<size_t>(
+                static_cast<size_t>(written), sizeof(returnChain) - chainLength - 1u);
+            break;
+        }
+        const uint32_t nextFrame = loadGuestBe32(base, frame);
+        const uint32_t savedLr = loadGuestBe32(base, frame + 8u);
+        const int written = std::snprintf(
+            returnChain + chainLength, sizeof(returnChain) - chainLength,
+            "%s0x%08X", chainLength == 0u ? "" : ",", savedLr);
+        if (written > 0) chainLength += std::min<size_t>(
+            static_cast<size_t>(written), sizeof(returnChain) - chainLength - 1u);
+        ++framesCaptured;
+        if (nextFrame == 0u || nextFrame <= frame) break;
+        frame = nextFrame;
+    }
+    if (returnChain[0] == '\0')
+        std::snprintf(returnChain, sizeof(returnChain), "unavailable");
+
+    char readsEvent[480];
+    std::snprintf(readsEvent, sizeof(readsEvent),
+        "B149_STREAM_LAST_READS sample=%u obj=0x%08X pair_count=%u pairs=%s",
+        sample, object, s_recentReads.count, recentReads);
+    recordRuntimeTrace(readsEvent);
+
+    char event[1400];
+    std::snprintf(event, sizeof(event),
+        "B149_STREAM_EOF_POLL sample=%u obj=0x%08X cursor=0x%08X "
+        "stream_size=0x%08X current_window_end=0x%08X count=%u "
+        "last_entry16=%s last_w0=0x%08X last_w1=0x%08X "
+        "last_w2=0x%08X last_w3=0x%08X r4=0x%08X r5=0x%08X "
+        "sp=0x%08X lr_entry=0x%08X return_frames=%u guest_return_chain=%s",
+        sample, object, cursor, sizeValid ? streamSize : 0xFFFFFFFFu,
+        currentWindowEnd, count, lastEntryHex, lastW0, lastW1, lastW2, lastW3,
+        destination, requested, ctx.r1.u32, static_cast<uint32_t>(ctx.lr),
+        framesCaptured, returnChain);
+    recordRuntimeTrace(event);
+}
+
 
 void xowue_trace_chunk_entry(PPCContext &ctx, uint8_t *base) {
     // Build 147: inspect the UE3 chunk entry before sub_82575108 mutates state.

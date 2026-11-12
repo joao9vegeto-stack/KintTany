@@ -99,12 +99,12 @@ jobs:
               }
               return false;
             }).length;
-            const baseBuildNumber = Math.max(completedIPAs + 2, 148);
-            // The explicitly tagged B148 implementation run must be exactly 148,
-            // not 148.1 due to the preceding preflight-only failed attempt.
-            const forceExactBuild148 = context.eventName === "push" &&
-              String(context.payload?.head_commit?.message || "").includes("[B148]");
-            const buildNumber = forceExactBuild148 ? "148" : (failedAttempts > 0
+            const baseBuildNumber = Math.max(completedIPAs + 2, 149);
+            // The explicitly tagged B149 implementation run must be exactly 149,
+            // not 149.1 due to an earlier failed attempt.
+            const forceExactBuild149 = context.eventName === "push" &&
+              String(context.payload?.head_commit?.message || "").includes("[B149]");
+            const buildNumber = forceExactBuild149 ? "149" : (failedAttempts > 0
               ? `${baseBuildNumber}.${failedAttempts}`
               : String(baseBuildNumber));
             core.exportVariable("XOWUE_BUILD_NUMBER", String(buildNumber));
@@ -507,7 +507,7 @@ jobs:
           test -s "$GITHUB_WORKSPACE/artifacts/xowue-aot-arm64-semantics.json"
           python3 -m json.tool "$GITHUB_WORKSPACE/artifacts/xowue-aot-arm64-semantics.json" >/dev/null
 
-      - name: Instrument B146/B147/B148 PPC stream, EOF-poll and chunk callsites
+      - name: Instrument B146/B147/B148/B149 PPC stream, EOF-poll and chunk callsites
         run: |
           set -euo pipefail
           python3 -m py_compile tools/patch_xowue_stream_memset_probe.py
@@ -523,10 +523,12 @@ jobs:
 
           grep -R -Fq 'xowue_trace_stream_eof_poll(ctx, base);' \
             "$GITHUB_WORKSPACE/generated/ppc"/ppc_recomp.*.cpp
-          grep -R -Fq 'if (xowue_trace_chunk_idx_oob(ctx, base)) return;' \
+          grep -R -Fq 'xowue_trace_stream_eof_poll_b149(ctx, base);' \
+            "$GITHUB_WORKSPACE/generated/ppc"/ppc_recomp.*.cpp
+          grep -R -Fq 'xowue_trace_chunk_idx_oob(ctx, base);' \
             "$GITHUB_WORKSPACE/generated/ppc"/ppc_recomp.*.cpp
 
-      - name: Verify B147/B148, run requested Engine.xxx scan and all XOWUE source tests
+      - name: Verify B147/B148/B149 source instrumentation and all XOWUE tests
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -538,19 +540,26 @@ jobs:
                 bool(re.search(r"if \(commit && \(allocationType & 0x00800000u\) == 0\) \{\s*std::memset\(base \+ address, 0, adjustedSize\);", src)))
           assert all(tag in src for tag in ("B147_VM_RECOMMIT", "B147_VM_RELEASE", "B147_CHUNK_ENTRY"))
           assert all(tag in src for tag in ("B148_STREAM_EOF_POLL", "B148_CHUNK_IDX_OOB", "B148_READ_ZERO"))
+          assert all(tag in src for tag in ("B149_STREAM_EOF_POLL", "B149_STREAM_LAST_READS", "B149_CHUNK_IDX_OOB"))
           assert not re.search(r"if \(commit && \(allocationType & 0x00800000u\) == 0\) \{\s*std::memset\(base \+ address, 0, adjustedSize\);", src)
           PY
 
-          # Exact B148 Engine.xxx EOF coverage and tag verification requested for this build.
+          # Source-only B149 inventory. This step intentionally does not inspect game-data files.
           python3 - <<'PY'
-          import os, sys, glob
-          root = "X-MEN ORIGINS WOLVERINE PT BR"
-          for p in glob.glob(os.path.join(root, "**", "Engine.xxx"), recursive=True):
-              sz = os.path.getsize(p)
-              print(p, "tamanho", sz, hex(sz), "| offset do EOF visto no log: 0x470000 =", 0x470000, "| cobre:", sz >= 0x470000)
-          src = open("Runtime/XOWUEEngine.cpp", errors="replace").read()
-          for tag in ("B148_STREAM_EOF_POLL", "B148_CHUNK_IDX_OOB", "B148_READ_ZERO"):
-              print(tag, "presente" if tag in src else "AUSENTE")
+          import pathlib, re
+          txt = "\n".join(
+              p.read_text(errors="replace")
+              for p in pathlib.Path(".").rglob("*")
+              if p.suffix in {".cpp", ".h", ".mm", ".py", ".yml"} and "ppc_recomp" not in p.name
+          )
+          for tag in ("B148_FILE_OPEN_SIZE", "B148_STREAM_EOF_POLL",
+                      "B148_CHUNK_IDX_OOB", "B148_READ_ZERO"):
+              print(tag, "presente" if tag in txt else "ausente")
+          for tag in ("B148_STREAM_EOF_POLL", "B148_CHUNK_IDX_OOB", "B148_READ_ZERO",
+                      "B149_STREAM_EOF_POLL", "B149_STREAM_LAST_READS", "B149_CHUNK_IDX_OOB"):
+              print(tag, "presente" if tag in txt else "ausente")
+          print("referencias a 148:", len(re.findall(r"\b148\b", txt)))
+          print("referencias a 149:", len(re.findall(r"\b149\b", txt)))
           PY
           test_count=0
           for test in tools/test_xowue_*.py; do

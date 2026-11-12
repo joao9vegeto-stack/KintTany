@@ -27,9 +27,14 @@ EOF_DECLARATION = (
 )
 EOF_CALL = "xowue_trace_stream_eof_poll(ctx, base);"
 CHUNK_OOB_DECLARATION = (
-    "bool xowue_trace_chunk_idx_oob(PPCContext &ctx, uint8_t *base);"
+    "void xowue_trace_chunk_idx_oob(PPCContext &ctx, uint8_t *base);"
 )
-CHUNK_OOB_GUARD = "if (xowue_trace_chunk_idx_oob(ctx, base)) return;"
+CHUNK_OOB_LEGACY_GUARD = "if (xowue_trace_chunk_idx_oob(ctx, base)) return;"
+CHUNK_OOB_GUARD = "xowue_trace_chunk_idx_oob(ctx, base);"
+EOF_B149_DECLARATION = (
+    "void xowue_trace_stream_eof_poll_b149(PPCContext &ctx, uint8_t *base);"
+)
+EOF_B149_CALL = "xowue_trace_stream_eof_poll_b149(ctx, base);"
 CALL_SITE = re.compile(
     r"(?P<prefix>"
     r"^\s*// li r4,0\s*\n"
@@ -113,24 +118,39 @@ def _patch_eof_poll_probe(source: str) -> tuple[str, bool, bool]:
         return source, False, False
     start, end, match = span
     body = source[start:end]
-    existing = body.count(EOF_CALL)
-    if existing == 1:
-        patched = _ensure_declaration(
-            source, f"PPC_FUNC_IMPL(__imp__{EOF_FUNCTION})", EOF_DECLARATION
-        )
-        return patched, True, False
-    if existing:
-        raise RuntimeError("duplicated stream EOF-poll probe detected; refusing to patch")
+    existing_b148 = body.count(EOF_CALL)
+    existing_b149 = body.count(EOF_B149_CALL)
+    if existing_b148 > 1 or existing_b149 > 1:
+        raise RuntimeError("duplicated B148/B149 stream EOF-poll probe detected; refusing to patch")
 
-    # Capture r3/r4/r5 and r1 before the first translated PPC instruction mutates them.
-    insertion = match.end()
-    patched = source[:insertion] + "\n    " + EOF_CALL + source[insertion:]
+    inserted = False
+    if existing_b148 == 0 and existing_b149 == 0:
+        insertion = match.end()
+        injected = "\n    " + EOF_CALL + "\n    " + EOF_B149_CALL
+        patched = source[:insertion] + injected + source[insertion:]
+        inserted = True
+    elif existing_b148 == 1 and existing_b149 == 0:
+        call_at = body.index(EOF_CALL) + len(EOF_CALL)
+        patched_body = body[:call_at] + "\n    " + EOF_B149_CALL + body[call_at:]
+        patched = source[:start] + patched_body + source[end:]
+        inserted = True
+    elif existing_b148 == 0 and existing_b149 == 1:
+        call_at = body.index(EOF_B149_CALL)
+        patched_body = body[:call_at] + EOF_CALL + "\n    " + body[call_at:]
+        patched = source[:start] + patched_body + source[end:]
+        inserted = True
+    else:
+        patched = source
+
     patched = _ensure_declaration(
         patched, f"PPC_FUNC_IMPL(__imp__{EOF_FUNCTION})", EOF_DECLARATION
     )
-    if patched.count(EOF_CALL) != 1:
-        raise RuntimeError("stream EOF-poll probe call count is not exactly one")
-    return patched, True, True
+    patched = _ensure_declaration(
+        patched, f"PPC_FUNC_IMPL(__imp__{EOF_FUNCTION})", EOF_B149_DECLARATION
+    )
+    if patched.count(EOF_CALL) != 1 or patched.count(EOF_B149_CALL) != 1:
+        raise RuntimeError("B148/B149 stream EOF-poll probe call counts are not exactly one")
+    return patched, True, inserted
 
 
 def _patch_chunk_entry_probe(source: str) -> tuple[str, bool, bool, bool, bool]:
@@ -139,9 +159,26 @@ def _patch_chunk_entry_probe(source: str) -> tuple[str, bool, bool, bool, bool]:
         return source, False, False, False, False
     start, end, match = span
     body = source[start:end]
-    existing_guard = body.count(CHUNK_OOB_GUARD)
+    existing_legacy_guard = body.count(CHUNK_OOB_LEGACY_GUARD)
+    existing_oob_calls = body.count(CHUNK_OOB_GUARD) - existing_legacy_guard
     existing_chunk = body.count(CHUNK_CALL)
-    if existing_guard == 1 and existing_chunk == 1:
+    if existing_legacy_guard > 1 or existing_oob_calls > 1 or existing_chunk > 1:
+        raise RuntimeError("duplicated B148/B149/B147 chunk-entry probe detected; refusing to patch")
+
+    if existing_legacy_guard == 1 and existing_oob_calls == 0 and existing_chunk == 1:
+        # Upgrade the B148 early-return guard into a B149 log-only call.
+        patched = source[:start] + body.replace(
+            CHUNK_OOB_LEGACY_GUARD, CHUNK_OOB_GUARD, 1
+        ) + source[end:]
+        patched = _ensure_declaration(
+            patched, f"PPC_FUNC_IMPL(__imp__{CHUNK_FUNCTION})", CHUNK_OOB_DECLARATION
+        )
+        patched = _ensure_declaration(
+            patched, f"PPC_FUNC_IMPL(__imp__{CHUNK_FUNCTION})", CHUNK_DECLARATION
+        )
+        return patched, True, False, True, False
+
+    if existing_oob_calls == 1 and existing_legacy_guard == 0 and existing_chunk == 1:
         patched = _ensure_declaration(
             source, f"PPC_FUNC_IMPL(__imp__{CHUNK_FUNCTION})", CHUNK_OOB_DECLARATION
         )
@@ -149,10 +186,11 @@ def _patch_chunk_entry_probe(source: str) -> tuple[str, bool, bool, bool, bool]:
             patched, f"PPC_FUNC_IMPL(__imp__{CHUNK_FUNCTION})", CHUNK_DECLARATION
         )
         return patched, True, False, True, False
-    if existing_guard or existing_chunk:
-        raise RuntimeError("partial/duplicated B148/B147 chunk-entry probe detected; refusing to patch")
 
-    # Reject only out-of-range chunk indexes; valid indexes continue through B147.
+    if existing_legacy_guard or existing_oob_calls or existing_chunk:
+        raise RuntimeError("partial B148/B149/B147 chunk-entry probe detected; refusing to patch")
+
+    # Log out-of-range indexes but never return early or alter PPC execution.
     insertion = match.end()
     injected = "\n    " + CHUNK_OOB_GUARD + "\n    " + CHUNK_CALL
     patched = source[:insertion] + injected + source[insertion:]
@@ -163,7 +201,7 @@ def _patch_chunk_entry_probe(source: str) -> tuple[str, bool, bool, bool, bool]:
         patched, f"PPC_FUNC_IMPL(__imp__{CHUNK_FUNCTION})", CHUNK_DECLARATION
     )
     if patched.count(CHUNK_OOB_GUARD) != 1 or patched.count(CHUNK_CALL) != 1:
-        raise RuntimeError("B148/B147 chunk-entry probe call counts are not exactly one")
+        raise RuntimeError("B148/B149/B147 chunk-entry probe call counts are not exactly one")
     return patched, True, True, True, True
 
 
@@ -220,9 +258,12 @@ PPC_FUNC_IMPL(__imp__sub_82575108) {
     assert patched.index("sub_82C2A1F0(ctx, base);") < patched.index(MEMSET_END)
     eof_marker = "PPC_FUNC_IMPL(__imp__sub_82575480) {"
     assert patched.index(EOF_CALL) == patched.index(eof_marker) + len(eof_marker) + 5
+    assert patched.index(EOF_B149_CALL) > patched.index(EOF_CALL)
+    assert patched.index(EOF_B149_CALL) < patched.index("ctx.r3.u64 = ctx.r3.u32;", patched.index(eof_marker))
     chunk_marker = "PPC_FUNC_IMPL(__imp__sub_82575108) {"
     assert patched.index(CHUNK_OOB_GUARD) == patched.index(chunk_marker) + len(chunk_marker) + 5
     assert patched.index(CHUNK_OOB_GUARD) < patched.index(CHUNK_CALL)
+    assert "if (xowue_trace_chunk_idx_oob(ctx, base)) return;" not in patched
     repeated, repeated_result = patch_source(patched)
     assert repeated == patched
     assert repeated_result["memset_inserted"] == 0
@@ -230,9 +271,9 @@ PPC_FUNC_IMPL(__imp__sub_82575108) {
     assert repeated_result["chunk_inserted"] == 0
     assert repeated_result["chunk_oob_inserted"] == 0
     assert patched.count(MEMSET_BEGIN) == 1 and patched.count(MEMSET_END) == 1
-    assert patched.count(EOF_CALL) == 1
+    assert patched.count(EOF_CALL) == 1 and patched.count(EOF_B149_CALL) == 1
     assert patched.count(CHUNK_OOB_GUARD) == 1 and patched.count(CHUNK_CALL) == 1
-    print("XOWUE_B146_B147_AOT_PROBE_SELF_TEST_OK memset_pc=0x82573E64 eof_poll_pc=0x82575480 chunk_entry=0x82575108 idempotent=1")
+    print("XOWUE_B146_B147_AOT_PROBE_SELF_TEST_OK B149 eof_poll=0x82575480 chunk_entry=0x82575108 log_only=1 idempotent=1")
 
 
 def main() -> int:
@@ -294,7 +335,7 @@ def main() -> int:
         "memset_callee": "0x82C2A1F0",
         "eof_poll_guest_function": "0x82575480",
         "chunk_entry_guest_function": "0x82575108",
-        "probe": "B146 stream memset + B147 chunk entry + B148 EOF poll and experimental OOB guard",
+        "probe": "B146 memset + B147 chunk entry + B148 EOF poll + B149 EOF history and log-only OOB",
         "found": found,
         "inserted": inserted,
         "patched_files": patched_files,

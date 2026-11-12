@@ -381,16 +381,17 @@ assert 'lines.filter { $0.contains("B84_CODE_AUDIT") }' in diag
 assert 'lines.filter { $0.contains("B90_STREAM_") }' in diag
 print("PASS: B86/B87 stream and file evidence, bounded wait diagnostics, compact app summary")
 
-# Retry builds retain the successful base version and receive a dotted attempt suffix.
+# Retry builds retain the successful base version and receive a dotted attempt suffix;
+# the explicitly tagged Build 149 implementation run is pinned to exactly 149.
 workflow_text = (root / ".github" / "workflows" / "xowue-ios.yml").read_text(encoding="utf-8")
 assert 'const failedAttempts = priorRuns.filter(' in workflow_text
 assert '`${baseBuildNumber}.${failedAttempts}`' in workflow_text
 assert 'CURRENT_PROJECT_VERSION="$XOWUE_BUILD_NUMBER"' in workflow_text
-assert 'Math.max(completedIPAs + 2, 148)' in workflow_text
-assert 'forceExactBuild148' in workflow_text
-assert 'includes("[B148]")' in workflow_text
+assert 'Math.max(completedIPAs + 2, 149)' in workflow_text
+assert 'forceExactBuild149' in workflow_text
+assert 'includes("[B149]")' in workflow_text
 assert 'XOWUE_BUILD_EXPERIMENTAL' in workflow_text
 assert 'info["XOWUEExperimentalBuild"] = True' in workflow_text
 assert 'IPA_NAME="XOWUE-Build-${XOWUE_BUILD_NUMBER}-EXPERIMENTAL.ipa"' in workflow_text
 assert 'name: XOWUE-Build-${{ steps.version.outputs.build_number }}-EXPERIMENTAL' in workflow_text
-print("PASS: failed/cancelled retries use dotted build identifiers (92.1, 92.2, ...) without consuming successful build numbers")
+print("PASS: Build 149 exact version marker and experimental IPA metadata")
