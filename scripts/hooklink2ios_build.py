@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """macOS Actions build stage for HookLink2iOS."""
 from __future__ import annotations
-import argparse, hashlib, json, os, shutil, subprocess, sys
+import argparse, hashlib, json, os, re, shutil, subprocess, sys, time
 from pathlib import Path
+import requests
+from google.auth.transport.requests import AuthorizedSession
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
 
 BRANCH="HookLink2iOS"
 TITLE_ID="0400486024DEC000"
@@ -32,23 +33,85 @@ def drive_client():
             info,scopes=["https://www.googleapis.com/auth/drive"])
     except Exception as exc:
         die(f"GOOGLE_SERVICE_ACCOUNT_JSON inválido: {exc}")
-    return build("drive","v3",credentials=creds,cache_discovery=False)
+    return build("drive","v3",credentials=creds,cache_discovery=False), AuthorizedSession(creds)
 
-def download_verified(drive,record,destination):
+def download_verified(drive,session,record,destination):
+    """Resumable Drive download. A broken response resumes from the exact byte already written."""
     destination.parent.mkdir(parents=True,exist_ok=True)
     meta=drive.files().get(fileId=record["id"],fields="id,name,size,md5Checksum",
         supportsAllDrives=True).execute(num_retries=5)
     expected=int(record["size"])
     if int(meta.get("size",-1))!=expected: die(f"Tamanho no Drive diverge para {record['name']}.")
     part=destination.with_name(destination.name+".part")
-    req=drive.files().get_media(fileId=record["id"],supportsAllDrives=True)
-    with part.open("wb") as out:
-        dl=MediaIoBaseDownload(out,req,chunksize=CHUNK); done=False
-        while not done:
-            status,done=dl.next_chunk(num_retries=8)
-            if status: print(f"Drive → Actions {record['name']}: {status.progress()*100:.1f}%",flush=True)
+    if part.exists() and part.stat().st_size>expected:
+        part.unlink()
+    url=f"https://www.googleapis.com/drive/v3/files/{record['id']}?alt=media&supportsAllDrives=true"
+    failures=0
+    last_report=0
+    range_bytes=512*1024*1024
+    while not part.exists() or part.stat().st_size<expected:
+        offset=part.stat().st_size if part.exists() else 0
+        end=min(offset+range_bytes-1,expected-1)
+        headers={"Range":f"bytes={offset}-{end}"}
+        before=offset
+        try:
+            with session.get(url,headers=headers,stream=True,timeout=(60,240)) as response:
+                if response.status_code==200 and offset>0:
+                    # If the endpoint ignores Range, restart safely from byte zero.
+                    part.unlink(missing_ok=True)
+                    offset=0
+                    end=expected-1
+                    expected_chunk=expected
+                    mode="wb"
+                elif response.status_code==206:
+                    content_range=response.headers.get("Content-Range","")
+                    match=re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)",content_range)
+                    if not match:
+                        die(f"Content-Range inválido para {record['name']}: {content_range!r}")
+                    range_start,range_end,range_total=map(int,match.groups())
+                    if range_start!=offset or range_total!=expected or range_end<range_start or range_end>end:
+                        die(f"Content-Range inconsistente para {record['name']}: {content_range!r}")
+                    expected_chunk=range_end-range_start+1
+                    mode="ab" if offset else "wb"
+                elif response.status_code==200 and offset==0:
+                    expected_chunk=expected
+                    mode="wb"
+                else:
+                    response.raise_for_status()
+                    die(f"HTTP inesperado {response.status_code} no download de {record['name']}.")
+                written=0
+                with part.open(mode) as out:
+                    for block in response.iter_content(chunk_size=8*1024*1024):
+                        if not block: continue
+                        out.write(block)
+                        written+=len(block)
+                        total_now=offset+written
+                        if total_now-last_report>=1024*1024*1024 or total_now==expected:
+                            print(f"Drive → Actions {record['name']}: {total_now/expected*100:.1f}% ({total_now:,}/{expected:,} bytes)",flush=True)
+                            last_report=total_now
+                        if written>expected_chunk:
+                            die(f"Drive enviou dados além do intervalo pedido para {record['name']}.")
+                if written!=expected_chunk:
+                    raise IOError(f"Resposta incompleta de {record['name']}: {written:,}/{expected_chunk:,} bytes.")
+            failures=0
+        except requests.HTTPError as exc:
+            status=exc.response.status_code if exc.response is not None else 0
+            if status not in (408,429,500,502,503,504):
+                raise
+            failures+=1
+            print(f"[HookLink2iOS] Drive HTTP {status}; tentativa retomável {failures}/20.",flush=True)
+        except (requests.exceptions.RequestException,OSError,IOError) as exc:
+            now=part.stat().st_size if part.exists() else 0
+            failures=0 if now>before else failures+1
+            print(f"[HookLink2iOS] Conexão interrompida em {now:,}/{expected:,} bytes; retomando ({failures}/20): {type(exc).__name__}: {exc}",flush=True)
+        if failures>=20:
+            die(f"Download de {record['name']} falhou após 20 tentativas retomáveis.")
+        if failures:
+            delay=min(60,2**min(failures,6))
+            print(f"[HookLink2iOS] Nova tentativa em {delay}s.",flush=True)
+            time.sleep(delay)
     if part.stat().st_size!=expected:
-        part.unlink(missing_ok=True); die(f"Download incompleto: {record['name']}.")
+        die(f"Tamanho local incorreto para {record['name']}: {part.stat().st_size:,}/{expected:,}.")
     sha=digest(part,"sha256"); md5=digest(part,"md5")
     if sha.lower()!=record["sha256"].lower():
         part.unlink(missing_ok=True); die(f"SHA-256 divergente: {record['name']}.")
@@ -75,18 +138,25 @@ def main():
     sha=subprocess.check_output(["git","-C",str(args.engine),"rev-parse","HEAD"],text=True).strip()
     if sha!=ENGINE_PIN: die(f"Checkout nxnative divergente: {sha}")
     if any(k not in h for k in ("nup","romfs","resolution_overlay","drive")): die("Handoff incompleto.")
+    for key in ("nup","romfs","resolution_overlay"):
+        record=h[key]
+        if not record.get("id") or int(record.get("size",0))<=0:
+            die(f"Registro {key} inválido no handoff.")
+        if len(record.get("sha256",""))!=64:
+            die(f"SHA-256 ausente/inválido em {key}.")
     rt=Path(os.environ.get("RUNNER_TEMP","/tmp"))
     work=rt/"hooklink2ios-work"; incoming=rt/"hooklink2ios-input"
     shutil.rmtree(work,ignore_errors=True); shutil.rmtree(incoming,ignore_errors=True)
     work.mkdir(parents=True); incoming.mkdir(parents=True)
     out=args.output; out.mkdir(parents=True,exist_ok=True)
-    drive=drive_client()
+    drive,drive_session=drive_client()
     nup=incoming/"game.nup"
+    # The pinned nxnative builder creates extract/v131072/RomFS.img directly from the NUP.
+    # Do not download the separate 26 GB Drive copy a second time.
     romfs=work/"extract"/f"v{VERSION}"/"RomFS.img"
     overlay=out/"res_overlay"/"Pack"/"Bootup.Nin_Ounce_NVN2.pack.zs"
-    download_verified(drive,h["nup"],nup)
-    download_verified(drive,h["romfs"],romfs)
-    download_verified(drive,h["resolution_overlay"],overlay)
+    download_verified(drive,drive_session,h["nup"],nup)
+    download_verified(drive,drive_session,h["resolution_overlay"],overlay)
 
     env_file=Path("hooklink/Resources/presets/iphone.env").resolve()
     entitlements=Path("hooklink/Resources/presets/entitlements.plist").resolve()
@@ -100,13 +170,23 @@ def main():
     print("[HookLink2iOS] Build Xcode/Metal iniciado; --romfs separate mantém o RomFS fora da IPA.",flush=True)
     subprocess.run(cmd,cwd=args.engine,env=os.environ.copy(),check=True)
     if not ipa.is_file() or not ipa.stat().st_size: die("Builder terminou sem gerar IPA.")
+    if not romfs.is_file() or romfs.stat().st_size!=int(h["romfs"]["size"]):
+        die("RomFS criado pelo builder difere do tamanho validado no Colab.")
+    romfs_sha=digest(romfs,"sha256")
+    if romfs_sha.lower()!=h["romfs"]["sha256"].lower():
+        die("SHA-256 do RomFS criado no Actions difere do RomFS previamente validado no Colab.")
+    romfs_identity=subprocess.check_output(
+        [sys.executable,str(args.engine/"dm/tools/romfs_image.py"),"--identity",
+         str(romfs),TITLE_ID,f"v{VERSION}",ENGINE_PIN],text=True).strip().splitlines()[-1]
+    if romfs_identity!=h["romfs"].get("identity"):
+        die("Identidade do RomFS criado no Actions difere do handoff validado no Colab.")
 
     report={"project":"HookLink2iOS","branch":BRANCH,"commit":os.environ.get("GITHUB_SHA"),
         "run_id":os.environ.get("GITHUB_RUN_ID"),"title_id":TITLE_ID,"package_version":f"v{VERSION}",
         "engine_commit":sha,"gpu_arch":gpu,"romfs_mode":"separate",
         "ipa":{"name":ipa.name,"size":ipa.stat().st_size,"sha256":digest(ipa,"sha256")},
-        "romfs":{"name":"romfs.img","size":romfs.stat().st_size,"sha256":digest(romfs,"sha256"),
-                 "identity":h["romfs"].get("identity")},
+        "romfs":{"name":"romfs.img","size":romfs.stat().st_size,"sha256":romfs_sha,
+                 "identity":romfs_identity,"source":"repacked-from-verified-nup"},
         "resolution_overlay":{"name":overlay.name,"size":overlay.stat().st_size,
                               "sha256":digest(overlay,"sha256")}}
     report_path=out/"build-report.json"
