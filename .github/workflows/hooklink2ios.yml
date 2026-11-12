@@ -78,7 +78,7 @@ jobs:
           xcrun --sdk iphoneos metal --version
           brew install xcodegen zstd glslang
           dotnet --list-sdks
-          dotnet --list-sdks | grep -Eq '^(8|9|10|11)\\.' || { echo "::error::.NET SDK 8+ is required by the pinned NXNative toolchain."; exit 1; }
+          dotnet --list-sdks | grep -Eq '^(8|9|10|11)[.]' || { echo "::error::.NET SDK 8+ is required by the pinned NXNative toolchain."; exit 1; }
           python -m pip install lz4 "capstone>=5,<6" fonttools nsz zbic backports.zstd google-api-python-client google-auth requests
 
       - name: Fetch exact HookLink nxnative engine commit
