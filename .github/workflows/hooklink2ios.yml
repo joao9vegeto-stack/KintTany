@@ -93,6 +93,51 @@ jobs:
           git -C "$RUNNER_TEMP/nxnative" checkout --detach FETCH_HEAD
           test "$(git -C "$RUNNER_TEMP/nxnative" rev-parse HEAD)" = "$PIN"
 
+      - name: Reclaim unused macOS image storage without touching Xcode 27.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTIVE_APP="$(cd "$DEVELOPER_DIR/../.." && pwd -P)"
+          echo "Required active Xcode: $ACTIVE_APP"
+          xcodebuild -version
+          test "$ACTIVE_APP" = "/Applications/Xcode_27.2.app"
+
+          echo "=== Simulator runtime storage before cleanup ==="
+          xcrun simctl runtime list || true
+          if xcrun simctl help runtime 2>&1 | grep -q "delete"; then
+            xcrun simctl runtime delete all --dry-run || true
+            xcrun simctl runtime delete all || true
+          fi
+          xcrun simctl delete all || true
+
+          echo "=== Removing other preinstalled Xcode versions (27.0 / 27.1) ==="
+          for candidate in /Applications/Xcode_27.app /Applications/Xcode_27.1.app; do
+            if [ -d "$candidate" ]; then
+              real="$(cd "$candidate" && pwd -P)"
+              if [ "$real" != "$ACTIVE_APP" ]; then
+                du -sh "$real" || true
+                sudo rm -rf "$real"
+              fi
+            fi
+          done
+          sudo xcode-select --switch "$DEVELOPER_DIR"
+          test "$(xcodebuild -version | head -1)" = "Xcode 27.2"
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphoneos metal --version
+
+          echo "=== Removing Android SDK (not used by this iOS build) ==="
+          for candidate in "$HOME/Library/Android/sdk" "$HOME/.android"; do
+            if [ -d "$candidate" ]; then
+              du -sh "$candidate" || true
+              rm -rf "$candidate"
+            fi
+          done
+
+          echo "=== Removing package/download caches only ==="
+          rm -rf "$HOME/Library/Caches/Homebrew" "$HOME/Library/Caches/pip"
+          brew cleanup -s || true
+          df -h "$RUNNER_TEMP"
+
       - name: Preflight HookLink build storage before large downloads
         shell: bash
         run: |
@@ -103,11 +148,11 @@ jobs:
           df -h "$RUNNER_TEMP"
           AVAILABLE_KB="$(df -Pk "$RUNNER_TEMP" | awk 'END {print $4}')"
           AVAILABLE_BYTES="$((AVAILABLE_KB * 1024))"
-          REQUIRED_BYTES="$((80 * 1024 * 1024 * 1024))"
+          REQUIRED_BYTES="$((75 * 1024 * 1024 * 1024))"
           echo "Available workspace storage: $((AVAILABLE_BYTES / 1024 / 1024 / 1024)) GiB"
-          echo "HookLink documented minimum: 80 GiB free"
+          echo "HookLink documented minimum: approximately 80 GB free (75 GiB gate)"
           if [ "$AVAILABLE_BYTES" -lt "$REQUIRED_BYTES" ]; then
-            echo "::error::Insufficient disk for HookLink's full native build. Refusing to download the 25.6 GB NUP: need at least 80 GiB free."
+            echo "::error::Insufficient disk for HookLink's full native build. Refusing to download the 25.6 GB NUP: need at least 75 GiB free after reclaiming unused image components."
             exit 1
           fi
 
