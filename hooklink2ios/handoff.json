@@ -54,7 +54,8 @@
     "platform": "ios",
     "romfs_mode": "separate",
     "runner": "macos-26",
-    "xcode": "27.2"
+    "xcode": "26.6.0",
+    "retry_reason": "Xcode 27.2 unavailable on macos-26; runner offers Xcode 26.6.0"
   },
   "created_at_utc": "2026-11-12T22:41:01Z"
 }
