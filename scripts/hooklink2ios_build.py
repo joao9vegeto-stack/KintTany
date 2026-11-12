@@ -3,15 +3,15 @@
 from __future__ import annotations
 import argparse, hashlib, json, os, shutil, subprocess, sys
 from pathlib import Path
-from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
+from googleapiclient.http import MediaIoBaseDownload
 
 BRANCH="HookLink2iOS"
 TITLE_ID="0400486024DEC000"
 VERSION=131072
 ENGINE_PIN="cf2a2fecc6ce3fb841131ffeffa90915cdadf109"
-FOLDER="application/vnd.google-apps.folder"
 CHUNK=64*1024*1024
 
 def digest(path,algo):
@@ -24,10 +24,22 @@ def die(message):
     raise RuntimeError(message)
 
 def drive_client():
-    raw=os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON","").strip()
-    if not raw: die("Secret GOOGLE_SERVICE_ACCOUNT_JSON não configurado no repositório.")
-    creds=service_account.Credentials.from_service_account_info(
-        json.loads(raw),scopes=["https://www.googleapis.com/auth/drive"])
+    raw=os.environ.get("HOOKLINK2IOS_DRIVE_OAUTH_JSON","").strip()
+    if not raw:
+        die("Secret temporário HOOKLINK2IOS_DRIVE_OAUTH_JSON ausente. Execute o notebook Colab atualizado.")
+    try:
+        info=json.loads(raw)
+        creds=Credentials.from_authorized_user_info(
+            info,scopes=["https://www.googleapis.com/auth/drive"])
+    except Exception as exc:
+        die(f"Credencial OAuth do Colab inválida: {exc}")
+    if creds.expired:
+        if not creds.refresh_token:
+            die("OAuth do Colab sem refresh_token; reautentique o Drive no notebook.")
+        try:
+            creds.refresh(Request())
+        except Exception as exc:
+            die(f"Não foi possível renovar o OAuth do Drive: {exc}")
     return build("drive","v3",credentials=creds,cache_discovery=False)
 
 def download_verified(drive,record,destination):
@@ -55,28 +67,6 @@ def download_verified(drive,record,destination):
     part.replace(destination)
     print(f"VERIFIED {record['name']}: {expected:,} bytes | SHA256 {sha}",flush=True)
 
-def ensure_folder(drive,parent,name):
-    qname=name.replace("'","\\'")
-    res=drive.files().list(q=f"'{parent}' in parents and name = '{qname}' and mimeType = '{FOLDER}' and trashed = false",
-        spaces="drive",pageSize=100,fields="files(id,name)",supportsAllDrives=True,
-        includeItemsFromAllDrives=True).execute(num_retries=5)
-    if res.get("files"): return res["files"][0]
-    return drive.files().create(body={"name":name,"mimeType":FOLDER,"parents":[parent]},
-        fields="id,name",supportsAllDrives=True).execute(num_retries=5)
-
-def upload_drive(drive,path,parent,name):
-    size=path.stat().st_size; md5=digest(path,"md5")
-    media=MediaFileUpload(str(path),mimetype="application/octet-stream",chunksize=CHUNK,resumable=True)
-    req=drive.files().create(body={"name":name,"parents":[parent]},media_body=media,
-        fields="id,name,size,md5Checksum,webViewLink",supportsAllDrives=True)
-    item=None
-    while item is None:
-        status,item=req.next_chunk(num_retries=8)
-        if status: print(f"Actions → Drive {name}: {status.progress()*100:.1f}%",flush=True)
-    if int(item.get("size",-1))!=size or str(item.get("md5Checksum","")).lower()!=md5:
-        die(f"Upload ao Drive não passou na verificação: {name}")
-    return {"id":item["id"],"name":name,"size":size,"md5":md5,"url":item.get("webViewLink")}
-
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("--handoff",type=Path,required=True)
@@ -96,7 +86,7 @@ def main():
     shutil.rmtree(work,ignore_errors=True); shutil.rmtree(incoming,ignore_errors=True)
     work.mkdir(parents=True); incoming.mkdir(parents=True)
     out=args.output; out.mkdir(parents=True,exist_ok=True)
-    drive=drive_client() if os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON","").strip() else None
+    drive=drive_client()
     nup=incoming/"game.nup"
     romfs=work/"extract"/f"v{VERSION}"/"RomFS.img"
     overlay=out/"res_overlay"/"Pack"/"Bootup.Nin_Ounce_NVN2.pack.zs"
@@ -127,24 +117,7 @@ def main():
                               "sha256":digest(overlay,"sha256")}}
     report_path=out/"build-report.json"
     report_path.write_text(json.dumps(report,indent=2),encoding="utf-8")
-    try:
-        if drive is None:
-            print("[HookLink2iOS] Sem credencial de serviço no Actions; IPA será publicada como artifact GitHub.",flush=True)
-        else:
-            dest=ensure_folder(drive,h["drive"]["run_folder_id"],
-                f"actions-run-{os.environ.get('GITHUB_RUN_NUMBER','manual')}")
-            report["drive_upload"]={"folder_id":dest["id"],
-                "ipa":upload_drive(drive,ipa,dest["id"],ipa.name),
-                "overlay":upload_drive(drive,overlay,dest["id"],overlay.name)}
-            # Upload a report after adding IPA/overlay Drive IDs so report contains links.
-            report_path.write_text(json.dumps(report,indent=2),encoding="utf-8")
-            report["drive_upload"]["report"]=upload_drive(drive,report_path,dest["id"],report_path.name)
-            report_path.write_text(json.dumps(report,indent=2),encoding="utf-8")
-            print("[HookLink2iOS] IPA/overlay/report enviados ao Google Drive.",flush=True)
-    except Exception as e:
-        report["drive_upload_warning"]=str(e)[:1000]
-        report_path.write_text(json.dumps(report,indent=2),encoding="utf-8")
-        print(f"::warning::Upload ao Drive falhou; o artifact do Actions será mantido. {e}",flush=True)
+    print("[HookLink2iOS] IPA/overlay/report ficam no artifact do Actions; o Colab os transfere ao Drive via OAuth após validar o artifact.",flush=True)
     print("HOOKLINK2IOS_BUILD_OK",flush=True)
     print(f"IPA={ipa} BYTES={ipa.stat().st_size}",flush=True)
 
