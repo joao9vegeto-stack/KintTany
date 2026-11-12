@@ -226,8 +226,10 @@ def prepare(*,source_url,drive_parent_folder_id,drive,github_token,repo_root,
         ("game.nup","game.nup.part") and not p.name.endswith(".part")]
     if nup.is_file() and nup.stat().st_size>0:
         source_filename=local_sources[0].name if local_sources else "recuperado-local.nup"
-        archive_extracted=Path(source_filename).suffix.lower() in
-            (".rar",".zip",".7z",".tar",".tgz",".gz",".xz",".bz2")
+        archive_extracted = (
+            Path(source_filename).suffix.lower() in
+            (".rar", ".zip", ".7z", ".tar", ".tgz", ".gz", ".xz", ".bz2")
+        )
         print(f"[HookLink2iOS] NUP LOCAL RECUPERADO: {nup.stat().st_size:,} bytes; sem download/extração.")
         nh=file_hashes(nup)
         cache_name=f"{Path(source_filename).stem[:55]}_{key[:10]}.nup"
