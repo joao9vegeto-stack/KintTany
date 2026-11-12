@@ -17,7 +17,7 @@ ENGINE = "https://github.com/dsi-hub/nxnative.git"
 ENGINE_PIN = "cf2a2fecc6ce3fb841131ffeffa90915cdadf109"
 TITLE_ID = "0400486024DEC000"
 VERSION = 131072
-GPU = "none"  # Match Link2iOS: do not prebuild an offline Metal PSO archive; the device builds bases as needed.
+GPU = "g18p"  # HookLink documented offline Metal pipeline archive for A19 / iPhone 17 Pro.
 CHUNK = 64 * 1024 * 1024
 FOLDER = "application/vnd.google-apps.folder"
 
@@ -321,7 +321,7 @@ def prepare(*,source_url,drive_parent_folder_id,drive,github_token,repo_root,
         "drive":{"parent_folder_id":drive_parent_folder_id,"project_folder_id":project["id"],
             "inputs_folder_id":inputs["id"],"run_folder_id":runfolder["id"],"run_folder_url":runfolder.get("webViewLink")},
         "nup":nup_item,"romfs":{**romfs_item,"identity":identity},"resolution_overlay":overlay_item,
-        "builder":{"platform":"ios","romfs_mode":"separate","runner":"macos-26","xcode":"26.6.0"},
+        "builder":{"platform":"ios","romfs_mode":"separate","runner":"xcode-27","xcode":"27.2.0"},
         "created_at_utc":time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime())}
     pushed=publish(github_token,handoff)
     print("[HookLink2iOS] Handoff publicado somente em HookLink2iOS; commit:",pushed["commit_sha"])
