@@ -537,7 +537,10 @@ for tag in ("B149_STREAM_EOF_POLL", "B149_STREAM_LAST_READS", "B149_CHUNK_IDX_OO
 assert "void xowue_trace_stream_eof_poll_b149(PPCContext &ctx, uint8_t *base)" in engine
 assert "static thread_local ReadHistory s_recentReads" in engine
 assert "readField(object, 148u, currentWindowEnd)" in engine
-assert "cursor < currentWindowEnd || windowCoversRequest" in engine
+assert "if (windowCoversRequest) {" in engine
+assert 'logSkip("window_covers_request", UINT32_MAX);' in engine
+assert "if (cursor < currentWindowEnd) {" in engine
+assert 'logSkip("cursor_before_window_end", UINT32_MAX);' in engine
 assert "last_entry16=%s" in engine and "guest_return_chain=%s" in engine
 assert "sample > 16u" in engine and "std::array<ReadPair, 8>" in engine
 assert "B149_STREAM_LAST_READS sample=%u" in engine
