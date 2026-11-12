@@ -103,7 +103,7 @@ jobs:
             // The explicitly tagged B148 implementation run must be exactly 148,
             // not 148.1 due to the preceding preflight-only failed attempt.
             const forceExactBuild148 = context.eventName === "push" &&
-              String(context.payload?.head_commit?.message || "").includes("[build-148-exact]");
+              String(context.payload?.head_commit?.message || "").includes("[B148]");
             const buildNumber = forceExactBuild148 ? "148" : (failedAttempts > 0
               ? `${baseBuildNumber}.${failedAttempts}`
               : String(baseBuildNumber));
