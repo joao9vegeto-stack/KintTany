@@ -52,10 +52,17 @@ def run(cmd, cwd=None):
     return p.stdout
 
 def file_hashes(path):
+    path=Path(path)
     sha, md5, size = hashlib.sha256(), hashlib.md5(), 0
+    total=path.stat().st_size
+    last_report=0
+    print(f"[HookLink2iOS] Calculando SHA-256/MD5: {path.name} ({total:,} bytes)",flush=True)
     with open(path,"rb") as f:
         for block in iter(lambda:f.read(16*1024*1024),b""):
             sha.update(block); md5.update(block); size += len(block)
+            if size-last_report >= 1024*1024*1024 or size==total:
+                print(f"[HookLink2iOS] Hash {path.name}: {size/total*100:.1f}% ({size:,}/{total:,} bytes)",flush=True)
+                last_report=size
     return {"size":size,"sha256":sha.hexdigest(),"md5":md5.hexdigest()}
 
 def safe_name(name):
@@ -152,8 +159,8 @@ def ensure_folder(drive,parent,name):
     return drive.files().create(body={"name":name,"mimeType":FOLDER,"parents":[parent]},
         fields="id,name,webViewLink",supportsAllDrives=True).execute(num_retries=5)
 
-def upload(drive,path,parent,name,app_properties=None,description=None):
-    h=file_hashes(path)
+def upload(drive,path,parent,name,app_properties=None,description=None,precomputed_hashes=None):
+    h=precomputed_hashes or file_hashes(path)
     body={"name":name,"parents":[parent]}
     if app_properties: body["appProperties"]={str(k):str(v) for k,v in app_properties.items()}
     if description: body["description"]=description[:25000]
@@ -259,7 +266,8 @@ def prepare(*,source_url,drive_parent_folder_id,drive,github_token,repo_root,
             app_properties={"hooklink2ios_source_key":key,"hooklink2ios_nup_sha256":nh["sha256"],
                 "hooklink2ios_source_filename":source_filename[:120],
                 "hooklink2ios_archive_extracted":str(archive_extracted).lower()},
-            description=f"HookLink2iOS input cache | source={source_filename} | key={key} | sha256={nh['sha256']}")
+            description=f"HookLink2iOS input cache | source={source_filename} | key={key} | sha256={nh['sha256']}",
+            precomputed_hashes=nh)
         for candidate in local_sources:
             candidate.unlink(missing_ok=True)
         print("[HookLink2iOS] NUP local persistido e verificado no Drive.")
