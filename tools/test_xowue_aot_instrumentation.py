@@ -386,5 +386,9 @@ workflow_text = (root / ".github" / "workflows" / "xowue-ios.yml").read_text(enc
 assert 'const failedAttempts = priorRuns.filter(' in workflow_text
 assert '`${baseBuildNumber}.${failedAttempts}`' in workflow_text
 assert 'CURRENT_PROJECT_VERSION="$XOWUE_BUILD_NUMBER"' in workflow_text
-assert 'IPA_NAME="XOWUE-Build-${XOWUE_BUILD_NUMBER}.ipa"' in workflow_text
+assert 'Math.max(completedIPAs + 2, 148)' in workflow_text
+assert 'XOWUE_BUILD_EXPERIMENTAL' in workflow_text
+assert 'info["XOWUEExperimentalBuild"] = True' in workflow_text
+assert 'IPA_NAME="XOWUE-Build-${XOWUE_BUILD_NUMBER}-EXPERIMENTAL.ipa"' in workflow_text
+assert 'name: XOWUE-Build-${{ steps.version.outputs.build_number }}-EXPERIMENTAL' in workflow_text
 print("PASS: failed/cancelled retries use dotted build identifiers (92.1, 92.2, ...) without consuming successful build numbers")
