@@ -570,6 +570,19 @@ jobs:
           echo "XOWUE_SOURCE_TESTS_PASSED count=$test_count"
           test "$test_count" -gt 0
 
+          # Exact user-requested source-only scan; do not inspect game-data folders.
+          python3 - <<'PY'
+          import pathlib
+          txt = "\n".join(
+              p.read_text(errors="replace")
+              for p in pathlib.Path(".").rglob("*")
+              if p.suffix in {".cpp", ".h", ".mm", ".swift", ".py"} and "ppc_recomp" not in p.name
+          )
+          for tag in ("B149_BOOT_MARK", "B149_STREAM_POLL_ENTRY", "B149_CHUNK_ENTRY",
+                      "B148_READ_ZERO", "B148_FILE_OPEN_SIZE"):
+              print(tag, "no codigo" if tag in txt else "AUSENTE")
+          PY
+
 
       - name: Install KosmicKrisp iOS cross-build prerequisites
         run: |
