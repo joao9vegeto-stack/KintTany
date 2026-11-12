@@ -77,9 +77,9 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-version
           xcrun --sdk iphoneos metal --version
           brew install xcodegen zstd glslang
-          brew list --cask dotnet-sdk >/dev/null 2>&1 || brew install --cask dotnet-sdk
-          python -m pip install --upgrade pip
-          python -m pip install lz4 "capstone>=5,<6" fonttools nsz zbic backports.zstd google-api-python-client google-auth
+          dotnet --list-sdks
+          dotnet --list-sdks | grep -Eq '^(8|9|10|11)\\.' || { echo "::error::.NET SDK 8+ is required by the pinned NXNative toolchain."; exit 1; }
+          python -m pip install lz4 "capstone>=5,<6" fonttools nsz zbic backports.zstd google-api-python-client google-auth requests
 
       - name: Fetch exact HookLink nxnative engine commit
         shell: bash
@@ -92,6 +92,24 @@ jobs:
           git -C "$RUNNER_TEMP/nxnative" fetch --depth 1 origin "$PIN"
           git -C "$RUNNER_TEMP/nxnative" checkout --detach FETCH_HEAD
           test "$(git -C "$RUNNER_TEMP/nxnative" rev-parse HEAD)" = "$PIN"
+
+      - name: Preflight HookLink build storage before large downloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Runner: $(uname -a)"
+          echo "CPU cores: $(sysctl -n hw.ncpu)"
+          echo "RAM bytes: $(sysctl -n hw.memsize)"
+          df -h "$RUNNER_TEMP"
+          AVAILABLE_KB="$(df -Pk "$RUNNER_TEMP" | awk 'END {print $4}')"
+          AVAILABLE_BYTES="$((AVAILABLE_KB * 1024))"
+          REQUIRED_BYTES="$((80 * 1024 * 1024 * 1024))"
+          echo "Available workspace storage: $((AVAILABLE_BYTES / 1024 / 1024 / 1024)) GiB"
+          echo "HookLink documented minimum: 80 GiB free"
+          if [ "$AVAILABLE_BYTES" -lt "$REQUIRED_BYTES" ]; then
+            echo "::error::Insufficient disk for HookLink's full native build. Refusing to download the 25.6 GB NUP: need at least 80 GiB free."
+            exit 1
+          fi
 
       - name: Build native iOS IPA using the existing Link2iOS Drive service-account pattern
         env:
