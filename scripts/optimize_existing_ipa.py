@@ -363,6 +363,10 @@ def main() -> None:
         "        const char *e = getenv(\"DM_FPS_HOLD\"); h = e ? strcmp(e, \"off\") != 0 : dm_prof()->fps_hold;\n"
         "        if (!h) LOG(\"[nvn] frame step: frames are not held longer than the cap's vsyncs (%s)\", e ? \"DM_FPS_HOLD\" : \"game profile\");",
     )
+    matched_holds = [block for block in old_holds if hold_source.count(block) == 1]
+    if len(matched_holds) != 1:
+        fail("could not uniquely locate upstream/fork fstep_hold() for the BOTW profile-authority fix")
+    old_hold = matched_holds[0]
     new_hold = '''        const char *e = getenv("DM_FPS_HOLD");
         h = dm_prof()->fps_hold;
         LOG("[nvn] frame step: BOTW runtime profile fps_hold=%d is authoritative; launcher DM_FPS_HOLD=%s ignored",
