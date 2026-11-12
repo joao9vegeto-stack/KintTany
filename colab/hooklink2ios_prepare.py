@@ -139,9 +139,22 @@ def upload(drive,path,parent,name,app_properties=None,description=None):
     req=drive.files().create(body=body,media_body=media,
         fields="id,name,size,md5Checksum,webViewLink,description,appProperties",supportsAllDrives=True)
     item=None
+    failures=0
     while item is None:
-        status,item=req.next_chunk(num_retries=8)
-        if status: print(f"[HookLink2iOS] Drive upload {name}: {status.progress()*100:.1f}%",flush=True)
+        try:
+            status,item=req.next_chunk(num_retries=8)
+            failures=0
+            if status: print(f"[HookLink2iOS] Drive upload {name}: {status.progress()*100:.1f}%",flush=True)
+        except (BrokenPipeError, ConnectionError, TimeoutError, OSError) as exc:
+            failures += 1
+            if failures > 12:
+                raise RuntimeError(
+                    f"Upload interrompido após {failures} tentativas; o arquivo local foi preservado: {path}"
+                ) from exc
+            delay=min(60, 2 ** min(failures, 6))
+            print(f"[HookLink2iOS] Conexão Drive caiu durante {name}; retomando a sessão "
+                  f"({failures}/12) em {delay}s...", flush=True)
+            time.sleep(delay)
     if int(item.get("size",-1))!=h["size"] or str(item.get("md5Checksum","")).lower()!=h["md5"]:
         raise RuntimeError(f"Upload Drive falhou na verificação: {name}")
     return {"id":item["id"],"name":name,**h,"web_view_url":item.get("webViewLink")}
@@ -207,7 +220,26 @@ def prepare(*,source_url,drive_parent_folder_id,drive,github_token,repo_root,
     inputs=ensure_folder(drive,project["id"],"Inputs")
     cached=find_cached_nup(drive,inputs["id"],key)
     nup=inp/"game.nup"; archive=None; archive_extracted=False; source_filename=""
-    if cached:
+    # Recuperação local: se a sessão anterior caiu durante o upload, reutiliza o NUP
+    # já extraído em /content e não baixa nem extrai novamente o arquivo de origem.
+    local_sources=[p for p in inp.iterdir() if p.is_file() and p.name not in
+        ("game.nup","game.nup.part") and not p.name.endswith(".part")]
+    if nup.is_file() and nup.stat().st_size>0:
+        source_filename=local_sources[0].name if local_sources else "recuperado-local.nup"
+        archive_extracted=Path(source_filename).suffix.lower() in
+            (".rar",".zip",".7z",".tar",".tgz",".gz",".xz",".bz2")
+        print(f"[HookLink2iOS] NUP LOCAL RECUPERADO: {nup.stat().st_size:,} bytes; sem download/extração.")
+        nh=file_hashes(nup)
+        cache_name=f"{Path(source_filename).stem[:55]}_{key[:10]}.nup"
+        nup_item=upload(drive,nup,inputs["id"],cache_name,
+            app_properties={"hooklink2ios_source_key":key,"hooklink2ios_nup_sha256":nh["sha256"],
+                "hooklink2ios_source_filename":source_filename[:120],
+                "hooklink2ios_archive_extracted":str(archive_extracted).lower()},
+            description=f"HookLink2iOS input cache | source={source_filename} | key={key} | sha256={nh['sha256']}")
+        for candidate in local_sources:
+            candidate.unlink(missing_ok=True)
+        print("[HookLink2iOS] NUP local persistido e verificado no Drive.")
+    elif cached:
         print("[HookLink2iOS] CACHE HIT: NUP já está no Drive; ignorando o download externo.")
         nup_item=download_verified_nup(drive,cached,nup)
         source_filename=(cached.get("appProperties") or {}).get("hooklink2ios_source_filename",cached["name"])
