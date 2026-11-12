@@ -351,6 +351,28 @@ def main() -> None:
     run(["git", "apply", "--check", patch], cwd=engine)
     run(["git", "apply", patch], cwd=engine)
 
+    # The generic iOS launcher currently exports DM_FPS_HOLD=on for this install,
+    # even though BOTW's packaged runtime profile explicitly says fps_hold=off.
+    # The environment switch wins over the profile in upstream fstep_hold(),
+    # re-enabling the 1->2 VSync step and letting the GPU downclock. For this
+    # BOTW-only host build, make the per-game runtime profile authoritative.
+    hold_source = hle_nvn_source.read_text(encoding="utf-8")
+    old_hold = '''        const char *e = getenv("DM_FPS_HOLD"); h = e ? strcmp(e, "off") != 0 : DM_GAME_FPS_HOLD;
+        if (!h) LOG("[nvn] frame step: frames are not held longer than the cap's vsyncs (%s)", e ? "DM_FPS_HOLD" : "game profile");'''
+    new_hold = '''        const char *e = getenv("DM_FPS_HOLD");
+        h = dm_prof()->fps_hold;
+        LOG("[nvn] frame step: BOTW runtime profile fps_hold=%d is authoritative; launcher DM_FPS_HOLD=%s ignored",
+            h, e ? e : "unset");
+        if (!h) LOG("[nvn] frame step: frames are not held longer than the cap's vsyncs (BOTW runtime profile)");'''
+    if hold_source.count(old_hold) != 1:
+        fail("could not uniquely locate upstream fstep_hold() for the BOTW profile-authority fix")
+    hold_source = hold_source.replace(old_hold, new_hold, 1)
+    hle_nvn_source.write_text(hold_source, encoding="utf-8")
+    hold_check = hle_nvn_source.read_text(encoding="utf-8")
+    if "h = dm_prof()->fps_hold;" not in hold_check or 'getenv("DM_FPS_HOLD"); h =' in hold_check:
+        fail("BOTW runtime-profile frame-hold authority patch did not apply")
+    log("BOTW frame-hold fix: runtime profile is authoritative; launcher DM_FPS_HOLD can no longer re-enable the hold")
+
     # Device logs show the host frame-step controller repeatedly changing hold
     # from one to two/three VSyncs after three late frames. With fps_hold=on, this
     # deliberately extends presentation; the lower rate then reduces GPU activity,
@@ -419,7 +441,7 @@ def main() -> None:
             fail("preserved app framework profile.tsv is missing " + row)
     if any(line.split("\t", 1)[0] == "draw_barriers" for line in app_runtime_lines):
         fail("preserved app framework profile.tsv still carries the unproven draw_barriers experiment")
-    log("BOTW frame pacing: fps_target=60, fps_hold=off; present_snap+encode_thread on; runtime profile synced into packaged framework; no quality/resolution changes")
+    log("BOTW frame pacing: fps_target=60, fps_hold=off (runtime profile authoritative over launcher env); present_snap+encode_thread on; render scale 1.0 preserved; no quality/resolution changes")
 
     # Recreate the host's normal iOS compile settings from its Makefile, without touching game assets.
     cfg = gen / "dm.xcconfig"
@@ -550,7 +572,7 @@ def main() -> None:
         "source_run": source_report.get("source_run"),
         "engine_pin": ENGINE_PIN,
         "upstream_optimization_commit": UPSTREAM_OPTIMIZATION,
-        "modified_host_source": ["dm/gfx/nvn/nvn_mtl.m"],
+        "modified_host_source": ["dm/gfx/nvn/nvn_mtl.m", "dm/gfx/nvn/hle_nvn.c"],
         "modified_game_profile": ["fps_hold=off", "present_snap=on", "enc_thread=on", "draw_barriers=upstream-default"],
         "rebuilt_host_framework": True,
         "rebuilt_shared_shell": False,
@@ -584,11 +606,14 @@ def main() -> None:
         },
         "frame_pacing_correction": {
             "fps_hold": "off",
-            "reason": "prevent the host from turning three late frames into a deliberate 2/3-VSync hold at a 60 Hz target",
+            "authority": "BOTW runtime profile; generic launcher DM_FPS_HOLD is ignored by the BOTW host",
+            "reason": "the uploaded device log had profile hold=0 but launcher environment hold=on; upstream environment precedence was re-enabling the extra VSync hold and allowing GPU downclocking",
             "late_frame_policy": "keep one-VSync cadence; late frames may be missed rather than forcing a persistent half-rate",
             "thermal_and_movie_caps": "preserved"
         },
         "render_scale_modified": False,
+        "render_scale_preserved": "1.0 (confirmed in uploaded device log; no scale override introduced)",
+        "dynamic_resolution_modified": False,
         "render_quality_reduced": False,
         "resolution_changed": False,
         "frame_pacing_settings_changed": True,
