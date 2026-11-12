@@ -17,7 +17,7 @@ ENGINE = "https://github.com/dsi-hub/nxnative.git"
 ENGINE_PIN = "cf2a2fecc6ce3fb841131ffeffa90915cdadf109"
 TITLE_ID = "0400486024DEC000"
 VERSION = 131072
-GPU = "g18p"  # iPhone 17 / 17 Pro A19 family; change only after validating the target GPU.
+GPU = "none"  # Match Link2iOS: do not prebuild an offline Metal PSO archive; the device builds bases as needed.
 CHUNK = 64 * 1024 * 1024
 FOLDER = "application/vnd.google-apps.folder"
 
