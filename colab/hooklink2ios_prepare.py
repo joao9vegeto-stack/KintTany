@@ -215,7 +215,7 @@ def prepare(*,source_url,drive_parent_folder_id,drive,github_token,repo_root,
         ext=Path(source_filename).suffix.lower()
         is_archive=ext in (".rar",".zip",".7z",".tar",".tgz",".gz",".xz",".bz2") or source_filename.lower().endswith((".tar.gz",".tar.xz",".tar.zst",".tar.bz2"))
         if ext==".nup":
-            shutil.copy2(source,nup)
+            if source.resolve()!=nup.resolve(): shutil.copy2(source,nup)
         elif is_archive:
             extracted_nup=extract_archive(source,extracted)
             shutil.copy2(extracted_nup,nup); archive=source; archive_extracted=True
@@ -229,7 +229,7 @@ def prepare(*,source_url,drive_parent_folder_id,drive,github_token,repo_root,
                 "hooklink2ios_archive_extracted":str(archive_extracted).lower()},
             description=f"HookLink2iOS input cache | source={source_filename} | key={key} | sha256={nh['sha256']}")
         # Keep the validated NUP on Drive; discard the source archive only after upload verification.
-        if source.exists(): source.unlink()
+        if source.exists() and source.resolve()!=nup.resolve(): source.unlink()
         shutil.rmtree(extracted,ignore_errors=True)
         print("[HookLink2iOS] NUP persistido e verificado em HookLink2iOS/Inputs.")
     if not nup.is_file() or not nup.stat().st_size: raise RuntimeError("NUP ausente após download/cache.")
