@@ -1,77 +1,112 @@
-# Link2iOS — Breath of the Wild
+# HookLink2iOS — The Legend of Zelda: Ocarina of Time
 
-Projeto dedicado a compilar **The Legend of Zelda: Breath of the Wild no iOS** com NX2Apple Route C / Shared Shell.
+Port nativo para iOS de **The Legend of Zelda: Ocarina of Time — Nintendo Switch 2 Edition**, usando HookLink sobre nxnative. Esta branch é isolada: todo handoff e build deste projeto pertencem a `HookLink2iOS`.
 
-## Entrada já configurada
+## Alvo fixo
 
-O notebook utiliza diretamente a pasta Google Drive compartilhada com a service account:
+| Propriedade | Valor |
+|---|---|
+| Projeto | `HookLink2iOS` |
+| Jogo | Ocarina of Time — Nintendo Switch 2 Edition |
+| Title ID | `0400486024DEC000` |
+| Update | `v131072` |
+| Engine | [dsi-hub/nxnative — HookLink pin](https://github.com/dsi-hub/nxnative/tree/cf2a2fecc6ce3fb841131ffeffa90915cdadf109) |
+| Engine commit | `cf2a2fecc6ce3fb841131ffeffa90915cdadf109` |
+| Perfil inicial | `g18p` — família A19 / iPhone 17 Pro |
+| Runner | `macos-26` |
+| Xcode | `27.2` |
+| RomFS | Externo à IPA (`--romfs separate`) |
 
-`https://drive.google.com/drive/folders/19HXEJCK-26NfBVKeUP3wqFxMFpoF3ykm`
+O pipeline não é um conversor genérico: valida o Title ID e a versão antes de publicar o handoff.
 
-Na raiz dessa pasta, deixe `prod.keys`, `update.nsp`, `dlc1.nsp` e `dlc2.nsp` (os demais arquivos e pastas são ignorados; `prod.keys` continua obrigatório). O jogo base não precisa ficar no Drive antes da primeira execução.
+## Fluxo de build — mesmo modelo operacional da Link2iOS
 
-Na primeira preparação, o notebook pede o link assinado do 7z por uma entrada protegida. O link não fica embutido no repositório público, não é impresso e não é gravado no Drive. O Colab baixa o 7z para seu armazenamento temporário, valida a assinatura, testa e extrai com 7-Zip. Para esta entrada, exige exatamente um NSP base com cabeçalho `PFS0` no início e envia somente esse NSP para `BOTW_Base_NSP/` no Drive. O extrator também mantém compatibilidade com uma entrada XCI única (`HEAD` no offset `0x100`). Arquivos auxiliares como HTML e README dentro do 7z são ignorados. O 7z temporário e a extração local são apagados.
+O pipeline tem duas etapas, como o fluxo BOTW da branch `Link2iOS`: preparação Linux no Colab e build iOS no GitHub Actions/macOS. O Colab não tenta executar Xcode/Metal; o Actions não baixa o pacote de origem nem repete o trabalho Linux.
 
-O `prod.keys` e os três NSPs (update + duas DLCs) são baixados da raiz da pasta Drive para o runtime temporário do Colab e apagados após a preparação. O NSP base extraído permanece no Drive. Nas próximas execuções, o notebook reutiliza `BOTW_Base_NSP/` e não baixa o 7z novamente; também reconhece a pasta `BOTW_Base_XCI/` de execuções anteriores.
+### 1. Colab: origem, cache, RomFS e handoff
 
-A entrada desta execução é BOTW base NSP v0 + update 1.9.0 (`v1114112`) + dois DLCs, Title ID `01007EF00011E000`, package `v1114112`. O pipeline confere a versão do update pelos metadados internos antes de iniciar extração/rewrite: um update diferente (por exemplo `v786432`) não é aceito como se fosse 1.9.0. O NXNative/NX2Apple identifica o NSP base, o NSP de update e os dois NSPs de DLC pelos metadados internos e os combina para preparar a versão solicitada. Os dois DLCs são obrigatórios e precisam gerar imagens AOC.
+Abra o [notebook HookLink2iOS no Google Colab](https://colab.research.google.com/github/joao9vegeto-stack/KintTany/blob/HookLink2iOS/colab/HookLink2iOS_Colab.ipynb) e execute as células em ordem.
 
-## Fluxo completo
+- O notebook autentica o Google Drive pela conta Google do Colab, reutilizando a pasta raiz já configurada no notebook Link2iOS: [pasta compartilhada](https://drive.google.com/drive/folders/19HXEJCK-26NfBVKeUP3wqFxMFpoF3ykm).
+- Cole diretamente uma URL HTTPS de um `.nup` ou de um arquivo compactado que contenha **exatamente um** NUP. São reconhecidos RAR, ZIP, 7z e formatos tar compactados. Não há escolha de modo `drive/url`.
+- A identidade do endereço é calculada sem os parâmetros temporários de assinatura. Ao reutilizar o mesmo arquivo com uma URL assinada renovada, o notebook procura primeiro o NUP já guardado no Drive e evita novo download.
+- Na primeira execução, o Colab baixa a origem, valida e extrai o NUP quando necessário, e envia o NUP para `HookLink2iOS/Inputs`. O arquivo compactado local só é excluído depois que o upload do NUP foi verificado por tamanho e MD5.
+- O nxnative é clonado no commit fixo. `scripts/pack_nup.py` confirma o Title ID/versão e gera `extract/v131072/RomFS.img`; em seguida, o script do perfil HookLink gera o overlay de resolução.
+- O NUP persistente, o RomFS e o overlay são enviados ao Drive com tamanho e hashes SHA-256/MD5. O Colab publica então apenas `hooklink2ios/handoff.json` na branch `HookLink2iOS`.
 
-**Colab/Linux:** acessa o Drive com OAuth da conta Google autenticada no Colab, obtém `prod.keys`, baixa e extrai o 7z com o NSP base (somente na primeira execução), identifica os quatro NSPs por seus metadados internos, sincroniza NX2Apple v1.3.1-rc2 e o commit fixo do NXNative, verifica os pacotes, extrai os conteúdos, reescreve módulos AArch64 e prepara o pacote NVN de shaders. A execução para antes do estágio Metal/Xcode.
+Layout no Google Drive:
 
-Em seguida, o Colab publica no Drive:
-- `pipeline/botw-work.tar.zst`: somente os arquivos necessários à continuação do build;
-- `games/01007EF00011E000/romfs.img`;
-- `games/01007EF00011E000/aoc/<index>.img`, geradas a partir de `dlc1.nsp` e `dlc2.nsp`.
+```text
+<pasta raiz já configurada>
+└── HookLink2iOS/
+    ├── Inputs/
+    │   └── <NUP validado e reutilizável>
+    └── HookLink2iOS-<request_id>/
+        ├── romfs.img
+        └── Bootup.Nin_Ounce_NVN2.pack.zs
+```
 
-O workspace não contém RomFS/AOC, XCI/NSPs de origem, `prod.keys`, caches NCA grandes, ferramentas Linux ou arquivos temporários. Ele mantém os módulos reescritos, o pacote NVN de shaders e sua chave de conteúdo.
+### 2. GitHub Actions: build nativo iOS
 
-**Última célula do Colab:** pede o Fine-grained PAT e atualiza `handoff.json` na branch `Link2iOS`. Esse commit dispara o workflow.
+O commit do handoff aciona `.github/workflows/hooklink2ios.yml`. O workflow:
 
-**GitHub Actions/macOS:** baixa somente o workspace preparado e os arquivos externos RomFS/AOC; verifica SHA-256 e restaura os arquivos no mesmo layout. Não baixa NSPs nem `prod.keys` e não repete extração, rewrite ou shader split. Importa os helpers do NXNative fixado, valida a chave do pacote NVN produzida no Colab, compila as bibliotecas iOS Metal, chama `build_ipa.sh` com `DM_FRAMEWORK_ONLY`, compila o Shared Shell, assina ad-hoc e empacota a IPA.
+1. aceita somente `push` na branch `HookLink2iOS` que altere `hooklink2ios/handoff.json` e confirma o SHA do checkout;
+2. valida projeto, Title ID, versão, pin do engine e os hashes dos três arquivos do handoff;
+3. usa `macos-26`, Python 3.12 e Xcode 27.2;
+4. busca exatamente o commit fixado do nxnative;
+5. baixa NUP, RomFS e overlay do Google Drive e verifica tamanho, SHA-256 e MD5;
+6. executa o builder iOS com `--romfs separate`;
+7. publica IPA, overlay e `build-report.json` no artifact `HookLink2iOS-Ocarina-<run_number>`.
 
-## A IPA não contém o jogo
+**A autenticação do Actions segue o padrão funcional de Link2iOS:** o runner usa o secret permanente `GOOGLE_SERVICE_ACCOUNT_JSON` do repositório para acessar o Drive. A conta de serviço precisa ter permissão sobre a pasta raiz indicada acima. O OAuth autenticado no Colab permanece no Colab: não é copiado para GitHub, não é gravado como secret temporário e não exige permissão `Secrets` no PAT.
 
-A IPA contém o launcher Shared Shell, o framework do BOTW, módulos reescritos, tabelas, configurações, bibliotecas Metal e componentes de runtime. A validação rejeita `romfs.img`, AOC, NSPs, `prod.keys` e arquivos PSO `.mtl4a` dentro da IPA.
+### 3. Retorno da IPA ao Drive
 
-RomFS e as imagens AOC dos dois DLCs permanecem no Drive externo. O Shared Shell precisa receber o RomFS externo por um provedor de arquivos que permita acesso aleatório; isso precisa ser validado no dispositivo. Se o provedor Google Drive do iOS não atender essa semântica, use uma pasta local ou iCloud Drive. O build não copia o RomFS para dentro da IPA.
+Depois do build, o notebook identifica a execução pelo **commit exato** do handoff, baixa apenas o artifact HookLink2iOS correspondente, confere o digest do ZIP e valida a IPA contra o `build-report.json`. Em seguida, envia a IPA, o overlay e o relatório à pasta daquela execução no Drive. O upload final é feito pelo OAuth do Colab e validado por tamanho/MD5.
 
-## Configuração
+O notebook solicita um Fine-grained PAT restrito a este repositório com:
+- `Contents: Read and write` — publicar o handoff;
+- `Actions: Read` — localizar o workflow e baixar o artifact.
 
-1. Mantenha `prod.keys`, `update.nsp`, `dlc1.nsp` e `dlc2.nsp` na raiz da pasta Drive. Para o GitHub Actions, a pasta também precisa estar compartilhada com a service account configurada nos Secrets do repositório; os demais itens da raiz são ignorados.
-2. No Colab, autentique sua própria conta Google na primeira célula do notebook (`auth.authenticate_user()`). Não é necessário configurar Secret de service account no Colab.
-3. Em GitHub → Settings → Secrets and variables → Actions, configure `GOOGLE_SERVICE_ACCOUNT_JSON` com a credencial de leitura do Drive.
-4. Gere um Fine-grained PAT restrito a este repositório com **Contents: Read and write**.
-5. Abra o [notebook Link2iOS_BOTW.ipynb no Google Colab](https://colab.research.google.com/github/joao9vegeto-stack/KintTany/blob/Link2iOS/colab/Link2iOS_BOTW.ipynb), cole o link do 7z quando solicitado e execute as células em ordem.
+Não precisa conceder `Secrets` ao PAT.
 
-## Isolamento
+## Preparação do repositório
 
-Existe apenas `.github/workflows/link2ios.yml`. Ele é acionado somente por `push` em `refs/heads/Link2iOS` que altere `handoff.json`. Não há gatilho em `main`, `Kleo2iOS`, `workflow_dispatch` ou workflow auxiliar nesta branch. Uma execução nova cancela outra execução Link2iOS ainda ativa.
+O repositório precisa manter o secret de Actions `GOOGLE_SERVICE_ACCOUNT_JSON` já usado pelo pipeline Link2iOS. O JSON é a credencial da conta de serviço; compartilhe a pasta raiz do Drive com o e-mail dessa conta, concedendo leitura e escrita. O notebook não pede nem grava esse JSON.
 
-## Perfil e pontos de atenção
+Nenhum NUP, RomFS, overlay, IPA, chave ou dado derivado do jogo é versionado no Git.
 
-- O perfil BOTW usa reserva de memória de 4 GiB, alias de 256 MiB, stack de 256 MiB e app pool de aproximadamente 3,2 GiB.
-- O upstream registra BOTW jogável em iPhone no perfil 1.9.0. Isso não garante o resultado no iPhone 17 Pro com iOS 26.5.1.
-- Para evitar PSO `.mtl4a` do SDK mais novo no alvo iOS 26, o estágio macOS usa `DM_PSO_GPUS=none`, mantendo as bibliotecas de shader. O dispositivo prepara os pipeline bases no primeiro uso.
-- IPA construída com sucesso não significa gameplay validado. O teste no aparelho continua necessário.
+## RomFS no iPhone
 
-## Pins
+A IPA não inclui o RomFS. Depois de instalar o app, coloque os arquivos externos no container de dados do aplicativo:
 
-- NX2Apple: https://github.com/LNPANDY/NX2Apple/tree/v1.3.1-rc2
-- NXNative: https://github.com/seedds/nxnative/tree/81906931262fb25d774cce8bca2db8926439e5a2
-- Perfil BOTW: https://github.com/seedds/nxnative/tree/81906931262fb25d774cce8bca2db8926439e5a2/dm/games/01007EF00011E000
+```text
+AppDataContainer/
+└── Documents/
+    ├── romfs.img
+    └── res_overlay/
+        └── Pack/
+            └── Bootup.Nin_Ounce_NVN2.pack.zs
+```
 
+O script upstream incluído em `hooklink/scripts/push_romfs.sh` automatiza a transferência para um dispositivo conectado a um Mac, usando AFC/afcclient ou devicectl e verificando o arquivo antes da publicação. Não coloque `romfs.img` dentro da IPA.
 
-## Retomada sem repetir a preparação
+## Isolamento e segurança
 
-Após uma preparação BOTW concluída, o notebook grava `handoff.json` dentro da pasta `Link2iOS_BOTW_*` no Drive. Em uma sessão nova, execute autenticação, clone e a célula **Recuperar preparação**. Ela filtra pelo projeto, Title ID `01007EF00011E000`, versão `v1114112` e presença de workspace/RomFS/AOC. Não baixa novamente o NSP base/NSPs nem repete a extração, reescrita de módulos ou shader split. Pastas de Kleo2iOS são ignoradas.
+- Trabalhar somente na branch `HookLink2iOS`; `main` e `Link2iOS` não fazem parte deste fluxo.
+- O workflow tem gatilho único: `push` em `HookLink2iOS` com alteração em `hooklink2ios/handoff.json`.
+- O job confirma `GITHUB_REF`, branch, commit do checkout e identidade do handoff antes de compilar.
+- Uma execução nova na mesma branch cancela a execução anterior ainda ativa.
+- Não existem gatilhos `workflow_dispatch`, `workflow_run`, schedule ou tag neste workflow.
+- URLs assinadas são mantidas apenas no runtime Colab e não são publicadas no handoff.
+- Arquivos de entrada são tratados como dados não confiáveis: o arquivo compactado é inspecionado antes da extração e deve conter exatamente um NUP.
 
-Durante a primeira preparação, downloads exibem bytes efetivos, tamanho conferido e tempo decorrido. O Colab mantém em `/content/link2ios` o 7z original, a extração, os quatro NSPs, `prod.keys`, o checkout NX2Apple/NXNative e o workspace de build. Retentativas na mesma sessão conectada reutilizam esses dados; o código remove apenas pacotes NSP/XCI duplicados ou obsoletos da pasta de entrada. APT, módulos Python e .NET 10 também são verificados antes de instalar, evitando reinstalações quando já estão presentes.
+## Retomada
 
-**Limite do armazenamento local:** os 225 GB do runtime do Colab são temporários. Eles sobrevivem a novas execuções de células enquanto o mesmo runtime continuar ativo, mas não a um runtime desconectado, reciclado ou substituído. A cópia de recuperação dos pacotes continua no Google Drive; após um runtime novo, os arquivos podem ser copiados novamente do Drive, mas o 7z original não precisa ser baixado de sua URL se a pasta `BOTW_Base_NSP` já existir.
+Se o Colab desconectar depois que NUP/RomFS/overlay forem enviados, abra novamente o notebook, autentique o Drive, cole a mesma URL (ou uma URL assinada renovada para o mesmo caminho) e execute as células. O notebook procura primeiro o handoff e os arquivos persistidos no Drive e não repete o download/preparação quando encontra uma combinação íntegra. Se o Actions já concluiu, recupera a execução ligada àquele commit e transfere o artifact correspondente.
 
+## Upstream e licenças
 
-### Validação obrigatória das duas DLCs BOTW
-
-O construtor NXNative identifica os conteúdos pelos metadados internos, não pelos nomes dos arquivos. Para BOTW, os IDs de DLC são `01007EF00011F001` e `01007EF00011F002`; o builder escreve seus RomFS como `aoc/1.img` e `aoc/2.img` (índice = title ID − base title ID − `0x1000`). O pipeline exige exatamente esses dois arquivos não vazios antes de enviar o handoff ao Actions. Uma preparação com apenas uma DLC não é aceita.
+- HookLink snapshot: `dsi-hub/HookLink`, commit `b329fa5443ad4bfea016dfd366042a305f221071`.
+- nxnative: `dsi-hub/nxnative`, commit `cf2a2fecc6ce3fb841131ffeffa90915cdadf109`.
+- Os avisos/licenças dos componentes upstream estão incluídos em `hooklink/`.
