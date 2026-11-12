@@ -70,6 +70,8 @@ def main():
     if h.get("project")!="HookLink2iOS" or h.get("branch")!=BRANCH: die("Handoff não pertence a HookLink2iOS.")
     if h.get("title_id")!=TITLE_ID or h.get("package_version_number")!=VERSION: die("Title ID/update do handoff incorretos.")
     if h.get("engine",{}).get("commit")!=ENGINE_PIN: die("Pin nxnative do handoff divergente.")
+    gpu=h.get("gpu_arch")
+    if gpu!="g18p": die(f"GPU incompatível com o perfil iPhone 17 Pro do HookLink: {gpu!r}")
     sha=subprocess.check_output(["git","-C",str(args.engine),"rev-parse","HEAD"],text=True).strip()
     if sha!=ENGINE_PIN: die(f"Checkout nxnative divergente: {sha}")
     if any(k not in h for k in ("nup","romfs","resolution_overlay","drive")): die("Handoff incompleto.")
@@ -91,9 +93,9 @@ def main():
     if not env_file.is_file() or not entitlements.is_file(): die("Preset iOS/entitlements HookLink ausentes.")
     os.environ["DM_ENTITLEMENTS"]=str(entitlements)
     ipa=out/"OcarinaOfTime-HookLink2iOS.ipa"
-    cmd=[sys.executable,str(args.engine/"scripts/build_ipa_from_nsp.py"),str(nup),
-        "--platform","ios","--romfs","separate","--allow-damaged",
-        "--gpu","none","--env-file",str(env_file),
+    cmd=[sys.executable,"-I",str(args.engine/"scripts/build_ipa_from_nsp.py"),str(nup),
+        "--platform","ios","--package",f"v{VERSION}","--romfs","separate","--allow-damaged",
+        "--gpu",gpu,"--env-file",str(env_file),
         "--work-dir",str(work),"--app-name","Ocarina of Time","-o",str(ipa)]
     print("[HookLink2iOS] Build Xcode/Metal iniciado; --romfs separate mantém o RomFS fora da IPA.",flush=True)
     subprocess.run(cmd,cwd=args.engine,env=os.environ.copy(),check=True)
@@ -101,7 +103,7 @@ def main():
 
     report={"project":"HookLink2iOS","branch":BRANCH,"commit":os.environ.get("GITHUB_SHA"),
         "run_id":os.environ.get("GITHUB_RUN_ID"),"title_id":TITLE_ID,"package_version":f"v{VERSION}",
-        "engine_commit":sha,"gpu_arch":h.get("gpu_arch","g18p"),"romfs_mode":"separate",
+        "engine_commit":sha,"gpu_arch":gpu,"romfs_mode":"separate",
         "ipa":{"name":ipa.name,"size":ipa.stat().st_size,"sha256":digest(ipa,"sha256")},
         "romfs":{"name":"romfs.img","size":romfs.stat().st_size,"sha256":digest(romfs,"sha256"),
                  "identity":h["romfs"].get("identity")},
