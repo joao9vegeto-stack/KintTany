@@ -66,6 +66,14 @@ assert '"B149_STREAM_EOF_POLL sample=%u' in helper
 # Diagnostics must be read-only with respect to the PPC context.
 assert not re.search(r"ctx\.(?:r\d+|lr|cr\d+)\.[A-Za-z0-9_]+\s*=", helper)
 
+# The production patcher inserts the read-only helper calls before the
+# original PPC instruction body in both guest functions.
+patcher = Path("tools/patch_xowue_stream_memset_probe.py").read_text(encoding="utf-8")
+assert "EOF_B149_CALL = \"xowue_trace_stream_eof_poll_b149(ctx, base);\"" in patcher
+assert "CHUNK_CALL = \"xowue_trace_chunk_entry(ctx, base);\"" in patcher
+assert "PPC_FUNC_IMPL(__imp__sub_82575480)" in patcher
+assert "PPC_FUNC_IMPL(__imp__sub_82575108)" in patcher
+
 # Chunk helper is invoked at sub_82575108 entry by the AOT patcher. Its B149
 # sample includes valid and invalid indices and safely prints unavailable bytes
 # rather than reading outside the guest table.
