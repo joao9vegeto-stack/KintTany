@@ -387,6 +387,8 @@ assert 'const failedAttempts = priorRuns.filter(' in workflow_text
 assert '`${baseBuildNumber}.${failedAttempts}`' in workflow_text
 assert 'CURRENT_PROJECT_VERSION="$XOWUE_BUILD_NUMBER"' in workflow_text
 assert 'Math.max(completedIPAs + 2, 148)' in workflow_text
+assert 'forceExactBuild148' in workflow_text
+assert '[build-148-exact]' in workflow_text
 assert 'XOWUE_BUILD_EXPERIMENTAL' in workflow_text
 assert 'info["XOWUEExperimentalBuild"] = True' in workflow_text
 assert 'IPA_NAME="XOWUE-Build-${XOWUE_BUILD_NUMBER}-EXPERIMENTAL.ipa"' in workflow_text

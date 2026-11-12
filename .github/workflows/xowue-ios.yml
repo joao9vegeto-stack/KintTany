@@ -100,9 +100,13 @@ jobs:
               return false;
             }).length;
             const baseBuildNumber = Math.max(completedIPAs + 2, 148);
-            const buildNumber = failedAttempts > 0
+            // The explicitly tagged B148 implementation run must be exactly 148,
+            // not 148.1 due to the preceding preflight-only failed attempt.
+            const forceExactBuild148 = context.eventName === "push" &&
+              /\\[build-148-exact\\]/i.test(String(context.payload?.head_commit?.message || ""));
+            const buildNumber = forceExactBuild148 ? "148" : (failedAttempts > 0
               ? `${baseBuildNumber}.${failedAttempts}`
-              : String(baseBuildNumber);
+              : String(baseBuildNumber));
             core.exportVariable("XOWUE_BUILD_NUMBER", String(buildNumber));
             core.exportVariable("XOWUE_BUILD_EXPERIMENTAL", "1");
             core.setOutput("build_number", String(buildNumber));
