@@ -93,7 +93,7 @@ def main():
     ipa=out/"OcarinaOfTime-HookLink2iOS.ipa"
     cmd=[sys.executable,str(args.engine/"scripts/build_ipa_from_nsp.py"),str(nup),
         "--platform","ios","--romfs","separate","--allow-damaged",
-        "--gpu",h.get("gpu_arch","g18p"),"--env-file",str(env_file),
+        "--gpu","none","--env-file",str(env_file),
         "--work-dir",str(work),"--app-name","Ocarina of Time","-o",str(ipa)]
     print("[HookLink2iOS] Build Xcode/Metal iniciado; --romfs separate mantém o RomFS fora da IPA.",flush=True)
     subprocess.run(cmd,cwd=args.engine,env=os.environ.copy(),check=True)
