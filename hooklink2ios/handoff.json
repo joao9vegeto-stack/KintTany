@@ -6,7 +6,7 @@
   "title_id": "0400486024DEC000",
   "package_version": "v131072",
   "package_version_number": 131072,
-  "gpu_arch": "none",
+  "gpu_arch": "g18p",
   "engine": {
     "repository": "https://github.com/dsi-hub/nxnative.git",
     "branch": "hooklink",
@@ -53,8 +53,8 @@
   "builder": {
     "platform": "ios",
     "romfs_mode": "separate",
-    "runner": "macos-26",
-    "xcode": "26.6.0",
+    "runner": "xcode-27",
+    "xcode": "27.2.0",
     "retry_reason": "Xcode 27.2 unavailable on macos-26; runner offers Xcode 26.6.0"
   },
   "created_at_utc": "2026-11-12T22:41:01Z"
