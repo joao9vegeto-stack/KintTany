@@ -58,8 +58,8 @@ O commit do handoff aciona `.github/workflows/hooklink2ios.yml`. O workflow:
 2. valida projeto, Title ID, versão, pin do engine e os hashes dos três arquivos do handoff;
 3. usa o runner `xcode-27`, Python 3.12 e Xcode 27.2;
 4. busca exatamente o commit fixado do nxnative;
-5. baixa NUP, RomFS e overlay do Google Drive e verifica tamanho, SHA-256 e MD5;
-6. executa o builder oficial `scripts/build_ipa_from_nsp.py` do HookLink/nxnative com `--package v131072`, `--romfs separate` e `--gpu g18p`. Ele executa no Actions as etapas pesadas: extração final do jogo, reescrita dos módulos AArch64, separação/validação dos shaders NVN, compilação das bibliotecas iOS Metal, geração offline do pipeline archive com `metal-tt` para A19 e empacotamento Xcode da IPA;
+5. baixa o NUP (com download retomável por HTTP Range) e o overlay, verificando tamanho, SHA-256 e MD5. Não baixa uma segunda cópia do RomFS: o builder cria a imagem a partir do NUP e o Actions compara o tamanho, SHA-256 e identidade com o RomFS já validado no Colab;
+6. verifica antes da transferência que há pelo menos 80 GiB livres, conforme o requisito de espaço documentado pelo HookLink; se não houver, interrompe antes de baixar o NUP. Em seguida, executa o builder oficial `scripts/build_ipa_from_nsp.py` do HookLink/nxnative com `--package v131072`, `--romfs separate` e `--gpu g18p`. Ele executa no Actions as etapas pesadas: extração final do jogo, reescrita dos módulos AArch64, separação/validação dos shaders NVN, compilação das bibliotecas iOS Metal, geração offline do pipeline archive com `metal-tt` para A19 e empacotamento Xcode da IPA;
 7. publica IPA, overlay e `build-report.json` no artifact `HookLink2iOS-Ocarina-<run_number>`.
 
 **A autenticação do Actions segue o padrão funcional de Link2iOS:** o runner usa o secret permanente `GOOGLE_SERVICE_ACCOUNT_JSON` do repositório para acessar o Drive. A conta de serviço precisa ter permissão sobre a pasta raiz indicada acima. O OAuth autenticado no Colab permanece no Colab: não é copiado para GitHub, não é gravado como secret temporário e não exige permissão `Secrets` no PAT.
