@@ -357,15 +357,21 @@ def main() -> None:
     # re-enabling the 1->2 VSync step and letting the GPU downclock. For this
     # BOTW-only host build, make the per-game runtime profile authoritative.
     hold_source = hle_nvn_source.read_text(encoding="utf-8")
-    old_hold = '''        const char *e = getenv("DM_FPS_HOLD"); h = e ? strcmp(e, "off") != 0 : DM_GAME_FPS_HOLD;
-        if (!h) LOG("[nvn] frame step: frames are not held longer than the cap's vsyncs (%s)", e ? "DM_FPS_HOLD" : "game profile");'''
+    old_holds = (
+        \'\'\'        const char *e = getenv("DM_FPS_HOLD"); h = e ? strcmp(e, "off") != 0 : DM_GAME_FPS_HOLD;
+        if (!h) LOG("[nvn] frame step: frames are not held longer than the cap's vsyncs (%s)", e ? "DM_FPS_HOLD" : "game profile");\'\'\',
+        \'\'\'        const char *e = getenv("DM_FPS_HOLD"); h = e ? strcmp(e, "off") != 0 : dm_prof()->fps_hold;
+        if (!h) LOG("[nvn] frame step: frames are not held longer than the cap's vsyncs (%s)", e ? "DM_FPS_HOLD" : "game profile");\'\'\',
+    )
+    matched_holds = [block for block in old_holds if hold_source.count(block) == 1]
+    if len(matched_holds) != 1:
+        fail("could not uniquely locate upstream/fork fstep_hold() for the BOTW profile-authority fix")
+    old_hold = matched_holds[0]
     new_hold = '''        const char *e = getenv("DM_FPS_HOLD");
         h = dm_prof()->fps_hold;
         LOG("[nvn] frame step: BOTW runtime profile fps_hold=%d is authoritative; launcher DM_FPS_HOLD=%s ignored",
             h, e ? e : "unset");
         if (!h) LOG("[nvn] frame step: frames are not held longer than the cap's vsyncs (BOTW runtime profile)");'''
-    if hold_source.count(old_hold) != 1:
-        fail("could not uniquely locate upstream fstep_hold() for the BOTW profile-authority fix")
     hold_source = hold_source.replace(old_hold, new_hold, 1)
     hle_nvn_source.write_text(hold_source, encoding="utf-8")
     hold_check = hle_nvn_source.read_text(encoding="utf-8")
