@@ -19,8 +19,6 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/HookLink2iOS'
     runs-on: macos-26
     timeout-minutes: 360
-    env:
-      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
 
     steps:
       - name: Checkout only the requested branch and commit
@@ -51,7 +49,6 @@ jobs:
               assert item.get("id") and int(item.get("size",0)) > 0
               assert re.fullmatch(r"[0-9a-f]{64}", item.get("sha256",""))
           assert h.get("drive",{}).get("run_folder_id")
-          assert os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"), "GOOGLE_SERVICE_ACCOUNT_JSON secret ausente"
           print("Handoff validado:",h["request_id"])
           PY
 
