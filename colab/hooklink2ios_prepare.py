@@ -348,9 +348,19 @@ def recover_current_handoff(*,github_token,source_url):
     commits=github_get(session,f"https://api.github.com/repos/{REPO}/commits",
         {"sha":BRANCH,"path":HANDOFF,"per_page":1})
     if not commits: raise RuntimeError("Commit do handoff não foi encontrado.")
-    return {"handoff":h,"commit_sha":commits[0]["sha"],
-        "commit_url":f"https://github.com/{REPO}/commit/{commits[0]['sha']}",
-        "actions_url":f"https://github.com/{REPO}/actions"}
+    handoff_commit=commits[0]["sha"]
+    runs=github_get(session,f"https://api.github.com/repos/{REPO}/actions/runs",
+        {"branch":BRANCH,"event":"push","per_page":100,"page":1}).get("workflow_runs",[])
+    matching=[x for x in runs if x.get("head_sha")==handoff_commit
+        and x.get("head_branch")==BRANCH and (
+            str(x.get("path","")).endswith("hooklink2ios.yml")
+            or WORKFLOW_NAME.lower() in str(x.get("name","")).lower()
+        )]
+    existing_run=sorted(matching,key=lambda x:x.get("id",0),reverse=True)[0] if matching else None
+    return {"handoff":h,"commit_sha":handoff_commit,
+        "commit_url":f"https://github.com/{REPO}/commit/{handoff_commit}",
+        "actions_url":(existing_run or {}).get("html_url",f"https://github.com/{REPO}/actions"),
+        "existing_run":existing_run}
 
 def verify_handoff_drive_assets(drive,h):
     for key in ("nup","romfs","resolution_overlay"):
