@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: hooklink2ios-\${{ github.ref }}
+  group: hooklink2ios-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -20,13 +20,13 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 360
     env:
-      GOOGLE_SERVICE_ACCOUNT_JSON: \${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
 
     steps:
       - name: Checkout only the requested branch and commit
         uses: actions/checkout@v4
         with:
-          ref: \${{ github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Enforce branch isolation and validate handoff
@@ -100,10 +100,10 @@ jobs:
       - name: Publish IPA, overlay and report as GitHub artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HookLink2iOS-Ocarina-\${{ github.run_number }}
+          name: HookLink2iOS-Ocarina-${{ github.run_number }}
           path: |
-            \${{ runner.temp }}/hooklink2ios-output/OcarinaOfTime-HookLink2iOS.ipa
-            \${{ runner.temp }}/hooklink2ios-output/res_overlay/Pack/Bootup.Nin_Ounce_NVN2.pack.zs
-            \${{ runner.temp }}/hooklink2ios-output/build-report.json
+            ${{ runner.temp }}/hooklink2ios-output/OcarinaOfTime-HookLink2iOS.ipa
+            ${{ runner.temp }}/hooklink2ios-output/res_overlay/Pack/Bootup.Nin_Ounce_NVN2.pack.zs
+            ${{ runner.temp }}/hooklink2ios-output/build-report.json
           if-no-files-found: error
           retention-days: 7
