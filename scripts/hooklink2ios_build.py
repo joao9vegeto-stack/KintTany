@@ -3,8 +3,7 @@
 from __future__ import annotations
 import argparse, hashlib, json, os, shutil, subprocess, sys
 from pathlib import Path
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
@@ -24,22 +23,15 @@ def die(message):
     raise RuntimeError(message)
 
 def drive_client():
-    raw=os.environ.get("HOOKLINK2IOS_DRIVE_OAUTH_JSON","").strip()
+    raw=os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON","").strip()
     if not raw:
-        die("Secret temporário HOOKLINK2IOS_DRIVE_OAUTH_JSON ausente. Execute o notebook Colab atualizado.")
+        die("Secret GOOGLE_SERVICE_ACCOUNT_JSON ausente; configure a mesma credencial de Drive usada pelo workflow Link2iOS.")
     try:
         info=json.loads(raw)
-        creds=Credentials.from_authorized_user_info(
+        creds=service_account.Credentials.from_service_account_info(
             info,scopes=["https://www.googleapis.com/auth/drive"])
     except Exception as exc:
-        die(f"Credencial OAuth do Colab inválida: {exc}")
-    if creds.expired:
-        if not creds.refresh_token:
-            die("OAuth do Colab sem refresh_token; reautentique o Drive no notebook.")
-        try:
-            creds.refresh(Request())
-        except Exception as exc:
-            die(f"Não foi possível renovar o OAuth do Drive: {exc}")
+        die(f"GOOGLE_SERVICE_ACCOUNT_JSON inválido: {exc}")
     return build("drive","v3",credentials=creds,cache_discovery=False)
 
 def download_verified(drive,record,destination):
