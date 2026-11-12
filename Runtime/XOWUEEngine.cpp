@@ -653,6 +653,10 @@ std::vector<std::shared_ptr<GuestThread>> snapshotAllGuestThreads() {
 }
 
 bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
+    // B148/B149 diagnostics are explicitly persisted. Their producers already
+    // bound samples; the generic sequence sampler must never discard them.
+    if (event.find("B148_") != std::string::npos ||
+        event.find("B149_") != std::string::npos) return true;
     if (event.find("XOWUE_XAUDIO_") != std::string::npos)
         return g_xaudioTraceLogs.fetch_add(1u, std::memory_order_relaxed) < 96u;
     if (event.find("XOWUE_AOT_HOT_FUNCTION") != std::string::npos) {
@@ -4771,6 +4775,8 @@ void xowue_trace_stream_eof_poll_b149(PPCContext &ctx, uint8_t *base) {
         uint32_t count = 0u;
     };
     static thread_local ReadHistory s_recentReads{};
+    static std::atomic<uint32_t> s_b149PollEntryLogs{0u};
+    static std::atomic<uint32_t> s_b149PollSkipLogs{0u};
     static std::atomic<uint32_t> s_b149StreamEofPollLogs{0u};
 
     const uint32_t object = ctx.r3.u32;
@@ -4778,6 +4784,7 @@ void xowue_trace_stream_eof_poll_b149(PPCContext &ctx, uint8_t *base) {
     const uint32_t requested = ctx.r5.u32;
     uint32_t cursor = 0xFFFFFFFFu;
     uint32_t streamSize = 0xFFFFFFFFu;
+    uint32_t currentWindowStart = 0xFFFFFFFFu;
     uint32_t currentWindowEnd = 0xFFFFFFFFu;
     uint32_t table = 0xFFFFFFFFu;
     uint32_t data = 0xFFFFFFFFu;
@@ -4793,29 +4800,72 @@ void xowue_trace_stream_eof_poll_b149(PPCContext &ctx, uint8_t *base) {
 
     const bool cursorValid = readField(object, 136u, cursor);
     const bool sizeValid = readField(object, 128u, streamSize);
+    const bool windowStartValid = readField(object, 140u, currentWindowStart);
     const bool windowEndValid = readField(object, 148u, currentWindowEnd);
+    const bool tableFieldValid = readField(object, 172u, table);
+    const bool tableHeaderValid = tableFieldValid && table != 0u &&
+        validGuestRange(table, 8u);
+    if (tableHeaderValid) count = loadGuestBe32(base, table + 4u);
 
-    // Per-host-thread rolling history: include the current (cursor, requested) pair.
+    // Always persist the first 32 hook entries, including invalid object/table
+    // states. This distinguishes "hook was never reached" from helper rejection.
+    const uint32_t entrySample =
+        s_b149PollEntryLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
+    if (entrySample <= 32u) {
+        char event[512];
+        std::snprintf(event, sizeof(event),
+            "B149_STREAM_POLL_ENTRY sample=%u obj=0x%08X cursor=0x%08X "
+            "stream_size=0x%08X window_start=0x%08X window_end=0x%08X "
+            "r4=0x%08X r5=0x%08X table=0x%08X count=%u "
+            "cursor_valid=%u size_valid=%u window_start_valid=%u window_end_valid=%u "
+            "table_field_valid=%u table_header_valid=%u",
+            entrySample, object, cursor, streamSize, currentWindowStart,
+            currentWindowEnd, destination, requested, table, count,
+            cursorValid ? 1u : 0u, sizeValid ? 1u : 0u,
+            windowStartValid ? 1u : 0u, windowEndValid ? 1u : 0u,
+            tableFieldValid ? 1u : 0u, tableHeaderValid ? 1u : 0u);
+        recordRuntimeTrace(event);
+    }
+
+    auto logSkip = [&](const char *reason, uint32_t entryIndex) {
+        const uint32_t sample =
+            s_b149PollSkipLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        if (sample <= 96u) {
+            char event[320];
+            std::snprintf(event, sizeof(event),
+                "B149_STREAM_POLL_SKIP sample=%u reason=%s obj=0x%08X "
+                "cursor=0x%08X stream_size=0x%08X window_start=0x%08X "
+                "window_end=0x%08X table=0x%08X count=%u entry_index=%u",
+                sample, reason, object, cursor, streamSize, currentWindowStart,
+                currentWindowEnd, table, count, entryIndex);
+            recordRuntimeTrace(event);
+        }
+    };
+
+    // Keep the last eight (cursor, request-size) pairs immediately preceding
+    // each qualifying EOF event, independently for each guest host thread.
     s_recentReads.pairs[s_recentReads.next] = {cursor, requested};
     s_recentReads.next = (s_recentReads.next + 1u) % 8u;
     s_recentReads.count = std::min<uint32_t>(s_recentReads.count + 1u, 8u);
 
-    const uint64_t tableField64 = static_cast<uint64_t>(object) + 172u;
-    if (object == 0u || base == nullptr || tableField64 > UINT32_MAX ||
-        !validGuestRange(static_cast<uint32_t>(tableField64), 4u)) return;
-    table = loadGuestBe32(base, static_cast<uint32_t>(tableField64));
-    if (table == 0u || !validGuestRange(table, 8u)) return;
+    if (!tableFieldValid || !tableHeaderValid) {
+        logSkip("table_invalid", UINT32_MAX);
+        return;
+    }
     data = loadGuestBe32(base, table);
-    count = loadGuestBe32(base, table + 4u);
-
-    // Bound the guest count and require the full array to be readable before
-    // claiming that no table window covers the requested stream interval.
+    // Count was read only after the complete table header was validated.
     constexpr uint32_t kB149MaxChunkEntries = 65536u;
-    if (count > kB149MaxChunkEntries) return;
+    if (count > kB149MaxChunkEntries) {
+        logSkip("count_excessive", UINT32_MAX);
+        return;
+    }
     if (count != 0u) {
         const uint64_t tableBytes = static_cast<uint64_t>(count) * 16u;
         if (data == 0u || tableBytes / 16u != count ||
-            !validGuestRange(data, tableBytes)) return;
+            !validGuestRange(data, tableBytes)) {
+            logSkip("interval_unreadable", UINT32_MAX);
+            return;
+        }
     }
 
     bool windowCoversRequest = false;
@@ -4832,7 +4882,10 @@ void xowue_trace_stream_eof_poll_b149(PPCContext &ctx, uint8_t *base) {
         const uint64_t entryAddress64 =
             static_cast<uint64_t>(data) + static_cast<uint64_t>(entryIndex) * 16u;
         if (entryAddress64 > UINT32_MAX ||
-            !validGuestRange(static_cast<uint32_t>(entryAddress64), 16u)) continue;
+            !validGuestRange(static_cast<uint32_t>(entryAddress64), 16u)) {
+            logSkip("interval_unreadable", entryIndex);
+            continue;
+        }
         const uint32_t entryAddress = static_cast<uint32_t>(entryAddress64);
         const uint32_t w0 = loadGuestBe32(base, entryAddress);
         const uint32_t w1 = loadGuestBe32(base, entryAddress + 4u);
@@ -4857,12 +4910,25 @@ void xowue_trace_stream_eof_poll_b149(PPCContext &ctx, uint8_t *base) {
         }
     }
 
-    if (!cursorValid || !windowEndValid ||
-        cursor < currentWindowEnd || windowCoversRequest) return;
+    if (!cursorValid || !windowStartValid || !windowEndValid) {
+        logSkip("interval_unreadable", UINT32_MAX);
+        return;
+    }
+    if (windowCoversRequest) {
+        logSkip("window_covers_request", UINT32_MAX);
+        return;
+    }
+    if (cursor < currentWindowEnd) {
+        logSkip("cursor_before_window_end", UINT32_MAX);
+        return;
+    }
 
     const uint32_t sample =
         s_b149StreamEofPollLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
-    if (sample > 16u) return;
+    if (sample > 16u) {
+        logSkip("event_sample_cap", UINT32_MAX);
+        return;
+    }
 
     char lastEntryHex[33];
     if (lastEntryValid) {
@@ -4994,6 +5060,27 @@ void xowue_trace_chunk_entry(PPCContext &ctx, uint8_t *base) {
     }
 
     const bool entryValid = entryRangeValid && w1 != 0u && w1 <= 0x400000u;
+    if (sample <= 16u) {
+        char entry16[33];
+        if (entryRangeValid) {
+            constexpr char kHex[] = "0123456789ABCDEF";
+            const uint32_t entryAddress = static_cast<uint32_t>(entryAddress64);
+            for (uint32_t i = 0u; i < 16u; ++i) {
+                const uint8_t value = base[entryAddress + i];
+                entry16[i * 2u] = kHex[value >> 4u];
+                entry16[i * 2u + 1u] = kHex[value & 0x0Fu];
+            }
+            entry16[32] = '\0';
+        } else {
+            std::snprintf(entry16, sizeof(entry16), "unavailable");
+        }
+        char b149Event[256];
+        std::snprintf(b149Event, sizeof(b149Event),
+            "B149_CHUNK_ENTRY sample=%u obj=0x%08X idx=%u count=%u "
+            "entry16=%s entry_valid=%u",
+            sample, object, index, count, entry16, entryValid ? 1u : 0u);
+        recordRuntimeTrace(b149Event);
+    }
     char dataHex[65];
     if (dataValid) {
         constexpr char kHex[] = "0123456789ABCDEF";
@@ -5496,6 +5583,16 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             g_runtimeTrace.clear();
         }
         g_runtimeTracePersistSequence.store(0, std::memory_order_relaxed);
+        static std::atomic<bool> s_b149BootMarkEmitted{false};
+        s_b149BootMarkEmitted.store(false, std::memory_order_relaxed);
+        if (!s_b149BootMarkEmitted.exchange(true, std::memory_order_acq_rel)) {
+            recordRuntimeTrace(
+                "B149_BOOT_MARK build=149 registered="
+                "B149_BOOT_MARK,B149_STREAM_POLL_ENTRY,B149_STREAM_POLL_SKIP,"
+                "B149_STREAM_LAST_READS,B149_STREAM_EOF_POLL,B149_CHUNK_ENTRY,"
+                "B149_CHUNK_IDX_OOB,B148_FILE_OPEN_SIZE,B148_READ_ZERO,"
+                "B148_STREAM_EOF_POLL,B148_CHUNK_IDX_OOB");
+        }
         g_vdRetrainCallOrder.store(0u, std::memory_order_relaxed);
         g_touchControllerUpdateCount.store(0u, std::memory_order_relaxed);
         g_xowueTouchAHostDownCount.store(0u, std::memory_order_relaxed);
@@ -7862,6 +7959,15 @@ static void logStartupMovieOpen(const char *api, const std::string &guestPath,
             static_cast<unsigned long long>(ec ? 0u : bytes));
         recordRuntimeTrace(event);
     }
+    // B148 file-size evidence is a separate, unconditional record for every
+    // startup .bik/.xxx open; it is not hidden behind the B86 sample counter.
+    char sizeEvent[640];
+    std::snprintf(sizeEvent, sizeof(sizeEvent),
+        "B148_FILE_OPEN_SIZE api=%s guest=%s status=0x%08X handle=0x%08X "
+        "mapped=%u present=%u bytes=%llu",
+        api, guestPath.c_str(), status, handle, mapped ? 1u : 0u,
+        present ? 1u : 0u, static_cast<unsigned long long>(ec ? 0u : bytes));
+    recordRuntimeTrace(sizeEvent);
 }
 
 static uint32_t createGuestFile(uint8_t *base, const std::string &guestPath,
