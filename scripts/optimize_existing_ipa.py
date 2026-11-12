@@ -357,25 +357,40 @@ def main() -> None:
     # re-enabling the 1->2 VSync step and letting the GPU downclock. For this
     # BOTW-only host build, make the per-game runtime profile authoritative.
     hold_source = hle_nvn_source.read_text(encoding="utf-8")
-    old_holds = (
-        "        const char *e = getenv(\"DM_FPS_HOLD\"); h = e ? strcmp(e, \"off\") != 0 : DM_GAME_FPS_HOLD;\n"
-        "        if (!h) LOG(\"[nvn] frame step: frames are not held longer than the cap's vsyncs (%s)\", e ? \"DM_FPS_HOLD\" : \"game profile\");",
-        "        const char *e = getenv(\"DM_FPS_HOLD\"); h = e ? strcmp(e, \"off\") != 0 : dm_prof()->fps_hold;\n"
-        "        if (!h) LOG(\"[nvn] frame step: frames are not held longer than the cap's vsyncs (%s)\", e ? \"DM_FPS_HOLD\" : \"game profile\");",
-    )
-    matched_holds = [block for block in old_holds if hold_source.count(block) == 1]
-    if len(matched_holds) != 1:
-        fail("could not uniquely locate upstream/fork fstep_hold() for the BOTW profile-authority fix")
-    old_hold = matched_holds[0]
-    new_hold = '''        const char *e = getenv("DM_FPS_HOLD");
+    hold_signature = "static int fstep_hold(void)"
+    if hold_source.count(hold_signature) != 1:
+        fail("could not uniquely locate fstep_hold() in the synced NXNative source")
+    function_start = hold_source.index(hold_signature)
+    function_open = hold_source.find("{", function_start)
+    if function_open < 0:
+        fail("fstep_hold() has no opening brace")
+    depth = 0
+    function_end = -1
+    for position in range(function_open, len(hold_source)):
+        if hold_source[position] == "{":
+            depth += 1
+        elif hold_source[position] == "}":
+            depth -= 1
+            if depth == 0:
+                function_end = position + 1
+                break
+    if function_end < 0:
+        fail("fstep_hold() has no matching closing brace")
+    new_hold = """static int fstep_hold(void) {
+    static int h = -1;
+    if (h < 0) {
+        const char *e = getenv("DM_FPS_HOLD");
         h = dm_prof()->fps_hold;
         LOG("[nvn] frame step: BOTW runtime profile fps_hold=%d is authoritative; launcher DM_FPS_HOLD=%s ignored",
             h, e ? e : "unset");
-        if (!h) LOG("[nvn] frame step: frames are not held longer than the cap's vsyncs (BOTW runtime profile)");'''
-    hold_source = hold_source.replace(old_hold, new_hold, 1)
+        if (!h) LOG("[nvn] frame step: frames are not held longer than the cap's vsyncs (BOTW runtime profile)");
+    }
+    return h;
+}"""
+    hold_source = hold_source[:function_start] + new_hold + hold_source[function_end:]
     hle_nvn_source.write_text(hold_source, encoding="utf-8")
     hold_check = hle_nvn_source.read_text(encoding="utf-8")
-    if "h = dm_prof()->fps_hold;" not in hold_check or 'getenv("DM_FPS_HOLD"); h =' in hold_check:
+    if new_hold not in hold_check:
         fail("BOTW runtime-profile frame-hold authority patch did not apply")
     log("BOTW frame-hold fix: runtime profile is authoritative; launcher DM_FPS_HOLD can no longer re-enable the hold")
 
