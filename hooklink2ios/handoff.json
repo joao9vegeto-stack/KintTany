@@ -6,7 +6,7 @@
   "title_id": "0400486024DEC000",
   "package_version": "v131072",
   "package_version_number": 131072,
-  "gpu_arch": "g18p",
+  "gpu_arch": "none",
   "engine": {
     "repository": "https://github.com/dsi-hub/nxnative.git",
     "branch": "hooklink",
