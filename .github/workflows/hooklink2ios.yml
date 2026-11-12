@@ -85,9 +85,12 @@ jobs:
           git -C "$RUNNER_TEMP/nxnative" checkout --detach FETCH_HEAD
           test "$(git -C "$RUNNER_TEMP/nxnative" rev-parse HEAD)" = "$PIN"
 
-      - name: Build native iOS IPA and attempt Drive upload
+      - name: Build native iOS IPA using temporary Colab OAuth
+        env:
+          HOOKLINK2IOS_DRIVE_OAUTH_JSON: ${{ secrets.HOOKLINK2IOS_DRIVE_OAUTH_JSON }}
         shell: bash
         run: |
+          test -n "$HOOKLINK2IOS_DRIVE_OAUTH_JSON" || { echo "::error::Temporary Colab OAuth secret is missing."; exit 1; }
           set -euo pipefail
           python scripts/hooklink2ios_build.py \
             --handoff hooklink2ios/handoff.json \
