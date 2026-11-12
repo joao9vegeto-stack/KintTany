@@ -11,6 +11,7 @@ REPO = "joao9vegeto-stack/KintTany"
 BRANCH = "HookLink2iOS"
 WORKFLOW_NAME = "HookLink2iOS Ocarina native build"
 HANDOFF = "hooklink2ios/handoff.json"
+WORKFLOW_NAME = "HookLink2iOS Ocarina native build"
 ENGINE = "https://github.com/dsi-hub/nxnative.git"
 ENGINE_PIN = "cf2a2fecc6ce3fb841131ffeffa90915cdadf109"
 TITLE_ID = "0400486024DEC000"
@@ -330,7 +331,10 @@ def wait_for_actions_artifact(*,github_token,expected_commit,timeout_seconds=216
     while time.time()<deadline:
         payload=github_get(session,url,{"branch":BRANCH,"event":"push","per_page":100,"page":1})
         matches=[x for x in payload.get("workflow_runs",[]) if x.get("head_sha")==expected_commit
-            and x.get("head_branch")==BRANCH and (x.get("path")=="hooklink2ios.yml" or WORKFLOW_NAME.lower() in str(x.get("name","")).lower())]
+            and x.get("head_branch")==BRANCH and (
+                str(x.get("path","")).endswith("hooklink2ios.yml")
+                or WORKFLOW_NAME.lower() in str(x.get("name","")).lower()
+            )]
         if matches:
             run_data=sorted(matches,key=lambda x:x.get("id",0),reverse=True)[0]
             print("[HookLink2iOS] Actions run",run_data["run_number"],run_data.get("status"),run_data.get("html_url"),flush=True)
