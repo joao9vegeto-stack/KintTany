@@ -12,16 +12,16 @@ Port nativo para iOS de **The Legend of Zelda: Ocarina of Time — Nintendo Swit
 | Update | `v131072` |
 | Engine | [dsi-hub/nxnative — HookLink pin](https://github.com/dsi-hub/nxnative/tree/cf2a2fecc6ce3fb841131ffeffa90915cdadf109) |
 | Engine commit | `cf2a2fecc6ce3fb841131ffeffa90915cdadf109` |
-| Perfil inicial | `g18p` — família A19 / iPhone 17 Pro |
-| Runner | `macos-26` |
+| GPU / pipeline archive | `g18p` — A19 / iPhone 17 Pro; inclui o arquivo offline de pipelines |
+| Runner | `xcode-27` |
 | Xcode | `27.2` |
 | RomFS | Externo à IPA (`--romfs separate`) |
 
 O pipeline não é um conversor genérico: valida o Title ID e a versão antes de publicar o handoff.
 
-## Fluxo de build — mesmo modelo operacional da Link2iOS
+## Fluxo de build — HookLink + nxnative
 
-O pipeline tem duas etapas, como o fluxo BOTW da branch `Link2iOS`: preparação Linux no Colab e build iOS no GitHub Actions/macOS. O Colab não tenta executar Xcode/Metal; o Actions não baixa o pacote de origem nem repete o trabalho Linux.
+O pipeline tem duas etapas, mas preserva o construtor oficial simplificado do HookLink: o Colab faz intake, validação, RomFS e overlay; o GitHub Actions executa o builder completo do nxnative no macOS. Não usamos o finalizador Route C/Shared Shell do Link2iOS, porque esse não é o fluxo do HookLink.
 
 ### 1. Colab: origem, cache, RomFS e handoff
 
@@ -31,7 +31,7 @@ Abra o [notebook HookLink2iOS no Google Colab](https://colab.research.google.com
 - Cole diretamente uma URL HTTPS de um `.nup` ou de um arquivo compactado que contenha **exatamente um** NUP. São reconhecidos RAR, ZIP, 7z e formatos tar compactados. Não há escolha de modo `drive/url`.
 - A identidade do endereço é calculada sem os parâmetros temporários de assinatura. Ao reutilizar o mesmo arquivo com uma URL assinada renovada, o notebook procura primeiro o NUP já guardado no Drive e evita novo download.
 - Na primeira execução, o Colab baixa a origem, valida e extrai o NUP quando necessário, e envia o NUP para `HookLink2iOS/Inputs`. O arquivo compactado local só é excluído depois que o upload do NUP foi verificado por tamanho e MD5.
-- O nxnative é clonado no commit fixo. `scripts/pack_nup.py` confirma o Title ID/versão e gera `extract/v131072/RomFS.img`; em seguida, o script do perfil HookLink gera o overlay de resolução.
+- O nxnative é clonado no commit fixo. `scripts/pack_nup.py` confirma o Title ID/versão, extrai ExeFS/metadata e prepara `RomFS.img`; em seguida, o script do perfil HookLink gera o overlay de resolução. O Colab **não** compila shaders nem Metal.
 - O NUP persistente, o RomFS e o overlay são enviados ao Drive com tamanho e hashes SHA-256/MD5. O Colab publica então apenas `hooklink2ios/handoff.json` na branch `HookLink2iOS`.
 
 Layout no Google Drive:
@@ -56,10 +56,10 @@ O commit do handoff aciona `.github/workflows/hooklink2ios.yml`. O workflow:
 
 1. aceita somente `push` na branch `HookLink2iOS` que altere `hooklink2ios/handoff.json` e confirma o SHA do checkout;
 2. valida projeto, Title ID, versão, pin do engine e os hashes dos três arquivos do handoff;
-3. usa `macos-26`, Python 3.12 e Xcode 27.2;
+3. usa o runner `xcode-27`, Python 3.12 e Xcode 27.2;
 4. busca exatamente o commit fixado do nxnative;
 5. baixa NUP, RomFS e overlay do Google Drive e verifica tamanho, SHA-256 e MD5;
-6. executa o builder iOS com `--romfs separate`;
+6. executa o builder oficial `scripts/build_ipa_from_nsp.py` do HookLink/nxnative com `--package v131072`, `--romfs separate` e `--gpu g18p`. Ele executa no Actions as etapas pesadas: extração final do jogo, reescrita dos módulos AArch64, separação/validação dos shaders NVN, compilação das bibliotecas iOS Metal, geração offline do pipeline archive com `metal-tt` para A19 e empacotamento Xcode da IPA;
 7. publica IPA, overlay e `build-report.json` no artifact `HookLink2iOS-Ocarina-<run_number>`.
 
 **A autenticação do Actions segue o padrão funcional de Link2iOS:** o runner usa o secret permanente `GOOGLE_SERVICE_ACCOUNT_JSON` do repositório para acessar o Drive. A conta de serviço precisa ter permissão sobre a pasta raiz indicada acima. O OAuth autenticado no Colab permanece no Colab: não é copiado para GitHub, não é gravado como secret temporário e não exige permissão `Secrets` no PAT.
@@ -82,7 +82,7 @@ Nenhum NUP, RomFS, overlay, IPA, chave ou dado derivado do jogo é versionado no
 
 ## RomFS no iPhone
 
-A IPA não inclui o RomFS. Depois de instalar o app, coloque os arquivos externos no container de dados do aplicativo:
+A IPA de aproximadamente **5 GB** contém o app nativo, as bibliotecas de shaders Metal e o pipeline archive `g18p` do iPhone 17 Pro. O RomFS do jogo (aproximadamente 24 GB) fica separado e não é duplicado dentro da IPA. Depois de instalar o app, coloque os arquivos externos no container de dados do aplicativo:
 
 ```text
 AppDataContainer/
