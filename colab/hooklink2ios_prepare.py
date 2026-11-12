@@ -9,6 +9,7 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 REPO = "joao9vegeto-stack/KintTany"
 BRANCH = "HookLink2iOS"
+WORKFLOW_NAME = "HookLink2iOS Ocarina native build"
 HANDOFF = "hooklink2ios/handoff.json"
 ENGINE = "https://github.com/dsi-hub/nxnative.git"
 ENGINE_PIN = "cf2a2fecc6ce3fb841131ffeffa90915cdadf109"
