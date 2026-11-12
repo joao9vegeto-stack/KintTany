@@ -1,0 +1,109 @@
+name: HookLink2iOS Ocarina native build
+
+on:
+  push:
+    branches:
+      - HookLink2iOS
+    paths:
+      - hooklink2ios/handoff.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hooklink2ios-\${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/HookLink2iOS'
+    runs-on: macos-26
+    timeout-minutes: 360
+    env:
+      GOOGLE_SERVICE_ACCOUNT_JSON: \${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+
+    steps:
+      - name: Checkout only the requested branch and commit
+        uses: actions/checkout@v4
+        with:
+          ref: \${{ github.sha }}
+          persist-credentials: false
+
+      - name: Enforce branch isolation and validate handoff
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/HookLink2iOS"
+          test "$GITHUB_REF_NAME" = "HookLink2iOS"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -s hooklink2ios/handoff.json
+          python3 - <<'PY'
+          import json, os, re
+          h=json.load(open("hooklink2ios/handoff.json", encoding="utf-8"))
+          assert h.get("project") == "HookLink2iOS"
+          assert h.get("branch") == "HookLink2iOS"
+          assert h.get("title_id") == "0400486024DEC000"
+          assert h.get("package_version") == "v131072"
+          assert h.get("package_version_number") == 131072
+          assert h.get("engine", {}).get("commit") == "cf2a2fecc6ce3fb841131ffeffa90915cdadf109"
+          for key in ("nup", "romfs", "resolution_overlay"):
+              item=h[key]
+              assert item.get("id") and int(item.get("size",0)) > 0
+              assert re.fullmatch(r"[0-9a-f]{64}", item.get("sha256",""))
+          assert h.get("drive",{}).get("run_folder_id")
+          assert os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"), "GOOGLE_SERVICE_ACCOUNT_JSON secret ausente"
+          print("Handoff validado:",h["request_id"])
+          PY
+
+      - name: Select Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Select Xcode 27.2
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "27.2"
+
+      - name: Install pinned Xcode, Metal and Python build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphoneos metal --version
+          brew install xcodegen zstd glslang
+          python -m pip install --upgrade pip
+          python -m pip install lz4 "capstone>=5,<6" fonttools nsz zbic backports.zstd google-api-python-client google-auth
+
+      - name: Fetch exact HookLink nxnative engine commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          PIN="$(python -c 'import json; print(json.load(open("hooklink2ios/handoff.json"))["engine"]["commit"])')"
+          test "$PIN" = "cf2a2fecc6ce3fb841131ffeffa90915cdadf109"
+          git init "$RUNNER_TEMP/nxnative"
+          git -C "$RUNNER_TEMP/nxnative" remote add origin https://github.com/dsi-hub/nxnative.git
+          git -C "$RUNNER_TEMP/nxnative" fetch --depth 1 origin "$PIN"
+          git -C "$RUNNER_TEMP/nxnative" checkout --detach FETCH_HEAD
+          test "$(git -C "$RUNNER_TEMP/nxnative" rev-parse HEAD)" = "$PIN"
+
+      - name: Build native iOS IPA and attempt Drive upload
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/hooklink2ios_build.py \
+            --handoff hooklink2ios/handoff.json \
+            --engine "$RUNNER_TEMP/nxnative" \
+            --output "$RUNNER_TEMP/hooklink2ios-output"
+
+      - name: Publish IPA, overlay and report as GitHub artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HookLink2iOS-Ocarina-\${{ github.run_number }}
+          path: |
+            \${{ runner.temp }}/hooklink2ios-output/OcarinaOfTime-HookLink2iOS.ipa
+            \${{ runner.temp }}/hooklink2ios-output/res_overlay/Pack/Bootup.Nin_Ounce_NVN2.pack.zs
+            \${{ runner.temp }}/hooklink2ios-output/build-report.json
+          if-no-files-found: error
+          retention-days: 7
