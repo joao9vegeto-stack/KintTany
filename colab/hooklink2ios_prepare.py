@@ -321,7 +321,7 @@ def prepare(*,source_url,drive_parent_folder_id,drive,github_token,repo_root,
         "drive":{"parent_folder_id":drive_parent_folder_id,"project_folder_id":project["id"],
             "inputs_folder_id":inputs["id"],"run_folder_id":runfolder["id"],"run_folder_url":runfolder.get("webViewLink")},
         "nup":nup_item,"romfs":{**romfs_item,"identity":identity},"resolution_overlay":overlay_item,
-        "builder":{"platform":"ios","romfs_mode":"separate","runner":"macos-26","xcode":"27.2"},
+        "builder":{"platform":"ios","romfs_mode":"separate","runner":"macos-26","xcode":"26.6.0"},
         "created_at_utc":time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime())}
     pushed=publish(github_token,handoff)
     print("[HookLink2iOS] Handoff publicado somente em HookLink2iOS; commit:",pushed["commit_sha"])
