@@ -57,6 +57,7 @@
 #include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <time.h>
 
@@ -4609,6 +4610,149 @@ void xowue_trace_stream_memset(PPCContext &ctx, uint8_t *base, uint32_t phase) {
             sample, threadId, ioStatus, ctx.r3.u32, ctx.r4.u32, ctx.r5.u32);
         recordRuntimeTrace(event);
     }
+}
+
+void xowue_trace_stream_eof_poll(PPCContext &ctx, uint8_t *base) {
+    static std::atomic<uint32_t> s_b148StreamEofPollLogs{0u};
+
+    const uint32_t object = ctx.r3.u32;
+    const uint32_t destination = ctx.r4.u32;
+    const uint32_t requested = ctx.r5.u32;
+    uint32_t cursor = 0xFFFFFFFFu;
+    uint32_t totalSize = 0xFFFFFFFFu;
+    uint32_t table = 0xFFFFFFFFu;
+    uint32_t data = 0xFFFFFFFFu;
+    uint32_t count = 0xFFFFFFFFu;
+    uint32_t w0 = 0xFFFFFFFFu;
+    uint32_t w1 = 0xFFFFFFFFu;
+    uint32_t w2 = 0xFFFFFFFFu;
+    uint32_t w3 = 0xFFFFFFFFu;
+    uint64_t lastEntryAddress64 = 0xFFFFFFFFFFFFFFFFull;
+    uint64_t lastWindowEnd64 = 0xFFFFFFFFFFFFFFFFull;
+    bool cursorValid = false;
+    bool sizeValid = false;
+    bool lastEntryValid = false;
+    bool lastWindowEndValid = false;
+
+    auto readField = [&](uint32_t address, uint32_t offset, uint32_t &value) -> bool {
+        const uint64_t fieldAddress = static_cast<uint64_t>(address) + offset;
+        if (object == 0u || base == nullptr || fieldAddress > UINT32_MAX ||
+            !validGuestRange(static_cast<uint32_t>(fieldAddress), 4u)) return false;
+        value = loadGuestBe32(base, static_cast<uint32_t>(fieldAddress));
+        return true;
+    };
+
+    cursorValid = readField(object, 136u, cursor);
+    sizeValid = readField(object, 128u, totalSize);
+    if (readField(object, 172u, table) && table != 0u &&
+        validGuestRange(table, 8u)) {
+        data = loadGuestBe32(base, table);
+        count = loadGuestBe32(base, table + 4u);
+        if (count != 0u && data != 0u) {
+            lastEntryAddress64 = static_cast<uint64_t>(data) +
+                (static_cast<uint64_t>(count) - 1u) * 16u;
+            lastEntryValid = lastEntryAddress64 <= UINT32_MAX &&
+                validGuestRange(static_cast<uint32_t>(lastEntryAddress64), 16u);
+            if (lastEntryValid) {
+                const uint32_t lastEntryAddress = static_cast<uint32_t>(lastEntryAddress64);
+                w0 = loadGuestBe32(base, lastEntryAddress);
+                w1 = loadGuestBe32(base, lastEntryAddress + 4u);
+                w2 = loadGuestBe32(base, lastEntryAddress + 8u);
+                w3 = loadGuestBe32(base, lastEntryAddress + 12u);
+                // Chunk-table w0 is the window start and w1 is its byte length.
+                lastWindowEnd64 = static_cast<uint64_t>(w0) + w1;
+                lastWindowEndValid = lastWindowEnd64 <= UINT32_MAX;
+            }
+        }
+    }
+
+    const bool reachedObjectEof = cursorValid && sizeValid && cursor >= totalSize;
+    const bool reachedLastWindowEnd = cursorValid && lastWindowEndValid &&
+        static_cast<uint64_t>(cursor) == lastWindowEnd64;
+    if (!reachedObjectEof && !reachedLastWindowEnd) return;
+
+    const uint32_t sample =
+        s_b148StreamEofPollLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
+    if (sample > 16u) return;
+
+    char lastEntryHex[33];
+    if (lastEntryValid) {
+        constexpr char kHex[] = "0123456789ABCDEF";
+        const uint32_t entryAddress = static_cast<uint32_t>(lastEntryAddress64);
+        for (uint32_t i = 0u; i < 16u; ++i) {
+            const uint8_t value = base[entryAddress + i];
+            lastEntryHex[i * 2u] = kHex[value >> 4u];
+            lastEntryHex[i * 2u + 1u] = kHex[value & 0x0Fu];
+        }
+        lastEntryHex[32] = '\0';
+    } else {
+        std::snprintf(lastEntryHex, sizeof(lastEntryHex), "unavailable");
+    }
+
+    char returnChain[160];
+    returnChain[0] = '\0';
+    size_t chainLength = 0u;
+    uint32_t frame = ctx.r1.u32;
+    for (uint32_t i = 0u; i < 8u; ++i) {
+        if (frame == 0u || base == nullptr || frame > UINT32_MAX - 12u ||
+            !validGuestRange(frame, 12u)) {
+            const int written = std::snprintf(returnChain + chainLength,
+                sizeof(returnChain) - chainLength, "%s<invalid>",
+                chainLength == 0u ? "" : ",");
+            if (written > 0) chainLength += std::min<size_t>(
+                static_cast<size_t>(written), sizeof(returnChain) - chainLength - 1u);
+            break;
+        }
+        const uint32_t nextFrame = loadGuestBe32(base, frame);
+        const uint32_t savedLr = loadGuestBe32(base, frame + 8u);
+        const int written = std::snprintf(returnChain + chainLength,
+            sizeof(returnChain) - chainLength, "%s0x%08X",
+            chainLength == 0u ? "" : ",", savedLr);
+        if (written > 0) chainLength += std::min<size_t>(
+            static_cast<size_t>(written), sizeof(returnChain) - chainLength - 1u);
+        if (nextFrame == 0u || nextFrame <= frame) break;
+        frame = nextFrame;
+    }
+    if (returnChain[0] == '\0') std::snprintf(returnChain, sizeof(returnChain), "unavailable");
+
+    char event[1200];
+    std::snprintf(event, sizeof(event),
+        "B148_STREAM_EOF_POLL sample=%u obj=0x%08X cursor=0x%08X tamanho=0x%08X "
+        "count=%u last_entry=%s last_w0=0x%08X last_w1=0x%08X "
+        "last_w2=0x%08X last_w3=0x%08X last_window_end=0x%016llX "
+        "dest=0x%08X requested=0x%08X sp=0x%08X lr_entry=0x%08X lr_chain=%s",
+        sample, object, cursor, totalSize, count, lastEntryHex,
+        w0, w1, w2, w3, static_cast<unsigned long long>(lastWindowEnd64),
+        destination, requested, ctx.r1.u32, static_cast<uint32_t>(ctx.lr),
+        returnChain);
+    recordRuntimeTrace(event);
+}
+
+bool xowue_trace_chunk_idx_oob(PPCContext &ctx, uint8_t *base) {
+    static std::atomic<uint32_t> s_b148ChunkIdxOobLogs{0u};
+
+    const uint32_t object = ctx.r3.u32;
+    const uint32_t index = ctx.r4.u32;
+    const uint64_t tableField64 = static_cast<uint64_t>(object) + 172u;
+    if (object == 0u || base == nullptr || tableField64 > UINT32_MAX ||
+        !validGuestRange(static_cast<uint32_t>(tableField64), 4u)) return false;
+
+    const uint32_t table = loadGuestBe32(base, static_cast<uint32_t>(tableField64));
+    if (table == 0u || !validGuestRange(table, 8u)) return false;
+    const uint32_t count = loadGuestBe32(base, table + 4u);
+    if (index < count) return false;
+
+    const uint32_t sample =
+        s_b148ChunkIdxOobLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
+    if (sample <= 32u) {
+        char event[240];
+        std::snprintf(event, sizeof(event),
+            "B148_CHUNK_IDX_OOB sample=%u obj=0x%08X idx=%u count=%u "
+            "action=read_suppressed experimental=1",
+            sample, object, index, count);
+        recordRuntimeTrace(event);
+    }
+    return true;
 }
 
 void xowue_trace_chunk_entry(PPCContext &ctx, uint8_t *base) {
@@ -9941,6 +10085,28 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
                 eventHandle, apcRoutine, apcContext, asyncRead ? 1u : 0u,
                 readStatus, readEof ? 1u : 0u, readFailed ? 1u : 0u, readBad ? 1u : 0u);
             recordRuntimeTrace(event);
+        }
+        if (bytesRead == 0u) {
+            static std::atomic<uint32_t> s_b148ReadZeroLogs{0u};
+            const uint32_t sample =
+                s_b148ReadZeroLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
+            if (sample <= 32u) {
+                struct stat hostStat {};
+                const int statResult = ::stat(file->path.c_str(), &hostStat);
+                const long long hostFileSize =
+                    statResult == 0 && hostStat.st_size >= 0
+                        ? static_cast<long long>(hostStat.st_size) : -1ll;
+                const int statError = statResult == 0 ? 0 : errno;
+                const std::string hostPath = file->path.string();
+                char event[1536];
+                std::snprintf(event, sizeof(event),
+                    "B148_READ_ZERO sample=%u path=%s offset=0x%016llX "
+                    "requested=%u bytes=0 host_file_size=%lld stat_errno=%d",
+                    sample, hostPath.c_str(),
+                    static_cast<unsigned long long>(offset), length,
+                    hostFileSize, statError);
+                recordRuntimeTrace(event);
+            }
         }
         result.sequence = file->lastReadSequence.fetch_add(1u, std::memory_order_relaxed) + 1u;
         result.status = readStatus;

@@ -21,6 +21,15 @@ CHUNK_DECLARATION = (
 MEMSET_BEGIN = "xowue_trace_stream_memset(ctx, base, 0u);"
 MEMSET_END = "xowue_trace_stream_memset(ctx, base, 1u);"
 CHUNK_CALL = "xowue_trace_chunk_entry(ctx, base);"
+EOF_FUNCTION = "sub_82575480"
+EOF_DECLARATION = (
+    "void xowue_trace_stream_eof_poll(PPCContext &ctx, uint8_t *base);"
+)
+EOF_CALL = "xowue_trace_stream_eof_poll(ctx, base);"
+CHUNK_OOB_DECLARATION = (
+    "bool xowue_trace_chunk_idx_oob(PPCContext &ctx, uint8_t *base);"
+)
+CHUNK_OOB_GUARD = "if (xowue_trace_chunk_idx_oob(ctx, base)) return;"
 CALL_SITE = re.compile(
     r"(?P<prefix>"
     r"^\s*// li r4,0\s*\n"
@@ -98,41 +107,79 @@ def _patch_memset_probe(source: str) -> tuple[str, bool, bool]:
     return patched, True, True
 
 
-def _patch_chunk_entry_probe(source: str) -> tuple[str, bool, bool]:
-    span = _function_span(source, CHUNK_FUNCTION)
+def _patch_eof_poll_probe(source: str) -> tuple[str, bool, bool]:
+    span = _function_span(source, EOF_FUNCTION)
     if span is None:
         return source, False, False
     start, end, match = span
     body = source[start:end]
-    existing = body.count(CHUNK_CALL)
+    existing = body.count(EOF_CALL)
     if existing == 1:
         patched = _ensure_declaration(
-            source, f"PPC_FUNC_IMPL(__imp__{CHUNK_FUNCTION})", CHUNK_DECLARATION
+            source, f"PPC_FUNC_IMPL(__imp__{EOF_FUNCTION})", EOF_DECLARATION
         )
         return patched, True, False
     if existing:
-        raise RuntimeError("duplicated chunk-entry probe detected; refusing to patch")
+        raise RuntimeError("duplicated stream EOF-poll probe detected; refusing to patch")
 
-    # The probe runs immediately after the generated function's opening brace,
-    # before its first translated PPC instruction can overwrite r3/r4/r5.
+    # Capture r3/r4/r5 and r1 before the first translated PPC instruction mutates them.
     insertion = match.end()
-    patched = source[:insertion] + "\n    " + CHUNK_CALL + source[insertion:]
+    patched = source[:insertion] + "\n    " + EOF_CALL + source[insertion:]
+    patched = _ensure_declaration(
+        patched, f"PPC_FUNC_IMPL(__imp__{EOF_FUNCTION})", EOF_DECLARATION
+    )
+    if patched.count(EOF_CALL) != 1:
+        raise RuntimeError("stream EOF-poll probe call count is not exactly one")
+    return patched, True, True
+
+
+def _patch_chunk_entry_probe(source: str) -> tuple[str, bool, bool, bool, bool]:
+    span = _function_span(source, CHUNK_FUNCTION)
+    if span is None:
+        return source, False, False, False, False
+    start, end, match = span
+    body = source[start:end]
+    existing_guard = body.count(CHUNK_OOB_GUARD)
+    existing_chunk = body.count(CHUNK_CALL)
+    if existing_guard == 1 and existing_chunk == 1:
+        patched = _ensure_declaration(
+            source, f"PPC_FUNC_IMPL(__imp__{CHUNK_FUNCTION})", CHUNK_OOB_DECLARATION
+        )
+        patched = _ensure_declaration(
+            patched, f"PPC_FUNC_IMPL(__imp__{CHUNK_FUNCTION})", CHUNK_DECLARATION
+        )
+        return patched, True, False, True, False
+    if existing_guard or existing_chunk:
+        raise RuntimeError("partial/duplicated B148/B147 chunk-entry probe detected; refusing to patch")
+
+    # Reject only out-of-range chunk indexes; valid indexes continue through B147.
+    insertion = match.end()
+    injected = "\n    " + CHUNK_OOB_GUARD + "\n    " + CHUNK_CALL
+    patched = source[:insertion] + injected + source[insertion:]
+    patched = _ensure_declaration(
+        patched, f"PPC_FUNC_IMPL(__imp__{CHUNK_FUNCTION})", CHUNK_OOB_DECLARATION
+    )
     patched = _ensure_declaration(
         patched, f"PPC_FUNC_IMPL(__imp__{CHUNK_FUNCTION})", CHUNK_DECLARATION
     )
-    if patched.count(CHUNK_CALL) != 1:
-        raise RuntimeError("chunk-entry probe call count is not exactly one")
-    return patched, True, True
+    if patched.count(CHUNK_OOB_GUARD) != 1 or patched.count(CHUNK_CALL) != 1:
+        raise RuntimeError("B148/B147 chunk-entry probe call counts are not exactly one")
+    return patched, True, True, True, True
 
 
 def patch_source(source: str) -> tuple[str, dict[str, int]]:
     patched, has_memset, inserted_memset = _patch_memset_probe(source)
-    patched, has_chunk, inserted_chunk = _patch_chunk_entry_probe(patched)
+    patched, has_eof, inserted_eof = _patch_eof_poll_probe(patched)
+    patched, has_chunk, inserted_chunk, has_chunk_oob, inserted_chunk_oob = _patch_chunk_entry_probe(patched)
     return patched, {
         "memset_function": int(has_memset),
         "memset_inserted": int(inserted_memset),
+        "eof_poll_function": int(has_eof),
+        "eof_poll_inserted": int(inserted_eof),
         "chunk_function": int(has_chunk),
         "chunk_inserted": int(inserted_chunk),
+        "chunk_oob_function": int(has_chunk_oob),
+        "chunk_oob_inserted": int(inserted_chunk_oob),
     }
 
 
@@ -152,27 +199,40 @@ PPC_FUNC_IMPL(__imp__sub_82573DE0) {
     sub_82C2A1F0(ctx, base);
 }
 
+PPC_FUNC_IMPL(__imp__sub_82575480) {
+    // first translated EOF poll instruction
+    ctx.r3.u64 = ctx.r3.u32;
+}
+
 PPC_FUNC_IMPL(__imp__sub_82575108) {
-    // first translated instruction
+    // first translated chunk instruction
     ctx.r3.u64 = ctx.r3.u32;
 }
 """
     patched, result = patch_source(fixture)
     assert result == {
         "memset_function": 1, "memset_inserted": 1,
+        "eof_poll_function": 1, "eof_poll_inserted": 1,
         "chunk_function": 1, "chunk_inserted": 1,
+        "chunk_oob_function": 1, "chunk_oob_inserted": 1,
     }
     assert patched.index(MEMSET_BEGIN) < patched.index("sub_82C2A1F0(ctx, base);")
     assert patched.index("sub_82C2A1F0(ctx, base);") < patched.index(MEMSET_END)
+    eof_marker = "PPC_FUNC_IMPL(__imp__sub_82575480) {"
+    assert patched.index(EOF_CALL) == patched.index(eof_marker) + len(eof_marker) + 5
     chunk_marker = "PPC_FUNC_IMPL(__imp__sub_82575108) {"
-    assert patched.index(CHUNK_CALL) == patched.index(chunk_marker) + len(chunk_marker) + 5
+    assert patched.index(CHUNK_OOB_GUARD) == patched.index(chunk_marker) + len(chunk_marker) + 5
+    assert patched.index(CHUNK_OOB_GUARD) < patched.index(CHUNK_CALL)
     repeated, repeated_result = patch_source(patched)
     assert repeated == patched
     assert repeated_result["memset_inserted"] == 0
+    assert repeated_result["eof_poll_inserted"] == 0
     assert repeated_result["chunk_inserted"] == 0
+    assert repeated_result["chunk_oob_inserted"] == 0
     assert patched.count(MEMSET_BEGIN) == 1 and patched.count(MEMSET_END) == 1
-    assert patched.count(CHUNK_CALL) == 1
-    print("XOWUE_B146_B147_AOT_PROBE_SELF_TEST_OK memset_pc=0x82573E64 chunk_entry=0x82575108 idempotent=1")
+    assert patched.count(EOF_CALL) == 1
+    assert patched.count(CHUNK_OOB_GUARD) == 1 and patched.count(CHUNK_CALL) == 1
+    print("XOWUE_B146_B147_AOT_PROBE_SELF_TEST_OK memset_pc=0x82573E64 eof_poll_pc=0x82575480 chunk_entry=0x82575108 idempotent=1")
 
 
 def main() -> int:
@@ -192,8 +252,18 @@ def main() -> int:
     if not paths:
         raise SystemExit(f"no generated ppc_recomp.*.cpp files in {args.ppc_dir}")
 
-    found = {"memset_function": 0, "chunk_function": 0}
-    inserted = {"memset_inserted": 0, "chunk_inserted": 0}
+    found = {
+        "memset_function": 0,
+        "eof_poll_function": 0,
+        "chunk_function": 0,
+        "chunk_oob_function": 0,
+    }
+    inserted = {
+        "memset_inserted": 0,
+        "eof_poll_inserted": 0,
+        "chunk_inserted": 0,
+        "chunk_oob_inserted": 0,
+    }
     patched_files = []
     for path in paths:
         original = path.read_text(encoding="utf-8")
@@ -203,26 +273,28 @@ def main() -> int:
         for key in inserted:
             inserted[key] += result[key]
         if patched != original:
-            temporary = path.with_suffix(path.suffix + ".b147-probe.tmp")
+            temporary = path.with_suffix(path.suffix + ".b148-probe.tmp")
             temporary.write_text(patched, encoding="utf-8", newline="\n")
             temporary.replace(path)
             patched_files.append(path.name)
 
-    if found["memset_function"] != 1:
-        raise SystemExit(
-            f"expected exactly one {MEMSET_FUNCTION} in generated AOT, found {found['memset_function']}"
-        )
-    if found["chunk_function"] != 1:
-        raise SystemExit(
-            f"expected exactly one {CHUNK_FUNCTION} in generated AOT, found {found['chunk_function']}"
-        )
+    expected = {
+        "memset_function": 1,
+        "eof_poll_function": 1,
+        "chunk_function": 1,
+        "chunk_oob_function": 1,
+    }
+    for key, value in expected.items():
+        if found[key] != value:
+            raise SystemExit(f"expected exactly {value} {key} in generated AOT, found {found[key]}")
 
     report = {
         "memset_guest_function": "0x82573DE0",
         "memset_guest_call_pc": "0x82573E64",
         "memset_callee": "0x82C2A1F0",
+        "eof_poll_guest_function": "0x82575480",
         "chunk_entry_guest_function": "0x82575108",
-        "probe": "B146 direct memset begin/end plus B147 entry hook before PPC instructions",
+        "probe": "B146 stream memset + B147 chunk entry + B148 EOF poll and experimental OOB guard",
         "found": found,
         "inserted": inserted,
         "patched_files": patched_files,

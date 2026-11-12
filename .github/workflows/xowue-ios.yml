@@ -99,11 +99,12 @@ jobs:
               }
               return false;
             }).length;
-            const baseBuildNumber = completedIPAs + 2;
+            const baseBuildNumber = Math.max(completedIPAs + 2, 148);
             const buildNumber = failedAttempts > 0
               ? `${baseBuildNumber}.${failedAttempts}`
               : String(baseBuildNumber);
             core.exportVariable("XOWUE_BUILD_NUMBER", String(buildNumber));
+            core.exportVariable("XOWUE_BUILD_EXPERIMENTAL", "1");
             core.setOutput("build_number", String(buildNumber));
             core.info("XOWUE Build " + buildNumber);
 
@@ -502,7 +503,7 @@ jobs:
           test -s "$GITHUB_WORKSPACE/artifacts/xowue-aot-arm64-semantics.json"
           python3 -m json.tool "$GITHUB_WORKSPACE/artifacts/xowue-aot-arm64-semantics.json" >/dev/null
 
-      - name: Instrument the direct PPC stream memset callsite
+      - name: Instrument B146/B147/B148 PPC stream, EOF-poll and chunk callsites
         run: |
           set -euo pipefail
           python3 -m py_compile tools/patch_xowue_stream_memset_probe.py
@@ -516,7 +517,12 @@ jobs:
           grep -R -Fq 'xowue_trace_chunk_entry(ctx, base);' \
             "$GITHUB_WORKSPACE/generated/ppc"/ppc_recomp.*.cpp
 
-      - name: Verify B147 requirements and run all XOWUE source tests
+          grep -R -Fq 'xowue_trace_stream_eof_poll(ctx, base);' \
+            "$GITHUB_WORKSPACE/generated/ppc"/ppc_recomp.*.cpp
+          grep -R -Fq 'if (xowue_trace_chunk_idx_oob(ctx, base)) return;' \
+            "$GITHUB_WORKSPACE/generated/ppc"/ppc_recomp.*.cpp
+
+      - name: Verify B147/B148, run requested Engine.xxx scan and all XOWUE source tests
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -527,7 +533,20 @@ jobs:
           print("memset de commit ainda incondicional:",
                 bool(re.search(r"if \(commit && \(allocationType & 0x00800000u\) == 0\) \{\s*std::memset\(base \+ address, 0, adjustedSize\);", src)))
           assert all(tag in src for tag in ("B147_VM_RECOMMIT", "B147_VM_RELEASE", "B147_CHUNK_ENTRY"))
+          assert all(tag in src for tag in ("B148_STREAM_EOF_POLL", "B148_CHUNK_IDX_OOB", "B148_READ_ZERO"))
           assert not re.search(r"if \(commit && \(allocationType & 0x00800000u\) == 0\) \{\s*std::memset\(base \+ address, 0, adjustedSize\);", src)
+          PY
+
+          # Exact B148 Engine.xxx EOF coverage and tag verification requested for this build.
+          python3 - <<'PY'
+          import os, sys, glob
+          root = "X-MEN ORIGINS WOLVERINE PT BR"
+          for p in glob.glob(os.path.join(root, "**", "Engine.xxx"), recursive=True):
+              sz = os.path.getsize(p)
+              print(p, "tamanho", sz, hex(sz), "| offset do EOF visto no log: 0x470000 =", 0x470000, "| cobre:", sz >= 0x470000)
+          src = open("Runtime/XOWUEEngine.cpp", errors="replace").read()
+          for tag in ("B148_STREAM_EOF_POLL", "B148_CHUNK_IDX_OOB", "B148_READ_ZERO"):
+              print(tag, "presente" if tag in src else "AUSENTE")
           PY
           test_count=0
           for test in tools/test_xowue_*.py; do
@@ -866,6 +885,12 @@ jobs:
           with open(sys.argv[1], "rb") as stream:
               info = plistlib.load(stream)
           assert str(info.get("CFBundleVersion")) == sys.argv[2], info.get("CFBundleVersion")
+          info["XOWUEExperimentalBuild"] = True
+          info["XOWUEBuildLabel"] = "EXPERIMENTAL"
+          with open(sys.argv[1], "wb") as stream:
+              plistlib.dump(info, stream)
+          assert info.get("XOWUEExperimentalBuild") is True
+          assert info.get("XOWUEBuildLabel") == "EXPERIMENTAL"
           supported = set(info.get("UISupportedInterfaceOrientations", []))
           assert {"UIInterfaceOrientationPortrait", "UIInterfaceOrientationLandscapeLeft",
                   "UIInterfaceOrientationLandscapeRight"}.issubset(supported), supported
@@ -876,9 +901,9 @@ jobs:
           assert any("com.xowue.xex" in entry.get("LSItemContentTypes", []) for entry in types)
           exported = info.get("UTExportedTypeDeclarations", [])
           assert any(entry.get("UTTypeIdentifier") == "com.xowue.xex" for entry in exported)
-          print(f"Info.plist OK · Build {sys.argv[2]} · Files sharing · XEX document type")
+          print(f"Info.plist OK · Build {sys.argv[2]} · EXPERIMENTAL · Files sharing · XEX document type")
           PY
-          IPA_NAME="XOWUE-Build-${XOWUE_BUILD_NUMBER}.ipa"
+          IPA_NAME="XOWUE-Build-${XOWUE_BUILD_NUMBER}-EXPERIMENTAL.ipa"
           ditto -c -k --sequesterRsrc --keepParent Payload "artifacts/$IPA_NAME"
           unzip -t "artifacts/$IPA_NAME"
 
@@ -915,7 +940,7 @@ jobs:
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
-          name: XOWUE-Build-${{ steps.version.outputs.build_number }}
+          name: XOWUE-Build-${{ steps.version.outputs.build_number }}-EXPERIMENTAL
           path: artifacts/XOWUE-Build-*.ipa
           if-no-files-found: error
           retention-days: 30
