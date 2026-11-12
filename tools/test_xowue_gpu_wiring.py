@@ -528,7 +528,8 @@ for tag in ("B148_STREAM_EOF_POLL", "B148_CHUNK_IDX_OOB", "B148_READ_ZERO"):
     assert tag in engine, f"missing retained B148 diagnostic tag {tag}"
 assert "void xowue_trace_chunk_idx_oob(PPCContext &ctx, uint8_t *base)" in engine
 assert "action=read_continues experimental=1" in engine
-assert "if (xowue_trace_chunk_idx_oob(ctx, base)) return;" not in memset_patcher
+assert "CHUNK_OOB_LEGACY_GUARD = \"if (xowue_trace_chunk_idx_oob(ctx, base)) return;\"" in memset_patcher
+assert 'CHUNK_OOB_GUARD = "xowue_trace_chunk_idx_oob(ctx, base);"' in memset_patcher
 assert "xowue_trace_chunk_idx_oob(ctx, base);" in memset_patcher
 
 for tag in ("B149_STREAM_EOF_POLL", "B149_STREAM_LAST_READS", "B149_CHUNK_IDX_OOB"):
