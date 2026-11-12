@@ -358,10 +358,10 @@ def main() -> None:
     # BOTW-only host build, make the per-game runtime profile authoritative.
     hold_source = hle_nvn_source.read_text(encoding="utf-8")
     old_holds = (
-        "        const char *e = getenv(\\\"DM_FPS_HOLD\\\"); h = e ? strcmp(e, \\\"off\\\") != 0 : DM_GAME_FPS_HOLD;\\n"
-        "        if (!h) LOG(\\\"[nvn] frame step: frames are not held longer than the cap's vsyncs (%s)\\\", e ? \\\"DM_FPS_HOLD\\\" : \\\"game profile\\\");",
-        "        const char *e = getenv(\\\"DM_FPS_HOLD\\\"); h = e ? strcmp(e, \\\"off\\\") != 0 : dm_prof()->fps_hold;\\n"
-        "        if (!h) LOG(\\\"[nvn] frame step: frames are not held longer than the cap's vsyncs (%s)\\\", e ? \\\"DM_FPS_HOLD\\\" : \\\"game profile\\\");",
+        "        const char *e = getenv(\"DM_FPS_HOLD\"); h = e ? strcmp(e, \"off\") != 0 : DM_GAME_FPS_HOLD;\n"
+        "        if (!h) LOG(\"[nvn] frame step: frames are not held longer than the cap's vsyncs (%s)\", e ? \"DM_FPS_HOLD\" : \"game profile\");",
+        "        const char *e = getenv(\"DM_FPS_HOLD\"); h = e ? strcmp(e, \"off\") != 0 : dm_prof()->fps_hold;\n"
+        "        if (!h) LOG(\"[nvn] frame step: frames are not held longer than the cap's vsyncs (%s)\", e ? \"DM_FPS_HOLD\" : \"game profile\");",
     )
     new_hold = '''        const char *e = getenv("DM_FPS_HOLD");
         h = dm_prof()->fps_hold;
