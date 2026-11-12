@@ -55,7 +55,8 @@
     "romfs_mode": "separate",
     "runner": "xcode-27",
     "xcode": "27.2.0",
-    "retry_reason": "Xcode 27.2 unavailable on macos-26; runner offers Xcode 26.6.0"
+    "romfs_actions_transfer": "omitted; nxnative repacks RomFS from verified NUP and checks SHA-256/identity",
+    "disk_preflight_gib": 80
   },
   "created_at_utc": "2026-11-12T22:41:01Z"
 }
