@@ -1,0 +1,60 @@
+{
+  "schema": 2,
+  "project": "HookLink2iOS",
+  "branch": "HookLink2iOS",
+  "request_id": "de6bf0e1-15a4-44a3-934b-d4d06662f871",
+  "title_id": "0400486024DEC000",
+  "package_version": "v131072",
+  "package_version_number": 131072,
+  "gpu_arch": "g18p",
+  "engine": {
+    "repository": "https://github.com/dsi-hub/nxnative.git",
+    "branch": "hooklink",
+    "commit": "cf2a2fecc6ce3fb841131ffeffa90915cdadf109"
+  },
+  "source": {
+    "filename": "recuperado-local.nup",
+    "url_fingerprint": "7566888867d8715cb7989d082ad148616292311e2e31f8da160d16384c277c08",
+    "archive_extracted": false,
+    "archive_deleted_after_extraction": false
+  },
+  "drive": {
+    "parent_folder_id": "19HXEJCK-26NfBVKeUP3wqFxMFpoF3ykm",
+    "project_folder_id": "1IynIGg57WnKydeqsdVzOp90tPkiX_eNY",
+    "inputs_folder_id": "16eE-y4HKOhQi4nAzUoGaKRkUwGuAw578",
+    "run_folder_id": "160LSyVNEzd4qyvRWB4SmHhXW14xV6bHj",
+    "run_folder_url": "https://drive.google.com/drive/folders/160LSyVNEzd4qyvRWB4SmHhXW14xV6bHj"
+  },
+  "nup": {
+    "id": "1FpTpsgqOrtOi6D3ivK1qneZTG9Ny_xq7",
+    "name": "recuperado-local_7566888867.nup",
+    "size": 25622267860,
+    "sha256": "85b08e81a2a08612f88de1063c8581fe088f7554303aa1ff207972d729b5916f",
+    "md5": "82655de36490b85030c6440b4af2f7d1",
+    "web_view_url": "https://drive.google.com/file/d/1FpTpsgqOrtOi6D3ivK1qneZTG9Ny_xq7/view?usp=drivesdk"
+  },
+  "romfs": {
+    "id": "1OPcts3e6FFmcm7gCeE3ZmGuk1EsVZIsw",
+    "name": "romfs.img",
+    "size": 26247576430,
+    "sha256": "872de47b913bb97890880e9f17dccedc4144953a258e9a6aecf04c379427a669",
+    "md5": "1bb04fa56ed696c0169fdf7d13ee6587",
+    "web_view_url": "https://drive.google.com/file/d/1OPcts3e6FFmcm7gCeE3ZmGuk1EsVZIsw/view?usp=drivesdk",
+    "identity": "DMROMFSID1 title=0400486024DEC000 version=v131072 build=cf2a2fecc6ce3fb841131ffeffa90915cdadf109 size=26247576430 index=b6a3def414e47ca5"
+  },
+  "resolution_overlay": {
+    "id": "1yxY1kLW1j1w_6pTpKDy-RB5GUeR18kji",
+    "name": "Bootup.Nin_Ounce_NVN2.pack.zs",
+    "size": 110383,
+    "sha256": "a90bd16f722603fb0f3ba97d420d33d8121d75d6a817a49b23b374e35910dc96",
+    "md5": "9763f1c2dce6b2816a7c9794c35817d2",
+    "web_view_url": "https://drive.google.com/file/d/1yxY1kLW1j1w_6pTpKDy-RB5GUeR18kji/view?usp=drivesdk"
+  },
+  "builder": {
+    "platform": "ios",
+    "romfs_mode": "separate",
+    "runner": "macos-26",
+    "xcode": "27.2"
+  },
+  "created_at_utc": "2026-11-12T22:41:01Z"
+}
