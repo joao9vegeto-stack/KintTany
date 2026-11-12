@@ -124,11 +124,11 @@ def clone_engine(dest):
 def ensure_folder(drive,parent,name):
     qname=name.replace("'","\\'")
     res=drive.files().list(q=f"'{parent}' in parents and name = '{qname}' and mimeType = '{FOLDER}' and trashed = false",
-        spaces="drive",pageSize=100,fields="files(id,name)",supportsAllDrives=True,
+        spaces="drive",pageSize=100,fields="files(id,name,webViewLink)",supportsAllDrives=True,
         includeItemsFromAllDrives=True).execute(num_retries=5)
     if res.get("files"): return res["files"][0]
     return drive.files().create(body={"name":name,"mimeType":FOLDER,"parents":[parent]},
-        fields="id,name",supportsAllDrives=True).execute(num_retries=5)
+        fields="id,name,webViewLink",supportsAllDrives=True).execute(num_retries=5)
 
 def upload(drive,path,parent,name,app_properties=None,description=None):
     h=file_hashes(path)
@@ -354,15 +354,19 @@ def transfer_actions_artifact_to_drive(*,github_token,expected_commit,drive,run_
     ih=file_hashes(paths[ipa[0].filename.split("/")[-1]])
     if report_data.get("project")!="HookLink2iOS" or report_data.get("branch")!=BRANCH: raise RuntimeError("Proveniência do build-report incorreta.")
     if int(report_data.get("ipa",{}).get("size",-1))!=ih["size"] or report_data.get("ipa",{}).get("sha256","").lower()!=ih["sha256"]: raise RuntimeError("Hash/tamanho da IPA diverge do build-report.")
+    if report_data.get("commit")!=expected_commit:
+        raise RuntimeError("Commit no build-report não corresponde ao commit do workflow.")
+    build_folder=ensure_folder(drive,run_folder_id,
+        f"actions-{run_data['run_number']}-{run_data['id']}")
     provenance=f"HookLink2iOS | branch={BRANCH} | commit={expected_commit} | run_id={run_data['id']} | artifact={artifact['name']} | run_url={run_data.get('html_url')}"
-    ipa_item=upload(drive,paths[ipa[0].filename.split("/")[-1]],run_folder_id,"OcarinaOfTime-HookLink2iOS.ipa",description=provenance)
-    upload(drive,paths[overlays[0].filename.split("/")[-1]],run_folder_id,"Bootup.Nin_Ounce_NVN2.pack.zs",description=provenance)
-    upload(drive,paths["build-report.json"],run_folder_id,"build-report.json",description=provenance)
+    ipa_item=upload(drive,paths[ipa[0].filename.split("/")[-1]],build_folder["id"],"OcarinaOfTime-HookLink2iOS.ipa",description=provenance)
+    upload(drive,paths[overlays[0].filename.split("/")[-1]],build_folder["id"],"Bootup.Nin_Ounce_NVN2.pack.zs",description=provenance)
+    upload(drive,paths["build-report.json"],build_folder["id"],"build-report.json",description=provenance)
     remote=drive.files().get(fileId=ipa_item["id"],fields="id,name,size,md5Checksum,webViewLink,description",supportsAllDrives=True).execute()
     if int(remote.get("size",-1))!=ih["size"] or remote.get("md5Checksum","").lower()!=ih["md5"] or remote.get("description")!=provenance: raise RuntimeError("IPA no Drive falhou na verificação final.")
     zip_path.unlink(missing_ok=True)
     return {"run":run_data,"artifact":artifact,"ipa":remote,"ipa_sha256":ih["sha256"],
-        "commit_sha":expected_commit,"run_url":run_data.get("html_url"),
+        "drive_folder":build_folder,"commit_sha":expected_commit,"run_url":run_data.get("html_url"),
         "commit_url":f"https://github.com/{REPO}/commit/{expected_commit}"}
 
 if __name__=="__main__":
