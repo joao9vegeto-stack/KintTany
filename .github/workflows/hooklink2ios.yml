@@ -19,6 +19,8 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/HookLink2iOS'
     runs-on: xcode-27
     timeout-minutes: 360
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
 
     steps:
       - name: Checkout only the requested branch and commit
@@ -44,6 +46,7 @@ jobs:
           assert h.get("package_version") == "v131072"
           assert h.get("package_version_number") == 131072
           assert h.get("engine", {}).get("commit") == "cf2a2fecc6ce3fb841131ffeffa90915cdadf109"
+          assert h.get("gpu_arch") == "g18p", "iPhone 17 Pro requires HookLink's documented g18p pipeline archive."
           for key in ("nup", "romfs", "resolution_overlay"):
               item=h[key]
               assert item.get("id") and int(item.get("size",0)) > 0
@@ -57,10 +60,14 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Select Xcode 26.6.0
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: "26.6.0"
+      - name: Verify the exact Xcode 27.2 and iOS Metal toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "$DEVELOPER_DIR" || { echo "::error::Xcode 27.2 is missing from xcode-27"; exit 1; }
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphoneos metal --version
 
       - name: Install pinned Xcode, Metal and Python build tools
         shell: bash
@@ -70,6 +77,7 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-version
           xcrun --sdk iphoneos metal --version
           brew install xcodegen zstd glslang
+          brew list --cask dotnet-sdk >/dev/null 2>&1 || brew install --cask dotnet-sdk
           python -m pip install --upgrade pip
           python -m pip install lz4 "capstone>=5,<6" fonttools nsz zbic backports.zstd google-api-python-client google-auth
 
