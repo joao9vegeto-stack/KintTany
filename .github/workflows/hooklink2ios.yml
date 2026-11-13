@@ -60,6 +60,32 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Validate Python syntax and Colab helper parity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile scripts/hooklink2ios_build.py colab/hooklink2ios_prepare.py
+          python - <<'PY'
+          import ast, hashlib, json
+          from pathlib import Path
+          helper=Path("colab/hooklink2ios_prepare.py").read_text(encoding="utf-8")
+          ast.parse(helper)
+          ast.parse(Path("scripts/hooklink2ios_build.py").read_text(encoding="utf-8"))
+          notebook=json.loads(Path("colab/HookLink2iOS_Colab.ipynb").read_text(encoding="utf-8"))
+          cell="".join(notebook["cells"][4]["source"])
+          start="HELPER_SOURCE = r'''"
+          end='\n\'\'\'\nHELPER_SHA256 = hashlib.sha256(HELPER_SOURCE.encode("utf-8")).hexdigest()'
+          p=cell.index(start); q=cell.index(end,p)
+          embedded=cell[p+len(start)+1:q]
+          assert embedded==helper, "Colab embedded helper diverges from the versioned helper"
+          digest=hashlib.sha256(helper.encode("utf-8")).hexdigest()
+          assert f'HELPER_SHA256 = hashlib.sha256(HELPER_SOURCE.encode("utf-8")).hexdigest()' in cell
+          transfer="".join(notebook["cells"][14]["source"])
+          assert "handoff=HANDOFF" in transfer
+          assert "transfer_actions_artifact_to_drive" in transfer
+          print("Python syntax, Colab helper SHA",digest,"and notebook transfer wiring: OK")
+          PY
+
       - name: Verify the exact Xcode 27.2 and iOS Metal toolchain
         shell: bash
         run: |
@@ -93,6 +119,40 @@ jobs:
           git -C "$RUNNER_TEMP/nxnative" checkout --detach FETCH_HEAD
           test "$(git -C "$RUNNER_TEMP/nxnative" rev-parse HEAD)" = "$PIN"
 
+      - name: Preflight the exact Ocarina profile and Metal compiler lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENGINE="$RUNNER_TEMP/nxnative"
+          PROFILE="$ENGINE/dm/games/0400486024DEC000"
+          python - "$ENGINE" <<'PY'
+          import pathlib, re, sys
+          root=pathlib.Path(sys.argv[1])
+          profile=root/"dm/games/0400486024DEC000"
+          fields={}
+          for line in (profile/"game.tsv").read_text().splitlines():
+              if line and not line.startswith("#") and "\t" in line:
+                  key,value=line.split("\t",1); fields[key]=value
+          assert fields.get("title_id")=="0400486024DEC000"
+          assert fields.get("package")=="v131072"
+          assert fields.get("pso_mtl4")=="on"
+          for table in ("shader_pairs.tsv","pso_pairs.tsv"):
+              path=profile/table
+              rows=sum(1 for line in path.read_text().splitlines() if line.strip() and not line.startswith("#"))
+              assert rows>1000, f"{table}: only {rows} rows"
+              print(f"{table}: {rows:,} entries")
+          lock=(root/"dm/gfx/tools/dmsh_chain.lock").read_text()
+          for key in ("metal_macosx","metal_iphoneos","dmsh_xlate","spirv-cross"):
+              assert re.search(rf"^{re.escape(key)}\\t.+$",lock,re.M), f"{key} absent from shader lock"
+          builder=(root/"scripts/build_ipa_from_nsp.py").read_text()
+          anchor="    aoc = extract_aoc(nx, keys, repo, work, app, fam, logs)\\n"
+          assert builder.count(anchor)==1, "unexpected nxnative builder extraction flow"
+          assert (root/"dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate").is_file()
+          assert (root/"dm/gfx/tools/spirv_cross_bin/spirv-cross").is_file()
+          print("Ocarina profile, NVN pipeline tables, translation tools and NUP release hook: OK")
+          PY
+          python "$ENGINE/dm/gfx/tools/own_compilers.py" --check-metal
+          
       - name: Reclaim unused macOS image storage without touching Xcode 27.2
         shell: bash
         run: |
