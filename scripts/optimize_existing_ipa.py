@@ -233,14 +233,19 @@ def main() -> None:
         fail("the snapshot/encode path or corrected fast-wake completion code is missing from the pinned Metal source")
     fstep_text = fstep_source.read_text(encoding="utf-8")
     hle_nvn_text = hle_nvn_source.read_text(encoding="utf-8")
-    if "nvn_fstep_next" not in fstep_text or "FSTEP_LATE" not in fstep_text:
-        fail("the shared frame-step algorithm could not be audited")
+    if not all(token in fstep_text for token in (
+        "nvn_fstep_next", "FSTEP_LATE", "nvn_fstep_gpu_slowed",
+        "nvn_fstep_same", "FSTEP_GPU_SLOW", "FSTEP_GRACE",
+        "FSTEP_SAME", "FSTEP_PROBE_MAX"
+    )):
+        fail("the pinned frame-step source lacks the GPU-clock recovery probe algorithm")
     if not all(token in hle_nvn_text for token in (
         "static int fstep_hold(void)", "DM_FPS_HOLD", "!fstep_hold()",
-        "static int fps_step_cap(void)", "dm_movie_playing()", "thermal ? 30 : 60"
+        "static int fps_step_cap(void)", "dm_movie_playing()", "thermal ? 30 : 60",
+        "nvn_fstep_gpu_slowed", "nvn_fstep_same"
     )):
-        fail("the host frame-hold controller or independent thermal/movie caps could not be audited")
-    log("present/encode and frame-step audit passed: own-record snapshot path, optional hold switch, and independent thermal/movie caps are present")
+        fail("the host frame-hold controller, GPU recovery probes, or independent thermal/movie caps could not be audited")
+    log("frame-step audit passed: upstream GPU-slow probes and same-scene recovery are present; thermal/movie caps remain independent")
 
     output.mkdir(parents=True, exist_ok=True)
     shutil.rmtree(work, ignore_errors=True)
@@ -351,55 +356,13 @@ def main() -> None:
     run(["git", "apply", patch], cwd=engine)
     run(["git", "diff", "--check"], cwd=engine)
 
-    # The generic iOS launcher currently exports DM_FPS_HOLD=on for this install,
-    # even though BOTW's packaged runtime profile explicitly says fps_hold=off.
-    # The environment switch wins over the profile in upstream fstep_hold(),
-    # re-enabling the 1->2 VSync step and letting the GPU downclock. For this
-    # BOTW-only host build, make the per-game runtime profile authoritative.
-    hold_source = hle_nvn_source.read_text(encoding="utf-8")
-    hold_signature = "static int fstep_hold(void)"
-    if hold_source.count(hold_signature) != 1:
-        fail("could not uniquely locate fstep_hold() in the synced NXNative source")
-    function_start = hold_source.index(hold_signature)
-    function_open = hold_source.find("{", function_start)
-    if function_open < 0:
-        fail("fstep_hold() has no opening brace")
-    depth = 0
-    function_end = -1
-    for position in range(function_open, len(hold_source)):
-        if hold_source[position] == "{":
-            depth += 1
-        elif hold_source[position] == "}":
-            depth -= 1
-            if depth == 0:
-                function_end = position + 1
-                break
-    if function_end < 0:
-        fail("fstep_hold() has no matching closing brace")
-    new_hold = """static int fstep_hold(void) {
-    static int h = -1;
-    if (h < 0) {
-        const char *e = getenv("DM_FPS_HOLD");
-        h = dm_prof()->fps_hold;
-        LOG("[nvn] frame step: BOTW runtime profile fps_hold=%d is authoritative; launcher DM_FPS_HOLD=%s ignored",
-            h, e ? e : "unset");
-        if (!h) LOG("[nvn] frame step: frames are not held longer than the cap's vsyncs (BOTW runtime profile)");
-    }
-    return h;
-}"""
-    hold_source = hold_source[:function_start] + new_hold + hold_source[function_end:]
-    hle_nvn_source.write_text(hold_source, encoding="utf-8")
-    hold_check = hle_nvn_source.read_text(encoding="utf-8")
-    if new_hold not in hold_check:
-        fail("BOTW runtime-profile frame-hold authority patch did not apply")
-    log("BOTW frame-hold fix: runtime profile is authoritative; launcher DM_FPS_HOLD can no longer re-enable the hold")
-
-    # Device logs show the host frame-step controller repeatedly changing hold
-    # from one to two/three VSyncs after three late frames. With fps_hold=on, this
-    # deliberately extends presentation; the lower rate then reduces GPU activity,
-    # and later 60 Hz probes fail at the lower clock. No game-fixed step was logged.
-    # fps_hold=off prevents only the optional extra hold. The 60 Hz target stays;
-    # serious-thermal and movie hard caps in fps_step_cap() remain active.
+    # Keep the pinned upstream adaptive hold controller for BOTW. With fps_hold=off,
+    # the host is fixed at one vsync and cannot enter the GPU-clock recovery probe
+    # path. The uploaded device log showed 0 up / 0 down and 0 probes despite many
+    # late frames. With fps_hold=on, a sustained miss may step to 30, but the pinned
+    # nvn_fstep_gpu_slowed / nvn_fstep_same logic probes back to 60 after a GPU
+    # downshift. This is not a fake 60 FPS cap: a probe fails when the scene still
+    # cannot fit the 16.67 ms deadline. Do not override or replace upstream logic.
     # No render scale, resolution, texture, shader, or pass-quality setting changes.
     def update_profile(path, updates, remove_keys=()):
         path = Path(path)
@@ -435,7 +398,7 @@ def main() -> None:
     profile_updates = {
         "op_mode": "handheld",
         "fps_target": "60",
-        "fps_hold": "off",
+        "fps_hold": "on",
         "present_snap": "on",
         "enc_thread": "on",
     }
@@ -454,7 +417,7 @@ def main() -> None:
     shutil.copy2(runtime_profile_path, app_runtime_profile_path)
     app_runtime_lines = app_runtime_profile_path.read_text(encoding="utf-8").splitlines()
     required_runtime_rows = (
-        "op_mode\thandheld", "fps_target\t60", "fps_hold\toff",
+        "op_mode\thandheld", "fps_target\t60", "fps_hold\ton",
         "present_snap\ton", "enc_thread\ton",
     )
     for row in required_runtime_rows:
@@ -462,7 +425,15 @@ def main() -> None:
             fail("preserved app framework profile.tsv is missing " + row)
     if any(line.split("\t", 1)[0] == "draw_barriers" for line in app_runtime_lines):
         fail("preserved app framework profile.tsv still carries the unproven draw_barriers experiment")
-    log("BOTW optimization: range-aware compute dispatch ordering enabled and regression-tested; fps_target=60, fps_hold=off; present snapshots + encode thread on; render scale 1.0 and original visual quality preserved")
+    log("BOTW optimization: fps_target=60 with upstream adaptive GPU recovery probes; fps_hold=on; present snapshots + encode thread on; render scale 1.0 and original visual quality preserved; compute dispatch code unchanged")
+
+    # Run the pinned frame-step controller regression suite before compiling.
+    # It covers BOTW iPhone GPU-clock downshift, recovery probes, grace/ramp,
+    # and the negative case where a genuinely heavier scene cannot hold 60.
+    fstep_tests = engine / "dm/gfx/tests"
+    run(["make", "t_fstep"], cwd=fstep_tests)
+    run([fstep_tests / "t_fstep"], cwd=fstep_tests)
+    log("BOTW frame-step unit suite passed, including iPhone GPU-clock recovery scenarios")
 
     # Recreate the host's normal iOS compile settings from its Makefile, without touching game assets.
     cfg = gen / "dm.xcconfig"
@@ -479,7 +450,7 @@ def main() -> None:
     generated_profile = profile_header.read_text(encoding="utf-8")
     required_profile_macros = (
         "#define DM_GAME_FPS_TARGET 60",
-        "#define DM_GAME_FPS_HOLD 0",
+        "#define DM_GAME_FPS_HOLD 1",
         "#define DM_GAME_PRESENT_SNAP 1",
         "#define DM_GAME_ENC_THREAD 1",
         "#define DM_GAME_OPMODE 0",
@@ -575,7 +546,7 @@ def main() -> None:
             fail("optimized IPA game manifest verification failed")
         final_profile = z.read(f"Payload/DmShell.app/Frameworks/{FRAMEWORK_NAME}/profile.tsv").decode()
         final_rows = final_profile.splitlines()
-        for row in ("fps_target\t60", "fps_hold\toff", "op_mode\thandheld",
+        for row in ("fps_target\t60", "fps_hold\ton", "op_mode\thandheld",
                     "present_snap\ton", "enc_thread\ton"):
             if row not in final_rows:
                 fail("optimized IPA runtime profile is missing " + row)
@@ -592,8 +563,8 @@ def main() -> None:
         "source_run_number": args.source_run_number,
         "source_run": source_report.get("source_run"),
         "engine_pin": ENGINE_PIN,
-        "modified_host_source": ["dm/gfx/nvn/nvn_mtl.m", "dm/gfx/nvn/nvn_geometry.inc", "dm/gfx/nvn/hle_nvn.c"],
-        "modified_game_profile": ["fps_hold=off", "present_snap=on", "enc_thread=on", "draw_barriers=upstream-default"],
+        "modified_host_source": ["dm/gfx/nvn/nvn_mtl.m"],
+        "modified_game_profile": ["fps_hold=on", "present_snap=on", "enc_thread=on", "draw_barriers=upstream-default"],
         "rebuilt_host_framework": True,
         "rebuilt_shared_shell": False,
         "recompiled_game_framework": False,
@@ -606,7 +577,7 @@ def main() -> None:
         "optimized_framework_executable_sha256": new_hash,
         "module_list": manifest["modules"],
         "profile_effective": {
-            "op_mode": "handheld", "fps_target": 60, "fps_hold": "off",
+            "op_mode": "handheld", "fps_target": 60, "fps_hold": "on",
             "present_snap": "on", "enc_thread": "on",
             "present_interval": "game (unchanged)", "draw_barriers": "upstream-default"
         },
@@ -626,12 +597,15 @@ def main() -> None:
         },
         "compute_dispatch_ordering": "not modified; incompatible backport removed from production path pending a port against the exact NX2Apple 70-patch tree",
         "frame_pacing_correction": {
-            "fps_hold": "off",
-            "authority": "BOTW runtime profile; generic launcher DM_FPS_HOLD is ignored by the BOTW host",
-            "reason": "the uploaded device log had profile hold=0 but launcher environment hold=on; upstream environment precedence was re-enabling the extra VSync hold and allowing GPU downclocking",
-            "late_frame_policy": "keep one-VSync cadence; late frames may be missed rather than forcing a persistent half-rate",
+            "fps_hold": "on",
+            "authority": "pinned upstream adaptive fstep controller; launcher DM_FPS_HOLD=on agrees with the packaged profile",
+            "reason": "the prior fps_hold=off build reported 0 step changes and 0 recovery probes despite thousands of late frames; the upstream GPU-slow and same-scene probe path was therefore never entered",
+            "late_frame_policy": "three late frames may step to 30; after a GPU-clock downshift the controller probes back to 60 with a 30-frame grace and extended ramp when GPU work keeps getting cheaper; failed probes back off up to 8 seconds",
+            "recovery_algorithm": "nvn_fstep_gpu_slowed + nvn_fstep_same; GPU-slow threshold 1.3x the learned 60-fps reference",
             "thermal_and_movie_caps": "preserved"
         },
+        "frame_step_unit_test": "make -C dm/gfx/tests t_fstep; ./t_fstep",
+        "compute_dispatch_ordering": "unchanged; no incompatible backport applied",
         "render_scale_modified": False,
         "render_scale_preserved": "1.0 (confirmed in uploaded device log; no scale override introduced)",
         "dynamic_resolution_modified": False,
