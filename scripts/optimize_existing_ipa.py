@@ -352,8 +352,13 @@ def main() -> None:
     # Apply the reviewed host-only optimizations to this exact pinned tree.
     run(["git", "apply", "--check", patch], cwd=engine)
     run(["git", "apply", patch], cwd=engine)
-    run(["git", "apply", "--check", dispatch_patch], cwd=engine)
-    run(["git", "apply", dispatch_patch], cwd=engine)
+    # The optimization was authored against upstream 547c5db's parent, not the
+    # older NX2Apple pin. Fetch that exact base and let Git perform a real
+    # three-way backport onto the 70-patch NX2Apple tree; never force-apply hunks.
+    run(["git", "fetch", "--no-tags", "https://github.com/seedds/nxnative.git",
+         "301cf6c9f9f41fa2b13ca6f348cdf86bdbe98138"], cwd=engine)
+    run(["git", "apply", "--3way", "--check", dispatch_patch], cwd=engine)
+    run(["git", "apply", "--3way", dispatch_patch], cwd=engine)
 
     # Run upstream's ordering regression suite before creating an IPA. It checks
     # game barriers, overlapping host-copy ranges, unknown bindings and encoder
