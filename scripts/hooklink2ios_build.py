@@ -122,6 +122,28 @@ def download_verified(drive,session,record,destination):
     part.replace(destination)
     print(f"VERIFIED {record['name']}: {expected:,} bytes | SHA256 {sha}",flush=True)
 
+def patch_nxnative_release_nup_after_extract(engine):
+    """Free the verified 25.6 GB input NUP after nxnative has extracted main game + DLC."""
+    script=engine/"scripts/build_ipa_from_nsp.py"
+    source=script.read_text(encoding="utf-8")
+    marker="    # HookLink2iOS: release the source NUP after extract_aoc; no later stage reads it.\n"
+    if marker in source:
+        return
+    anchor="    aoc = extract_aoc(nx, keys, repo, work, app, fam, logs)\n"
+    if source.count(anchor)!=1:
+        die("Não foi possível localizar de forma única a etapa final de extração do NUP no builder fixado.")
+    injection=anchor+marker+"""    if fam.get('nup') is not None:
+        _hooklink_nup = fam['nup']
+        _hooklink_nup_path = _hooklink_nup.path
+        _hooklink_nup.close()
+        fam['nup'] = None
+        _hooklink_nup_path.unlink()
+        say(f'HookLink2iOS: NUP de entrada removido após extração validada ({_hooklink_nup_path.name}); {shutil.disk_usage(work).free / 2**30:.1f} GiB livres para shaders/Metal.')
+"""
+    script.write_text(source.replace(anchor,injection),encoding="utf-8")
+    if marker not in script.read_text(encoding="utf-8"):
+        die("Patch de liberação do NUP não foi persistido.")
+
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("--handoff",type=Path,required=True)
@@ -138,6 +160,8 @@ def main():
     sha=subprocess.check_output(["git","-C",str(args.engine),"rev-parse","HEAD"],text=True).strip()
     if sha!=ENGINE_PIN: die(f"Checkout nxnative divergente: {sha}")
     if any(k not in h for k in ("nup","romfs","resolution_overlay","drive")): die("Handoff incompleto.")
+    if int(h["nup"]["size"]) < 20 * 1024**3:
+        die("NUP menor que o esperado para o build HookLink; abortando antes de qualquer transferência.")
     for key in ("nup","romfs","resolution_overlay"):
         record=h[key]
         if not record.get("id") or int(record.get("size",0))<=0:
@@ -158,6 +182,7 @@ def main():
     download_verified(drive,drive_session,h["nup"],nup)
     download_verified(drive,drive_session,h["resolution_overlay"],overlay)
 
+    patch_nxnative_release_nup_after_extract(args.engine)
     env_file=Path("hooklink/Resources/presets/iphone.env").resolve()
     entitlements=Path("hooklink/Resources/presets/entitlements.plist").resolve()
     if not env_file.is_file() or not entitlements.is_file(): die("Preset iOS/entitlements HookLink ausentes.")
@@ -184,6 +209,8 @@ def main():
     report={"project":"HookLink2iOS","branch":BRANCH,"commit":os.environ.get("GITHUB_SHA"),
         "run_id":os.environ.get("GITHUB_RUN_ID"),"title_id":TITLE_ID,"package_version":f"v{VERSION}",
         "engine_commit":sha,"gpu_arch":gpu,"romfs_mode":"separate",
+        "nup_source":{"size":int(h["nup"]["size"]),"sha256":h["nup"]["sha256"],
+                      "deleted_after_extract":True},
         "ipa":{"name":ipa.name,"size":ipa.stat().st_size,"sha256":digest(ipa,"sha256")},
         "romfs":{"name":"romfs.img","size":romfs.stat().st_size,"sha256":romfs_sha,
                  "identity":romfs_identity,"source":"repacked-from-verified-nup"},
