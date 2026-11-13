@@ -6,7 +6,7 @@
   "title_id": "0400486024DEC000",
   "package_version": "v131072",
   "package_version_number": 131072,
-  "gpu_arch": "g18p",
+  "gpu_arch": "none",
   "engine": {
     "repository": "https://github.com/dsi-hub/nxnative.git",
     "branch": "hooklink",
@@ -56,10 +56,10 @@
     "runner": "xcode-27",
     "xcode": "27.2.0",
     "romfs_actions_transfer": "omitted; nxnative repacks RomFS from verified NUP and checks SHA-256/identity",
-    "disk_preflight_gib": 75,
+    "disk_preflight_gib": 0,
     "dotnet_preflight": "validates installed SDK major >= 8",
-    "disk_cleanup_enabled": true,
-    "nup_release_after_extract": true,
+    "disk_cleanup_enabled": false,
+    "nup_release_after_extract": false,
     "ipa_resource_validation": true,
     "shader_workers": 1
   },
