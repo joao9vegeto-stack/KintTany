@@ -67,5 +67,5 @@
     "shader_cache_persistence": "Drive SQLite online backup, verified before resume"
   },
   "created_at_utc": "2026-11-12T22:41:01Z",
-  "build_attempt": "resumable-metal-cache-2-workers"
+  "build_attempt": "resumable-metal-cache-2-workers-retry-2"
 }
