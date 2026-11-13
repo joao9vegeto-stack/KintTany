@@ -281,8 +281,6 @@ PPC_FUNC_IMPL(__imp__sub_82575480) {
 }
 
 PPC_FUNC_IMPL(__imp__sub_82575108) {
-    xowue_trace_chunk_idx_oob(ctx, base);
-    xowue_trace_chunk_entry(ctx, base);
     PPC_FUNC_PROLOGUE();
     // first translated chunk instruction
     ctx.r3.u64 = ctx.r3.u32;
