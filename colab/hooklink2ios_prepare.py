@@ -481,8 +481,10 @@ def transfer_actions_artifact_to_drive(*,github_token,expected_commit,handoff,dr
     url=f"https://api.github.com/repos/{REPO}/actions/artifacts/{artifact['id']}/zip"
     work=Path("/content/hooklink2ios-artifact-transfer"); work.mkdir(parents=True,exist_ok=True)
     zip_path=work/"artifact.zip"
+    artifact_session=requests.Session()
+    artifact_session.headers.update(github_headers(github_token))
     download_artifact_zip_resumable(
-        session=requests.Session(),url=url,artifact=artifact,destination=zip_path
+        session=artifact_session,url=url,artifact=artifact,destination=zip_path
     )
     dest=work/"extracted"; shutil.rmtree(dest,ignore_errors=True); dest.mkdir()
     with zipfile.ZipFile(zip_path) as z:
