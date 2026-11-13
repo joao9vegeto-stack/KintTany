@@ -198,8 +198,10 @@ def main() -> None:
     work = args.work.resolve()
     repo = Path(__file__).resolve().parents[1]
     patch = repo / "scripts/patches/botw-metal4-encode-thread.patch"
-    if not artifact_zip.is_file() or not patch.is_file():
-        fail("artifact ZIP or the pinned Metal optimization patch is missing")
+    dispatch_patch = repo / "scripts/patches/botw-compute-dispatch-order.patch"
+    dispatch_test = repo / "scripts/patches/t_dispatch_barrier.m"
+    if not artifact_zip.is_file() or not patch.is_file() or not dispatch_patch.is_file() or not dispatch_test.is_file():
+        fail("artifact ZIP or one of the pinned Metal/compute optimization patches and tests is missing")
     if (nx / ".upstream-ref").read_text(encoding="utf-8").strip() != ENGINE_PIN:
         fail("NX2Apple upstream pin does not match the source IPA")
     engine = nx / "engine"
@@ -347,9 +349,19 @@ def main() -> None:
         "DM_LANG": str(app_info.get("DMLanguage", "pt-BR")),
     })
 
-    # Apply the reviewed host-only upstream optimization to this exact pinned tree.
+    # Apply the reviewed host-only optimizations to this exact pinned tree.
     run(["git", "apply", "--check", patch], cwd=engine)
     run(["git", "apply", patch], cwd=engine)
+    run(["git", "apply", "--check", dispatch_patch], cwd=engine)
+    run(["git", "apply", dispatch_patch], cwd=engine)
+
+    # Run upstream's ordering regression suite before creating an IPA. It checks
+    # game barriers, overlapping host-copy ranges, unknown bindings and encoder
+    # boundaries, with the encode thread both enabled and disabled.
+    dispatch_test_target = engine / "dm/gfx/tests/t_dispatch_barrier.m"
+    shutil.copy2(dispatch_test, dispatch_test_target)
+    run(["make", "-C", str(engine / "dm/gfx/tests"), "check_t_dispatch_barrier"])
+    log("BOTW compute ordering: range-aware dispatch barriers passed all four Metal regression configurations")
 
     # The generic iOS launcher currently exports DM_FPS_HOLD=on for this install,
     # even though BOTW's packaged runtime profile explicitly says fps_hold=off.
@@ -462,7 +474,7 @@ def main() -> None:
             fail("preserved app framework profile.tsv is missing " + row)
     if any(line.split("\t", 1)[0] == "draw_barriers" for line in app_runtime_lines):
         fail("preserved app framework profile.tsv still carries the unproven draw_barriers experiment")
-    log("BOTW frame pacing: fps_target=60, fps_hold=off (runtime profile authoritative over launcher env); present_snap+encode_thread on; render scale 1.0 preserved; no quality/resolution changes")
+    log("BOTW optimization: range-aware compute dispatch ordering enabled and regression-tested; fps_target=60, fps_hold=off; present snapshots + encode thread on; render scale 1.0 and original visual quality preserved")
 
     # Recreate the host's normal iOS compile settings from its Makefile, without touching game assets.
     cfg = gen / "dm.xcconfig"
@@ -593,7 +605,7 @@ def main() -> None:
         "source_run": source_report.get("source_run"),
         "engine_pin": ENGINE_PIN,
         "upstream_optimization_commit": UPSTREAM_OPTIMIZATION,
-        "modified_host_source": ["dm/gfx/nvn/nvn_mtl.m", "dm/gfx/nvn/hle_nvn.c"],
+        "modified_host_source": ["dm/gfx/nvn/nvn_mtl.m", "dm/gfx/nvn/nvn_geometry.inc", "dm/gfx/nvn/hle_nvn.c"],
         "modified_game_profile": ["fps_hold=off", "present_snap=on", "enc_thread=on", "draw_barriers=upstream-default"],
         "rebuilt_host_framework": True,
         "rebuilt_shared_shell": False,
@@ -624,6 +636,13 @@ def main() -> None:
                 "present_snapshot_ring": "2 host textures",
                 "metal_encode_thread": "separate thread"
             }
+        },
+        "compute_dispatch_ordering": {
+            "default": "NVN game-barrier order with precise compute-buffer range tracking",
+            "barriers_preserved": ["explicit game barriers", "overlapping host-copy read/write ranges", "unknown or unbounded shader bindings", "encoder boundaries"],
+            "fallback": "DM_NVN_DISPATCH_BARRIER=full restores the conservative per-dispatch barrier path",
+            "runtime_metrics": "per-window counts of game-barrier, copy-range, unknown-range and barrier-free dispatches",
+            "regression_test": "check_t_dispatch_barrier with encode thread 0 and 1, in full and game modes"
         },
         "frame_pacing_correction": {
             "fps_hold": "off",
