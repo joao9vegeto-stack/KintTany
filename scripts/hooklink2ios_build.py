@@ -476,6 +476,8 @@ def main():
     report={"project":"HookLink2iOS","branch":BRANCH,"commit":os.environ.get("GITHUB_SHA"),
         "run_id":os.environ.get("GITHUB_RUN_ID"),"title_id":TITLE_ID,"package_version":f"v{VERSION}",
         "engine_commit":sha,"gpu_arch":gpu,"romfs_mode":"separate",
+        "iphoneos_deployment_target":"26.0",
+        "shader_cache":{"checkpoint":"Google Drive","interval_minutes":15,"workers":2},
         "nup_source":{"size":int(h["nup"]["size"]),"sha256":h["nup"]["sha256"],
                       "deleted_after_extract":True},
         "ipa":{"name":ipa.name,"size":ipa.stat().st_size,"sha256":digest(ipa,"sha256"),
