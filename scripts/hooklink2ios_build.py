@@ -301,7 +301,6 @@ def main():
     py=sys.executable
     env=builder.tool_env()
     env.setdefault("USER",os.environ.get("USER") or "runner")
-    builder.configure_dotnet(env)
     env.update({"DM_GAME":TITLE_ID,"DM_ROOT":str(work),"WORK":str(work/"tmp"),
                 "IOS_PULL":"1","IPHONEOS_DEPLOYMENT_TARGET":IOS_DEPLOYMENT_TARGET,"J":"1"})
     xlate=args.engine/"dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate"
