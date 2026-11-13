@@ -605,7 +605,6 @@ def main() -> None:
             "thermal_and_movie_caps": "preserved"
         },
         "frame_step_unit_test": "make -C dm/gfx/tests t_fstep; ./t_fstep",
-        "compute_dispatch_ordering": "unchanged; no incompatible backport applied",
         "render_scale_modified": False,
         "render_scale_preserved": "1.0 (confirmed in uploaded device log; no scale override introduced)",
         "dynamic_resolution_modified": False,
