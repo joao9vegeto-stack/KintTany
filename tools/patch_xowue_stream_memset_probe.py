@@ -35,6 +35,10 @@ EOF_B149_DECLARATION = (
     "void xowue_trace_stream_eof_poll_b149(PPCContext &ctx, uint8_t *base);"
 )
 EOF_B149_CALL = "xowue_trace_stream_eof_poll_b149(ctx, base);"
+EOF_ZERO_DECLARATION = (
+    "bool xowue_exp_eof_zero_apply(PPCContext &ctx, uint8_t *base);"
+)
+EOF_ZERO_CALL = "if (xowue_exp_eof_zero_apply(ctx, base)) return;"
 CALL_SITE = re.compile(
     r"(?P<prefix>"
     r"^\s*// li r4,0\s*\n"
@@ -205,10 +209,42 @@ def _patch_chunk_entry_probe(source: str) -> tuple[str, bool, bool, bool, bool]:
     return patched, True, True, True, True
 
 
+def _patch_eof_zero_probe(source: str) -> tuple[str, bool, bool]:
+    span = _function_span(source, CHUNK_FUNCTION)
+    if span is None:
+        return source, False, False
+    start, end, _ = span
+    body = source[start:end]
+    existing = body.count(EOF_ZERO_CALL)
+    if existing > 1:
+        raise RuntimeError("duplicated B150 EOF-zero chunk hook detected; refusing to patch")
+    prologue = "PPC_FUNC_PROLOGUE();"
+    if body.count(prologue) != 1:
+        raise RuntimeError(f"expected exactly one PPC_FUNC_PROLOGUE in {CHUNK_FUNCTION}")
+    prologue_end = body.index(prologue) + len(prologue)
+    if existing == 1:
+        if body.index(EOF_ZERO_CALL) < prologue_end:
+            raise RuntimeError("B150 EOF-zero hook must run after PPC_FUNC_PROLOGUE")
+        patched = _ensure_declaration(
+            source, f"PPC_FUNC_IMPL(__imp__{CHUNK_FUNCTION})", EOF_ZERO_DECLARATION
+        )
+        return patched, True, False
+    patched_body = body[:prologue_end] + "\n    " + EOF_ZERO_CALL + body[prologue_end:]
+    patched = source[:start] + patched_body + source[end:]
+    patched = _ensure_declaration(
+        patched, f"PPC_FUNC_IMPL(__imp__{CHUNK_FUNCTION})", EOF_ZERO_DECLARATION
+    )
+    if patched.count(EOF_ZERO_CALL) != 1:
+        raise RuntimeError("B150 EOF-zero hook call count is not exactly one")
+    return patched, True, True
+
+
+
 def patch_source(source: str) -> tuple[str, dict[str, int]]:
     patched, has_memset, inserted_memset = _patch_memset_probe(source)
     patched, has_eof, inserted_eof = _patch_eof_poll_probe(patched)
     patched, has_chunk, inserted_chunk, has_chunk_oob, inserted_chunk_oob = _patch_chunk_entry_probe(patched)
+    patched, has_eof_zero, inserted_eof_zero = _patch_eof_zero_probe(patched)
     return patched, {
         "memset_function": int(has_memset),
         "memset_inserted": int(inserted_memset),
@@ -218,6 +254,8 @@ def patch_source(source: str) -> tuple[str, dict[str, int]]:
         "chunk_inserted": int(inserted_chunk),
         "chunk_oob_function": int(has_chunk_oob),
         "chunk_oob_inserted": int(inserted_chunk_oob),
+        "eof_zero_function": int(has_eof_zero),
+        "eof_zero_inserted": int(inserted_eof_zero),
     }
 
 
@@ -243,6 +281,9 @@ PPC_FUNC_IMPL(__imp__sub_82575480) {
 }
 
 PPC_FUNC_IMPL(__imp__sub_82575108) {
+    xowue_trace_chunk_idx_oob(ctx, base);
+    xowue_trace_chunk_entry(ctx, base);
+    PPC_FUNC_PROLOGUE();
     // first translated chunk instruction
     ctx.r3.u64 = ctx.r3.u32;
 }
@@ -253,6 +294,7 @@ PPC_FUNC_IMPL(__imp__sub_82575108) {
         "eof_poll_function": 1, "eof_poll_inserted": 1,
         "chunk_function": 1, "chunk_inserted": 1,
         "chunk_oob_function": 1, "chunk_oob_inserted": 1,
+        "eof_zero_function": 1, "eof_zero_inserted": 1,
     }
     assert patched.index(MEMSET_BEGIN) < patched.index("sub_82C2A1F0(ctx, base);")
     assert patched.index("sub_82C2A1F0(ctx, base);") < patched.index(MEMSET_END)
@@ -263,6 +305,10 @@ PPC_FUNC_IMPL(__imp__sub_82575108) {
     chunk_marker = "PPC_FUNC_IMPL(__imp__sub_82575108) {"
     assert patched.index(CHUNK_OOB_GUARD) == patched.index(chunk_marker) + len(chunk_marker) + 5
     assert patched.index(CHUNK_OOB_GUARD) < patched.index(CHUNK_CALL)
+    prologue_pos = patched.index("PPC_FUNC_PROLOGUE();", patched.index(chunk_marker))
+    zero_pos = patched.index(EOF_ZERO_CALL, prologue_pos)
+    assert zero_pos > prologue_pos
+    assert zero_pos < patched.index("// first translated chunk instruction", prologue_pos)
     assert "if (xowue_trace_chunk_idx_oob(ctx, base)) return;" not in patched
     repeated, repeated_result = patch_source(patched)
     assert repeated == patched
@@ -270,10 +316,12 @@ PPC_FUNC_IMPL(__imp__sub_82575108) {
     assert repeated_result["eof_poll_inserted"] == 0
     assert repeated_result["chunk_inserted"] == 0
     assert repeated_result["chunk_oob_inserted"] == 0
+    assert repeated_result["eof_zero_inserted"] == 0
     assert patched.count(MEMSET_BEGIN) == 1 and patched.count(MEMSET_END) == 1
     assert patched.count(EOF_CALL) == 1 and patched.count(EOF_B149_CALL) == 1
     assert patched.count(CHUNK_OOB_GUARD) == 1 and patched.count(CHUNK_CALL) == 1
-    print("XOWUE_B146_B147_AOT_PROBE_SELF_TEST_OK B149 eof_poll=0x82575480 chunk_entry=0x82575108 log_only=1 idempotent=1")
+    assert patched.count(EOF_ZERO_CALL) == 1
+    print("XOWUE_B146_B147_AOT_PROBE_SELF_TEST_OK B149 eof_poll=0x82575480 chunk_entry=0x82575108 B150 eof_zero=after-prologue log_only=1 idempotent=1")
 
 
 def main() -> int:
@@ -298,12 +346,14 @@ def main() -> int:
         "eof_poll_function": 0,
         "chunk_function": 0,
         "chunk_oob_function": 0,
+        "eof_zero_function": 0,
     }
     inserted = {
         "memset_inserted": 0,
         "eof_poll_inserted": 0,
         "chunk_inserted": 0,
         "chunk_oob_inserted": 0,
+        "eof_zero_inserted": 0,
     }
     patched_files = []
     for path in paths:
@@ -324,6 +374,7 @@ def main() -> int:
         "eof_poll_function": 1,
         "chunk_function": 1,
         "chunk_oob_function": 1,
+        "eof_zero_function": 1,
     }
     for key, value in expected.items():
         if found[key] != value:
@@ -335,7 +386,7 @@ def main() -> int:
         "memset_callee": "0x82C2A1F0",
         "eof_poll_guest_function": "0x82575480",
         "chunk_entry_guest_function": "0x82575108",
-        "probe": "B146 memset + B147 chunk entry + B148 EOF poll + B149 EOF history and log-only OOB",
+        "probe": "B146 memset + B147 chunk entry + B148 EOF poll + B149 EOF history/log-only OOB + B150 guarded EOF zero window",
         "found": found,
         "inserted": inserted,
         "patched_files": patched_files,

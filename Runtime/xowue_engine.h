@@ -10,6 +10,8 @@ int xowue_inspect_xex(const char *path, char *output, size_t output_capacity);
 int xowue_boot_xex(const char *path, char *output, size_t output_capacity);
 /* Start a fresh launcher session and clear a previous session's stop latch. */
 void xowue_begin_session(void);
+/* Enable/disable the experimental B150 EOF zero-window runtime path. */
+void xowue_set_exp_eof_zero_enabled(int enabled);
 /* Request cooperative cancellation of all guest PPC threads and the Xenos pump. */
 void xowue_request_stop(void);
 /* Monotonic Xbox guest timebase at 50 MHz, shared with recompiled mftb. */

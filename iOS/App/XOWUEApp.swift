@@ -1704,6 +1704,11 @@ private final class XOWUEGameLibrary: ObservableObject {
         bootOutput = "O jogo está sendo iniciado."
         let executable = game.appendingPathComponent(XOWUEFileStore.executableName)
         XOWUEDiagnostics.bootStarted(path: executable.path, build: XOWUEBuild.number)
+        let eofZeroOverride = UserDefaults.standard.object(forKey: "XOWUE_EXP_EOF_ZERO") as? Bool
+        let build150Default = XOWUEBuild.number == "150" || XOWUEBuild.number.hasPrefix("150.")
+        let eofZeroEnabled = eofZeroOverride ?? build150Default
+        xowue_set_exp_eof_zero_enabled(eofZeroEnabled ? 1 : 0)
+        XOWUEDiagnostics.log("runtime.XOWUE_EXP_EOF_ZERO enabled=\(eofZeroEnabled) build=\(XOWUEBuild.number)")
         xowue_begin_session()
         XOWUEDiagnostics.log("runtime.session.begin cancellation latch cleared")
 

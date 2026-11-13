@@ -632,6 +632,13 @@ std::atomic<uint32_t> g_xaudioTraceLogs{0u};
 std::unordered_map<uint32_t, std::shared_ptr<std::recursive_timed_mutex>> g_criticalSectionLocks;
 XenosFrontendState g_xenosFrontend;
 std::atomic<bool> g_schedulerStopRequested{false};
+std::atomic<bool> g_xowueExpEofZeroEnabled{false};
+std::mutex g_b150EofZeroMutex;
+uint32_t g_b150ZeroBufferAddress = 0u;
+uint32_t g_b150PastEndRequests = 0u;
+uint32_t g_b150AppliedCount = 0u;
+uint32_t g_b150AppliedLogCount = 0u;
+bool g_b150RunawayLogged = false;
 // Host-side latch survives the interval before xowue_boot_xex creates its session.
 std::atomic<bool> g_hostStopRequested{false};
 std::atomic<bool> g_runtimeSessionPoisoned{false};
@@ -653,10 +660,11 @@ std::vector<std::shared_ptr<GuestThread>> snapshotAllGuestThreads() {
 }
 
 bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
-    // B148/B149 diagnostics are explicitly persisted. Their producers already
+    // B148/B149/B150 diagnostics are explicitly persisted. Their producers already
     // bound samples; the generic sequence sampler must never discard them.
     if (event.find("B148_") != std::string::npos ||
-        event.find("B149_") != std::string::npos) return true;
+        event.find("B149_") != std::string::npos ||
+        event.find("B150_") != std::string::npos) return true;
     if (event.find("XOWUE_XAUDIO_") != std::string::npos)
         return g_xaudioTraceLogs.fetch_add(1u, std::memory_order_relaxed) < 96u;
     if (event.find("XOWUE_AOT_HOT_FUNCTION") != std::string::npos) {
@@ -5114,6 +5122,136 @@ void xowue_trace_chunk_entry(PPCContext &ctx, uint8_t *base) {
     recordRuntimeTrace(event);
 }
 
+// Build 150: intercept only an out-of-table chunk request past every indexed window.
+// sub_82575480 copies from [obj+156] + cursor - [obj+140], then advances [obj+136].
+bool xowue_exp_eof_zero_apply(PPCContext &ctx, uint8_t *base) {
+    if (!base || !g_xowueExpEofZeroEnabled.load(std::memory_order_acquire))
+        return false;
+    const uint32_t object = ctx.r3.u32;
+    const uint32_t index = ctx.r4.u32;
+    if (object == 0u || !validGuestRange(object, 176u))
+        return false;
+
+    const uint32_t cursor = loadGuestBe32(base, object + 136u);
+    const uint32_t windowStart = loadGuestBe32(base, object + 140u);
+    const uint32_t windowEnd = loadGuestBe32(base, object + 148u);
+    const uint32_t streamSize = loadGuestBe32(base, object + 128u);
+    const uint32_t table = loadGuestBe32(base, object + 172u);
+
+    if (cursor >= windowStart && cursor < windowEnd)
+        return false;
+    if (streamSize == 0u || cursor >= streamSize ||
+        table == 0u || !validGuestRange(table, 8u))
+        return false;
+
+    const uint32_t data = loadGuestBe32(base, table);
+    const uint32_t count = loadGuestBe32(base, table + 4u);
+    if (index < count || count == 0u || count > 65536u || data == 0u)
+        return false;
+    const uint64_t tableBytes = static_cast<uint64_t>(count) * 16u;
+    if (!validGuestRange(data, tableBytes))
+        return false;
+
+    bool haveLastWindow = false;
+    uint64_t lastWindowEnd = 0u;
+    uint64_t maxWindowEnd = 0u;
+    for (uint32_t entryIndex = 0u; entryIndex < count; ++entryIndex) {
+        const uint64_t entryAddress64 =
+            static_cast<uint64_t>(data) + static_cast<uint64_t>(entryIndex) * 16u;
+        if (entryAddress64 > UINT32_MAX ||
+            !validGuestRange(static_cast<uint32_t>(entryAddress64), 16u))
+            return false;
+        const uint32_t entryAddress = static_cast<uint32_t>(entryAddress64);
+        const uint32_t entryStart = loadGuestBe32(base, entryAddress);
+        const uint32_t entrySize = loadGuestBe32(base, entryAddress + 4u);
+        if (entrySize == 0u || entrySize > 0x400000u)
+            continue;
+        const uint64_t entryEnd = static_cast<uint64_t>(entryStart) + entrySize;
+        if (entryEnd > UINT32_MAX)
+            return false;
+        haveLastWindow = true;
+        lastWindowEnd = entryEnd;
+        maxWindowEnd = std::max(maxWindowEnd, entryEnd);
+        if (cursor >= entryStart && static_cast<uint64_t>(cursor) < entryEnd)
+            return false;
+    }
+    if (!haveLastWindow ||
+        static_cast<uint64_t>(cursor) < lastWindowEnd ||
+        static_cast<uint64_t>(cursor) < maxWindowEnd ||
+        cursor > UINT32_MAX - 0x1000u)
+        return false;
+
+    uint32_t applied = 0u;
+    uint32_t zeroBuffer = 0u;
+    uint32_t beyondEndRequests = 0u;
+    bool logApplied = false;
+    bool logRunaway = false;
+    {
+        std::lock_guard<std::mutex> lock(g_b150EofZeroMutex);
+        if (!g_xowueExpEofZeroEnabled.load(std::memory_order_acquire))
+            return false;
+        if (loadGuestBe32(base, object + 136u) != cursor ||
+            loadGuestBe32(base, object + 172u) != table ||
+            loadGuestBe32(base, table + 4u) != count)
+            return false;
+        const uint32_t currentStart = loadGuestBe32(base, object + 140u);
+        const uint32_t currentEnd = loadGuestBe32(base, object + 148u);
+        if (cursor >= currentStart && cursor < currentEnd)
+            return false;
+
+        beyondEndRequests = ++g_b150PastEndRequests;
+        if (beyondEndRequests > 4096u) {
+            g_xowueExpEofZeroEnabled.store(false, std::memory_order_release);
+            if (!g_b150RunawayLogged) {
+                g_b150RunawayLogged = true;
+                logRunaway = true;
+            }
+        } else {
+            if (g_b150ZeroBufferAddress == 0u)
+                g_b150ZeroBufferAddress = allocateSmallGuestPoolBlock(base, 0x1000u, 0x1000u);
+            zeroBuffer = g_b150ZeroBufferAddress;
+            if (zeroBuffer == 0u || !validGuestRange(zeroBuffer, 0x1000u))
+                return false;
+
+            std::memset(base + zeroBuffer, 0, 0x1000u);
+            storeGuestBe32(base, object + 140u, cursor);
+            storeGuestBe32(base, object + 148u, cursor + 0x1000u);
+            storeGuestBe32(base, object + 156u, zeroBuffer);
+            storeGuestBe32(base, object + 164u, 0u);
+            storeGuestBe32(base, object + 168u, 0u);
+            applied = ++g_b150AppliedCount;
+            if (g_b150AppliedLogCount < 16u) {
+                ++g_b150AppliedLogCount;
+                logApplied = true;
+            }
+        }
+    }
+
+    if (logRunaway) {
+        char event[256];
+        std::snprintf(event, sizeof(event),
+            "B150_EOF_ZERO_RUNAWAY obj=0x%08X cursor=0x%08X last_end=0x%08X "
+            "requests=%u action=disabled",
+            object, cursor, static_cast<uint32_t>(lastWindowEnd), beyondEndRequests);
+        recordRuntimeTrace(event);
+        return false;
+    }
+    if (applied == 0u)
+        return false;
+
+    ctx.r3.u64 = 1ull;
+    if (logApplied) {
+        char event[256];
+        std::snprintf(event, sizeof(event),
+            "B150_EOF_ZERO_APPLIED obj=0x%08X cursor=0x%08X last_end=0x%08X "
+            "applied=%u buffer=0x%08X window_end=0x%08X",
+            object, cursor, static_cast<uint32_t>(lastWindowEnd), applied,
+            zeroBuffer, cursor + 0x1000u);
+        recordRuntimeTrace(event);
+    }
+    return true;
+}
+
 void xowue_dispatch_indirect(PPCContext &context, uint8_t *base, uint32_t target) {
     // Build 90: retain callback telemetry without replacing native PPC return values.
     if (target == 0x82DC2390u && xowue_82dc2390_observe(context, base)) return;
@@ -5519,6 +5657,10 @@ static bool translateGuestFilePath(const std::string &guestPath, bool forWrite,
 
 // Exit must terminate guest PPC execution; dismissing the view alone leaves
 // native guest workers running indefinitely behind the single-game launcher.
+extern "C" void xowue_set_exp_eof_zero_enabled(int enabled) {
+    g_xowueExpEofZeroEnabled.store(enabled != 0, std::memory_order_release);
+}
+
 extern "C" void xowue_begin_session(void) {
     // Called synchronously by the launcher before starting the detached boot task.
     // A later stop request must survive all native boot initialization.
@@ -5729,6 +5871,14 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
         GuestXenosPumpSessionGuard xenosPumpSession;
         g_nextVirtualAllocation = kFirstVirtualAllocation;
         { std::lock_guard<std::mutex> poolLock(g_smallGuestPoolMutex); g_smallGuestPoolCursor=0u; g_smallGuestPoolEnd=0u; g_smallGuestPoolLogs.store(0u,std::memory_order_relaxed); }
+        {
+            std::lock_guard<std::mutex> b150Lock(g_b150EofZeroMutex);
+            g_b150ZeroBufferAddress = 0u;
+            g_b150PastEndRequests = 0u;
+            g_b150AppliedCount = 0u;
+            g_b150AppliedLogCount = 0u;
+            g_b150RunawayLogged = false;
+        }
         g_build66AuditEmitted.store(false,std::memory_order_relaxed);
         g_nextPhysicalAllocation = kFirstPhysicalAllocation;
         g_nextGuestHandle = 0x100u;

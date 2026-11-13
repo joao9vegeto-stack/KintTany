@@ -100,13 +100,13 @@ jobs:
               return false;
             }).length;
             const baseBuildNumber = Math.max(completedIPAs + 2, 149);
-            // The explicitly tagged B149 implementation run must be exactly 149,
-            // not 149.1 due to an earlier failed attempt.
-            const forceExactBuild149 = context.eventName === "push" &&
-              String(context.payload?.head_commit?.message || "").includes("[B149]");
-            const buildNumber = forceExactBuild149 ? "149" : (failedAttempts > 0
+            // Explicit B149/B150 commits pin the first run to the requested base.
+            const commitMessage = String(context.payload?.head_commit?.message || "");
+            const forceExactBuild149 = context.eventName === "push" && commitMessage.includes("[B149]");
+            const forceExactBuild150 = context.eventName === "push" && commitMessage.includes("[B150]");
+            const buildNumber = forceExactBuild150 ? "150" : (forceExactBuild149 ? "149" : (failedAttempts > 0
               ? `${baseBuildNumber}.${failedAttempts}`
-              : String(baseBuildNumber));
+              : String(baseBuildNumber)));
             core.exportVariable("XOWUE_BUILD_NUMBER", String(buildNumber));
             core.exportVariable("XOWUE_BUILD_EXPERIMENTAL", "1");
             core.setOutput("build_number", String(buildNumber));
@@ -356,6 +356,8 @@ jobs:
           python3 tools/test_xowue_aot_instrumentation.py
           python3 -m py_compile tools/test_xowue_b149_diagnostic_persistence.py
           python3 tools/test_xowue_b149_diagnostic_persistence.py
+          python3 -m py_compile tools/test_xowue_b150_eof_zero.py
+          python3 tools/test_xowue_b150_eof_zero.py
           python3 -m py_compile tools/generate_aot.py
           python3 tools/generate_aot.py --self-test
           python3 -m py_compile tools/test_xowue_build86_diagnostics.py
@@ -509,7 +511,7 @@ jobs:
           test -s "$GITHUB_WORKSPACE/artifacts/xowue-aot-arm64-semantics.json"
           python3 -m json.tool "$GITHUB_WORKSPACE/artifacts/xowue-aot-arm64-semantics.json" >/dev/null
 
-      - name: Instrument B146/B147/B148/B149 PPC stream, EOF-poll and chunk callsites
+      - name: Instrument B146/B147/B148/B149/B150 PPC stream, EOF-poll and chunk callsites
         run: |
           set -euo pipefail
           python3 -m py_compile tools/patch_xowue_stream_memset_probe.py
@@ -529,8 +531,10 @@ jobs:
             "$GITHUB_WORKSPACE/generated/ppc"/ppc_recomp.*.cpp
           grep -R -Fq 'xowue_trace_chunk_idx_oob(ctx, base);' \
             "$GITHUB_WORKSPACE/generated/ppc"/ppc_recomp.*.cpp
+          grep -R -Fq 'if (xowue_exp_eof_zero_apply(ctx, base)) return;' \
+            "$GITHUB_WORKSPACE/generated/ppc"/ppc_recomp.*.cpp
 
-      - name: Verify B147/B148/B149 source instrumentation and all XOWUE tests
+      - name: Verify B147/B148/B149/B150 source instrumentation and all XOWUE tests
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -543,6 +547,8 @@ jobs:
           assert all(tag in src for tag in ("B147_VM_RECOMMIT", "B147_VM_RELEASE", "B147_CHUNK_ENTRY"))
           assert all(tag in src for tag in ("B148_STREAM_EOF_POLL", "B148_CHUNK_IDX_OOB", "B148_READ_ZERO"))
           assert all(tag in src for tag in ("B149_STREAM_EOF_POLL", "B149_STREAM_LAST_READS", "B149_CHUNK_IDX_OOB"))
+          assert all(tag in src for tag in ("B150_EOF_ZERO_APPLIED", "B150_EOF_ZERO_RUNAWAY"))
+          assert "g_xowueExpEofZeroEnabled" in src
           assert not re.search(r"if \(commit && \(allocationType & 0x00800000u\) == 0\) \{\s*std::memset\(base \+ address, 0, adjustedSize\);", src)
           PY
 
@@ -581,8 +587,12 @@ jobs:
               if p.suffix in {".cpp", ".h", ".mm", ".swift", ".py"} and "ppc_recomp" not in p.name
           )
           for tag in ("B149_BOOT_MARK", "B149_STREAM_POLL_ENTRY", "B149_CHUNK_ENTRY",
-                      "B148_READ_ZERO", "B148_FILE_OPEN_SIZE"):
+                      "B148_READ_ZERO", "B148_FILE_OPEN_SIZE",
+                      "XOWUE_EXP_EOF_ZERO", "B150_EOF_ZERO_APPLIED", "B150_EOF_ZERO_RUNAWAY"):
               print(tag, "no codigo" if tag in txt else "AUSENTE")
+          assert all(tag in txt for tag in ("XOWUE_EXP_EOF_ZERO",
+                                           "B150_EOF_ZERO_APPLIED",
+                                           "B150_EOF_ZERO_RUNAWAY"))
           PY
 
 
