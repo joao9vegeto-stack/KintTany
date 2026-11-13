@@ -7,6 +7,8 @@ on:
     paths:
       - scripts/optimize_existing_ipa.py
       - scripts/patches/botw-metal4-encode-thread.patch
+      - scripts/patches/botw-compute-dispatch-order.patch
+      - scripts/patches/t_dispatch_barrier.m
       - .github/workflows/link2ios-optimize.yml
 
 permissions:
