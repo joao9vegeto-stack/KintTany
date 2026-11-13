@@ -250,15 +250,15 @@ def check_linux_prerequisites(engine):
             missing.append(name)
     if missing:
         raise RuntimeError("Dependências Python ausentes no Colab: " + ", ".join(missing))
-    for name in ("git", "zstd", "dotnet"):
+    for name in ("git", "zstd", "cmake", "ninja", "pkg-config", "make"):
         if shutil.which(name) is None:
             raise RuntimeError(f"Ferramenta ausente no Colab: {name}")
     for rel in ("dm/tools/nx_extract_bin/nx_extract",
                 "dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate",
                 "dm/gfx/tools/spirv_cross_bin/spirv-cross"):
         p=engine/rel
-        if not p.is_file():
-            raise RuntimeError(f"Binário nativo obrigatório ausente: {p}")
+        if not p.is_file() or not os.access(p,os.X_OK):
+            raise RuntimeError(f"Binário nativo obrigatório ausente ou sem permissão de execução: {p}")
 
 
 def run_nxnative_linux_preparation(engine, nup, work):
