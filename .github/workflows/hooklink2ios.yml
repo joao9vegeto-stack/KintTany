@@ -200,7 +200,6 @@ jobs:
             ${{ runner.temp }}/hooklink2ios-output/build-report.json
           if-no-files-found: error
           retention-days: 7
-,project,re.M), "DmIOS deployment target must remain iOS 26.0"
           assert (root/"dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate").is_file()
           assert (root/"dm/gfx/tools/spirv_cross_bin/spirv-cross").is_file()
           builder=(root/"scripts/build_ipa_from_nsp.py").read_text()
