@@ -86,9 +86,10 @@ jobs:
           end="\n'''\nHELPER_SHA256 = hashlib.sha256(HELPER_SOURCE.encode(\"utf-8\")).hexdigest()"
           p=cell.index(start); q=cell.index(end,p)
           embedded=cell[p+len(start)+1:q]
-          assert embedded==helper, "Colab embedded helper diverges from the versioned helper."
-          print("Python syntax and exact Colab helper parity validated.")
+          assert embedded.rstrip("\n")==helper.rstrip("\n"), "Colab embedded helper content diverges from the versioned helper."
+          print("Python syntax and Colab helper content validated (trailing newline normalized).")
           print("Colab helper SHA-256:", hashlib.sha256(helper.encode()).hexdigest())
+          print("Notebook helper SHA-256:", hashlib.sha256((embedded+"\n").encode()).hexdigest())
           PY
 
       - name: Verify exact Xcode 27.2 and iOS 26 Metal toolchain
