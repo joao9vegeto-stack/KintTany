@@ -17,7 +17,7 @@ ENGINE = "https://github.com/dsi-hub/nxnative.git"
 ENGINE_PIN = "cf2a2fecc6ce3fb841131ffeffa90915cdadf109"
 TITLE_ID = "0400486024DEC000"
 VERSION = 131072
-GPU = "g18p"  # HookLink documented offline Metal pipeline archive for A19 / iPhone 17 Pro.
+GPU = "none"  # iOS 26 path: compile Metal libraries; no offline PSO archive.
 CHUNK = 64 * 1024 * 1024
 FOLDER = "application/vnd.google-apps.folder"
 
@@ -236,6 +236,151 @@ def publish(token,handoff):
     return {"commit_sha":c.get("sha"),"commit_url":c.get("html_url"),
             "actions_url":f"https://github.com/{REPO}/actions"}
 
+class PreparedBoundary(Exception):
+    """The Linux preparation reached the macOS-only IPA finalization boundary."""
+
+
+def check_linux_prerequisites(engine):
+    if sys.platform != "linux" or sys.version_info < (3, 12):
+        raise RuntimeError("A preparação HookLink deve executar no Colab/Linux com Python 3.12+.")
+    missing = []
+    for name in ("lz4.block", "capstone", "fontTools", "zbic", "backports.zstd"):
+        try:
+            __import__(name)
+        except Exception:
+            missing.append(name)
+    if missing:
+        raise RuntimeError("Dependências Python ausentes no Colab: " + ", ".join(missing))
+    for name in ("git", "zstd", "dotnet"):
+        if shutil.which(name) is None:
+            raise RuntimeError(f"Ferramenta ausente no Colab: {name}")
+    for rel in ("dm/tools/nx_extract_bin/nx_extract",
+                "dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate",
+                "dm/gfx/tools/spirv_cross_bin/spirv-cross"):
+        p=engine/rel
+        if not p.is_file():
+            raise RuntimeError(f"Binário nativo obrigatório ausente: {p}")
+
+
+def run_nxnative_linux_preparation(engine, nup, work):
+    """Run the same Linux preparation stages as Link2iOS, stopping before Xcode/Metal."""
+    import importlib.util
+    for path in (engine/"dm/tools", engine/"dm/games", engine/"dm/gfx/tools", engine/"scripts"):
+        sys.path.insert(0, str(path))
+    script=engine/"scripts/build_ipa_from_nsp.py"
+    spec=importlib.util.spec_from_file_location("hooklink2ios_nxnative_builder",script)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Não foi possível carregar o builder nxnative: {script}")
+    module=importlib.util.module_from_spec(spec)
+    sys.modules[spec.name]=module
+    spec.loader.exec_module(module)
+    check_linux_prerequisites(engine)
+
+    original_run=module.run
+    original_split=module.split_shaders
+    split={}
+    def intercept_final_build(command, log=None, *pos, **kw):
+        cmd=[str(x) for x in command] if isinstance(command,(list,tuple)) else [str(command)]
+        normalized=[x.replace("\\","/") for x in cmd]
+        if any(x.endswith("dm/ios/tools/build_ipa.sh") for x in normalized):
+            print("[HookLink2iOS] Extração/rewrite/shader split concluídos; Xcode/Metal ficam para o Actions.",flush=True)
+            raise PreparedBoundary()
+        return original_run(command,log,*pos,**kw)
+
+    def split_without_apple_host(*pos,**kw):
+        oodle=kw.get("oodle")
+        if oodle is None and len(pos)>9:
+            oodle=pos[9]
+        if oodle is not None:
+            raise RuntimeError("O perfil Ocarina solicitou decoder Oodle do host Apple durante o shader split Linux; não vou substituir esse decoder por outro.")
+        key=original_split(*pos,**kw)
+        split["key"]=key
+        return key
+
+    def defer_ios_metal(py,repo_path,shader_root,*pos,**kw):
+        out=Path(shader_root)/"ios"
+        out.mkdir(parents=True,exist_ok=True)
+        print("[HookLink2iOS] NVN split pronto; compilação das bibliotecas Metal iOS será executada no Actions.",flush=True)
+        return out
+
+    module.check_prereqs=lambda *a,**k: check_linux_prerequisites(engine)
+    module.check_metal=lambda *a,**k: print("[HookLink2iOS] Metal compiler deferred to Xcode 27.2 / iOS SDK.",flush=True)
+    module.build_shaders=defer_ios_metal
+    module.split_shaders=split_without_apple_host
+    module.run=intercept_final_build
+    module.HEAP_CHECK=False
+    args=module.parse_args([
+        str(nup),"--title-id",TITLE_ID,"--package",f"v{VERSION}",
+        "--platform","ios","--romfs","separate","--keep-extracted",
+        "--work-dir",str(work),"--no-heap-check","--allow-damaged",
+        "--progress","lines","--gpu",GPU,
+    ])
+    try:
+        module.main(args)
+    except PreparedBoundary:
+        pass
+    finally:
+        try: module.PROG.close(ok=True)
+        except Exception: pass
+
+    version_dir=work/"extract"/f"v{VERSION}"
+    romfs=version_dir/"RomFS.img"
+    exefs=version_dir/"ExeFS"
+    patched=work/f"patched_v{VERSION}"
+    shader_pkg=work/"shader"/"pkg"
+    if not romfs.is_file() or not romfs.stat().st_size:
+        raise RuntimeError("nxnative não produziu o RomFS do update esperado.")
+    if not (exefs/"main").is_file() or not (patched/"main.patched.bin").is_file():
+        raise RuntimeError("Extração/reescrita AArch64 incompleta: ExeFS/main ou main.patched.bin ausente.")
+    if not shader_pkg.is_dir() or not any(shader_pkg.iterdir()):
+        raise RuntimeError("Shader split NVN não produziu shader/pkg.")
+    shader_key=split.get("key")
+    if not isinstance(shader_key,str) or not re.fullmatch(r"[0-9a-f]{64}",shader_key):
+        raise RuntimeError("nxnative não retornou uma chave de conteúdo válida para shader/pkg.")
+    chain=module.chain_of(engine)
+    if not chain:
+        raise RuntimeError("nxnative não resolveu a versão da cadeia de shaders.")
+    import game as game_profiles
+    profile=game_profiles.by_title(int(TITLE_ID,16))
+    if profile is None:
+        raise RuntimeError(f"Perfil nxnative ausente para {TITLE_ID}.")
+    modules=profile.modules_in(exefs)
+    for name in modules:
+        if not (patched/f"{name}.patched.bin").is_file() or not (patched/f"{name}.fixups.tsv").is_file():
+            raise RuntimeError(f"Rewrite incompleto para módulo {name}.")
+    aoc=sorted((work/"aoc").glob("*.img")) if (work/"aoc").is_dir() else []
+    return {
+        "format":1,"project":"HookLink2iOS","title_id":TITLE_ID,
+        "package_version":f"v{VERSION}","engine_pin":ENGINE_PIN,
+        "modules":modules,"shader_package_key":shader_key,"shader_chain":chain,
+        "romfs_relative_path":f"extract/v{VERSION}/RomFS.img",
+        "aoc_images":[{"name":p.name,"size":p.stat().st_size,"sha256":file_hashes(p)["sha256"]} for p in aoc],
+        "prepared_stages":[
+            "nxnative_scan_nup_and_update","nxnative_extract_exefs_romfs_and_dlc",
+            "nxnative_aarch64_module_rewrite","nxnative_nvn_shader_split",
+        ],
+        "deferred_stages":["ios_metal_shader_compile","ios_ipa_xcode_package"],
+        "romfs_size":romfs.stat().st_size,
+    }
+
+
+def build_work_archive(work,destination):
+    destination.parent.mkdir(parents=True,exist_ok=True)
+    command=["tar","-C",str(work),"--exclude=./nsp","--exclude=./tools",
+             "--exclude=./tmp","--exclude=./extract/*/RomFS.img","-cf","-","."]
+    tar=subprocess.Popen(command,stdout=subprocess.PIPE)
+    if tar.stdout is None: raise RuntimeError("Não foi possível abrir o stream do workspace.")
+    try:
+        compressed=subprocess.run(["zstd","-T0","-8","-o",str(destination)],
+                                  stdin=tar.stdout,check=False)
+    finally:
+        tar.stdout.close()
+    if tar.wait()!=0 or compressed.returncode!=0:
+        raise RuntimeError("Falha ao compactar o workspace preparado em tar.zst.")
+    if not destination.is_file() or not destination.stat().st_size:
+        raise RuntimeError("Archive do workspace está vazio.")
+
+
 def prepare(*,source_url,drive_parent_folder_id,drive,github_token,repo_root,
             work_root=Path("/content/hooklink2ios-work")):
     if sys.version_info<(3,12): raise RuntimeError("Python 3.12+ obrigatório.")
@@ -243,23 +388,16 @@ def prepare(*,source_url,drive_parent_folder_id,drive,github_token,repo_root,
     inp=work_root/"input"; extracted=work_root/"unpacked"
     engine=work_root/"nxnative"; build=work_root/"linux-build"
     inp.mkdir(parents=True,exist_ok=True); work_root.mkdir(parents=True,exist_ok=True)
-    parent=drive_execute(drive.files().get(fileId=drive_parent_folder_id,fields="id,mimeType",supportsAllDrives=True), "consulta da pasta raiz")
+    parent=drive_execute(drive.files().get(fileId=drive_parent_folder_id,fields="id,mimeType",supportsAllDrives=True),"consulta da pasta raiz")
     if parent.get("mimeType")!=FOLDER: raise ValueError("DRIVE_FOLDER_ID não é uma pasta.")
     project=ensure_folder(drive,drive_parent_folder_id,"HookLink2iOS")
     inputs=ensure_folder(drive,project["id"],"Inputs")
     cached=find_cached_nup(drive,inputs["id"],key)
     nup=inp/"game.nup"; archive=None; archive_extracted=False; source_filename=""
-    # Recuperação local: se a sessão anterior caiu durante o upload, reutiliza o NUP
-    # já extraído em /content e não baixa nem extrai novamente o arquivo de origem.
-    local_sources=[p for p in inp.iterdir() if p.is_file() and p.name not in
-        ("game.nup","game.nup.part") and not p.name.endswith(".part")]
+    local_sources=[p for p in inp.iterdir() if p.is_file() and p.name not in ("game.nup","game.nup.part") and not p.name.endswith(".part")]
     if nup.is_file() and nup.stat().st_size>0:
         source_filename=local_sources[0].name if local_sources else "recuperado-local.nup"
-        archive_extracted = (
-            Path(source_filename).suffix.lower() in
-            (".rar", ".zip", ".7z", ".tar", ".tgz", ".gz", ".xz", ".bz2")
-        )
-        print(f"[HookLink2iOS] NUP LOCAL RECUPERADO: {nup.stat().st_size:,} bytes; sem download/extração.")
+        archive_extracted=Path(source_filename).suffix.lower() in (".rar",".zip",".7z",".tar",".tgz",".gz",".xz",".bz2")
         nh=file_hashes(nup)
         cache_name=f"{Path(source_filename).stem[:55]}_{key[:10]}.nup"
         nup_item=upload(drive,nup,inputs["id"],cache_name,
@@ -268,11 +406,10 @@ def prepare(*,source_url,drive_parent_folder_id,drive,github_token,repo_root,
                 "hooklink2ios_archive_extracted":str(archive_extracted).lower()},
             description=f"HookLink2iOS input cache | source={source_filename} | key={key} | sha256={nh['sha256']}",
             precomputed_hashes=nh)
-        for candidate in local_sources:
-            candidate.unlink(missing_ok=True)
-        print("[HookLink2iOS] NUP local persistido e verificado no Drive.")
+        for candidate in local_sources: candidate.unlink(missing_ok=True)
+        print("[HookLink2iOS] NUP local persistido/verificado no Drive; a entrada original foi preservada.",flush=True)
     elif cached:
-        print("[HookLink2iOS] CACHE HIT: NUP já está no Drive; ignorando o download externo.")
+        print("[HookLink2iOS] CACHE HIT: recuperando NUP do Drive para a preparação Linux; Actions não receberá o NUP.",flush=True)
         nup_item=download_verified_nup(drive,cached,nup)
         source_filename=(cached.get("appProperties") or {}).get("hooklink2ios_source_filename",cached["name"])
         archive_extracted=(cached.get("appProperties") or {}).get("hooklink2ios_archive_extracted")=="true"
@@ -294,37 +431,47 @@ def prepare(*,source_url,drive_parent_folder_id,drive,github_token,repo_root,
                 "hooklink2ios_source_filename":source_filename[:120],
                 "hooklink2ios_archive_extracted":str(archive_extracted).lower()},
             description=f"HookLink2iOS input cache | source={source_filename} | key={key} | sha256={nh['sha256']}")
-        # Keep the validated NUP on Drive; discard the source archive only after upload verification.
         if source.exists() and source.resolve()!=nup.resolve(): source.unlink()
         shutil.rmtree(extracted,ignore_errors=True)
-        print("[HookLink2iOS] NUP persistido e verificado em HookLink2iOS/Inputs.")
+
     if not nup.is_file() or not nup.stat().st_size: raise RuntimeError("NUP ausente após download/cache.")
     clone_engine(engine)
-    out=run([sys.executable,engine/"scripts/pack_nup.py",nup,"--version",str(VERSION),"--work-dir",build],cwd=engine)
-    if f"{TITLE_ID} version {VERSION}" not in out: raise ValueError("Title ID/update não corresponde ao alvo; handoff cancelado.")
-    romfs=build/"extract"/f"v{VERSION}"/"RomFS.img"
-    if not romfs.is_file() or not romfs.stat().st_size: raise RuntimeError("RomFS.img não foi criado.")
+    prep=run_nxnative_linux_preparation(engine,nup,build)
+    romfs=build/prep["romfs_relative_path"]
+    if not romfs.is_file() or romfs.stat().st_size!=int(prep["romfs_size"]):
+        raise RuntimeError("RomFS final da preparação diverge do manifest nxnative.")
     identity=run([sys.executable,engine/"dm/tools/romfs_image.py","--identity",romfs,TITLE_ID,f"v{VERSION}",ENGINE_PIN]).strip().splitlines()[-1]
     overlay=work_root/"res_overlay"/"Pack"/"Bootup.Nin_Ounce_NVN2.pack.zs"
     overlay.parent.mkdir(parents=True,exist_ok=True)
     run([sys.executable,repo_root/"hooklink/Resources/tools/hl_resolution.py",engine,romfs,overlay,"0.75","95"])
     if not overlay.is_file() or not overlay.stat().st_size: raise RuntimeError("Overlay não foi gerado.")
+
     runfolder=drive.files().create(body={"name":f"HookLink2iOS-{request_id}","mimeType":FOLDER,"parents":[project["id"]]},
         fields="id,name,webViewLink",supportsAllDrives=True).execute()
     romfs_item=upload(drive,romfs,runfolder["id"],"romfs.img")
     overlay_item=upload(drive,overlay,runfolder["id"],"Bootup.Nin_Ounce_NVN2.pack.zs")
-    handoff={"schema":2,"project":"HookLink2iOS","branch":BRANCH,"request_id":request_id,
+    prep_path=build/"hooklink2ios-linux-prep.json"
+    prep["romfs_identity"]=identity
+    prep_path.write_text(json.dumps(prep,indent=2)+"\n",encoding="utf-8")
+    work_archive=work_root/"hooklink2ios-work.tar.zst"
+    print("[HookLink2iOS] Arquivando somente workspace preparado; excluindo RomFS (externo), ferramentas e temporários.",flush=True)
+    build_work_archive(build,work_archive)
+    work_item=upload(drive,work_archive,runfolder["id"],"hooklink2ios-work.tar.zst")
+    handoff={"schema":3,"project":"HookLink2iOS","branch":BRANCH,"request_id":request_id,
         "title_id":TITLE_ID,"package_version":f"v{VERSION}","package_version_number":VERSION,
         "gpu_arch":GPU,"engine":{"repository":ENGINE,"branch":"hooklink","commit":ENGINE_PIN},
         "source":{"filename":source_filename,"url_fingerprint":key,"archive_extracted":archive_extracted,
                   "archive_deleted_after_extraction":archive_extracted},
         "drive":{"parent_folder_id":drive_parent_folder_id,"project_folder_id":project["id"],
             "inputs_folder_id":inputs["id"],"run_folder_id":runfolder["id"],"run_folder_url":runfolder.get("webViewLink")},
-        "nup":nup_item,"romfs":{**romfs_item,"identity":identity},"resolution_overlay":overlay_item,
-        "builder":{"platform":"ios","romfs_mode":"separate","runner":"xcode-27","xcode":"27.2.0"},
+        "nup":nup_item,"work_archive":work_item,
+        "romfs":{**romfs_item,"identity":identity},"resolution_overlay":overlay_item,
+        "prepared":prep,
+        "builder":{"platform":"ios","romfs_mode":"separate","runner":"xcode-27","xcode":"27.2.0",
+            "iphoneos_deployment_target":"26.0","gpu":"none","nup_download_in_actions":False},
         "created_at_utc":time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime())}
     pushed=publish(github_token,handoff)
-    print("[HookLink2iOS] Handoff publicado somente em HookLink2iOS; commit:",pushed["commit_sha"])
+    print("[HookLink2iOS] Handoff preparado publicado somente em HookLink2iOS; commit:",pushed["commit_sha"])
     return {"handoff":handoff,"github":pushed}
 
 def github_headers(token):
