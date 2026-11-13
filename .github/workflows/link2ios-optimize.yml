@@ -7,8 +7,6 @@ on:
     paths:
       - scripts/optimize_existing_ipa.py
       - scripts/patches/botw-metal4-encode-thread.patch
-      - scripts/patches/botw-compute-dispatch-order.patch
-      - scripts/patches/t_dispatch_barrier.m
       - .github/workflows/link2ios-optimize.yml
 
 permissions:
@@ -52,8 +50,6 @@ jobs:
           python3 tools/engine.py sync
           test "$(cat .upstream-ref)" = "81906931262fb25d774cce8bca2db8926439e5a2"
           git -C engine apply --check "$GITHUB_WORKSPACE/scripts/patches/botw-metal4-encode-thread.patch"
-          git -C engine fetch --no-tags https://github.com/seedds/nxnative.git 301cf6c9f9f41fa2b13ca6f348cdf86bdbe98138 0b1244866a81a4369aef159c13eb25e06747d9d2
-          git -C engine apply --3way "$GITHUB_WORKSPACE/scripts/patches/botw-compute-dispatch-order.patch"
           git -C engine diff --check
           echo "BOTW_HOST_PATCHES_APPLY_TO_PINNED_ENGINE=1"
 
