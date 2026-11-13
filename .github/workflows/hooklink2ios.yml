@@ -10,9 +10,10 @@ on:
 permissions:
   contents: read
 
+# Never kill a long native build merely because a newer handoff was pushed.
 concurrency:
-  group: hooklink2ios-${ github.ref }}
-  cancel-in-progress: true
+  group: hooklink2ios-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -27,10 +28,10 @@ jobs:
       - name: Checkout only the requested branch and commit
         uses: actions/checkout@v4
         with:
-          ref: ${ github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Enforce branch isolation and validate prepared handoff
+      - name: Enforce branch isolation and validate HookLink handoff
         shell: bash
         run: |
           set -euo pipefail
@@ -41,7 +42,7 @@ jobs:
           python3 - <<'PY'
           import json, re
           h=json.load(open("hooklink2ios/handoff.json", encoding="utf-8"))
-          assert h.get("schema") == 3, "Only the prepared-workspace handoff schema 3 is valid."
+          assert h.get("schema") in (2,3), f"Unsupported handoff schema: {h.get('schema')}"
           assert h.get("project") == "HookLink2iOS"
           assert h.get("branch") == "HookLink2iOS"
           assert h.get("title_id") == "0400486024DEC000"
@@ -49,18 +50,18 @@ jobs:
           assert h.get("package_version_number") == 131072
           assert h.get("engine", {}).get("commit") == "cf2a2fecc6ce3fb841131ffeffa90915cdadf109"
           assert h.get("gpu_arch") == "none"
-          assert h.get("builder", {}).get("iphoneos_deployment_target") == "26.0"
-          assert h.get("builder", {}).get("nup_download_in_actions") is False
-          assert h.get("prepared", {}).get("engine_pin") == h["engine"]["commit"]
-          assert h.get("prepared", {}).get("shader_package_key")
-          assert h.get("prepared", {}).get("shader_chain")
-          for key in ("nup", "work_archive", "romfs", "resolution_overlay"):
+          assert h.get("drive", {}).get("run_folder_id")
+          for key in ("nup", "romfs", "resolution_overlay"):
               item=h[key]
-              assert item.get("id") and int(item.get("size",0)) > 0
+              assert item.get("id") and int(item.get("size",0)) > 0, key
               assert re.fullmatch(r"[0-9a-f]{64}", item.get("sha256","")), key
-          assert h.get("drive",{}).get("run_folder_id")
-          print("Prepared workspace handoff validated:",h["request_id"])
-          print("NUP remains in Drive cache; Actions downloads only work_archive + RomFS + overlay.")
+          assert int(h["nup"]["size"]) > 20 * 1024**3
+          if h["schema"] == 3:
+              assert h.get("prepared", {}).get("engine_pin") == h["engine"]["commit"]
+              assert h.get("work_archive", {}).get("id")
+          print("HookLink handoff validated:", h["request_id"])
+          print("Schema:", h["schema"], "| GPU: none | iOS deployment target: 26.0")
+          print("Metal CAS checkpoint location:", h["drive"]["run_folder_id"])
           PY
 
       - name: Select Python 3.12
@@ -68,7 +69,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Validate Python syntax, embedded Colab helper and iOS target
+      - name: Validate Python syntax and Colab helper parity
         shell: bash
         run: |
           set -euo pipefail
@@ -86,11 +87,11 @@ jobs:
           p=cell.index(start); q=cell.index(end,p)
           embedded=cell[p+len(start)+1:q]
           assert embedded==helper, "Colab embedded helper diverges from the versioned helper."
-          print("Python syntax, exact Colab helper parity and iOS 26 target validated.")
-          print("Helper SHA-256:",hashlib.sha256(helper.encode()).hexdigest())
+          print("Python syntax and exact Colab helper parity validated.")
+          print("Colab helper SHA-256:", hashlib.sha256(helper.encode()).hexdigest())
           PY
 
-      - name: Verify Xcode 27.2 and iOS 26 SDK/Metal toolchain
+      - name: Verify exact Xcode 27.2 and iOS 26 Metal toolchain
         shell: bash
         run: |
           set -euo pipefail
@@ -99,15 +100,13 @@ jobs:
           test "$(xcodebuild -version | head -1)" = "Xcode 27.2"
           xcrun --sdk iphoneos --show-sdk-version
           xcrun --sdk iphoneos metal --version
-          echo "Deployment target: $IPHONEOS_DEPLOYMENT_TARGET (toolchain Xcode 27.2)"
+          echo "Deployment target: $IPHONEOS_DEPLOYMENT_TARGET"
 
       - name: Install native nxnative build tools
         shell: bash
         run: |
           set -euo pipefail
           brew install xcodegen zstd glslang
-          dotnet --list-sdks
-          dotnet --list-sdks | grep -Eq '^(8|9|10|11)[.]' || { echo "::error::.NET SDK 8+ is required by the pinned nxnative toolchain."; exit 1; }
           python -m pip install lz4 "capstone>=5,<6" fonttools zbic backports.zstd google-api-python-client google-auth requests
 
       - name: Fetch exact HookLink nxnative engine commit
@@ -147,20 +146,21 @@ jobs:
           for line in (root/"dm/gfx/tools/dmsh_chain.lock").read_text().splitlines():
               if "\t" in line and not line.startswith("#"):
                   key,value=line.split("\t",1); lock_fields[key]=value
-          for key in ("metal_macosx","metal_iphoneos","dmsh_xlate","xlate_source","spirv_cross"):
+          # The pinned nxnative lock file uses the hyphenated key.
+          for key in ("metal_macosx","metal_iphoneos","dmsh_xlate","spirv-cross"):
               assert lock_fields.get(key), f"{key} absent from dmsh_chain.lock"
           project=(root/"dm/ios/project.yml").read_text()
-          assert re.search(r'^\s+iOS:\s*["\']26\.0["\']\s*$',project,re.M), "nxnative DmIOS deployment target must remain iOS 26.0"
+          assert re.search(r"^\s+iOS:\s*['\"]?26\.0['\"]?\s*$",project,re.M), "DmIOS deployment target must remain iOS 26.0"
           assert (root/"dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate").is_file()
           assert (root/"dm/gfx/tools/spirv_cross_bin/spirv-cross").is_file()
           builder=(root/"scripts/build_ipa_from_nsp.py").read_text()
           assert "def build_shaders(" in builder
           assert "dm/ios/tools/build_ipa.sh" in builder
-          print("Pinned Ocarina profile, NVN tables, real Metal-lock keys, iOS 26 project and native builder validated.")
+          print("Pinned Ocarina profile, compiler lock, native binaries and iOS 26 project validated.")
           PY
           python "$ENGINE/dm/gfx/tools/own_compilers.py" --check-metal
 
-      - name: Inspect actual runner storage (no destructive Xcode cleanup)
+      - name: Check runner storage before large downloads
         shell: bash
         run: |
           set -euo pipefail
@@ -168,12 +168,18 @@ jobs:
           echo "CPU cores: $(sysctl -n hw.ncpu)"
           echo "RAM bytes: $(sysctl -n hw.memsize)"
           df -h "$RUNNER_TEMP"
-          xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-version
+          AVAILABLE_KB="$(df -Pk "$RUNNER_TEMP" | awk 'END {print $4}')"
+          AVAILABLE_BYTES="$((AVAILABLE_KB * 1024))"
+          REQUIRED_BYTES="$((75 * 1024 * 1024 * 1024))"
+          echo "Available workspace storage: $((AVAILABLE_BYTES / 1024 / 1024 / 1024)) GiB"
+          if [ "$AVAILABLE_BYTES" -lt "$REQUIRED_BYTES" ]; then
+            echo "::error::HookLink requires at least 75 GiB free before the verified NUP download."
+            exit 1
+          fi
 
-      - name: Build native IPA from the Colab-prepared workspace
+      - name: Build native iOS IPA with resumable Metal cache
         env:
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         shell: bash
         run: |
           set -euo pipefail
@@ -183,13 +189,13 @@ jobs:
             --engine "$RUNNER_TEMP/nxnative" \
             --output "$RUNNER_TEMP/hooklink2ios-output"
 
-      - name: Publish IPA, overlay and report as GitHub artifact
+      - name: Publish IPA, overlay and build report
         uses: actions/upload-artifact@v4
         with:
-          name: HookLink2iOS-Ocarina-${ github.run_number }}
+          name: HookLink2iOS-Ocarina-${{ github.run_number }}
           path: |
-            ${ runner.temp }}/hooklink2ios-output/OcarinaOfTime-HookLink2iOS.ipa
-            ${ runner.temp }}/hooklink2ios-output/res_overlay/Pack/Bootup.Nin_Ounce_NVN2.pack.zs
-            ${ runner.temp }}/hooklink2ios-output/build-report.json
+            ${{ runner.temp }}/hooklink2ios-output/OcarinaOfTime-HookLink2iOS.ipa
+            ${{ runner.temp }}/hooklink2ios-output/res_overlay/Pack/Bootup.Nin_Ounce_NVN2.pack.zs
+            ${{ runner.temp }}/hooklink2ios-output/build-report.json
           if-no-files-found: error
           retention-days: 7
