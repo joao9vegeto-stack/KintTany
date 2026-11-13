@@ -431,7 +431,7 @@ def main() -> None:
     # It covers BOTW iPhone GPU-clock downshift, recovery probes, grace/ramp,
     # and the negative case where a genuinely heavier scene cannot hold 60.
     fstep_tests = engine / "dm/gfx/tests"
-    run(["make", "t_fstep"], cwd=fstep_tests)
+    run(["make", "GAME=" + TITLE_ID, "t_fstep"], cwd=fstep_tests)
     run([fstep_tests / "t_fstep"], cwd=fstep_tests)
     log("BOTW frame-step unit suite passed, including iPhone GPU-clock recovery scenarios")
 
