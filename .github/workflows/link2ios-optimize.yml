@@ -52,7 +52,8 @@ jobs:
           python3 tools/engine.py sync
           test "$(cat .upstream-ref)" = "81906931262fb25d774cce8bca2db8926439e5a2"
           git -C engine apply --check "$GITHUB_WORKSPACE/scripts/patches/botw-metal4-encode-thread.patch"
-          git -C engine apply --check "$GITHUB_WORKSPACE/scripts/patches/botw-compute-dispatch-order.patch"
+          git -C engine fetch --no-tags https://github.com/seedds/nxnative.git 301cf6c9f9f41fa2b13ca6f348cdf86bdbe98138
+          git -C engine apply --3way --check "$GITHUB_WORKSPACE/scripts/patches/botw-compute-dispatch-order.patch"
           echo "BOTW_HOST_PATCHES_APPLY_TO_PINNED_ENGINE=1"
 
       - name: Select and download the previous optimized IPA (skip run #6)
