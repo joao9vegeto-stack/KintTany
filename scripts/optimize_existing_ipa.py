@@ -24,7 +24,6 @@ FRAMEWORK_NAME = f"DmGame{TITLE_ID}.framework"
 IGNORED_SOURCE_RUN_NUMBERS = {6}
 LEGACY_SOURCE_HASH_RUN_NUMBERS = {4}
 ENGINE_PIN = "81906931262fb25d774cce8bca2db8926439e5a2"
-UPSTREAM_OPTIMIZATION = "3304d6a0d7edebc4bb5b57c73e6d7b431721c8f5"
 
 
 def fail(message: str) -> None:
@@ -198,10 +197,8 @@ def main() -> None:
     work = args.work.resolve()
     repo = Path(__file__).resolve().parents[1]
     patch = repo / "scripts/patches/botw-metal4-encode-thread.patch"
-    dispatch_patch = repo / "scripts/patches/botw-compute-dispatch-order.patch"
-    dispatch_test = repo / "scripts/patches/t_dispatch_barrier.m"
-    if not artifact_zip.is_file() or not patch.is_file() or not dispatch_patch.is_file() or not dispatch_test.is_file():
-        fail("artifact ZIP or one of the pinned Metal/compute optimization patches and tests is missing")
+    if not artifact_zip.is_file() or not patch.is_file():
+        fail("artifact ZIP or pinned Metal encode-thread patch is missing")
     if (nx / ".upstream-ref").read_text(encoding="utf-8").strip() != ENGINE_PIN:
         fail("NX2Apple upstream pin does not match the source IPA")
     engine = nx / "engine"
@@ -352,22 +349,7 @@ def main() -> None:
     # Apply the reviewed host-only optimizations to this exact pinned tree.
     run(["git", "apply", "--check", patch], cwd=engine)
     run(["git", "apply", patch], cwd=engine)
-    # The optimization was authored against upstream 547c5db's parent, not the
-    # older NX2Apple pin. Fetch that exact base and let Git perform a real
-    # three-way backport onto the 70-patch NX2Apple tree; never force-apply hunks.
-    run(["git", "fetch", "--no-tags", "https://github.com/seedds/nxnative.git",
-         "301cf6c9f9f41fa2b13ca6f348cdf86bdbe98138",
-         "0b1244866a81a4369aef159c13eb25e06747d9d2"], cwd=engine)
-    run(["git", "apply", "--3way", dispatch_patch], cwd=engine)
     run(["git", "diff", "--check"], cwd=engine)
-
-    # Run upstream's ordering regression suite before creating an IPA. It checks
-    # game barriers, overlapping host-copy ranges, unknown bindings and encoder
-    # boundaries, with the encode thread both enabled and disabled.
-    dispatch_test_target = engine / "dm/gfx/tests/t_dispatch_barrier.m"
-    shutil.copy2(dispatch_test, dispatch_test_target)
-    run(["make", "-C", str(engine / "dm/gfx/tests"), "check_t_dispatch_barrier"])
-    log("BOTW compute ordering: range-aware dispatch barriers passed all four Metal regression configurations")
 
     # The generic iOS launcher currently exports DM_FPS_HOLD=on for this install,
     # even though BOTW's packaged runtime profile explicitly says fps_hold=off.
@@ -610,7 +592,6 @@ def main() -> None:
         "source_run_number": args.source_run_number,
         "source_run": source_report.get("source_run"),
         "engine_pin": ENGINE_PIN,
-        "upstream_optimization_commit": UPSTREAM_OPTIMIZATION,
         "modified_host_source": ["dm/gfx/nvn/nvn_mtl.m", "dm/gfx/nvn/nvn_geometry.inc", "dm/gfx/nvn/hle_nvn.c"],
         "modified_game_profile": ["fps_hold=off", "present_snap=on", "enc_thread=on", "draw_barriers=upstream-default"],
         "rebuilt_host_framework": True,
@@ -643,13 +624,7 @@ def main() -> None:
                 "metal_encode_thread": "separate thread"
             }
         },
-        "compute_dispatch_ordering": {
-            "default": "NVN game-barrier order with precise compute-buffer range tracking",
-            "barriers_preserved": ["explicit game barriers", "overlapping host-copy read/write ranges", "unknown or unbounded shader bindings", "encoder boundaries"],
-            "fallback": "DM_NVN_DISPATCH_BARRIER=full restores the conservative per-dispatch barrier path",
-            "runtime_metrics": "per-window counts of game-barrier, copy-range, unknown-range and barrier-free dispatches",
-            "regression_test": "check_t_dispatch_barrier with encode thread 0 and 1, in full and game modes"
-        },
+        "compute_dispatch_ordering": "not modified; incompatible backport removed from production path pending a port against the exact NX2Apple 70-patch tree",
         "frame_pacing_correction": {
             "fps_hold": "off",
             "authority": "BOTW runtime profile; generic launcher DM_FPS_HOLD is ignored by the BOTW host",
