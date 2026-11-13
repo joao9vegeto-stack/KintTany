@@ -5135,13 +5135,13 @@ bool xowue_exp_eof_zero_apply(PPCContext &ctx, uint8_t *base) {
     const uint32_t cursor = loadGuestBe32(base, object + 136u);
     const uint32_t windowStart = loadGuestBe32(base, object + 140u);
     const uint32_t windowEnd = loadGuestBe32(base, object + 148u);
-    const uint32_t streamSize = loadGuestBe32(base, object + 128u);
     const uint32_t table = loadGuestBe32(base, object + 172u);
 
     if (cursor >= windowStart && cursor < windowEnd)
         return false;
-    if (streamSize == 0u || cursor >= streamSize ||
-        table == 0u || !validGuestRange(table, 8u))
+    // The observed B149 object size (0x280000) can be lower than the indexed
+    // byte cursor (0xBBE556); table end, not this field, is authoritative here.
+    if (table == 0u || !validGuestRange(table, 8u))
         return false;
 
     const uint32_t data = loadGuestBe32(base, table);

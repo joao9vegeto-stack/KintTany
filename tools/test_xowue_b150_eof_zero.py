@@ -25,7 +25,8 @@ assert "cursor >= windowStart && cursor < windowEnd" in helper
 assert "cursor >= entryStart && static_cast<uint64_t>(cursor) < entryEnd" in helper
 assert "static_cast<uint64_t>(cursor) < lastWindowEnd" in helper
 assert "static_cast<uint64_t>(cursor) < maxWindowEnd" in helper
-assert "cursor >= streamSize" in helper
+assert "streamSize" not in helper
+assert "table == 0u || !validGuestRange(table, 8u)" in helper
 assert "entrySize > 0x400000u" in helper
 assert "allocateSmallGuestPoolBlock(base, 0x1000u, 0x1000u)" in helper
 assert "std::memset(base + zeroBuffer, 0, 0x1000u)" in helper
