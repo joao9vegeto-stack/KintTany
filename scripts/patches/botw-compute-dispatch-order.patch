@@ -1,4 +1,5 @@
 diff --git a/dm/gfx/nvn/nvn_geometry.inc b/dm/gfx/nvn/nvn_geometry.inc
+index fc1abe54386d32a8c8234c73421f8bd4faf06ab9..fc1abe54386d32a8c8234c73421f8bd4faf06ab9 100644
 --- a/dm/gfx/nvn/nvn_geometry.inc
 +++ b/dm/gfx/nvn/nvn_geometry.inc
 @@ -10,6 +10,22 @@
@@ -25,6 +26,7 @@ diff --git a/dm/gfx/nvn/nvn_geometry.inc b/dm/gfx/nvn/nvn_geometry.inc
  static int geo_cmp_index(const void *a, const void *b) {
      uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
 diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
+index bd65f8f8eaa17debcc05707a77b59da5481714e7..dc90d387731a1cbf6044648365e207c034a61597 100644
 --- a/dm/gfx/nvn/nvn_mtl.m
 +++ b/dm/gfx/nvn/nvn_mtl.m
 @@ -1699,11 +1699,13 @@ static inline id enc_b_begin(id cb) {
@@ -141,6 +143,7 @@ diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
 -                if (bits) { g_game_barrier |= bits; g_fb_bar++; } break; }
 +                if (bits) { g_game_barrier |= bits; g_fb_bar++; g_dsp_game_bar = 1; } break; }
 diff --git a/dm/gfx/nvn/hle_nvn.c b/dm/gfx/nvn/hle_nvn.c
+index aa01cadea1598870480810f9e24fad496157f357..a4d838a0d14497b3bcc608bae44eaed9575c9890 100644
 --- a/dm/gfx/nvn/hle_nvn.c
 +++ b/dm/gfx/nvn/hle_nvn.c
 @@ -1982,4 +1982,10 @@ static void power_line(uint64_t frame) {
@@ -155,6 +158,7 @@ diff --git a/dm/gfx/nvn/hle_nvn.c b/dm/gfx/nvn/hle_nvn.c
 +        pdg = dg; pdc = dc; pdu = du; pdn = dn;
          char rs[400]; static uint64_t pbs, pbf; uint64_t bs, bf; mtl_res_stats(rs, sizeof rs); mtl_barrier_stats(&bs, &bf);
 diff --git a/dm/gfx/tests/Makefile b/dm/gfx/tests/Makefile
+index 2e443631dc59e618b98a6dafc967d9060aafece7..e5591696a039b3998ee8eb5f58a3db7513032b56 100644
 --- a/dm/gfx/tests/Makefile
 +++ b/dm/gfx/tests/Makefile
 @@ -237,6 +237,13 @@ t_dispatch_own: t_dispatch_own.m $(MTL_T_DEP)
