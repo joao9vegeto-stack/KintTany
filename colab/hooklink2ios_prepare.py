@@ -393,22 +393,97 @@ def wait_for_actions_artifact(*,github_token,expected_commit,timeout_seconds=216
     if len(found)!=1: raise RuntimeError(f"Artifact {name} ausente/expirado.")
     return {"run":run_data,"artifact":found[0],"headers":dict(session.headers)}
 
-def transfer_actions_artifact_to_drive(*,github_token,expected_commit,drive,run_folder_id):
+def download_artifact_zip_resumable(*,session,url,artifact,destination,chunk_bytes=512*1024*1024):
+    """Download a GitHub artifact with byte-range resume, reacquiring signed redirects after failures."""
+    expected=int(artifact.get("size_in_bytes") or 0)
+    if expected<=0: raise RuntimeError("GitHub não informou o tamanho do artifact; download recusado.")
+    raw_digest=str(artifact.get("digest") or "")
+    expected_sha=raw_digest.split(":",1)[-1].lower()
+    if not re.fullmatch(r"[0-9a-f]{64}",expected_sha):
+        raise RuntimeError("GitHub não informou um SHA-256 válido para o artifact.")
+    part=destination.with_name(destination.name+".part")
+    if part.exists() and part.stat().st_size>expected: part.unlink()
+    failures=0; last_report=0
+    while not part.exists() or part.stat().st_size<expected:
+        offset=part.stat().st_size if part.exists() else 0
+        end=min(offset+chunk_bytes-1,expected-1)
+        try:
+            # Re-request the API redirect every chunk/retry; signed blob URLs can expire.
+            redirect=session.get(url,headers={"Accept":"application/vnd.github+json"},
+                allow_redirects=False,timeout=(30,120))
+            if redirect.status_code in (301,302,303,307,308):
+                blob_url=redirect.headers.get("Location")
+                if not blob_url: raise RuntimeError("GitHub devolveu redirect de artifact sem Location.")
+            elif redirect.status_code==200 and offset==0:
+                blob_url=url
+            else:
+                redirect.raise_for_status()
+                raise RuntimeError(f"Resposta inesperada da API de artifact: HTTP {redirect.status_code}.")
+            headers={"Accept-Encoding":"identity","Range":f"bytes={offset}-{end}"}
+            with requests.get(blob_url,headers=headers,stream=True,allow_redirects=True,
+                              timeout=(30,240)) as response:
+                if response.status_code==206:
+                    content_range=response.headers.get("Content-Range","")
+                    match=re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)",content_range)
+                    if not match: raise RuntimeError(f"Content-Range inválido no artifact: {content_range!r}")
+                    start,end_actual,total=map(int,match.groups())
+                    if start!=offset or end_actual<start or end_actual>end or total!=expected:
+                        raise RuntimeError(f"Content-Range inconsistente no artifact: {content_range!r}")
+                    expected_chunk=end_actual-start+1
+                    mode="ab" if offset else "wb"
+                elif response.status_code==200 and offset==0:
+                    expected_chunk=expected
+                    mode="wb"
+                elif response.status_code==200 and offset>0:
+                    # A CDN ignored Range: safely restart from byte zero.
+                    part.unlink(missing_ok=True)
+                    offset=0; expected_chunk=expected; mode="wb"
+                else:
+                    response.raise_for_status()
+                    raise RuntimeError(f"HTTP inesperado {response.status_code} no artifact.")
+                written=0
+                with part.open(mode) as out:
+                    for block in response.iter_content(8*1024*1024):
+                        if not block: continue
+                        out.write(block); written+=len(block)
+                        total_now=offset+written
+                        if total_now-last_report>=1024*1024*1024 or total_now==expected:
+                            print(f"[HookLink2iOS] Artifact GitHub: {total_now/expected*100:.1f}% "
+                                  f"({total_now:,}/{expected:,} bytes)",flush=True)
+                            last_report=total_now
+                        if written>expected_chunk:
+                            raise RuntimeError("CDN enviou mais bytes que o intervalo pedido.")
+                if written!=expected_chunk:
+                    raise IOError(f"Chunk do artifact incompleto: {written:,}/{expected_chunk:,} bytes.")
+            failures=0
+        except (requests.exceptions.RequestException,OSError,IOError) as exc:
+            current=part.stat().st_size if part.exists() else 0
+            failures=0 if current>offset else failures+1
+            print(f"[HookLink2iOS] Artifact interrompido em {current:,}/{expected:,}; "
+                  f"retomada {failures}/20 ({type(exc).__name__}: {exc})",flush=True)
+        if failures>=20: raise RuntimeError("Artifact não pôde ser baixado após 20 tentativas retomáveis.")
+        if failures:
+            delay=min(60,2**min(failures,6))
+            time.sleep(delay)
+    if part.stat().st_size!=expected:
+        raise RuntimeError(f"Tamanho final do artifact diverge: {part.stat().st_size:,}/{expected:,}.")
+    actual_sha=file_hashes(part)["sha256"]
+    if actual_sha.lower()!=expected_sha:
+        part.unlink(missing_ok=True)
+        raise RuntimeError("SHA-256 do ZIP diverge do digest publicado pelo GitHub.")
+    part.replace(destination)
+    print(f"[HookLink2iOS] Artifact verificado por SHA-256: {actual_sha}",flush=True)
+    return {"path":destination,"size":expected,"sha256":actual_sha}
+
+def transfer_actions_artifact_to_drive(*,github_token,expected_commit,handoff,drive,run_folder_id):
     info=wait_for_actions_artifact(github_token=github_token,expected_commit=expected_commit)
     artifact=info["artifact"]; run_data=info["run"]
     url=f"https://api.github.com/repos/{REPO}/actions/artifacts/{artifact['id']}/zip"
     work=Path("/content/hooklink2ios-artifact-transfer"); work.mkdir(parents=True,exist_ok=True)
-    zip_path=work/"artifact.zip"; part=zip_path.with_suffix(".part"); total=0
-    r=requests.get(url,headers=info["headers"],stream=True,allow_redirects=True,timeout=(30,180)); r.raise_for_status()
-    with r:
-        with part.open("wb") as out:
-            for block in r.iter_content(8*1024*1024):
-                if block: out.write(block); total+=len(block)
-    expected_size=int(artifact.get("size_in_bytes") or 0)
-    if expected_size and total!=expected_size: part.unlink(missing_ok=True); raise RuntimeError("ZIP do artifact incompleto.")
-    zip_sha=file_hashes(part)["sha256"]; digest=str(artifact.get("digest") or "").split(":",1)[-1].lower()
-    if digest and zip_sha.lower()!=digest: part.unlink(missing_ok=True); raise RuntimeError("Digest do ZIP diverge do GitHub.")
-    part.replace(zip_path)
+    zip_path=work/"artifact.zip"
+    download_artifact_zip_resumable(
+        session=requests.Session(),url=url,artifact=artifact,destination=zip_path
+    )
     dest=work/"extracted"; shutil.rmtree(dest,ignore_errors=True); dest.mkdir()
     with zipfile.ZipFile(zip_path) as z:
         members=z.infolist()
@@ -418,7 +493,8 @@ def transfer_actions_artifact_to_drive(*,github_token,expected_commit,drive,run_
         ipa=[m for m in members if m.filename.lower().endswith(".ipa")]
         report=[m for m in members if PurePosixPath(m.filename).name=="build-report.json"]
         overlays=[m for m in members if PurePosixPath(m.filename).name=="Bootup.Nin_Ounce_NVN2.pack.zs"]
-        if len(ipa)!=1 or len(report)!=1 or len(overlays)!=1: raise RuntimeError("Artifact não contém IPA/report/overlay únicos.")
+        if len(ipa)!=1 or len(report)!=1 or len(overlays)!=1:
+            raise RuntimeError("Artifact não contém exatamente uma IPA, um relatório e um overlay.")
         paths={}
         for m in (ipa[0],report[0],overlays[0]):
             p=dest/PurePosixPath(m.filename).name
@@ -426,10 +502,32 @@ def transfer_actions_artifact_to_drive(*,github_token,expected_commit,drive,run_
             paths[p.name]=p
     report_data=json.loads(paths["build-report.json"].read_text())
     ih=file_hashes(paths[ipa[0].filename.split("/")[-1]])
-    if report_data.get("project")!="HookLink2iOS" or report_data.get("branch")!=BRANCH: raise RuntimeError("Proveniência do build-report incorreta.")
-    if int(report_data.get("ipa",{}).get("size",-1))!=ih["size"] or report_data.get("ipa",{}).get("sha256","").lower()!=ih["sha256"]: raise RuntimeError("Hash/tamanho da IPA diverge do build-report.")
-    if report_data.get("commit")!=expected_commit:
-        raise RuntimeError("Commit no build-report não corresponde ao commit do workflow.")
+    if report_data.get("project")!="HookLink2iOS" or report_data.get("branch")!=BRANCH:
+        raise RuntimeError("Proveniência do build-report incorreta.")
+    if report_data.get("commit")!=expected_commit or report_data.get("run_id")!=str(run_data["id"]):
+        raise RuntimeError("Commit/run_id do build-report não correspondem ao Actions.")
+    if report_data.get("title_id")!=handoff.get("title_id") or report_data.get("package_version")!=handoff.get("package_version"):
+        raise RuntimeError("Title ID/versão do build-report divergem do handoff.")
+    if report_data.get("engine_commit")!=handoff.get("engine",{}).get("commit"):
+        raise RuntimeError("Pin nxnative no build-report diverge do handoff.")
+    if report_data.get("gpu_arch")!="g18p" or report_data.get("romfs_mode")!="separate":
+        raise RuntimeError("GPU/RomFS mode do build-report divergem do perfil HookLink iPhone 17.")
+    if int(report_data.get("ipa",{}).get("size",-1))!=ih["size"] or report_data.get("ipa",{}).get("sha256","").lower()!=ih["sha256"]:
+        raise RuntimeError("Hash/tamanho da IPA divergem do build-report.")
+    records=report_data.get("romfs",{})
+    if int(records.get("size",-1))!=int(handoff["romfs"]["size"]) or records.get("sha256","").lower()!=handoff["romfs"]["sha256"].lower():
+        raise RuntimeError("RomFS no build-report diverge do arquivo validado no Colab.")
+    if records.get("identity")!=handoff["romfs"].get("identity"):
+        raise RuntimeError("Identidade RomFS no build-report diverge do handoff.")
+    nup_record=report_data.get("nup_source",{})
+    if int(nup_record.get("size",-1))!=int(handoff["nup"]["size"]) or nup_record.get("sha256","").lower()!=handoff["nup"]["sha256"].lower() or not nup_record.get("deleted_after_extract"):
+        raise RuntimeError("Proveniência do NUP no build-report diverge do handoff.")
+    overlay_record=report_data.get("resolution_overlay",{})
+    if int(overlay_record.get("size",-1))!=int(handoff["resolution_overlay"]["size"]) or overlay_record.get("sha256","").lower()!=handoff["resolution_overlay"]["sha256"].lower():
+        raise RuntimeError("Overlay no build-report diverge do handoff.")
+    contents=report_data.get("ipa",{}).get("contents",{})
+    if contents.get("pso_archive",{}).get("name")!="Payload/DmIOS.app/pso/applegpu_g18p.mtl4a" or not contents.get("msl_files"):
+        raise RuntimeError("IPA reportada sem pipeline archive g18p ou biblioteca NVN/Metal.")
     build_folder=ensure_folder(drive,run_folder_id,
         f"actions-{run_data['run_number']}-{run_data['id']}")
     provenance=f"HookLink2iOS | branch={BRANCH} | commit={expected_commit} | run_id={run_data['id']} | artifact={artifact['name']} | run_url={run_data.get('html_url')}"
@@ -437,7 +535,8 @@ def transfer_actions_artifact_to_drive(*,github_token,expected_commit,drive,run_
     upload(drive,paths[overlays[0].filename.split("/")[-1]],build_folder["id"],"Bootup.Nin_Ounce_NVN2.pack.zs",description=provenance)
     upload(drive,paths["build-report.json"],build_folder["id"],"build-report.json",description=provenance)
     remote=drive.files().get(fileId=ipa_item["id"],fields="id,name,size,md5Checksum,webViewLink,description",supportsAllDrives=True).execute()
-    if int(remote.get("size",-1))!=ih["size"] or remote.get("md5Checksum","").lower()!=ih["md5"] or remote.get("description")!=provenance: raise RuntimeError("IPA no Drive falhou na verificação final.")
+    if int(remote.get("size",-1))!=ih["size"] or remote.get("md5Checksum","").lower()!=ih["md5"] or remote.get("description")!=provenance:
+        raise RuntimeError("IPA no Drive falhou na verificação final.")
     zip_path.unlink(missing_ok=True)
     return {"run":run_data,"artifact":artifact,"ipa":remote,"ipa_sha256":ih["sha256"],
         "drive_folder":build_folder,"commit_sha":expected_commit,"run_url":run_data.get("html_url"),
