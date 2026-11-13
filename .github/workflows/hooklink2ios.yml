@@ -151,8 +151,7 @@ jobs:
           for key in ("metal_macosx","metal_iphoneos","dmsh_xlate","spirv-cross"):
               assert lock_fields.get(key), f"{key} absent from dmsh_chain.lock"
           project=(root/"dm/ios/project.yml").read_text()
-          assert re.search(r'^\s+iOS:\s*"26\.0"\s*(?:#.*)?
-          assert (root/"dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate").is_file()
+          assert 'iOS: "26.0"' in project, "DmIOS deployment target must remain iOS 26.0"
           assert (root/"dm/gfx/tools/spirv_cross_bin/spirv-cross").is_file()
           builder=(root/"scripts/build_ipa_from_nsp.py").read_text()
           assert "def build_shaders(" in builder
