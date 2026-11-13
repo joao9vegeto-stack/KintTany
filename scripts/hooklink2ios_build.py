@@ -122,6 +122,40 @@ def download_verified(drive,session,record,destination):
     part.replace(destination)
     print(f"VERIFIED {record['name']}: {expected:,} bytes | SHA256 {sha}",flush=True)
 
+def preflight_hooklink_engine(engine):
+    """Reject an incompatible engine/profile before any 25.6 GB Drive transfer."""
+    profile=engine/"dm/games"/TITLE_ID/"game.tsv"
+    if not profile.is_file(): die(f"Perfil nxnative ausente: {profile}")
+    values={}
+    for line in profile.read_text(encoding="utf-8").splitlines():
+        if not line or line.startswith("#") or "\t" not in line: continue
+        key,value=line.split("\t",1)
+        values[key]=value
+    expected={"title_id":TITLE_ID,"program_id":TITLE_ID,"package":f"v{VERSION}","pso_mtl4":"on"}
+    for key,value in expected.items():
+        if values.get(key)!=value:
+            die(f"Perfil Ocarina/nxnative divergente em {key}: esperado {value!r}, obtido {values.get(key)!r}")
+    for filename,minimum in (("shader_pairs.tsv",1000),("pso_pairs.tsv",1000)):
+        table=profile.parent/filename
+        if not table.is_file(): die(f"Tabela de shaders obrigatória ausente: {table}")
+        rows=sum(1 for line in table.open(encoding="utf-8") if line.strip() and not line.startswith("#"))
+        if rows<minimum: die(f"Tabela {filename} contém {rows} linhas; esperado ao menos {minimum}.")
+        print(f"[HookLink2iOS] Preflight {filename}: {rows:,} pares.",flush=True)
+    lock=engine/"dm/gfx/tools/dmsh_chain.lock"
+    if not lock.is_file(): die("dmsh_chain.lock ausente.")
+    lock_text=lock.read_text(encoding="utf-8")
+    for key in ("metal_macosx","metal_iphoneos","dmsh_xlate","spirv-cross"):
+        if not re.search(rf"^{re.escape(key)}\t.+$",lock_text,re.M):
+            die(f"Fingerprint {key} ausente em dmsh_chain.lock.")
+    builder=engine/"scripts/build_ipa_from_nsp.py"
+    source=builder.read_text(encoding="utf-8")
+    anchor="    aoc = extract_aoc(nx, keys, repo, work, app, fam, logs)\n"
+    if source.count(anchor)!=1:
+        die("A versão fixada do builder não contém a etapa única de extração de DLC/NUP esperada.")
+    if "def extract_nup(" not in source or "def extract_aoc(" not in source:
+        die("Builder fixado não expõe extração NUP/AOC esperada.")
+    print("[HookLink2iOS] Perfil, shader tables, chain lock e ponto de liberação NUP validados.",flush=True)
+
 def patch_nxnative_release_nup_after_extract(engine):
     """Free the verified 25.6 GB input NUP after nxnative has extracted main game + DLC."""
     script=engine/"scripts/build_ipa_from_nsp.py"
@@ -191,6 +225,7 @@ def main():
     sha=subprocess.check_output(["git","-C",str(args.engine),"rev-parse","HEAD"],text=True).strip()
     if sha!=ENGINE_PIN: die(f"Checkout nxnative divergente: {sha}")
     if any(k not in h for k in ("nup","romfs","resolution_overlay","drive")): die("Handoff incompleto.")
+    preflight_hooklink_engine(args.engine)
     if int(h["nup"]["size"]) < 20 * 1024**3:
         die("NUP menor que o esperado para o build HookLink; abortando antes de qualquer transferência.")
     for key in ("nup","romfs","resolution_overlay"):
@@ -210,10 +245,10 @@ def main():
     # Do not download the separate 26 GB Drive copy a second time.
     romfs=work/"extract"/f"v{VERSION}"/"RomFS.img"
     overlay=out/"res_overlay"/"Pack"/"Bootup.Nin_Ounce_NVN2.pack.zs"
+    # Patch compatibility is checked before spending time on the multi-GB transfers.
+    patch_nxnative_release_nup_after_extract(args.engine)
     download_verified(drive,drive_session,h["nup"],nup)
     download_verified(drive,drive_session,h["resolution_overlay"],overlay)
-
-    patch_nxnative_release_nup_after_extract(args.engine)
     env_file=Path("hooklink/Resources/presets/iphone.env").resolve()
     entitlements=Path("hooklink/Resources/presets/entitlements.plist").resolve()
     if not env_file.is_file() or not entitlements.is_file(): die("Preset iOS/entitlements HookLink ausentes.")
@@ -223,8 +258,11 @@ def main():
         "--platform","ios","--package",f"v{VERSION}","--romfs","separate","--allow-damaged",
         "--gpu",gpu,"--env-file",str(env_file),
         "--work-dir",str(work),"--app-name","Ocarina of Time","-o",str(ipa)]
-    print("[HookLink2iOS] Build Xcode/Metal iniciado; --romfs separate mantém o RomFS fora da IPA.",flush=True)
-    subprocess.run(cmd,cwd=args.engine,env=os.environ.copy(),check=True)
+    build_env=os.environ.copy()
+    # xcode-27 standard has 7 GB RAM / 3 CPU cores; cap shader workers to avoid memory pressure/OOM.
+    build_env["J"]="1"
+    print("[HookLink2iOS] Build Xcode/Metal iniciado (J=1 para limitar RAM); --romfs separate mantém o RomFS fora da IPA.",flush=True)
+    subprocess.run(cmd,cwd=args.engine,env=build_env,check=True)
     if not ipa.is_file() or not ipa.stat().st_size: die("Builder terminou sem gerar IPA.")
     ipa_contents=audit_ipa(ipa,h["romfs"])
     print("[HookLink2iOS] IPA auditada: biblioteca Metal + pipeline g18p + marcador RomFS presentes.",flush=True)
