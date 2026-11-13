@@ -185,8 +185,7 @@ def audit_ipa(ipa,romfs_record):
         with zipfile.ZipFile(ipa,"r") as archive:
             names=set(archive.namelist())
             app="Payload/DmIOS.app/"
-            required=(app+"Info.plist",app+"DmIOS",app+"romfs.id",
-                      app+"pso/prebuilt.tsv",app+"pso/applegpu_g18p.mtl4a")
+            required=(app+"Info.plist",app+"DmIOS",app+"romfs.id")
             missing=[name for name in required if name not in names]
             if missing:
                 die("IPA incompleta: faltam recursos obrigatórios do HookLink: "+", ".join(missing))
@@ -194,9 +193,9 @@ def audit_ipa(ipa,romfs_record):
                  and (".img" in Path(name).name)]
             if not msl:
                 die("IPA incompleta: biblioteca NVN/Metal b-<chain>.img ausente.")
-            pso_size=archive.getinfo(app+"pso/applegpu_g18p.mtl4a").file_size
-            if pso_size<=0:
-                die("IPA contém o nome do pipeline archive g18p, mas o arquivo está vazio.")
+            pso_files=[name for name in names if name.startswith(app+"pso/") and name.endswith(".mtl4a")]
+            if pso_files:
+                die("GPU none exige ausência de pipeline archive offline; encontrados: "+", ".join(pso_files))
             marker=archive.read(app+"romfs.id").decode("utf-8","replace").strip()
             fields=dict(item.split("=",1) for item in marker.split()[1:] if "=" in item)
             expected=dict(item.split("=",1) for item in str(romfs_record.get("identity","")).split()[1:] if "=" in item)
@@ -204,8 +203,7 @@ def audit_ipa(ipa,romfs_record):
                 die("IPA romfs.id não corresponde ao RomFS validado no Colab (size/index).")
             msl_records=[{"name":name,"size":archive.getinfo(name).file_size} for name in sorted(msl)]
             return {"app_root":app.rstrip("/"),"msl_files":msl_records,
-                    "pso_archive":{"name":app+"pso/applegpu_g18p.mtl4a","size":pso_size},
-                    "romfs_marker":marker}
+                    "pso_archive":None,"gpu_mode":"none","romfs_marker":marker}
     except zipfile.BadZipFile as exc:
         die(f"IPA não é um ZIP válido: {exc}")
 
@@ -221,7 +219,7 @@ def main():
     if h.get("title_id")!=TITLE_ID or h.get("package_version_number")!=VERSION: die("Title ID/update do handoff incorretos.")
     if h.get("engine",{}).get("commit")!=ENGINE_PIN: die("Pin nxnative do handoff divergente.")
     gpu=h.get("gpu_arch")
-    if gpu!="g18p": die(f"GPU incompatível com o perfil iPhone 17 Pro do HookLink: {gpu!r}")
+    if gpu!="none": die(f"GPU incompatível: HookLink2iOS segue Link2iOS com --gpu none, recebido {gpu!r}")
     sha=subprocess.check_output(["git","-C",str(args.engine),"rev-parse","HEAD"],text=True).strip()
     if sha!=ENGINE_PIN: die(f"Checkout nxnative divergente: {sha}")
     if any(k not in h for k in ("nup","romfs","resolution_overlay","drive")): die("Handoff incompleto.")
@@ -265,7 +263,7 @@ def main():
     subprocess.run(cmd,cwd=args.engine,env=build_env,check=True)
     if not ipa.is_file() or not ipa.stat().st_size: die("Builder terminou sem gerar IPA.")
     ipa_contents=audit_ipa(ipa,h["romfs"])
-    print("[HookLink2iOS] IPA auditada: biblioteca Metal + pipeline g18p + marcador RomFS presentes.",flush=True)
+    print("[HookLink2iOS] IPA auditada: biblioteca Metal + marcador RomFS presentes; GPU none sem PSO offline.",flush=True)
     if not romfs.is_file() or romfs.stat().st_size!=int(h["romfs"]["size"]):
         die("RomFS criado pelo builder difere do tamanho validado no Colab.")
     romfs_sha=digest(romfs,"sha256")
