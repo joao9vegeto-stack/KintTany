@@ -1,7 +1,7 @@
 diff --git a/dm/gfx/nvn/nvn_geometry.inc b/dm/gfx/nvn/nvn_geometry.inc
 --- a/dm/gfx/nvn/nvn_geometry.inc
 +++ b/dm/gfx/nvn/nvn_geometry.inc
-@@ -10,6 +10,20 @@
+@@ -10,6 +10,22 @@
  static uint32_t draw_color_writes(NvProg *pr);
  static void lc_land(void);
  static void sub_cut(void);
@@ -57,13 +57,13 @@ diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
  // buffer → buffer / fill: reads [rlo, rhi) (0, 0 when nothing is read), writes [wlo, whi)
  static uint64_t g_wr_epoch;
  static uint64_t g_mdx_epoch;
-@@ -1756,7 +1760,7 @@ static void drw_note(uint64_t lo, uint64_t n) {
+@@ -1756,4 +1760,4 @@ static void drw_note(uint64_t lo, uint64_t n) {
      // their operations with everything before and after. Ordinary pools keep the
      // range-based batching, including separate Metal buffers over one CPU range.
      if (nvn_sparse_alias(rlo, rhi) || nvn_sparse_alias(wlo, whi)) { wlo = 0; whi = ~0ull; }
 -    if (g_blit_ops && (g_bw_n == BW_MAX || g_br_n == BW_MAX || (rhi > rlo && bw_hit(rlo, rhi)) || bw_hit(wlo, whi) || br_hit(wlo, whi))) blit_barrier();
 +    if (g_blit_ops && (g_bw_n == BW_MAX || g_br_n == BW_MAX || (rhi > rlo && (bw_hit(rlo, rhi) || dw_hit(rlo, rhi))) || bw_hit(wlo, whi) || br_hit(wlo, whi) || dw_hit(wlo, whi) || dr_hit(wlo, whi))) blit_barrier();
-@@ -14291,11 +14295,65 @@ static void bufsnap_after(NvShader *cs, id ce) {
+@@ -14291,9 +14295,64 @@ static void bufsnap_after(NvShader *cs, id ce) {
      res_add(dst); res_commit();
      [(id<MTL4ComputeCommandEncoder>)ce barrierAfterEncoderStages:MTLStageDispatch | MTLStageBlit beforeStages:MTLStageDispatch | MTLStageBlit visibilityOptions:blit_vis()];
      [(id<MTL4ComputeCommandEncoder>)ce copyFromBuffer:(__bridge id<MTLBuffer>)mb sourceOffset:mo toBuffer:dst destinationOffset:0 size:n];
@@ -129,12 +129,12 @@ diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
 +    return e;
 +}
  static void dispatch(const p_dispatch *dp) {
-@@ -14368,7 +14426,7 @@ static void dispatch(const p_dispatch *dp) {
+@@ -14368,3 +14426,3 @@ static void dispatch(const p_dispatch *dp) {
      encode_args(nil, cs, 5, 0);
      if (own && g_blit) { enc_b_end(g_blit); g_blit = nil; }
 -    id<MTLComputeCommandEncoder> ce = own ? pg_compute() : (id<MTLComputeCommandEncoder>)dispatch_enc();
 +    id<MTLComputeCommandEncoder> ce = own ? pg_compute() : (id<MTLComputeCommandEncoder>)dispatch_enc_cs(cs, dp->ind);
-@@ -15418,7 +15476,7 @@ void mtl_exec(const uint8_t *p) {
+@@ -15418,4 +15476,4 @@ void mtl_exec(const uint8_t *p) {
                  PD("I %llu barrier bits %#x%s", g_stat_pass, bits, split ? ": ends the pass (shader writes)" : order ? " (render pass open; a later shader write is ordered after its draws)" : g_enc ? " (render pass open)" : "");
                  if (split) { rp_end(); static int once; if (!once++) MLOG("a game barrier (bits %#x) after shader writes in a draw pass: the pass ends there (first case pass %llu)", bits, (unsigned long long)g_stat_pass); }
                  else if (order) g_pass_order |= (bits & NVN_BARRIER_ORDER_PRIMITIVES_BIT ? 1 : 0) | (bits & (NVN_BARRIER_ORDER_FRAGMENTS_BIT | NVN_BARRIER_ORDER_FRAGMENTS_TILED_BIT) ? 2 : 0);
@@ -143,7 +143,7 @@ diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
 diff --git a/dm/gfx/nvn/hle_nvn.c b/dm/gfx/nvn/hle_nvn.c
 --- a/dm/gfx/nvn/hle_nvn.c
 +++ b/dm/gfx/nvn/hle_nvn.c
-@@ -1982,6 +1982,10 @@ static void power_line(uint64_t frame) {
+@@ -1982,4 +1982,10 @@ static void power_line(uint64_t frame) {
          double nf = frame > pf ? (double)(frame - pf) : 1;
          LOG("[nvn] power up to frame %llu: CPU energy %.2f W, %.1f mJ per frame (%.1f fps); CPU %.0f%% (100 = one core), %.0f%% of it on performance cores; wakeups %.0f/s (out of platform idle %.0f); GPU %.1f ms/s; thermal %d; top yielders: %s", frame,
              (e - pe) / 1e9 / s, (e - pe) / 1e6 / nf, nf / s, (cpu - pcpu) / 1e7 / s, cpu > pcpu ? 100.0 * (double)(p - pp) / (double)(cpu - pcpu) : 0, (iw - piw) / s, (idw - ppw) / s, (g - pg) / 1e6 / s, dm_thermal_now(), yt);
@@ -157,7 +157,7 @@ diff --git a/dm/gfx/nvn/hle_nvn.c b/dm/gfx/nvn/hle_nvn.c
 diff --git a/dm/gfx/tests/Makefile b/dm/gfx/tests/Makefile
 --- a/dm/gfx/tests/Makefile
 +++ b/dm/gfx/tests/Makefile
-@@ -237,6 +237,13 @@ t_dispatch_own: t_dispatch_own.m $(MTL_T_DEP)
+@@ -237,7 +237,14 @@ t_dispatch_own: t_dispatch_own.m $(MTL_T_DEP)
  	clang $(CFLAGS) -fobjc-arc -o $@ t_dispatch_own.m $(MTL_T_SRC) $(FW)
  .PHONY: check_t_dispatch_own
  check_t_dispatch_own: t_dispatch_own
