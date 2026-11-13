@@ -78,7 +78,7 @@ jobs:
           end='\n\'\'\'\nHELPER_SHA256 = hashlib.sha256(HELPER_SOURCE.encode("utf-8")).hexdigest()'
           p=cell.index(start); q=cell.index(end,p)
           embedded=cell[p+len(start)+1:q]
-          assert embedded.rstrip("\\n")==helper.rstrip("\\n"), "Colab embedded helper content diverges from the versioned helper"
+          assert embedded.rstrip(chr(10))==helper.rstrip(chr(10)), "Colab embedded helper content diverges from the versioned helper"
           digest=hashlib.sha256(helper.encode("utf-8")).hexdigest()
           assert f'HELPER_SHA256 = hashlib.sha256(HELPER_SOURCE.encode("utf-8")).hexdigest()' in cell
           transfer="".join(notebook["cells"][14]["source"])
