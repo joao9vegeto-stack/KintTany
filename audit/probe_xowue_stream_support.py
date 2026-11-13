@@ -140,6 +140,14 @@ def main():
             }}
     args.report.parent.mkdir(parents=True,exist_ok=True)
     args.report.write_text(json.dumps(result,indent=2),encoding="utf-8")
+    for target in (0x82575250, 0x82575480, 0x82575108):
+        item = found.get(target)
+        if item is None:
+            raise SystemExit(f"Required stream function missing for source dump: 0x{target:08X}")
+        print(f"XOWUE_AOT_SOURCE_BEGIN {item['name']} file={item['file']}")
+        print(item["body"])
+        print(f"XOWUE_AOT_SOURCE_END {item['name']}")
+
     print("XOWUE_STREAM_SUPPORT_AOT_SOURCE "+json.dumps({
         "found":[{"name":f["name"],"file":f["file"],
                   "instruction_comments":f["instruction_comment_count"],
