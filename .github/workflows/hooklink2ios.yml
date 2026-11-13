@@ -143,9 +143,9 @@ jobs:
               print(f"{table}: {rows:,} entries")
           lock=(root/"dm/gfx/tools/dmsh_chain.lock").read_text()
           for key in ("metal_macosx","metal_iphoneos","dmsh_xlate","spirv-cross"):
-              assert re.search(rf"^{re.escape(key)}\\t.+$",lock,re.M), f"{key} absent from shader lock"
+              assert re.search(rf"^{re.escape(key)}\t.+$",lock,re.M), f"{key} absent from shader lock"
           builder=(root/"scripts/build_ipa_from_nsp.py").read_text()
-          anchor="    aoc = extract_aoc(nx, keys, repo, work, app, fam, logs)\\n"
+          anchor="    aoc = extract_aoc(nx, keys, repo, work, app, fam, logs)\n"
           assert builder.count(anchor)==1, "unexpected nxnative builder extraction flow"
           assert (root/"dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate").is_file()
           assert (root/"dm/gfx/tools/spirv_cross_bin/spirv-cross").is_file()
