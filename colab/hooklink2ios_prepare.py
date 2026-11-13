@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Linux/Colab intake + RomFS preparation for HookLink2iOS."""
+"""Linux/Colab preparation and artifact handoff for HookLink2iOS."""
 from __future__ import annotations
 import base64, email.message, hashlib, json, os, re, shutil, subprocess, sys, time, uuid, zipfile
 from pathlib import Path, PurePosixPath
@@ -12,7 +12,6 @@ REPO = "joao9vegeto-stack/KintTany"
 BRANCH = "HookLink2iOS"
 WORKFLOW_NAME = "HookLink2iOS Ocarina native build"
 HANDOFF = "hooklink2ios/handoff.json"
-WORKFLOW_NAME = "HookLink2iOS Ocarina native build"
 ENGINE = "https://github.com/dsi-hub/nxnative.git"
 ENGINE_PIN = "cf2a2fecc6ce3fb841131ffeffa90915cdadf109"
 TITLE_ID = "0400486024DEC000"
@@ -492,6 +491,12 @@ def recover_current_handoff(*,github_token,source_url):
     if not r.ok: raise RuntimeError(f"Leitura do handoff falhou: HTTP {r.status_code}: {r.text[:800]}")
     h=json.loads(base64.b64decode(r.json()["content"]).decode("utf-8"))
     if h.get("project")!="HookLink2iOS" or h.get("branch")!=BRANCH or h.get("source",{}).get("url_fingerprint")!=key: return None
+    # Schema 2 never included the prepared extraction/rewrite/shader workspace.
+    if (h.get("schema")!=3 or not h.get("work_archive",{}).get("id")
+            or not h.get("prepared",{}).get("shader_package_key")
+            or h.get("builder",{}).get("iphoneos_deployment_target")!="26.0"):
+        print("[HookLink2iOS] Handoff antigo/incompleto: refazendo preparação Linux a partir do NUP em cache.",flush=True)
+        return None
     commits=github_get(session,f"https://api.github.com/repos/{REPO}/commits",
         {"sha":BRANCH,"path":HANDOFF,"per_page":1})
     if not commits: raise RuntimeError("Commit do handoff não foi encontrado.")
@@ -510,7 +515,11 @@ def recover_current_handoff(*,github_token,source_url):
         "existing_run":existing_run}
 
 def verify_handoff_drive_assets(drive,h):
-    for key in ("nup","romfs","resolution_overlay"):
+    if h.get("schema")!=3 or h.get("gpu_arch")!="none":
+        raise RuntimeError("Handoff não corresponde ao pipeline HookLink iOS 26 / GPU none.")
+    if h.get("builder",{}).get("iphoneos_deployment_target")!="26.0":
+        raise RuntimeError("Handoff não fixa o alvo iOS 26.0.")
+    for key in ("nup","work_archive","romfs","resolution_overlay"):
         rec=h[key]
         remote=drive.files().get(fileId=rec["id"],fields="id,size,md5Checksum",supportsAllDrives=True).execute()
         if int(remote.get("size",-1))!=int(rec["size"]): raise RuntimeError(f"{key} size diverge no Drive.")
@@ -659,8 +668,9 @@ def transfer_actions_artifact_to_drive(*,github_token,expected_commit,handoff,dr
         raise RuntimeError("Title ID/versão do build-report divergem do handoff.")
     if report_data.get("engine_commit")!=handoff.get("engine",{}).get("commit"):
         raise RuntimeError("Pin nxnative no build-report diverge do handoff.")
-    if report_data.get("gpu_arch")!="g18p" or report_data.get("romfs_mode")!="separate":
-        raise RuntimeError("GPU/RomFS mode do build-report divergem do perfil HookLink iPhone 17.")
+    if (report_data.get("gpu_arch")!="none" or report_data.get("romfs_mode")!="separate"
+            or report_data.get("iphoneos_deployment_target")!="26.0"):
+        raise RuntimeError("GPU/RomFS/deployment target do build-report divergem do perfil iOS 26.")
     if int(report_data.get("ipa",{}).get("size",-1))!=ih["size"] or report_data.get("ipa",{}).get("sha256","").lower()!=ih["sha256"]:
         raise RuntimeError("Hash/tamanho da IPA divergem do build-report.")
     records=report_data.get("romfs",{})
@@ -669,14 +679,25 @@ def transfer_actions_artifact_to_drive(*,github_token,expected_commit,handoff,dr
     if records.get("identity")!=handoff["romfs"].get("identity"):
         raise RuntimeError("Identidade RomFS no build-report diverge do handoff.")
     nup_record=report_data.get("nup_source",{})
-    if int(nup_record.get("size",-1))!=int(handoff["nup"]["size"]) or nup_record.get("sha256","").lower()!=handoff["nup"]["sha256"].lower() or not nup_record.get("deleted_after_extract"):
-        raise RuntimeError("Proveniência do NUP no build-report diverge do handoff.")
+    if (int(nup_record.get("size",-1))!=int(handoff["nup"]["size"])
+            or nup_record.get("sha256","").lower()!=handoff["nup"]["sha256"].lower()
+            or nup_record.get("downloaded_in_actions") is not False):
+        raise RuntimeError("Proveniência do NUP incorreta: Actions não deveria baixá-lo.")
+    archive_record=report_data.get("work_archive",{})
+    if (int(archive_record.get("size",-1))!=int(handoff["work_archive"]["size"])
+            or archive_record.get("sha256","").lower()!=handoff["work_archive"]["sha256"].lower()
+            or archive_record.get("verified") is not True):
+        raise RuntimeError("Workspace preparado pelo Colab não confere com o build-report.")
+    prepared=report_data.get("prepared",{})
+    if (prepared.get("shader_package_key")!=handoff["prepared"].get("shader_package_key")
+            or prepared.get("shader_chain")!=handoff["prepared"].get("shader_chain")):
+        raise RuntimeError("Shader split usado pelo Actions difere da preparação Colab.")
     overlay_record=report_data.get("resolution_overlay",{})
     if int(overlay_record.get("size",-1))!=int(handoff["resolution_overlay"]["size"]) or overlay_record.get("sha256","").lower()!=handoff["resolution_overlay"]["sha256"].lower():
         raise RuntimeError("Overlay no build-report diverge do handoff.")
     contents=report_data.get("ipa",{}).get("contents",{})
-    if contents.get("pso_archive",{}).get("name")!="Payload/DmIOS.app/pso/applegpu_g18p.mtl4a" or not contents.get("msl_files"):
-        raise RuntimeError("IPA reportada sem pipeline archive g18p ou biblioteca NVN/Metal.")
+    if contents.get("minimum_os_version")!="26.0" or not contents.get("msl_files") or contents.get("pso_archive") is not None or contents.get("gpu_mode")!="none":
+        raise RuntimeError("IPA não respeita iOS 26.0, biblioteca Metal e ausência de PSO offline.")
     build_folder=ensure_folder(drive,run_folder_id,
         f"actions-{run_data['run_number']}-{run_data['id']}")
     provenance=f"HookLink2iOS | branch={BRANCH} | commit={expected_commit} | run_id={run_data['id']} | artifact={artifact['name']} | run_url={run_data.get('html_url')}"
