@@ -144,6 +144,37 @@ def patch_nxnative_release_nup_after_extract(engine):
     if marker not in script.read_text(encoding="utf-8"):
         die("Patch de liberação do NUP não foi persistido.")
 
+def audit_ipa(ipa,romfs_record):
+    """Reject an IPA that silently omitted HookLink's NVN shader library or A19 pipeline archive."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(ipa,"r") as archive:
+            names=set(archive.namelist())
+            app="Payload/DmIOS.app/"
+            required=(app+"Info.plist",app+"DmIOS",app+"romfs.id",
+                      app+"pso/prebuilt.tsv",app+"pso/applegpu_g18p.mtl4a")
+            missing=[name for name in required if name not in names]
+            if missing:
+                die("IPA incompleta: faltam recursos obrigatórios do HookLink: "+", ".join(missing))
+            msl=[name for name in names if name.startswith(app+"msl/b-")
+                 and (".img" in Path(name).name)]
+            if not msl:
+                die("IPA incompleta: biblioteca NVN/Metal b-<chain>.img ausente.")
+            pso_size=archive.getinfo(app+"pso/applegpu_g18p.mtl4a").file_size
+            if pso_size<=0:
+                die("IPA contém o nome do pipeline archive g18p, mas o arquivo está vazio.")
+            marker=archive.read(app+"romfs.id").decode("utf-8","replace").strip()
+            fields=dict(item.split("=",1) for item in marker.split()[1:] if "=" in item)
+            expected=dict(item.split("=",1) for item in str(romfs_record.get("identity","")).split()[1:] if "=" in item)
+            if fields.get("size")!=str(romfs_record["size"]) or fields.get("index")!=expected.get("index"):
+                die("IPA romfs.id não corresponde ao RomFS validado no Colab (size/index).")
+            msl_records=[{"name":name,"size":archive.getinfo(name).file_size} for name in sorted(msl)]
+            return {"app_root":app.rstrip("/"),"msl_files":msl_records,
+                    "pso_archive":{"name":app+"pso/applegpu_g18p.mtl4a","size":pso_size},
+                    "romfs_marker":marker}
+    except zipfile.BadZipFile as exc:
+        die(f"IPA não é um ZIP válido: {exc}")
+
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("--handoff",type=Path,required=True)
@@ -195,6 +226,8 @@ def main():
     print("[HookLink2iOS] Build Xcode/Metal iniciado; --romfs separate mantém o RomFS fora da IPA.",flush=True)
     subprocess.run(cmd,cwd=args.engine,env=os.environ.copy(),check=True)
     if not ipa.is_file() or not ipa.stat().st_size: die("Builder terminou sem gerar IPA.")
+    ipa_contents=audit_ipa(ipa,h["romfs"])
+    print("[HookLink2iOS] IPA auditada: biblioteca Metal + pipeline g18p + marcador RomFS presentes.",flush=True)
     if not romfs.is_file() or romfs.stat().st_size!=int(h["romfs"]["size"]):
         die("RomFS criado pelo builder difere do tamanho validado no Colab.")
     romfs_sha=digest(romfs,"sha256")
@@ -211,7 +244,8 @@ def main():
         "engine_commit":sha,"gpu_arch":gpu,"romfs_mode":"separate",
         "nup_source":{"size":int(h["nup"]["size"]),"sha256":h["nup"]["sha256"],
                       "deleted_after_extract":True},
-        "ipa":{"name":ipa.name,"size":ipa.stat().st_size,"sha256":digest(ipa,"sha256")},
+        "ipa":{"name":ipa.name,"size":ipa.stat().st_size,"sha256":digest(ipa,"sha256"),
+               "contents":ipa_contents},
         "romfs":{"name":"romfs.img","size":romfs.stat().st_size,"sha256":romfs_sha,
                  "identity":romfs_identity,"source":"repacked-from-verified-nup"},
         "resolution_overlay":{"name":overlay.name,"size":overlay.stat().st_size,
