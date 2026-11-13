@@ -358,8 +358,8 @@ def main() -> None:
     run(["git", "fetch", "--no-tags", "https://github.com/seedds/nxnative.git",
          "301cf6c9f9f41fa2b13ca6f348cdf86bdbe98138",
          "0b1244866a81a4369aef159c13eb25e06747d9d2"], cwd=engine)
-    run(["git", "apply", "--3way", "--check", dispatch_patch], cwd=engine)
     run(["git", "apply", "--3way", dispatch_patch], cwd=engine)
+    run(["git", "diff", "--check"], cwd=engine)
 
     # Run upstream's ordering regression suite before creating an IPA. It checks
     # game barriers, overlapping host-copy ranges, unknown bindings and encoder
