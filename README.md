@@ -12,7 +12,7 @@ Port nativo para iOS de **The Legend of Zelda: Ocarina of Time — Nintendo Swit
 | Update | `v131072` |
 | Engine | [dsi-hub/nxnative — HookLink pin](https://github.com/dsi-hub/nxnative/tree/cf2a2fecc6ce3fb841131ffeffa90915cdadf109) |
 | Engine commit | `cf2a2fecc6ce3fb841131ffeffa90915cdadf109` |
-| GPU / pipeline archive | `g18p` — A19 / iPhone 17 Pro; inclui o arquivo offline de pipelines |
+| GPU / pipeline archive | `none` — igual ao Link2iOS; sem arquivo PSO offline |
 | Runner | `xcode-27` |
 | Xcode | `27.2` |
 | RomFS | Externo à IPA (`--romfs separate`) |
@@ -59,7 +59,7 @@ O commit do handoff aciona `.github/workflows/hooklink2ios.yml`. O workflow:
 3. usa o runner `xcode-27`, Python 3.12 e Xcode 27.2;
 4. busca exatamente o commit fixado do nxnative;
 5. baixa o NUP (com download retomável por HTTP Range) e o overlay, verificando tamanho, SHA-256 e MD5. Não baixa uma segunda cópia do RomFS: o builder cria a imagem a partir do NUP e o Actions compara o tamanho, SHA-256 e identidade com o RomFS já validado no Colab;
-6. verifica o espaço livre antes do download. Primeiro remove componentes não usados do runner (Xcodes 27.0/27.1, runtimes de simuladores e SDK Android), preservando Xcode 27.2/SDK iOS/Metal; exige pelo menos 75 GiB livres antes de baixar o NUP. Se não houver espaço, interrompe antes da transferência. Em seguida, executa o builder oficial `scripts/build_ipa_from_nsp.py` do HookLink/nxnative com `--package v131072`, `--romfs separate` e `--gpu g18p`. Ele executa no Actions as etapas pesadas: extração final do jogo e DLCs, reescrita dos módulos AArch64, separação/validação dos shaders NVN, compilação das bibliotecas iOS Metal, geração offline do pipeline archive `applegpu_g18p.mtl4a` com `metal-tt` para A19 e empacotamento Xcode da IPA. Após extrair e validar jogo/DLCs, o builder fecha o NUP e apaga apenas sua cópia temporária local para recuperar quase 24 GiB; o arquivo original continua preservado no Drive;
+6. verifica o espaço livre antes do download. Primeiro remove componentes não usados do runner (Xcodes 27.0/27.1, runtimes de simuladores e SDK Android), preservando Xcode 27.2/SDK iOS/Metal; exige pelo menos 75 GiB livres antes de baixar o NUP. Se não houver espaço, interrompe antes da transferência. Em seguida, executa o builder oficial `scripts/build_ipa_from_nsp.py` do HookLink/nxnative com `--package v131072`, `--romfs separate` e `--gpu g18p`. Ele executa no Actions as etapas pesadas: extração final do jogo e DLCs, reescrita dos módulos AArch64, separação/validação dos shaders NVN, compilação das bibliotecas iOS Metal, sem geração de PSO offline (`--gpu none`), mantendo a compilação das bibliotecas de shaders Metal e empacotamento Xcode da IPA. Após extrair e validar jogo/DLCs, o builder fecha o NUP e apaga apenas sua cópia temporária local para recuperar quase 24 GiB; o arquivo original continua preservado no Drive;
 7. publica IPA, overlay e `build-report.json` no artifact `HookLink2iOS-Ocarina-<run_number>`.
 
 **A autenticação do Actions segue o padrão funcional de Link2iOS:** o runner usa o secret permanente `GOOGLE_SERVICE_ACCOUNT_JSON` do repositório para acessar o Drive. A conta de serviço precisa ter permissão sobre a pasta raiz indicada acima. O OAuth autenticado no Colab permanece no Colab: não é copiado para GitHub, não é gravado como secret temporário e não exige permissão `Secrets` no PAT.
@@ -82,7 +82,7 @@ Nenhum NUP, RomFS, overlay, IPA, chave ou dado derivado do jogo é versionado no
 
 ## RomFS no iPhone
 
-A IPA de aproximadamente **5 GB** contém o app nativo, as bibliotecas de shaders Metal e o pipeline archive `g18p` do iPhone 17 Pro. O RomFS do jogo (aproximadamente 24 GB) fica separado e não é duplicado dentro da IPA. Depois de instalar o app, coloque os arquivos externos no container de dados do aplicativo:
+A IPA de aproximadamente **5 GB** contém o app nativo, as bibliotecas de shaders Metal e o pipeline archive `none` do iPhone 17 Pro. O RomFS do jogo (aproximadamente 24 GB) fica separado e não é duplicado dentro da IPA. Depois de instalar o app, coloque os arquivos externos no container de dados do aplicativo:
 
 ```text
 AppDataContainer/
