@@ -128,7 +128,7 @@ jobs:
           set -euo pipefail
           git clone --depth 1 --branch v1.3.1-rc2 https://github.com/LNPANDY/NX2Apple.git NX2Apple
           python NX2Apple/tools/engine.py sync
-          test "$(tr -d '\\r\\n' < NX2Apple/.upstream-ref)" = "81906931262fb25d774cce8bca2db8926439e5a2"
+          test "$(cat NX2Apple/.upstream-ref)" = "81906931262fb25d774cce8bca2db8926439e5a2"
 
       - name: Restore workspace and external RomFS from Drive (size + SHA-256)
         env:

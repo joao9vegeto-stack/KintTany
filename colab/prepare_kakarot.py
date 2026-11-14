@@ -192,6 +192,11 @@ def run_preparation(args) -> dict:
         detected = "NSP" if header[:4] == b"PFS0" else "XCI" if header[0x100:0x104] == b"HEAD" else None
         expected = "XCI" if path.suffix.lower() == ".xci" else "NSP"
         require(detected == expected, f"Invalid or mismatched package header in {path.name}: expected {expected}, detected {detected}.")
+    required_free = sum(path.stat().st_size for path in package_files) * 2 + 10 * 1024**3
+    free_bytes = shutil.disk_usage(work.parent).free
+    require(free_bytes >= required_free,
+            f"Insufficient Colab disk space before extraction: {free_bytes / 2**30:.1f} GiB free; estimated requirement is {required_free / 2**30:.1f} GiB (twice base+update bytes plus 10 GiB).")
+    print(f"[KaKaRoTiOS] Colab disk preflight: {free_bytes / 2**30:.1f} GiB free; {required_free / 2**30:.1f} GiB estimated requirement.", flush=True)
     work.mkdir(parents=True, exist_ok=True)
     install_linux_dependencies(work.parent)
     module = load_builder(nx / "engine")
