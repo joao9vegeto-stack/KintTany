@@ -101,6 +101,70 @@ jobs:
           print("SPK Python, Colab notebook JSON and Actions YAML syntax: OK")
           PY
 
+      - name: Exercise macOS Actions-to-Colab manifest contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sys, tempfile
+          from pathlib import Path
+          sys.path.insert(0, "scripts")
+          from build_spk_shared import validate_prepared_contract
+
+          common = {
+              "project": "SpkIOSzero", "title_id": "010035F022078000",
+              "package_version": "v327680", "nx2apple_tag": "v1.3.1-rc2",
+              "engine_pin": "81906931262fb25d774cce8bca2db8926439e5a2",
+              "profile_type": "registered",
+              "profile_source": "NXNative pinned built-in Sparking! ZERO profile",
+              "main_build_id": "68edafd68c7bc1a1af50b82aac838018",
+              "main_sha256": "a0f8f0644c92384ddb1baac1c21aecbeeace5bc99ad40895e216add61da78efe",
+              "allocator": {"layout": "UE4_27", "getter_slot": 19},
+              "modules": ["main", "subsdk0", "sdk"], "shader_chain": "0c434f1b68df",
+              "input_package_count": 12, "input_nsp_count": 11, "input_xci_count": 1,
+              "input_base_package_type": "XCI", "input_base_package_name": "000_base.xci",
+              "unreal_shader_sources": {"ue_decode": False, "oodle_packs": False, "ue_legacy": True},
+          }
+          with tempfile.TemporaryDirectory(prefix="spk-manifest-contract-") as tmp:
+              work = Path(tmp).resolve()
+              prep = {
+                  **common,
+                  "romfs_relative_path": "extract/v327680/RomFS.img",
+                  "romfs_id_relative_path": "extract/v327680/RomFS.img.id",
+                  "aoc_relative_dir": "aoc", "romfs_size": 123456,
+                  "aoc_images": [{"name": "1.img", "size": 399}],
+                  "graphics_api": "nvn",
+              }
+              game_data = {
+                  "romfs_relative_path": prep["romfs_relative_path"],
+                  "aoc_relative_dir": prep["aoc_relative_dir"],
+                  "romfs": {"size": prep["romfs_size"], "sha256": "a" * 64},
+              }
+              actions = {
+                  **common,
+                  "romfs_path": str(work / prep["romfs_relative_path"]),
+                  "romfs_id_path": str(work / prep["romfs_id_relative_path"]),
+                  "aoc_dir": str(work / prep["aoc_relative_dir"]),
+                  "aoc_images": ["1.img"], "game_data": game_data,
+              }
+              validate_prepared_contract(actions, prep, work)
+              bad_path = dict(actions, romfs_path=str(work / "wrong.img"))
+              try:
+                  validate_prepared_contract(bad_path, prep, work)
+              except SystemExit:
+                  pass
+              else:
+                  raise AssertionError("Mismatched absolute RomFS path was accepted")
+              bad_aoc = dict(actions, aoc_images=["wrong.img"])
+              try:
+                  validate_prepared_contract(bad_aoc, prep, work)
+              except SystemExit:
+                  pass
+              else:
+                  raise AssertionError("Mismatched AOC filename list was accepted")
+          print("Actions absolute paths + Colab relative paths/AOC projection: OK")
+          PY
+
       - name: Exercise NSP and XCI header recognition
         shell: bash
         run: |
