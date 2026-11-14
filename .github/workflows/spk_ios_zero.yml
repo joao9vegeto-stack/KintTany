@@ -140,7 +140,7 @@ jobs:
           assert "DRAGON BALL: Sparking! ZERO 2.0.76" in hle
           source = Path("colab/source_spk.py").read_text(encoding="utf-8")
           assert 'upload_drive_file(api, base_path, spk_folder["id"], f"base{base_extension}")' in source
-          upstream_builder = Path("engine/scripts/build_ipa_from_nsp.py").read_text(encoding="utf-8")
+          upstream_builder = (engine / "scripts" / "build_ipa_from_nsp.py").read_text(encoding="utf-8")
           assert "return h[:4] == b'PFS0' or h[0x100:] == b'HEAD'" in upstream_builder
           assert "PACKAGE_SUFFIXES = ('.nsp', '.xci', '.nsz', '.xcz')" in upstream_builder
           assert 'PACKAGE_SUFFIXES = {".nsp", ".xci"}' in source
