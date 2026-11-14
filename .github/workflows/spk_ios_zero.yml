@@ -47,11 +47,34 @@ jobs:
             scripts/prepare_spk_actions.py \
             scripts/build_spk_shared.py
           python - <<'PY'
-          import json, yaml
+          import ast, json, yaml
           from pathlib import Path
           notebook = json.loads(Path("colab/SpkIOSzero.ipynb").read_text(encoding="utf-8"))
           assert notebook["nbformat"] == 4
+          assert len(notebook["cells"]) == 12
           notebook_source = "\n".join("".join(c.get("source", [])) for c in notebook["cells"])
+          for index, cell in enumerate(notebook["cells"]):
+              if cell.get("cell_type") != "code":
+                  continue
+              parts = cell.get("source", [])
+              assert isinstance(parts, list), f"Cell {index}: source must be a list"
+              assert all(part.endswith("\n") for part in parts[:-1]), (
+                  f"Cell {index}: a source fragment is missing its newline; "
+                  "Colab would concatenate separate Python lines"
+              )
+              source = "".join(parts)
+              normalized = "\n".join(
+                  "pass" if line.lstrip().startswith(("%", "!")) else line
+                  for line in source.splitlines()
+              )
+              try:
+                  ast.parse(normalized, filename=f"SpkIOSzero.ipynb:cell-{index}")
+              except SyntaxError as exc:
+                  raise AssertionError(
+                      f"Notebook code cell {index} is not valid Python after IPython magic normalization: {exc}"
+                  ) from exc
+          cell7 = "".join(notebook["cells"][7]["source"])
+          assert "\nelse:\n" in cell7, "Cell 7 if/else block lost its line breaks"
           assert len(notebook["cells"]) == 12
           assert "DRIVE_FOLDER_ID" in notebook_source and ('"spk"' in notebook_source or "'spk'" in notebook_source)
           assert "10 DLCs .nsp" in notebook_source
