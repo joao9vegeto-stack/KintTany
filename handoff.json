@@ -1,0 +1,260 @@
+{
+  "format": 1,
+  "project": "SpkIOSzero",
+  "branch": "SpkIOSzero",
+  "request_id": "3c798c0d-8ca5-47da-9848-5dd994a5cf40",
+  "title_id": "010035F022078000",
+  "package_version": "v327680",
+  "nx2apple_tag": "v1.3.1-rc2",
+  "engine_pin": "81906931262fb25d774cce8bca2db8926439e5a2",
+  "drive_output_folder_id": "1NNHDpu733N2qVNlKN91JujM6oNf5JCPC",
+  "drive_output_folder_url": "https://drive.google.com/drive/folders/1NNHDpu733N2qVNlKN91JujM6oNf5JCPC",
+  "work_archive": {
+    "id": "18-3_GF70fvuMISApEbCVM8ScLlUBmF4F",
+    "name": "spk-work.tar.zst",
+    "size": 102156232,
+    "sha256": "963bfd68b836a92ba20eed1dd6013f344134b54e1c96cb6be43aa56b2570927c"
+  },
+  "source": {
+    "folder_name": "spk",
+    "package_count": 12,
+    "base_type": "XCI",
+    "base_extension": ".xci",
+    "base_file_name": "000_base.xci",
+    "input_nsp_count": 11,
+    "input_xci_count": 1,
+    "update_nsp_count": 1,
+    "dlc_nsp_count": 10,
+    "dlc_files": [
+      {
+        "name": "002_dlc1.nsp",
+        "drive_name": "dlc1.nsp",
+        "size": 124112
+      },
+      {
+        "name": "003_dlc10.nsp",
+        "drive_name": "dlc10.nsp",
+        "size": 124112
+      },
+      {
+        "name": "004_dlc2.nsp",
+        "drive_name": "dlc2.nsp",
+        "size": 124112
+      },
+      {
+        "name": "005_dlc3.nsp",
+        "drive_name": "dlc3.nsp",
+        "size": 124112
+      },
+      {
+        "name": "006_dlc4.nsp",
+        "drive_name": "dlc4.nsp",
+        "size": 124112
+      },
+      {
+        "name": "007_dlc5.nsp",
+        "drive_name": "dlc5.nsp",
+        "size": 124112
+      },
+      {
+        "name": "008_dlc6.nsp",
+        "drive_name": "dlc6.nsp",
+        "size": 124112
+      },
+      {
+        "name": "009_dlc7.nsp",
+        "drive_name": "dlc7.nsp",
+        "size": 124112
+      },
+      {
+        "name": "010_dlc8.nsp",
+        "drive_name": "dlc8.nsp",
+        "size": 124112
+      },
+      {
+        "name": "011_dlc9.nsp",
+        "drive_name": "dlc9.nsp",
+        "size": 124112
+      }
+    ]
+  },
+  "game_data": {
+    "folder_id": "1tmVvRKEovOeCqeuYwOMkxSrhWvRGNM9m",
+    "folder_url": "https://drive.google.com/drive/folders/1tmVvRKEovOeCqeuYwOMkxSrhWvRGNM9m",
+    "romfs": {
+      "id": "1qWbcuCjEBCuwdi9OLInmUqFnsKz465ZD",
+      "name": "romfs.img",
+      "size": 7307227371,
+      "sha256": "91696eadf8839c217be15f974b7a6c57d461e34975d9eaa14347fb5cc050a7d2"
+    },
+    "aoc": [
+      {
+        "id": "14JQhMT_IYySZBJ7e-mOoznkkgHiRDuVK",
+        "name": "1.img",
+        "size": 399,
+        "sha256": "d4cd52b53c7e5503f825a2967f634160a5600bb7bb03c9327d321547d204746a"
+      },
+      {
+        "id": "1s6ANHX2KG3Hu4QxYWtqPnuC9qrkb4PXY",
+        "name": "10.img",
+        "size": 399,
+        "sha256": "d4cd52b53c7e5503f825a2967f634160a5600bb7bb03c9327d321547d204746a"
+      },
+      {
+        "id": "1Yoc9A7ZuCri98jiGCMKMp6Giqq7DaPnp",
+        "name": "11.img",
+        "size": 399,
+        "sha256": "d4cd52b53c7e5503f825a2967f634160a5600bb7bb03c9327d321547d204746a"
+      },
+      {
+        "id": "1Tk_kIKhh61194JE3Nrv12M4y9-9vUCQz",
+        "name": "12.img",
+        "size": 399,
+        "sha256": "d4cd52b53c7e5503f825a2967f634160a5600bb7bb03c9327d321547d204746a"
+      },
+      {
+        "id": "158Bn8nAUcAGJuKUnq0zAOrsDHTZSnBHk",
+        "name": "14.img",
+        "size": 399,
+        "sha256": "d4cd52b53c7e5503f825a2967f634160a5600bb7bb03c9327d321547d204746a"
+      },
+      {
+        "id": "1_5WmX4lSZjIH9xOafm0Ah9mpCABnsWv9",
+        "name": "2.img",
+        "size": 399,
+        "sha256": "d4cd52b53c7e5503f825a2967f634160a5600bb7bb03c9327d321547d204746a"
+      },
+      {
+        "id": "1GQe2879_DJ1-CKEQmm58kxaeqZAOy4br",
+        "name": "3.img",
+        "size": 399,
+        "sha256": "d4cd52b53c7e5503f825a2967f634160a5600bb7bb03c9327d321547d204746a"
+      },
+      {
+        "id": "1h_MVfuKd4XNyIYQCmA93gHYiyw7RMVRC",
+        "name": "6.img",
+        "size": 399,
+        "sha256": "d4cd52b53c7e5503f825a2967f634160a5600bb7bb03c9327d321547d204746a"
+      },
+      {
+        "id": "1nzKRbFgJ9xmZtV01Bgeh93cRXi-o-yLj",
+        "name": "7.img",
+        "size": 399,
+        "sha256": "d4cd52b53c7e5503f825a2967f634160a5600bb7bb03c9327d321547d204746a"
+      },
+      {
+        "id": "1snn8XR4hvenpPQobf6bscVJK8by86V_v",
+        "name": "8.img",
+        "size": 399,
+        "sha256": "d4cd52b53c7e5503f825a2967f634160a5600bb7bb03c9327d321547d204746a"
+      }
+    ],
+    "romfs_relative_path": "extract/v327680/RomFS.img",
+    "aoc_relative_dir": "aoc"
+  },
+  "prepared": {
+    "format": 1,
+    "project": "SpkIOSzero",
+    "title_id": "010035F022078000",
+    "package_version": "v327680",
+    "nx2apple_tag": "v1.3.1-rc2",
+    "engine_pin": "81906931262fb25d774cce8bca2db8926439e5a2",
+    "input_package_count": 12,
+    "input_nsp_count": 11,
+    "input_xci_count": 1,
+    "input_base_package_type": "XCI",
+    "input_base_package_name": "000_base.xci",
+    "input_base_nsp_count": 0,
+    "input_base_xci_count": 1,
+    "input_update_nsp_count": 1,
+    "input_dlc_nsp_count": 10,
+    "profile_type": "registered",
+    "profile_source": "NXNative pinned built-in Sparking! ZERO profile",
+    "modules": [
+      "main",
+      "subsdk0",
+      "sdk"
+    ],
+    "main_build_id": "68edafd68c7bc1a1af50b82aac838018",
+    "main_sha256": "a0f8f0644c92384ddb1baac1c21aecbeeace5bc99ad40895e216add61da78efe",
+    "allocator": {
+      "detector": "NXNative engine-wide ue_malloc.find",
+      "layout": "UE4_27",
+      "vtable": "0x8703ab8",
+      "getter_slot": 19,
+      "constructor_calls": [
+        "0x1e4db30",
+        "0x1e4e048"
+      ],
+      "object_register": "x0"
+    },
+    "graphics_api": "nvn",
+    "unreal_shader_sources": {
+      "ue_decode": false,
+      "oodle_packs": false,
+      "ue_legacy": true
+    },
+    "shader_chain": "0c434f1b68df",
+    "romfs_relative_path": "extract/v327680/RomFS.img",
+    "romfs_id_relative_path": "extract/v327680/RomFS.img.id",
+    "aoc_relative_dir": "aoc",
+    "romfs_size": 7307227371,
+    "aoc_images": [
+      {
+        "name": "1.img",
+        "size": 399
+      },
+      {
+        "name": "10.img",
+        "size": 399
+      },
+      {
+        "name": "11.img",
+        "size": 399
+      },
+      {
+        "name": "12.img",
+        "size": 399
+      },
+      {
+        "name": "14.img",
+        "size": 399
+      },
+      {
+        "name": "2.img",
+        "size": 399
+      },
+      {
+        "name": "3.img",
+        "size": 399
+      },
+      {
+        "name": "6.img",
+        "size": 399
+      },
+      {
+        "name": "7.img",
+        "size": 399
+      },
+      {
+        "name": "8.img",
+        "size": 399
+      }
+    ],
+    "prepared_stages": [
+      "content_meta_scan",
+      "base_update_DLC_extraction",
+      "RomFS_and_AOC_creation",
+      "upstream_generic_FMallocBinned3_two_call_AArch64_rewrite"
+    ],
+    "deferred_stages": [
+      "Unreal_Oodle_decode_on_macOS",
+      "shader_split_on_macOS",
+      "iOS_Metal_compile",
+      "game_framework",
+      "Shared_Shell",
+      "ad_hoc_thin_IPA"
+    ]
+  },
+  "created_utc": "2026-11-14T07:21:32.402911+00:00"
+}
