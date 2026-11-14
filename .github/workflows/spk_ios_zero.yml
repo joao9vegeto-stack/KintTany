@@ -201,13 +201,15 @@ jobs:
           assert src.get("package_count") == 12
           assert src.get("update_nsp_count") == 1
           assert src.get("dlc_nsp_count") == 10
+          base_type = src.get("base_type")
+          assert base_type in ("NSP", "XCI")
+          assert src.get("base_extension") == (".xci" if base_type == "XCI" else ".nsp")
           assert p.get("input_package_count") == 12
-          assert p.get("input_package_count") == 12
-          assert p.get("input_base_package_type") in ("NSP", "XCI")
-          assert p.get("input_nsp_count") + p.get("input_xci_count") == 12
-          assert p.get("input_base_nsp_count", 0) + p.get("input_base_xci_count", 0) == 1
-          assert p.get("input_base_xci_count", 0) == (1 if p.get("input_base_package_type") == "XCI" else 0)
-          assert p.get("input_base_nsp_count") == 1
+          assert p.get("input_base_package_type") == base_type
+          assert p.get("input_nsp_count") == (11 if base_type == "XCI" else 12)
+          assert p.get("input_xci_count") == (1 if base_type == "XCI" else 0)
+          assert p.get("input_base_nsp_count") == (1 if base_type == "NSP" else 0)
+          assert p.get("input_base_xci_count") == (1 if base_type == "XCI" else 0)
           assert p.get("input_update_nsp_count") == 1
           assert p.get("input_dlc_nsp_count") == 10
           assert p.get("graphics_api") == "nvn"
