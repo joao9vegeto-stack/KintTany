@@ -196,9 +196,11 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path, archive_url: s
                  and x.get("mimeType") != FOLDER_MIME]
     spk_keys = [x for x in spk_items if x.get("name", "").lower() == "prod.keys"
                 and x.get("mimeType") != FOLDER_MIME]
-    if len(root_keys) + len(spk_keys) != 1:
-        fail("Place exactly one prod.keys either in the configured Drive root or in Drive/spk.")
-    keys_item = (root_keys or spk_keys)[0]
+    # A duplicate root copy is harmless; use the game-scoped key inside Drive/spk.
+    # Reject duplicates within either folder, but accept one copy in each location.
+    if len(root_keys) > 1 or len(spk_keys) > 1 or not (root_keys or spk_keys):
+        fail(f"Expected prod.keys in Drive root or Drive/spk (max one per folder); found {len(root_keys)} in root and {len(spk_keys)} in spk.")
+    keys_item = (spk_keys or root_keys)[0]
     update_item = by_name(spk_items, "update.nsp")
     if not update_item:
         fail("spk/update.nsp was not found.")
