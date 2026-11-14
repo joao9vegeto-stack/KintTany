@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: kakarotios-\${{ github.ref }}
+  group: kakarotios-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -58,9 +58,34 @@ jobs:
           print("KaKaRoTiOS/Kakarot handoff contract: OK")
           PY
           python -m py_compile colab/source_kakarot.py colab/prepare_kakarot.py colab/run_kakarot.py scripts/prepare_kakarot_actions.py scripts/build_kakarot_shared.py
+          python - <<'PY'
+          import sys, tempfile
+          from pathlib import Path
+          sys.path.insert(0, "colab")
+          import source_kakarot
+          with tempfile.TemporaryDirectory(prefix="kakarot-package-contract-") as tmp:
+              root = Path(tmp)
+              nsp = root / "base.nsp"
+              nsp.write_bytes(b"PFS0" + bytes(4096))
+              xci = root / "update.xci"
+              header = bytearray(0x104)
+              header[0x100:0x104] = b"HEAD"
+              xci.write_bytes(header)
+              assert source_kakarot.validate_package(nsp) == "NSP"
+              assert source_kakarot.validate_package(xci) == "XCI"
+              try:
+                  source_kakarot.validate_package(nsp, ".xci")
+              except SystemExit:
+                  pass
+              else:
+                  raise AssertionError("NSP mislabeled as XCI was accepted")
+          print("NSP/XCI header and extension contract: OK")
+          PY
 
   build-kakarot:
     needs: validate-handoff
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     if: github.ref == 'refs/heads/KaKaRoTiOS' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Queue KaKaRoTiOS build ')))
     runs-on: xcode-27
     timeout-minutes: 360
@@ -76,26 +101,26 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/KaKaRoTiOS"
+          test -d "$DEVELOPER_DIR" || { echo "::error::Xcode 27.2 is missing from xcode-27"; exit 1; }
           xcode-select -p
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphoneos metal --version
           test "$(uname -m)" = "arm64"
 
-      - name: Set up Python 3.12 and .NET 10
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
 
       - name: Install build tools and Python dependencies (no cache)
         shell: bash
         run: |
           set -euo pipefail
-          brew install zstd cmake ninja xcodegen
+          brew install xcodegen zstd glslang cmake ninja pkg-config
+          brew list --cask dotnet-sdk >/dev/null 2>&1 || brew install --cask dotnet-sdk
           python -m pip install --upgrade pip
-          python -m pip install lz4 'capstone>=5,<6' fonttools zbic backports.zstd requests pycryptodome google-api-python-client google-auth
+          python -m pip install lz4 'capstone>=5,<6' fonttools zbic backports.zstd google-api-python-client google-auth PyYAML
 
       - name: Clone and pin NX2Apple / NXNative
         shell: bash
@@ -107,7 +132,7 @@ jobs:
 
       - name: Restore workspace and external RomFS from Drive (size + SHA-256)
         env:
-          GOOGLE_SERVICE_ACCOUNT_JSON: \${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: |
           set -euo pipefail
           python scripts/prepare_kakarot_actions.py \
@@ -128,7 +153,7 @@ jobs:
         with:
           name: KaKaRoTiOS-Kakarot-IPA
           path: |
-            \${{ runner.temp }}/kakarot-output/KaKaRoTiOS.ipa
-            \${{ runner.temp }}/kakarot-output/build-report.json
+            ${{ runner.temp }}/kakarot-output/KaKaRoTiOS.ipa
+            ${{ runner.temp }}/kakarot-output/build-report.json
           if-no-files-found: error
           retention-days: 14

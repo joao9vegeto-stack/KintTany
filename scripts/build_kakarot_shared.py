@@ -155,7 +155,8 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
                 "modules", "main_build_id", "main_sha256", "rewrite_audit",
                 "graphics_api", "unreal_shader_sources", "pak_audit", "shader_chain",
                 "romfs_relative_path", "romfs_id_relative_path",
-                "romfs_size", "romfs_sha256", "input_package_count", "input_packages"):
+                "romfs_size", "romfs_sha256", "survey_relative_path", "survey_size",
+        "survey_sha256", "input_package_count", "input_packages"):
         if prepared.get(key) != prep.get(key):
             fail(f"Actions input and Colab workspace disagree on {key}.")
     if prep.get("profile_type") != "provisional":
@@ -188,6 +189,14 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
     identity_rel = safe_relative(prep["romfs_id_relative_path"], "RomFS identity")
     romfs = work.joinpath(*romfs_rel.parts)
     identity = work.joinpath(*identity_rel.parts)
+    survey_rel = safe_relative(prep["survey_relative_path"], "survey")
+    survey = work.joinpath(*survey_rel.parts)
+    if not survey.is_file() or survey.stat().st_size != int(prep["survey_size"]):
+        fail("Restored NXNative Kakarot survey report is missing or has the wrong size.")
+    if sha256_file(survey) != prep["survey_sha256"]:
+        fail("Restored NXNative Kakarot survey SHA-256 differs from Colab.")
+    if prepared.get("survey_path") != str(survey):
+        fail("Actions input survey path does not point to the restored Kakarot survey.")
     patched = work / f"patched_{prep['package_version']}"
     for path, label in (
         (exefs / "main", "extracted main"),
@@ -227,6 +236,12 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
             fail(f"Rewritten module is missing: {name}")
         if not (patched / f"{name}.fixups.tsv").is_file():
             fail(f"Rewrite fixups are missing: {name}")
+    for item in (prep.get("rewrite_audit") or {}).get("module_artifacts", []):
+        name = item["name"]
+        if sha256_file(patched / f"{name}.patched.bin") != item["patched_sha256"]:
+            fail(f"Rewritten ARM64 module SHA-256 mismatch: {name}.patched.bin")
+        if sha256_file(patched / f"{name}.fixups.tsv") != item["fixups_sha256"]:
+            fail(f"Rewrite fixup audit SHA-256 mismatch: {name}.fixups.tsv")
     return profile, version_dir, romfs, identity, patched, prep, modules
 
 def main() -> None:
@@ -276,6 +291,28 @@ def main() -> None:
         actual_chain = builder.chain_of(engine)
         if actual_chain != prepared["shader_chain"]:
             fail(f"Shader chain differs from Colab: {actual_chain} != {prepared['shader_chain']}.")
+
+        # Complete the NXNative provisional-profile path on macOS ARM64. Colab cannot
+        # execute the Apple host; this is where heap size and VA-region use are measured.
+        builder.provisional_prep(py, engine, env, logs, profile)
+        profile = builder.refine_after_rewrite(profile, version_dir, patched)
+        if (builder.HEAP_CHECK and not builder.heap_checked(profile)
+                and pg.heap_check_needed(version_dir / "ExeFS")):
+            if not builder.apple_silicon():
+                fail("Kakarot's provisional heap check requires the macOS ARM64 host.")
+            print("[KaKaRoTiOS] Measuring the provisional heap and guest memory split on the Mac host...", flush=True)
+            builder.PROG.add(1)
+            profile = builder.heap_check(engine, version_dir, patched, work, env, logs, profile)
+        if (builder.HEAP_CHECK and pg.has_va(version_dir / "ExeFS")
+                and not builder.region_checked(profile, patched)):
+            if not builder.apple_silicon():
+                fail("Kakarot's virtual-address region check requires the macOS ARM64 host.")
+            print("[KaKaRoTiOS] Measuring guest virtual-address region usage against the iPhone alias budget...", flush=True)
+            builder.PROG.add(1)
+            profile = builder.region_check(engine, version_dir, patched, work, env, logs, profile)
+        profile = game_profiles.load(TITLE_ID)
+        if profile.dir.resolve() != (work / "profile" / TITLE_ID).resolve():
+            fail("The Mac bring-up selected a profile other than the Kakarot workspace profile.")
 
         romfs_source = builder.rfs.source(version_dir)
         facts = pg.build_sources(version_dir / "ExeFS", romfs_source, modules)

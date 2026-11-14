@@ -124,7 +124,7 @@ def build_work_archive(work: Path, destination: Path) -> None:
     command = [
         "tar", "-C", str(work),
         "--exclude=./tools", "--exclude=./tmp",
-        "--exclude=./extract/*/RomFS.img",
+        "--exclude=./extract/*/RomFS.img", "--exclude=*/RomFS.img",
         "--exclude=./extract/*/RomFS.img.part",
         "-cf", "-", ".",
     ]

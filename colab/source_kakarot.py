@@ -23,8 +23,8 @@ def sha256_file(path: Path) -> str:
             digest.update(block)
     return digest.hexdigest()
 
-def validate_package(path: Path) -> str:
-    suffix = path.suffix.lower()
+def validate_package(path: Path, expected_suffix: str | None = None) -> str:
+    suffix = (expected_suffix or path.suffix).lower()
     if suffix not in PACKAGE_SUFFIXES:
         fail(f"{path.name}: expected .nsp or .xci.")
     if not path.is_file() or path.stat().st_size < 0x104:
@@ -49,11 +49,6 @@ def download_url(url: str, destination: Path, retries: int = 10) -> dict:
     fingerprint = hashlib.sha256(url.encode("utf-8")).hexdigest()
     part = destination.with_suffix(destination.suffix + ".part")
     part_source = destination.with_suffix(destination.suffix + ".part.urlsha256")
-    if part.exists():
-        old_source = part_source.read_text(encoding="utf-8").strip() if part_source.exists() else ""
-        if old_source != fingerprint:
-            part.unlink(missing_ok=True)
-    part_source.write_text(fingerprint + "\\n", encoding="utf-8")
     meta_path = destination.with_suffix(destination.suffix + ".source.json")
     if destination.is_file() and meta_path.is_file():
         try:
@@ -67,6 +62,11 @@ def download_url(url: str, destination: Path, retries: int = 10) -> dict:
                             "sha256": digest, "url_sha256": fingerprint}
         except (OSError, ValueError):
             pass
+    if part.exists():
+        old_source = part_source.read_text(encoding="utf-8").strip() if part_source.exists() else ""
+        if old_source != fingerprint:
+            part.unlink(missing_ok=True)
+    part_source.write_text(fingerprint + chr(10), encoding="utf-8")
     destination.parent.mkdir(parents=True, exist_ok=True)
     previous = part.stat().st_size if part.exists() else 0
     last_error = None
@@ -94,7 +94,12 @@ def download_url(url: str, destination: Path, retries: int = 10) -> dict:
                 if "text/html" in content_type:
                     raise RuntimeError("download returned HTML, not a package; use a direct file-download URL")
                 response.raise_for_status()
-                total = offset + int(response.headers.get("Content-Length") or 0)
+                length = response.headers.get("Content-Length")
+                if length is not None:
+                    total = offset + int(length)
+                else:
+                    match = re.match(r"bytes\s+\d+-\d+/(\d+|\*)", response.headers.get("Content-Range", ""))
+                    total = int(match.group(1)) if match and match.group(1) != "*" else 0
                 written = offset
                 with part.open(mode) as output:
                     for block in response.iter_content(chunk_size=16 * 1024 * 1024):
@@ -103,7 +108,7 @@ def download_url(url: str, destination: Path, retries: int = 10) -> dict:
                             written += len(block)
                 if total and written != total:
                     raise RuntimeError(f"short transfer: expected {total:,} bytes, received {written:,}")
-            kind = validate_package(part)
+            kind = validate_package(part, destination.suffix)
             digest = sha256_file(part)
             part.replace(destination)
             part_source.unlink(missing_ok=True)
@@ -182,15 +187,22 @@ def prepare_source(api, drive_root_id: str, runtime_root: Path,
     folder = get_or_create_folder(api, "kakarot", drive_root_id)
     root_items = list_children(api, drive_root_id)
     game_items = list_children(api, folder["id"])
-    root_keys = [x for x in root_items if x.get("name", "").lower() == "prod.keys"
-                 and x.get("mimeType") != FOLDER_MIME]
-    game_keys = [x for x in game_items if x.get("name", "").lower() == "prod.keys"
-                 and x.get("mimeType") != FOLDER_MIME]
-    if len(root_keys) > 1 or len(game_keys) > 1 or not (root_keys or game_keys):
-        fail(f"Expected one prod.keys in Drive root or Drive/kakarot; found {len(root_keys)} in root and {len(game_keys)} in kakarot.")
-    if root_keys and game_keys:
-        fail("prod.keys exists in both Drive root and Drive/kakarot; keep just one authoritative copy.")
-    keys_item = (game_keys or root_keys)[0]
+    spk_folders = [x for x in root_items if x.get("mimeType") == FOLDER_MIME
+                   and x.get("name", "").lower() == "spk"]
+    if len(spk_folders) > 1:
+        fail("More than one Drive/spk folder exists; cannot choose an unambiguous prod.keys source.")
+    spk_folder = spk_folders[0] if spk_folders else None
+    spk_items = list_children(api, spk_folder["id"]) if spk_folder else []
+    key_locations = [
+        ("root", [x for x in root_items if x.get("name", "").lower() == "prod.keys" and x.get("mimeType") != FOLDER_MIME]),
+        ("kakarot", [x for x in game_items if x.get("name", "").lower() == "prod.keys" and x.get("mimeType") != FOLDER_MIME]),
+        ("spk", [x for x in spk_items if x.get("name", "").lower() == "prod.keys" and x.get("mimeType") != FOLDER_MIME]),
+    ]
+    matches = [(where, found[0]) for where, found in key_locations for _ in found]
+    if any(len(found) > 1 for _, found in key_locations) or len(matches) != 1:
+        summary = ", ".join(f"{where}={len(found)}" for where, found in key_locations)
+        fail(f"Expected exactly one prod.keys in Drive root, Drive/kakarot, or the existing Drive/spk folder; found {summary}.")
+    keys_location, keys_item = matches[0]
 
     input_dir = runtime_root / "input-packages"
     keys_path = runtime_root / "keys" / "prod.keys"

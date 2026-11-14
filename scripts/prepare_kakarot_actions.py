@@ -76,6 +76,11 @@ def extract_verified_archive(archive: Path, destination: Path) -> None:
                 rel = PurePosixPath(member.name)
                 if rel.is_absolute() or ".." in rel.parts:
                     fail(f"Unsafe workspace archive path: {member.name}")
+                lowered = member.name.lower()
+                if (lowered.endswith("/romfs.img") or lowered.endswith(".nsp")
+                        or lowered.endswith(".xci") or lowered.endswith(".nsz")
+                        or lowered.endswith(".xcz") or lowered.endswith("/prod.keys")):
+                    fail(f"Workspace archive must not contain external RomFS, source packages or keys: {member.name}")
                 if member.issym() or member.islnk() or not (member.isdir() or member.isfile()):
                     fail(f"Unsupported workspace archive entry: {member.name}")
                 target = destination.joinpath(*[part for part in rel.parts if part not in ("", ".")])
@@ -155,7 +160,8 @@ def main() -> None:
         "modules", "main_build_id", "main_sha256", "rewrite_audit",
         "graphics_api", "unreal_shader_sources", "pak_audit", "shader_chain",
         "romfs_relative_path", "romfs_id_relative_path",
-        "romfs_size", "romfs_sha256", "input_package_count", "input_packages",
+        "romfs_size", "romfs_sha256", "survey_relative_path", "survey_size",
+        "survey_sha256", "input_package_count", "input_packages",
     )
     for key in compare_keys:
         if prep.get(key) != prep_handoff.get(key):
@@ -180,6 +186,12 @@ def main() -> None:
     romfs_sha = sha256_file(romfs)
     if romfs_sha != prep["romfs_sha256"] or romfs_sha != romfs_record["sha256"]:
         fail("Restored RomFS SHA-256 differs from Colab and/or Drive.")
+    survey_rel = safe_relative(prep["survey_relative_path"], "survey")
+    survey = work.joinpath(*survey_rel.parts)
+    if not survey.is_file() or survey.stat().st_size != int(prep["survey_size"]):
+        fail("Restored Kakarot survey report is missing or has the wrong size.")
+    if sha256_file(survey) != prep["survey_sha256"]:
+        fail("Restored Kakarot survey report SHA-256 differs from Colab.")
     if not identity.is_file():
         fail("RomFS identity sidecar was not retained in the workspace archive.")
     try:
@@ -208,6 +220,12 @@ def main() -> None:
             fail(f"Restored ARM64 rewrite output is missing for {name}.")
         if not (patched / f"{name}.fixups.tsv").is_file():
             fail(f"Restored rewrite audit is missing for {name}.")
+    for item in (prep.get("rewrite_audit") or {}).get("module_artifacts", []):
+        name = item["name"]
+        if sha256_file(patched / f"{name}.patched.bin") != item["patched_sha256"]:
+            fail(f"Restored ARM64 module SHA-256 mismatch: {name}.patched.bin")
+        if sha256_file(patched / f"{name}.fixups.tsv") != item["fixups_sha256"]:
+            fail(f"Restored ARM64 fixup audit SHA-256 mismatch: {name}.fixups.tsv")
     for path in (main, patched / "main.patched.bin", patched / "main.fixups.tsv",
                  patched / "main.cuts.tsv", patched / "main.obs.tsv"):
         if not path.is_file():
@@ -221,6 +239,8 @@ def main() -> None:
         "work_dir": str(work),
         "romfs_path": str(romfs),
         "romfs_id_path": str(identity),
+        "survey_path": str(survey),
+        "survey_sha256": prep["survey_sha256"],
         "profile_dir": str(profile_dir),
         "exefs_dir": str(exefs),
         "patched_dir": str(patched),
