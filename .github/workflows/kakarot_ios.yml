@@ -1,0 +1,134 @@
+name: KaKaRoTiOS Kakarot build
+
+on:
+  push:
+    branches:
+      - KaKaRoTiOS
+    paths:
+      - handoff.json
+  workflow_dispatch:
+
+concurrency:
+  group: kakarotios-\${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate-handoff:
+    if: github.ref == 'refs/heads/KaKaRoTiOS'
+    runs-on: macos-26
+    steps:
+      - name: Checkout KaKaRoTiOS only
+        uses: actions/checkout@v4
+        with:
+          ref: KaKaRoTiOS
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate branch scope and Kakarot handoff
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/KaKaRoTiOS"
+          python -m json.tool handoff.json >/dev/null
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          h = json.loads(Path("handoff.json").read_text())
+          p = h.get("prepared") or {}
+          assert h.get("project") == "KaKaRoTiOS"
+          assert h.get("branch") == "KaKaRoTiOS"
+          assert h.get("title_id") == "010051C0134F8000"
+          assert h.get("nx2apple_tag") == "v1.3.1-rc2"
+          assert h.get("engine_pin") == "81906931262fb25d774cce8bca2db8926439e5a2"
+          assert h.get("package_version") == p.get("package_version")
+          assert p.get("profile_type") == "provisional"
+          assert p.get("graphics_api") == "nvn"
+          assert p.get("input_package_count") == 2
+          assert len(p.get("input_packages", [])) == 2
+          assert all(x.get("type") in ("NSP", "XCI") for x in p["input_packages"])
+          assert h.get("work_archive", {}).get("sha256")
+          assert h.get("game_data", {}).get("romfs", {}).get("sha256")
+          print("KaKaRoTiOS/Kakarot handoff contract: OK")
+          PY
+          python -m py_compile colab/source_kakarot.py colab/prepare_kakarot.py colab/run_kakarot.py scripts/prepare_kakarot_actions.py scripts/build_kakarot_shared.py
+
+  build-kakarot:
+    needs: validate-handoff
+    if: github.ref == 'refs/heads/KaKaRoTiOS' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Queue KaKaRoTiOS build ')))
+    runs-on: xcode-27
+    timeout-minutes: 360
+    steps:
+      - name: Checkout KaKaRoTiOS only
+        uses: actions/checkout@v4
+        with:
+          ref: KaKaRoTiOS
+          persist-credentials: false
+
+      - name: Assert branch and Xcode 27 / iOS SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/KaKaRoTiOS"
+          xcode-select -p
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          test "$(uname -m)" = "arm64"
+
+      - name: Set up Python 3.12 and .NET 10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install build tools and Python dependencies (no cache)
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install zstd cmake ninja xcodegen
+          python -m pip install --upgrade pip
+          python -m pip install lz4 'capstone>=5,<6' fonttools zbic backports.zstd requests pycryptodome google-api-python-client google-auth
+
+      - name: Clone and pin NX2Apple / NXNative
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v1.3.1-rc2 https://github.com/LNPANDY/NX2Apple.git NX2Apple
+          python NX2Apple/tools/engine.py sync
+          test "$(tr -d '\\r\\n' < NX2Apple/.upstream-ref)" = "81906931262fb25d774cce8bca2db8926439e5a2"
+
+      - name: Restore workspace and external RomFS from Drive (size + SHA-256)
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: \${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          python scripts/prepare_kakarot_actions.py \
+            --handoff handoff.json \
+            --destination "$RUNNER_TEMP/kakarot-actions"
+
+      - name: Build Oodle/shaders, iOS Metal, framework, Shared Shell and thin IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/build_kakarot_shared.py \
+            --nx2apple-root NX2Apple \
+            --prepared-json "$RUNNER_TEMP/kakarot-actions/actions-input.json" \
+            --output "$RUNNER_TEMP/kakarot-output"
+
+      - name: Upload KaKaRoTiOS IPA and report
+        uses: actions/upload-artifact@v4
+        with:
+          name: KaKaRoTiOS-Kakarot-IPA
+          path: |
+            \${{ runner.temp }}/kakarot-output/KaKaRoTiOS.ipa
+            \${{ runner.temp }}/kakarot-output/build-report.json
+          if-no-files-found: error
+          retention-days: 14
