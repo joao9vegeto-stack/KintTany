@@ -19,7 +19,65 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-sparking-zero:
+  validate-spk-source:
+    if: github.ref == 'refs/heads/SpkIOSzero'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout SpkIOSzero
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Compile all SPK Python entry points and validate notebook/workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet PyYAML
+          python -m py_compile \
+            scripts/spk_engine.py \
+            colab/source_spk.py \
+            colab/prepare_spk.py \
+            colab/run_spk.py \
+            scripts/prepare_spk_actions.py \
+            scripts/build_spk_shared.py
+          python - <<'PY'
+          import json, yaml
+          from pathlib import Path
+          notebook = json.loads(Path("colab/SpkIOSzero.ipynb").read_text(encoding="utf-8"))
+          assert notebook["nbformat"] == 4
+          notebook_source = "\\n".join("".join(c.get("source", [])) for c in notebook["cells"])
+          assert "DRIVE_FOLDER_ID" in notebook_source and "'spk'" in notebook_source
+          with Path(".github/workflows/spk_ios_zero.yml").open(encoding="utf-8") as f:
+              workflow = yaml.load(f, Loader=yaml.BaseLoader)
+          assert "validate-spk-source" in workflow["jobs"]
+          assert "build-sparking-zero" in workflow["jobs"]
+          print("SPK Python, Colab notebook JSON and Actions YAML syntax: OK")
+          PY
+
+      - name: Apply build-ID-gated SPK allocator changes against the exact pinned NXNative
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v1.3.1-rc2 https://github.com/LNPANDY/NX2Apple.git "$RUNNER_TEMP/NX2Apple"
+          cd "$RUNNER_TEMP/NX2Apple"
+          python tools/engine.py sync
+          test "$(cat .upstream-ref)" = "81906931262fb25d774cce8bca2db8926439e5a2"
+          cd "$GITHUB_WORKSPACE"
+          python scripts/spk_engine.py --engine-root "$RUNNER_TEMP/NX2Apple/engine"
+          python - <<'PY'
+          from pathlib import Path
+          engine = Path(__import__("os").environ["RUNNER_TEMP"]) / "NX2Apple" / "engine"
+          hle = (engine / "dm/host/hle_uemalloc.c").read_text(encoding="utf-8")
+          nso = (engine / "dm/tools/patch_nso.py").read_text(encoding="utf-8")
+          assert "UE5_SPK" in hle
+          assert "DRAGON BALL: Sparking! ZERO 2.0.76" in hle
+          assert "0x8703ab8" in hle and "0x1e4db30" in hle
+          assert "SPK_FIXED_MAIN" in nso
+          assert "0x1e4db34" in nso and "OBS_UE_MALLOC | (19 << 8)" in nso
+          print("Pinned NXNative allocator/observation patch anchors: OK")
+          PY
     if: github.ref == 'refs/heads/SpkIOSzero' && github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Queue SpkIOSzero build ')
     runs-on: xcode-27
     timeout-minutes: 360
