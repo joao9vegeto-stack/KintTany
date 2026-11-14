@@ -66,6 +66,28 @@ def download_drive_file(api, item: dict, target: Path) -> None:
         fail(f"Drive file is empty: {item['name']}")
     part.replace(target)
 
+def upload_drive_file(api, path: Path, parent_id: str, name: str) -> dict:
+    from googleapiclient.http import MediaFileUpload
+    size = path.stat().st_size
+    media = MediaFileUpload(str(path), mimetype="application/octet-stream",
+                            chunksize=CHUNK, resumable=True)
+    request = api.files().create(
+        body={"name": name, "parents": [parent_id]},
+        media_body=media,
+        fields="id,name,size",
+        supportsAllDrives=True,
+    )
+    item = None
+    while item is None:
+        status, item = request.next_chunk()
+        if status:
+            print(f"[SpkIOSzero] Uploading extracted base to Drive/spk/{name}: {status.progress()*100:.1f}%", flush=True)
+    if int(item.get("size", -1)) != size:
+        fail(f"Drive upload size mismatch for {name}: expected {size}, got {item.get('size')}")
+    print(f"[SpkIOSzero] Extracted base persisted in Drive/spk/{name}: {size:,} bytes ({size/2**30:.2f} GiB).", flush=True)
+    return {"id": item["id"], "name": item["name"], "size": size}
+
+
 def download_7z(url: str, target: Path) -> None:
     import requests
     if target.is_file() and target.stat().st_size > 32:
@@ -214,6 +236,9 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path, archive_url: s
         base_path = input_dir / "000_base.nsp"
         if not base_path.is_file() or base_path.stat().st_size != base_extracted.stat().st_size:
             shutil.copy2(base_extracted, base_path)
+        # Persist the extracted base back into this game's own Drive/spk folder.
+        # Subsequent Colab runs then reuse base.nsp and do not need the expiring URL.
+        upload_drive_file(api, base_path, spk_folder["id"], "base.nsp")
 
     update_path = input_dir / "001_update.nsp"
     download_drive_file(api, update_item, update_path)
