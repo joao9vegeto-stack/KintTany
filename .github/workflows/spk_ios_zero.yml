@@ -13,6 +13,7 @@ on:
       - colab/prepare_spk.py
       - colab/run_spk.py
       - colab/SpkIOSzero.ipynb
+      - colab/SpkIOSzero_Corrigido.ipynb
       - .github/workflows/spk_ios_zero.yml
 
 permissions:
@@ -75,6 +76,12 @@ jobs:
                   ) from exc
           cell7 = "".join(notebook["cells"][7]["source"])
           assert "\nelse:\n" in cell7, "Cell 7 if/else block lost its line breaks"
+          assert cell7.startswith("# CÉLULA AUTOSSUFICIENTE"), "Preparation cell is not self-contained"
+          assert 0 <= cell7.find("from pathlib import Path") < cell7.find("HANDOFF_PATH = Path")
+          assert 0 <= cell7.find("HANDOFF_READY = False") < cell7.find("if not HANDOFF_READY")
+          assert "drive_api_client = build(" in cell7 and "import run_spk" in cell7
+          assert "RECOVERED_HANDOFF = run_spk.recover(" in cell7
+          assert 'HANDOFF_PATH.write_text(json.dumps(HANDOFF, indent=2) + "\\n"' not in cell7
           assert len(notebook["cells"]) == 12
           assert "DRIVE_FOLDER_ID" in notebook_source and ('"spk"' in notebook_source or "'spk'" in notebook_source)
           assert "10 DLCs .nsp" in notebook_source
