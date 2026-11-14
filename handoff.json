@@ -257,6 +257,6 @@
     ]
   },
   "created_utc": "2026-11-14T07:21:32.402911+00:00",
-  "build_retry": 2,
-  "build_retry_reason": "manifest contract fix bc4bca76e445c592bb71c2d5b9a70b83feb0e6cf"
+  "build_retry": 3,
+  "build_retry_reason": "shader_map output location fix ebcc1298a1089e75b916710cd5bf9d793c2b2cc8; regression test a1e3d442be1e218a20542450d8976521b485cba4"
 }
