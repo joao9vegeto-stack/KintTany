@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
 jobs:
   check_workflow_status:
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/SpkIOSzero' }}
     runs-on: macos-latest
     timeout-minutes: 5
     outputs:
@@ -25,6 +26,7 @@ jobs:
           fi
 
   finalize:
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/SpkIOSzero' }}
     needs: check_workflow_status
     runs-on: macos-latest
     timeout-minutes: 60

@@ -8,6 +8,7 @@ permissions:
 
 jobs:
   build_shader_kit_ns:
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/SpkIOSzero' }}
     runs-on: macos-15
     timeout-minutes: 30
 

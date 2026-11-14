@@ -14,6 +14,7 @@ env:
 
 jobs:
   extract_and_split:
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/SpkIOSzero' }}
     runs-on: macos-latest
     timeout-minutes: 120
 

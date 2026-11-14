@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
 jobs:
   check_workflow_status:
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/SpkIOSzero' }}
     runs-on: macos-latest
     timeout-minutes: 5
     outputs:
@@ -25,6 +26,7 @@ jobs:
           fi
 
   compile_slice:
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/SpkIOSzero' }}
     needs: check_workflow_status
     if: needs.check_workflow_status.outputs.should_continue == 'true'
     runs-on: macos-latest
@@ -346,6 +348,7 @@ jobs:
           echo "════════════════════════════════════════════"
   
   merge_slices:
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/SpkIOSzero' }}
     needs: compile_slice
     runs-on: macos-latest
     timeout-minutes: 60
