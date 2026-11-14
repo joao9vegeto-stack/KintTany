@@ -256,5 +256,7 @@
       "ad_hoc_thin_IPA"
     ]
   },
-  "created_utc": "2026-11-14T07:21:32.402911+00:00"
+  "created_utc": "2026-11-14T07:21:32.402911+00:00",
+  "build_retry": 2,
+  "build_retry_reason": "manifest contract fix bc4bca76e445c592bb71c2d5b9a70b83feb0e6cf"
 }
