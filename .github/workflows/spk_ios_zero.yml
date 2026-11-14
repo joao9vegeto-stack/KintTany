@@ -47,7 +47,7 @@ jobs:
           from pathlib import Path
           notebook = json.loads(Path("colab/SpkIOSzero.ipynb").read_text(encoding="utf-8"))
           assert notebook["nbformat"] == 4
-          notebook_source = "\\n".join("".join(c.get("source", [])) for c in notebook["cells"])
+          notebook_source = "\n".join("".join(c.get("source", [])) for c in notebook["cells"])
           assert "DRIVE_FOLDER_ID" in notebook_source and "'spk'" in notebook_source
           with Path(".github/workflows/spk_ios_zero.yml").open(encoding="utf-8") as f:
               workflow = yaml.load(f, Loader=yaml.BaseLoader)
@@ -78,6 +78,8 @@ jobs:
           assert "0x1e4db34" in nso and "OBS_UE_MALLOC | (19 << 8)" in nso
           print("Pinned NXNative allocator/observation patch anchors: OK")
           PY
+
+  build-sparking-zero:
     if: github.ref == 'refs/heads/SpkIOSzero' && github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Queue SpkIOSzero build ')
     runs-on: xcode-27
     timeout-minutes: 360
@@ -195,6 +197,6 @@ jobs:
           name: SpkIOSzero-logs-${{ github.run_number }}
           path: |
             ${{ runner.temp }}/spk-ios-zero/work/logs/**
-            ${{ runner.temp }}/spk-ios-zero-output/**
+            ${{ runner.temp }}/spk-ios-zero-output/build-report.json
           if-no-files-found: ignore
           retention-days: 7
