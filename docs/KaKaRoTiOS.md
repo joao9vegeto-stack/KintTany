@@ -30,7 +30,7 @@ Open `colab/KaKaRoTiOS.ipynb`. Fill in:
 - `BASE_URL` and `UPDATE_URL` — direct download URLs for the user's own packages.
 - `BASE_FILENAME` and `UPDATE_FILENAME` — use `.nsp` or `.xci` to match each package's real format.
 
-The last notebook cell is deliberately opt-in. It defaults to `DISPATCH_TO_GITHUB = False`. Dispatch writes `handoff.json` to `KaKaRoTiOS` only. Do not dispatch until the URLs and source packages are ready.
+The last notebook cell is deliberately opt-in. It defaults to `DISPATCH_TO_GITHUB = False`. Dispatch writes `handoff.json` to `KaKaRoTiOS` only. The workflow has no manual dispatch trigger: it runs only when that explicit cell creates a `Queue KaKaRoTiOS build …` commit changing `handoff.json`. Ordinary code commits do not start the build. Do not dispatch until the URLs and source packages are ready.
 
 ## Branch and workflow isolation
 

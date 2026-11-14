@@ -6,7 +6,6 @@ on:
       - KaKaRoTiOS
     paths:
       - handoff.json
-  workflow_dispatch:
 
 concurrency:
   group: kakarotios-${{ github.ref }}
@@ -17,7 +16,7 @@ permissions:
 
 jobs:
   validate-handoff:
-    if: github.ref == 'refs/heads/KaKaRoTiOS'
+    if: github.ref == 'refs/heads/KaKaRoTiOS' && startsWith(github.event.head_commit.message, 'Queue KaKaRoTiOS build ')
     runs-on: macos-26
     steps:
       - name: Checkout KaKaRoTiOS only
@@ -86,7 +85,7 @@ jobs:
     needs: validate-handoff
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
-    if: github.ref == 'refs/heads/KaKaRoTiOS' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Queue KaKaRoTiOS build ')))
+    if: github.ref == 'refs/heads/KaKaRoTiOS' && github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Queue KaKaRoTiOS build ')
     runs-on: xcode-27
     timeout-minutes: 360
     steps:
