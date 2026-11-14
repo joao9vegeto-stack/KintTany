@@ -109,7 +109,7 @@ jobs:
           import sys, tempfile
           from pathlib import Path
           sys.path.insert(0, "scripts")
-          from build_spk_shared import validate_prepared_contract
+          from build_spk_shared import validate_prepared_contract, validate_shader_map
 
           common = {
               "project": "SpkIOSzero", "title_id": "010035F022078000",
@@ -162,6 +162,29 @@ jobs:
                   pass
               else:
                   raise AssertionError("Mismatched AOC filename list was accepted")
+          class Profile:
+              def __init__(self, root):
+                  self.root = root
+              def table(self, name):
+                  return self.root / name
+
+          # NXNative provisional split writes shader_map.tsv to profile.table(),
+          # not into the shader package directory.
+          with tempfile.TemporaryDirectory(prefix="spk-shader-map-") as tmp:
+              root = Path(tmp)
+              profile = Profile(root / "profile")
+              profile.root.mkdir()
+              shader_map = profile.table("shader_map.tsv")
+              shader_map.write_text("# generated\\nshader.bin\\t0\\t1\\t0123456789abcdef\\tvertex\\n")
+              assert validate_shader_map(profile) == shader_map
+              shader_map.write_text("")
+              try:
+                  validate_shader_map(profile)
+              except SystemExit:
+                  pass
+              else:
+                  raise AssertionError("Empty profile shader_map.tsv was accepted")
+          print("NXNative profile shader_map.tsv output location and non-empty validation: OK")
           print("Actions absolute paths + Colab relative paths/AOC projection: OK")
           PY
 
