@@ -51,12 +51,19 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
     prep = json.loads(prep_path.read_text(encoding="utf-8"))
     for key in ("project", "title_id", "package_version", "nx2apple_tag", "engine_pin",
                 "main_build_id", "main_sha256", "allocator", "modules", "shader_chain",
+                "input_package_count", "input_nsp_count", "input_xci_count",
+                "input_base_package_type", "input_base_package_name",
                 "romfs_relative_path", "romfs_id_relative_path", "aoc_relative_dir",
                 "romfs_size", "aoc_images", "graphics_api", "unreal_shader_sources"):
         if prep.get(key) != prepared.get(key): fail(f"Actions handoff and Colab workspace disagree on {key}.")
     if prep.get("main_build_id") != EXPECTED_MAIN_BUILD_ID or prep.get("main_sha256") != EXPECTED_MAIN_SHA256:
         fail("Colab workspace is not the reviewed Sparking! ZERO main build.")
     if prep.get("graphics_api") != "nvn": fail(f"Sparking! ZERO expected NVN; Colab recorded {prep.get('graphics_api')}.")
+    base_type = prep.get("input_base_package_type")
+    if (prep.get("input_package_count") != 12 or base_type not in ("NSP", "XCI")
+        or prep.get("input_base_package_name", "").lower().endswith(".xci") != (base_type == "XCI")
+        or prep.get("input_xci_count") != (1 if base_type == "XCI" else 0)):
+        fail("Restored Colab manifest does not describe exactly one validated base NSP/XCI plus the update and 10 DLC NSPs.")
     ue_flags = prep.get("unreal_shader_sources") or {}
     if not any(ue_flags.get(k) for k in ("ue_decode", "oodle_packs", "ue_legacy")):
         fail("Colab did not identify Unreal/Oodle shader sources.")

@@ -96,16 +96,28 @@ def main() -> None:
     if prepared_manifest.get("main_sha256") != "a0f8f0644c92384ddb1baac1c21aecbeeace5bc99ad40895e216add61da78efe":
         fail("Colab manifest main SHA-256 differs from the reviewed SPK build.")
     source_manifest = handoff.get("source") or {}
+    base_type = source_manifest.get("base_type")
+    expected_base_extension = ".xci" if base_type == "XCI" else ".nsp"
     if (source_manifest.get("package_count") != 12
+        or base_type not in ("NSP", "XCI")
+        or source_manifest.get("base_extension") != expected_base_extension
+        or not source_manifest.get("base_file_name", "").lower().endswith(expected_base_extension)
+        or source_manifest.get("input_nsp_count") != (11 if base_type == "XCI" else 12)
+        or source_manifest.get("input_xci_count") != (1 if base_type == "XCI" else 0)
         or source_manifest.get("update_nsp_count") != 1
         or source_manifest.get("dlc_nsp_count") != 10):
-        fail("Source handoff must record exactly 1 base NSP + 1 update NSP + 10 DLC NSPs.")
+        fail("Source handoff must record exactly 1 base NSP/XCI + 1 update NSP + 10 DLC NSPs.")
+    expected_nsp_count = 11 if base_type == "XCI" else 12
+    expected_xci_count = 1 if base_type == "XCI" else 0
     if (prepared_manifest.get("input_package_count") != 12
-        or prepared_manifest.get("input_nsp_count") != 12
-        or prepared_manifest.get("input_base_nsp_count") != 1
+        or prepared_manifest.get("input_nsp_count") != expected_nsp_count
+        or prepared_manifest.get("input_xci_count") != expected_xci_count
+        or prepared_manifest.get("input_base_package_type") != base_type
+        or prepared_manifest.get("input_base_nsp_count") != (1 if base_type == "NSP" else 0)
+        or prepared_manifest.get("input_base_xci_count") != expected_xci_count
         or prepared_manifest.get("input_update_nsp_count") != 1
         or prepared_manifest.get("input_dlc_nsp_count") != 10):
-        fail("Colab manifest does not validate the exact 12-NSP Sparking! ZERO source set.")
+        fail("Colab manifest does not validate the exact 12-package Sparking! ZERO source set.")
     if not handoff.get("request_id") or not handoff.get("work_archive", {}).get("id"):
         fail("Handoff request ID or workspace archive reference is missing.")
     game_data = handoff.get("game_data") or {}
@@ -190,6 +202,11 @@ def main() -> None:
         "aoc_dir": str(aoc_dir), "aoc_count": len(restored),
         "aoc_images": [p.name for p in restored],
         "modules": prep["modules"], "shader_chain": prep["shader_chain"],
+        "input_package_count": prep["input_package_count"],
+        "input_nsp_count": prep["input_nsp_count"],
+        "input_xci_count": prep["input_xci_count"],
+        "input_base_package_type": prep["input_base_package_type"],
+        "input_base_package_name": prep["input_base_package_name"],
         "main_build_id": prep["main_build_id"], "main_sha256": prep["main_sha256"],
         "allocator": prep["allocator"], "unreal_shader_sources": prep["unreal_shader_sources"],
         "game_data": game_data,
@@ -197,6 +214,6 @@ def main() -> None:
     output_path = root / "actions-input.json"
     output_path.write_text(json.dumps(prepared, indent=2) + "\n", encoding="utf-8")
     print("[SpkIOSzero] Actions input validated:", output_path)
-    print("[SpkIOSzero] Source NSPs and prod.keys never leave Colab; only workspace + external RomFS/AOC are restored on macOS.")
+    print("[SpkIOSzero] Source NSP/XCI packages and prod.keys never leave Colab; only workspace + external RomFS/AOC are restored on macOS.")
 
 if __name__ == "__main__": main()

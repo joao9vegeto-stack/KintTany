@@ -83,6 +83,9 @@ jobs:
           assert "RECOVERED_HANDOFF = run_spk.recover(" in cell7
           handoff_write = next(line for line in cell7.splitlines() if "HANDOFF_PATH.write_text" in line)
           assert handoff_write.count("\\") == 1, "Handoff JSON must use one escaped newline"
+          assert '(".nsp", ".xci")' in cell7, "Notebook preflight must accept an XCI base"
+          assert 're.fullmatch(r"dlc[^/]*\\\\.nsp"' not in cell7, "Notebook DLC regex must not be double-escaped"
+          assert 're.fullmatch(r"dlc[^/]*\\.nsp"' in cell7, "Notebook must identify the ten DLC NSPs"
           assert len(notebook["cells"]) == 12
           assert "DRIVE_FOLDER_ID" in notebook_source and ('"spk"' in notebook_source or "'spk'" in notebook_source)
           assert "10 DLCs .nsp" in notebook_source
@@ -93,6 +96,29 @@ jobs:
           assert "validate-spk-source" in workflow["jobs"]
           assert "build-sparking-zero" in workflow["jobs"]
           print("SPK Python, Colab notebook JSON and Actions YAML syntax: OK")
+          PY
+
+      - name: Exercise NSP and XCI header recognition
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sys, tempfile
+          from pathlib import Path
+          sys.path.insert(0, "colab")
+          import source_spk
+          with tempfile.TemporaryDirectory(prefix="spk-package-test-") as tmp:
+              root = Path(tmp)
+              nsp = root / "base.nsp"
+              nsp.write_bytes(b"PFS0" + bytes(4096))
+              xci = root / "base.XCI"
+              header = bytearray(0x104)
+              header[0x100:0x104] = b"HEAD"
+              xci.write_bytes(header)
+              assert source_spk.validate_package(nsp) == "NSP"
+              assert source_spk.validate_package(xci) == "XCI"
+              assert set(source_spk.find_packages(root)) == {nsp, xci}
+          print("PFS0 NSP + XCI HEAD@0x100 detection: OK")
           PY
 
       - name: Apply build-ID-gated SPK allocator changes against the exact pinned NXNative
@@ -113,7 +139,16 @@ jobs:
           assert "UE5_SPK" in hle
           assert "DRAGON BALL: Sparking! ZERO 2.0.76" in hle
           source = Path("colab/source_spk.py").read_text(encoding="utf-8")
-          assert 'upload_drive_file(api, base_path, spk_folder["id"], "base.nsp")' in source
+          assert 'upload_drive_file(api, base_path, spk_folder["id"], f"base{base_extension}")' in source
+          upstream_builder = Path("engine/scripts/build_ipa_from_nsp.py").read_text(encoding="utf-8")
+          assert "return h[:4] == b'PFS0' or h[0x100:] == b'HEAD'" in upstream_builder
+          assert "PACKAGE_SUFFIXES = ('.nsp', '.xci', '.nsz', '.xcz')" in upstream_builder
+          assert 'PACKAGE_SUFFIXES = {".nsp", ".xci"}' in source
+          assert 'header[0x100:0x104] != b"HEAD"' in source
+          assert "def find_packages(" in source and "validate_package(" in source
+          prepare = Path("colab/prepare_spk.py").read_text(encoding="utf-8")
+          assert 'files_with_suffix(nsp_dir, ".nsp", ".xci")' in prepare
+          assert 'base_package_type = "XCI"' in prepare
           assert "0x8703ab8" in hle and "0x1e4db30" in hle
           assert "SPK_FIXED_MAIN" in nso
           assert "0x1e4db34" in nso and "OBS_UE_MALLOC | (19 << 8)" in nso
@@ -164,7 +199,11 @@ jobs:
           assert src.get("update_nsp_count") == 1
           assert src.get("dlc_nsp_count") == 10
           assert p.get("input_package_count") == 12
-          assert p.get("input_nsp_count") == 12
+          assert p.get("input_package_count") == 12
+          assert p.get("input_base_package_type") in ("NSP", "XCI")
+          assert p.get("input_nsp_count") + p.get("input_xci_count") == 12
+          assert p.get("input_base_nsp_count", 0) + p.get("input_base_xci_count", 0) == 1
+          assert p.get("input_base_xci_count", 0) == (1 if p.get("input_base_package_type") == "XCI" else 0)
           assert p.get("input_base_nsp_count") == 1
           assert p.get("input_update_nsp_count") == 1
           assert p.get("input_dlc_nsp_count") == 10

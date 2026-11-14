@@ -131,9 +131,15 @@ def prepare(args, api=None) -> dict:
     from source_spk import prepare_source
     source = prepare_source(api, args.drive_folder_id, root, os.environ.get("SPK_BASE_ARCHIVE_URL", "").strip())
     input_dir, keys = Path(source["package_dir"]), Path(source["keys_path"])
-    if source.get("package_count") != 12 or source.get("dlc_nsp_count") != 10:
-        fail("Drive/spk must contain exactly 1 base NSP + update.nsp + 10 DLC .nsp files.")
-    print(f"[SpkIOSzero] Source ready: 1 base NSP + 1 update.nsp + 10 DLC NSPs from Drive/{source['source_folder_name']}; BOTW inputs were not read.", flush=True)
+    if (source.get("package_count") != 12 or source.get("update_nsp_count") != 1
+        or source.get("dlc_nsp_count") != 10 or source.get("base_type") not in ("NSP", "XCI")):
+        fail("Drive/spk must contain exactly 1 base NSP/XCI + update.nsp + 10 DLC .nsp files.")
+    print(
+        f"[SpkIOSzero] Source ready: 1 base {source['base_type']} ({source['base_file_name']}) "
+        f"+ 1 update.nsp + 10 DLC NSPs from Drive/{source['source_folder_name']}; "
+        "BOTW inputs were not read.",
+        flush=True,
+    )
 
     from prepare_spk import run_preparation
     nx = install_nx2apple(root)
@@ -183,6 +189,10 @@ def prepare(args, api=None) -> dict:
             "folder_name": source["source_folder_name"],
             "package_count": source["package_count"],
             "base_type": source["base_type"],
+            "base_extension": source["base_extension"],
+            "base_file_name": source["base_file_name"],
+            "input_nsp_count": source["input_nsp_count"],
+            "input_xci_count": source["input_xci_count"],
             "update_nsp_count": source["update_nsp_count"],
             "dlc_nsp_count": source["dlc_nsp_count"],
             "dlc_files": source["dlc_files"],
@@ -236,12 +246,16 @@ def recover(args, api=None) -> dict | None:
             or handoff.get("package_version") != prepared.get("package_version")
             or not prepared.get("aoc_images") or not handoff.get("game_data", {}).get("aoc")
             or (handoff.get("source") or {}).get("package_count") != 12
+            or (handoff.get("source") or {}).get("base_type") not in ("NSP", "XCI")
+            or (handoff.get("source") or {}).get("base_extension") not in (".nsp", ".xci")
             or (handoff.get("source") or {}).get("dlc_nsp_count") != 10
             or prepared.get("input_package_count") != 12
-            or prepared.get("input_dlc_nsp_count") != 10):
+            or prepared.get("input_dlc_nsp_count") != 10
+            or prepared.get("input_base_package_type") != (handoff.get("source") or {}).get("base_type")
+            or prepared.get("input_base_nsp_count", 0) + prepared.get("input_base_xci_count", 0) != 1):
             dest.unlink(missing_ok=True)
             continue
-        print("[SpkIOSzero] Completed Sparking! ZERO handoff recovered from Drive; no NSP download, extraction or rewrite was repeated.")
+        print("[SpkIOSzero] Completed Sparking! ZERO handoff recovered from Drive; no NSP/XCI download, extraction or rewrite was repeated.")
         print("Request:", handoff["request_id"])
         print("Drive:", handoff.get("drive_output_folder_url"))
         print("Package:", handoff["package_version"])

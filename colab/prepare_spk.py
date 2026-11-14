@@ -128,10 +128,21 @@ def run_preparation(args) -> dict:
     expected_dlc_count = int(getattr(args, "expected_dlc_count", 10))
     expected_package_count = int(getattr(args, "expected_package_count", 12))
     require(expected_dlc_count == 10 and expected_package_count == 12,
-            "SpkIOSzero input contract is exactly 1 base NSP + 1 update NSP + 10 DLC NSPs.")
-    require(len(nsp_files) == expected_package_count and not xci_files,
-            f"Expected exactly 12 NSP packages (base + update + 10 DLC); found {len(nsp_files)} NSP(s) and {len(xci_files)} XCI(s).")
-    for path in nsp_files: require(module.is_package(path), f"Invalid PFS0 NSP header: {path.name}")
+            "SpkIOSzero input contract is 1 base package (.nsp or .xci) + 1 update.nsp + 10 DLC NSPs.")
+    base_files = [p for p in package_files if p.name.lower().startswith("000_base.")]
+    require(len(base_files) == 1 and base_files[0].suffix.lower() in (".nsp", ".xci"),
+            f"Expected exactly one 000_base.nsp or 000_base.xci; found {[p.name for p in base_files]}.")
+    base_file = base_files[0]
+    extra_packages = [p for p in package_files if p != base_file]
+    require(len(package_files) == 12 and len(extra_packages) == 11
+            and all(p.suffix.lower() == ".nsp" for p in extra_packages),
+            f"Expected 1 base package + 1 update NSP + 10 DLC NSPs; found {len(package_files)} package(s), {len(nsp_files)} NSP(s), {len(xci_files)} XCI(s).")
+    require(len(xci_files) == (1 if base_file.suffix.lower() == ".xci" else 0),
+            "An XCI is supported only as the single base package; update and DLC inputs must be NSP.")
+    for path in package_files:
+        require(module.is_package(path),
+                f"Invalid Nintendo package header for {path.name}: expected PFS0 (NSP) or XCI HEAD at offset 0x100.")
+    base_package_type = "XCI" if base_file.suffix.lower() == ".xci" else "NSP"
 
     original_rewrite = module.rewrite
     def rewrite_with_spk_guard(py, repo, exe_dir, out, env, logs, game, provisional=False):
@@ -225,15 +236,22 @@ def run_preparation(args) -> dict:
     romfs = version_dir / "RomFS.img"
     aoc_dir = work / "aoc"
     aoc_images = sorted(p for p in aoc_dir.glob("*.img") if p.is_file()) if aoc_dir.is_dir() else []
-    require(aoc_images, "No DLC AOC images were extracted from the NSPs under Drive/spk.")
+    require(aoc_images, "No DLC AOC images were extracted from the 10 DLC NSPs under Drive/spk.")
     require(all(p.stat().st_size > 0 for p in aoc_images), "At least one extracted DLC AOC image is empty.")
     shader_chain = module.chain_of(nx / "engine")
     require(bool(shader_chain), "NXNative shader chain header is missing after Linux preparation.")
     result = {
         "format": 1, "project": "SpkIOSzero", "title_id": TITLE_ID,
         "package_version": package_version, "nx2apple_tag": NX2APPLE_TAG, "engine_pin": pin,
-        "input_package_count": len(package_files), "input_nsp_count": len(nsp_files),
-        "input_base_nsp_count": 1, "input_update_nsp_count": 1, "input_dlc_nsp_count": 10,
+        "input_package_count": len(package_files),
+        "input_nsp_count": len(nsp_files),
+        "input_xci_count": len(xci_files),
+        "input_base_package_type": base_package_type,
+        "input_base_package_name": base_file.name,
+        "input_base_nsp_count": int(base_package_type == "NSP"),
+        "input_base_xci_count": int(base_package_type == "XCI"),
+        "input_update_nsp_count": 1,
+        "input_dlc_nsp_count": 10,
         "profile_type": "provisional", "modules": modules,
         "main_build_id": EXPECTED_MAIN_BUILD_ID, "main_sha256": EXPECTED_MAIN_SHA256,
         "allocator": {"layout": "UE5_SPK", "vtable": f"{spk_engine.VTABLE:#x}",

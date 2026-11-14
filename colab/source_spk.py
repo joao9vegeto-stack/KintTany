@@ -141,16 +141,36 @@ def install_7zip() -> str:
     fail("Unable to install 7-Zip in Colab.")
     raise AssertionError("unreachable")
 
-def find_nsps(root: Path) -> list[Path]:
-    return sorted(p for p in root.rglob("*") if p.is_file() and p.suffix.lower() == ".nsp")
+PACKAGE_SUFFIXES = {".nsp", ".xci"}
+
+def find_packages(root: Path) -> list[Path]:
+    if not root.exists():
+        return []
+    return sorted(
+        p for p in root.rglob("*")
+        if p.is_file() and p.suffix.lower() in PACKAGE_SUFFIXES
+        and not p.name.startswith("._")
+    )
 
 
-def validate_nsp(path: Path) -> None:
-    if not path.is_file() or path.stat().st_size < 4:
-        fail(f"NSP is empty or truncated: {path}")
-    with path.open("rb") as f:
-        if f.read(4) != b"PFS0":
-            fail(f"{path.name} is not a valid PFS0 NSP.")
+def validate_package(path: Path) -> str:
+    """Match NXNative is_package(): NSP=PFS0 at 0; XCI=HEAD at offset 0x100."""
+    if not path.is_file():
+        fail(f"Game package does not exist: {path}")
+    suffix = path.suffix.lower()
+    with path.open("rb") as stream:
+        header = stream.read(0x104)
+    if suffix == ".nsp":
+        if len(header) < 4 or header[:4] != b"PFS0":
+            fail(f"{path.name} has .nsp extension but does not contain the PFS0 header.")
+        return "NSP"
+    if suffix == ".xci":
+        if len(header) < 0x104 or header[0x100:0x104] != b"HEAD":
+            fail(f"{path.name} has .xci extension but does not contain the XCI HEAD magic at offset 0x100.")
+        return "XCI"
+    fail(f"Unsupported game package extension: {path.name}; expected .nsp or .xci.")
+    raise AssertionError("unreachable")
+
 
 def extract_single_base(archive: Path, destination: Path, sevenzip: str) -> Path:
     listing = subprocess.run([sevenzip, "l", "-slt", str(archive)], check=True,
@@ -173,16 +193,22 @@ def extract_single_base(archive: Path, destination: Path, sevenzip: str) -> Path
         fail("7-Zip integrity test failed; archive may be damaged or password protected.")
     shutil.rmtree(destination, ignore_errors=True)
     destination.mkdir(parents=True, exist_ok=True)
-    r = subprocess.run([sevenzip, "x", str(archive), f"-o{destination}", "-y"],
-                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    if r.returncode:
-        fail("7-Zip extraction failed: " + r.stdout[-2000:])
-    nsps = find_nsps(destination)
-    if len(nsps) != 1:
-        fail(f"Base 7z must contain exactly one NSP; found {len(nsps)}: " +
-             "; ".join(f"{p.relative_to(destination)} ({p.stat().st_size:,} bytes)" for p in nsps))
-    validate_nsp(nsps[0])
-    return nsps[0]
+    result = subprocess.run([sevenzip, "x", str(archive), f"-o{destination}", "-y"],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if result.returncode:
+        fail("7-Zip extraction failed: " + result.stdout[-2000:])
+    packages = find_packages(destination)
+    if len(packages) != 1:
+        details = "; ".join(
+            f"{p.relative_to(destination)} ({p.stat().st_size:,} bytes)"
+            for p in packages
+        )
+        fail(
+            "Base 7z must contain exactly one supported game package (.nsp or .xci); "
+            f"found {len(packages)}: {details or '(no NSP/XCI files)'}"
+        )
+    validate_package(packages[0])
+    return packages[0]
 
 def prepare_source(api, drive_folder_id: str, runtime_root: Path, archive_url: str) -> dict:
     root_items = list_children(api, drive_folder_id)
@@ -196,30 +222,34 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path, archive_url: s
                  and x.get("mimeType") != FOLDER_MIME]
     spk_keys = [x for x in spk_items if x.get("name", "").lower() == "prod.keys"
                 and x.get("mimeType") != FOLDER_MIME]
-    # A duplicate root copy is harmless; use the game-scoped key inside Drive/spk.
-    # Reject duplicates within either folder, but accept one copy in each location.
     if len(root_keys) > 1 or len(spk_keys) > 1 or not (root_keys or spk_keys):
         fail(f"Expected prod.keys in Drive root or Drive/spk (max one per folder); found {len(root_keys)} in root and {len(spk_keys)} in spk.")
     keys_item = (spk_keys or root_keys)[0]
-    update_item = by_name(spk_items, "update.nsp")
-    if not update_item:
-        fail("spk/update.nsp was not found.")
-    package_files = [x for x in spk_items if x.get("mimeType") != FOLDER_MIME
-                     and x.get("name", "").lower().endswith(".nsp")]
-    other_items = [x for x in package_files if x["id"] != update_item["id"]]
-    # Drive/spk contains update.nsp + ten DLC NSPs. An optional base.nsp
-    # is accepted after the first successful base extraction is checkpointed to Drive.
-    named_base = [x for x in other_items if x.get("name", "").lower().startswith("base")]
-    if len(other_items) == 10:
-        base_item, dlc_items = None, other_items
-    elif len(other_items) == 11 and len(named_base) == 1:
-        base_item = named_base[0]
-        dlc_items = [x for x in other_items if x["id"] != base_item["id"]]
-    else:
-        fail(f"Expected update.nsp + exactly 10 DLC NSPs in Drive/spk (optional base.nsp); found {len(other_items)} other NSP files.")
-    dlc_items = sorted(dlc_items, key=lambda x: x.get("name", "").lower())
+
+    package_items = [
+        x for x in spk_items
+        if x.get("mimeType") != FOLDER_MIME
+        and Path(x.get("name", "")).suffix.lower() in PACKAGE_SUFFIXES
+    ]
+    update_items = [x for x in package_items if x.get("name", "").lower() == "update.nsp"]
+    if len(update_items) != 1:
+        fail(f"Expected exactly one update.nsp in Drive/spk; found {len(update_items)}.")
+    update_item = update_items[0]
+
+    dlc_items = sorted(
+        (x for x in package_items
+         if x["id"] != update_item["id"]
+         and re.fullmatch(r"dlc[^/]*\.nsp", x.get("name", ""), re.I)),
+        key=lambda x: x.get("name", "").lower(),
+    )
     if len(dlc_items) != 10:
-        fail(f"Expected exactly 10 DLC .nsp files in Drive/spk; found {len(dlc_items)}.")
+        fail(f"Expected exactly 10 DLC NSPs (dlc*.nsp) in Drive/spk; found {len(dlc_items)}.")
+
+    excluded_ids = {update_item["id"], *(x["id"] for x in dlc_items)}
+    base_items = [x for x in package_items if x["id"] not in excluded_ids]
+    if len(base_items) > 1:
+        fail("Drive/spk contains more than one base package besides update.nsp and dlc*.nsp; keep exactly one .nsp or .xci.")
+    base_item = base_items[0] if base_items else None
 
     input_dir = runtime_root / "input-packages"
     keys_path = runtime_root / "keys" / "prod.keys"
@@ -228,57 +258,80 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path, archive_url: s
     download_drive_file(api, keys_item, keys_path)
 
     if base_item:
-        base_path = input_dir / "000_base.nsp"
+        base_extension = Path(base_item["name"]).suffix.lower()
+        base_type = "XCI" if base_extension == ".xci" else "NSP"
+        base_path = input_dir / f"000_base{base_extension}"
         download_drive_file(api, base_item, base_path)
-        validate_nsp(base_path)
-        print("[SpkIOSzero] Base NSP reused from Drive/spk; the 7z link is not needed.")
+        validate_package(base_path)
+        print(f"[SpkIOSzero] Base {base_type} reused from Drive/spk as {base_item['name']}; the 7z link is not needed.")
     else:
         temp = runtime_root / "7z-temporary"
         archive = temp / "sparking-zero-base.7z"
         extracted = temp / "extracted"
         temp.mkdir(parents=True, exist_ok=True)
-        download_7z(archive_url, archive)
-        if not find_nsps(extracted):
+        candidates = find_packages(extracted)
+        if not candidates:
+            download_7z(archive_url, archive)
             sevenzip = install_7zip()
             base_extracted = extract_single_base(archive, extracted, sevenzip)
         else:
-            candidates = find_nsps(extracted)
             if len(candidates) != 1:
-                fail(f"Cached base extraction is ambiguous: {len(candidates)} NSP files.")
+                fail(f"Cached base extraction is ambiguous: {len(candidates)} NSP/XCI packages.")
             base_extracted = candidates[0]
-            validate_nsp(base_extracted)
-        base_path = input_dir / "000_base.nsp"
-        if not base_path.is_file() or base_path.stat().st_size != base_extracted.stat().st_size:
-            shutil.copy2(base_extracted, base_path)
-        # Persist the extracted base back into this game's own Drive/spk folder.
-        # Subsequent Colab runs then reuse base.nsp and do not need the expiring URL.
-        upload_drive_file(api, base_path, spk_folder["id"], "base.nsp")
+            validate_package(base_extracted)
+        base_extension = base_extracted.suffix.lower()
+        base_type = "XCI" if base_extension == ".xci" else "NSP"
+        base_path = input_dir / f"000_base{base_extension}"
+        for stale in input_dir.glob("000_base.*"):
+            if stale != base_path:
+                stale.unlink(missing_ok=True)
+        shutil.copy2(base_extracted, base_path)
+        upload_drive_file(api, base_path, spk_folder["id"], f"base{base_extension}")
+        print(f"[SpkIOSzero] Persisted extracted base {base_type} as base{base_extension} in Drive/spk.")
 
     update_path = input_dir / "001_update.nsp"
     download_drive_file(api, update_item, update_path)
-    validate_nsp(update_path)
+    validate_package(update_path)
     package_paths = [base_path, update_path]
     dlc_records = []
     for index, item in enumerate(dlc_items, start=2):
         name = safe_name(item["name"])
         target = input_dir / f"{index:03d}_{name}"
         download_drive_file(api, item, target)
-        validate_nsp(target)
+        validate_package(target)
         package_paths.append(target)
-        dlc_records.append({"name": target.name, "drive_name": item["name"], "size": target.stat().st_size})
-    # Keep only this game's packages in the local input folder; BOTW never shares this directory.
+        dlc_records.append({
+            "name": target.name, "drive_name": item["name"], "size": target.stat().st_size
+        })
+
     expected = {p.resolve() for p in package_paths}
-    for old in input_dir.glob("*.nsp"):
-        if old.resolve() not in expected:
+    for old in list(input_dir.iterdir()):
+        if old.is_file() and old.suffix.lower() in PACKAGE_SUFFIXES and old.resolve() not in expected:
             old.unlink()
-    base_bytes = sum(p.stat().st_size for p in package_paths)
     if len(package_paths) != 12 or len(dlc_records) != 10:
-        fail(f"Expected exactly 12 NSP packages (1 base + 1 update + 10 DLC); found {len(package_paths)}.")
-    print(f"[SpkIOSzero] Source set: 12 .nsp packages (1 base + 1 update + 10 DLC), {base_bytes/2**30:.2f} GiB; Drive source folder is {spk_folder['name']}.")
+        fail(f"Expected 12 game packages (1 base {base_type} + 1 update NSP + 10 DLC NSPs); found {len(package_paths)}.")
+    nsp_count = sum(p.suffix.lower() == ".nsp" for p in package_paths)
+    xci_count = sum(p.suffix.lower() == ".xci" for p in package_paths)
+    if xci_count != (1 if base_type == "XCI" else 0):
+        fail(f"Expected exactly one base package in {base_type} format; found {xci_count} XCI package(s).")
+    total_bytes = sum(p.stat().st_size for p in package_paths)
+    print(
+        f"[SpkIOSzero] Source set: 12 packages (1 base {base_type} + 1 update NSP + 10 DLC NSPs), "
+        f"{total_bytes/2**30:.2f} GiB; Drive source folder is {spk_folder['name']}.",
+        flush=True,
+    )
     return {
-        "package_dir": str(input_dir), "keys_path": str(keys_path),
-        "source_folder_id": spk_folder["id"], "source_folder_name": spk_folder["name"],
-        "package_count": len(package_paths), "base_type": "NSP",
-        "update_nsp_count": 1, "dlc_nsp_count": len(dlc_records),
+        "package_dir": str(input_dir),
+        "keys_path": str(keys_path),
+        "source_folder_id": spk_folder["id"],
+        "source_folder_name": spk_folder["name"],
+        "package_count": len(package_paths),
+        "base_type": base_type,
+        "base_extension": base_extension,
+        "base_file_name": base_path.name,
+        "input_nsp_count": nsp_count,
+        "input_xci_count": xci_count,
+        "update_nsp_count": 1,
+        "dlc_nsp_count": len(dlc_records),
         "dlc_files": dlc_records,
     }
