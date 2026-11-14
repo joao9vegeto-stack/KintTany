@@ -53,7 +53,7 @@ jobs:
           assert notebook["nbformat"] == 4
           notebook_source = "\n".join("".join(c.get("source", [])) for c in notebook["cells"])
           assert len(notebook["cells"]) == 12
-          assert "DRIVE_FOLDER_ID" in notebook_source and "'spk'" in notebook_source
+          assert "DRIVE_FOLDER_ID" in notebook_source and ('"spk"' in notebook_source or "'spk'" in notebook_source)
           assert "10 DLCs .nsp" in notebook_source
           assert ".znsp" not in notebook_source.lower()
           assert "run_spk.py dispatch" in notebook_source
