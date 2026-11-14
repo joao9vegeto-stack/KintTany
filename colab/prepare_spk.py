@@ -57,6 +57,7 @@ def install_linux_dependencies(root: Path) -> None:
         ("lz4.block", "lz4"), ("capstone", "capstone>=5,<6"),
         ("fontTools", "fonttools"), ("zbic", "zbic"),
         ("backports.zstd", "backports.zstd"), ("requests", "requests"),
+        ("Crypto.Cipher", "pycryptodome"),
     )
     missing_pip = []
     for module_name, package_name in python_packages:
@@ -99,6 +100,14 @@ def install_linux_dependencies(root: Path) -> None:
 def load_builder(engine: Path):
     script = engine / "scripts" / "build_ipa_from_nsp.py"
     require(script.is_file(), f"NXNative builder not found: {script}")
+    # Colab sessions are long-lived: never reuse NXNative modules from another checkout/ref.
+    for module_name in (
+        "game", "nacp", "profile_guess", "nso", "nso_syms", "nso_asm",
+        "uepak", "uepak_extract", "nso_match", "sdk_patches", "pack_nup",
+        "pack_dump", "nx_extract", "patch_nso",
+    ):
+        sys.modules.pop(module_name, None)
+    importlib.invalidate_caches()
     for folder in (engine / "dm/tools", engine / "dm/games", engine / "dm/gfx/tools", engine / "scripts"):
         sys.path.insert(0, str(folder))
     spec = importlib.util.spec_from_file_location("spk_nxnative_builder", script)
@@ -114,21 +123,27 @@ def sha256_file(path: Path) -> str:
         for block in iter(lambda: stream.read(16 * 1024 * 1024), b""): digest.update(block)
     return digest.hexdigest()
 
-def install_spk_profile_patch(profile_dir: Path) -> None:
-    profile_dir.mkdir(parents=True, exist_ok=True)
-    patch_file = profile_dir / "patches.py"
-    source = f'''# Sparking! ZERO SpNet startup bypass. Restricted to the inspected main build.
-BUILD_ID = "{EXPECTED_MAIN_BUILD_ID}"
-CUTS = {{
-    BUILD_ID: [
-        (0x1b74d70, "68000034", "1f2003d5",
-         "FSpNetModule::StartupModule: cbz flag -> nop; bypass SpNet startup init")
-    ]
-}}
-'''
-    if patch_file.exists() and patch_file.read_text(encoding="utf-8") != source:
-        fail(f"Refusing to overwrite a different game patch file: {patch_file}")
-    patch_file.write_text(source, encoding="utf-8")
+def install_linux_aes_compat() -> None:
+    """Provide the upstream uepak reader with AES-256-ECB on Colab/Linux.
+
+    NXNative's default implementation calls macOS CommonCrypto. Without this
+    compatibility backend, encrypted PAK indexes are treated as keyless and
+    Sparking! ZERO's inline IoStore shaders are misclassified as shader archives.
+    """
+    require(sys.platform.startswith("linux"), "Linux AES compatibility is only used in Colab preparation.")
+    from Crypto.Cipher import AES
+    key = bytes(range(32))
+    plaintext = bytes.fromhex("00112233445566778899aabbccddeeff")
+    ciphertext = bytes.fromhex("8ea2b7ca516745bfeafc49904b496089")
+    require(AES.new(key, AES.MODE_ECB).decrypt(ciphertext) == plaintext,
+            "PyCryptodome AES-256-ECB self-test failed.")
+    import uepak
+    def aes_decrypt(key_bytes: bytes, data: bytes) -> bytes:
+        if len(key_bytes) != 32 or not data or len(data) % 16:
+            raise ValueError("Unreal pak AES-256-ECB requires a 32-byte key and 16-byte-aligned data.")
+        return AES.new(key_bytes, AES.MODE_ECB).decrypt(data)
+    uepak.aes_decrypt = aes_decrypt
+    print("[SpkIOSzero] Linux AES-256-ECB enabled for encrypted Unreal PAK index classification.", flush=True)
 
 def run_preparation(args) -> dict:
     nx, nsp_dir, keys, work = (args.nx2apple_root.resolve(), args.nsp_dir.resolve(),
@@ -143,8 +158,22 @@ def run_preparation(args) -> dict:
     install_linux_dependencies(work.parent)
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
     import spk_engine
-    spk_engine.patch(nx / "engine")
+    # Use the registered NXNative profile, not a generated provisional shadow.
+    for key in ("DM_GAMES_DIR", "DM_GAMES_FIRST"):
+        os.environ.pop(key, None)
+    os.environ["DM_GAME"] = TITLE_ID
+    upstream_allocator = spk_engine.verify(nx / "engine")
     module = load_builder(nx / "engine")
+    install_linux_aes_compat()
+    import game as game_profiles
+    registered_profile = game_profiles.load(TITLE_ID)
+    expected_profile_dir = (nx / "engine" / "dm/games" / TITLE_ID).resolve()
+    require(registered_profile.dir.resolve() == expected_profile_dir,
+            f"NXNative selected a non-upstream profile: {registered_profile.dir}")
+    require(not (expected_profile_dir / "patches.py").exists(),
+            "The registered upstream Sparking! ZERO profile unexpectedly contains a custom patches.py.")
+    require(registered_profile.builds().get("v327680", {}).get("main") == EXPECTED_MAIN_BUILD_ID,
+            "The registered upstream game profile does not match the inspected main build.")
     package_files = module.files_with_suffix(nsp_dir, ".nsp", ".xci")
     nsp_files = [p for p in package_files if p.suffix.lower() == ".nsp"]
     xci_files = [p for p in package_files if p.suffix.lower() == ".xci"]
@@ -173,11 +202,12 @@ def run_preparation(args) -> dict:
         require(main.is_file(), f"Extracted ExeFS/main is missing: {main}")
         build_id, digest = module.build_id(main), sha256_file(main)
         if build_id != EXPECTED_MAIN_BUILD_ID or digest != EXPECTED_MAIN_SHA256:
-            fail("The inspected allocator/SpNet patch set only applies to the known Sparking! ZERO build. "
+            fail("The upstream Sparking! ZERO profile and generic allocator detector apply only to the inspected main build. "
                  f"Received Build ID {build_id}, SHA-256 {digest}; expected "
-                 f"{EXPECTED_MAIN_BUILD_ID} / {EXPECTED_MAIN_SHA256}. No game patches were applied.")
-        install_spk_profile_patch(game.dir)
-        print(f"[SpkIOSzero] Exact main verified: Build ID {build_id}; SHA-256 {digest}.", flush=True)
+                 f"{EXPECTED_MAIN_BUILD_ID} / {EXPECTED_MAIN_SHA256}.")
+        require(game.dir.resolve() == registered_profile.dir.resolve(),
+                f"NXNative rewrite received an unexpected game profile: {game.dir}")
+        print(f"[SpkIOSzero] Exact registered main verified: Build ID {build_id}; SHA-256 {digest}.", flush=True)
         result = original_rewrite(py, repo, exe_dir, out, env, logs, game, provisional)
         for filename in ("main.patched.bin", "main.fixups.tsv", "main.cuts.tsv", "main.obs.tsv"):
             require((out / filename).is_file(), f"NXNative rewrite output missing: {out / filename}")
@@ -186,21 +216,32 @@ def run_preparation(args) -> dict:
         obs = [line for line in (out / "main.obs.tsv").read_text(errors="replace").splitlines()
                if line.strip() and not line.lstrip().startswith("#")]
         fixups = (out / "main.fixups.tsv").read_text(encoding="utf-8")
-        require(len(cuts) == 2 and any("0x1e4db30" in row for row in cuts)
-                and any("0x1b74d70" in row for row in cuts),
-                "Expected exactly two validated cuts: UE allocator constructor and SpNet StartupModule.")
-        require(len(obs) == 1 and "0x1e4db34" in obs[0],
-                "Expected exactly one UE allocator observation gate at main+0x1e4db34.")
+
+        allocator_cut_offsets = {
+            int(row.split("\t", 1)[0], 0)
+            for row in cuts if "FMallocBinned3" in row
+        }
+        allocator_obs_offsets = {
+            int(row.split("\t", 1)[0], 0)
+            for row in obs if "FMallocBinned3 constructor call (cut)" in row
+        }
+        expected_calls = set(spk_engine.ALLOCATOR_CALLS)
+        require(allocator_cut_offsets == expected_calls,
+                "NXNative did not cut both upstream FMallocBinned3 constructor calls: "
+                f"expected {[hex(x) for x in sorted(expected_calls)]}, got {[hex(x) for x in sorted(allocator_cut_offsets)]}.")
+        require(allocator_obs_offsets == expected_calls,
+                "NXNative did not install an x0 allocator observation gate at both constructor call sites: "
+                f"expected {[hex(x) for x in sorted(expected_calls)]}, got {[hex(x) for x in sorted(allocator_obs_offsets)]}.")
         require(f"# UE_MALLOC_VT\t{spk_engine.VTABLE:#x}" in fixups
-                and "# UE_MALLOC_SLOT\t0x17" in fixups,
-                "Rewriter fixups do not identify the expected UE5_SPK allocator vtable and slot 23.")
-        print("[SpkIOSzero] Rewrite audit passed: 2 cuts, 1 x19 allocator observation gate, UE_MALLOC_VT/UE_MALLOC_SLOT.", flush=True)
+                and f"# UE_MALLOC_SLOT\t{spk_engine.GETTER_SLOT:#x}" in fixups,
+                "NXNative fixups do not identify Sparking! ZERO's vtable and getter slot 19.")
+        print("[SpkIOSzero] Upstream allocator rewrite audit passed: 2 constructor cuts, 2 generic x0 gates, "
+              "vtable 0x8703ab8, getter slot 19.", flush=True)
         return result
 
     module.rewrite = rewrite_with_spk_guard
     module.check_prereqs = lambda *a, **k: print("[SpkIOSzero] Linux prerequisite check passed; Xcode/Metal are deferred.")
     module.check_metal = lambda *a, **k: print("[SpkIOSzero] Apple Metal compilation is deferred to macOS.")
-    module.HEAP_CHECK = False
     def defer_unreal_decode(*a, **k):
         print("[SpkIOSzero] Reached Unreal shader decode boundary; Oodle decode and shader split are deferred to macOS.", flush=True)
         raise PreparedBoundary()
@@ -211,7 +252,7 @@ def run_preparation(args) -> dict:
     module.split_shaders = defer_shader_split
 
     argv = [str(nsp_dir), "-k", str(keys), "--title-id", TITLE_ID, "--work-dir", str(work),
-            "--keep-extracted", "--provisional", "--no-heap-check", "--progress", "lines", "--gpu", "none"]
+            "--keep-extracted", "--progress", "lines", "--gpu", "none"]
     parsed = module.parse_args(argv)
     try:
         module.main(parsed)
@@ -231,7 +272,8 @@ def run_preparation(args) -> dict:
     require(main.is_file() and module.build_id(main) == EXPECTED_MAIN_BUILD_ID
             and sha256_file(main) == EXPECTED_MAIN_SHA256,
             "Final extracted main does not match the exact inspected Sparking! ZERO build.")
-    patched, profile_dir = work / f"patched_{package_version}", work / "profile" / TITLE_ID
+    patched = work / f"patched_{package_version}"
+    profile_dir = nx / "engine" / "dm/games" / TITLE_ID
     for path, label in (
         (version_dir / "RomFS.img", "external RomFS image"),
         (version_dir / "RomFS.img.id", "RomFS identity sidecar"),
@@ -240,21 +282,56 @@ def run_preparation(args) -> dict:
         (patched / "main.fixups.tsv", "main fixups"),
         (patched / "main.cuts.tsv", "main cut audit"),
         (patched / "main.obs.tsv", "main observation audit"),
-        (profile_dir / "game.tsv", "provisional game profile"),
-        (profile_dir / "patches.py", "SpNet game patch"),
-    ): require(path.is_file(), f"NXNative did not produce {label}: {path}")
+        (profile_dir / "game.tsv", "upstream registered game profile"),
+    ): require(path.is_file(), f"NXNative did not provide {label}: {path}")
+    require(not (profile_dir / "patches.py").exists(),
+            "Unexpected local patch file shadows the pinned upstream Sparking! ZERO profile.")
 
     import game as game_profiles
     profile = game_profiles.load(TITLE_ID)
+    require(profile.dir.resolve() == profile_dir.resolve(),
+            f"NXNative selected a non-upstream game profile: {profile.dir}")
+    require(profile.builds().get("v327680", {}).get("main") == EXPECTED_MAIN_BUILD_ID,
+            "The selected registered profile does not match the exact 2.0.76 main Build ID.")
     modules = profile.modules_in(exefs)
     for name in modules:
         require((patched / f"{name}.patched.bin").is_file(), f"Rewritten module missing: {name}")
         require((patched / f"{name}.fixups.tsv").is_file(), f"Rewrite fixups missing: {name}")
+
+    cuts = [line for line in (patched / "main.cuts.tsv").read_text(errors="replace").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")]
+    obs = [line for line in (patched / "main.obs.tsv").read_text(errors="replace").splitlines()
+           if line.strip() and not line.lstrip().startswith("#")]
+    fixups = (patched / "main.fixups.tsv").read_text(encoding="utf-8")
+    allocator_cut_offsets = {
+        int(row.split("\t", 1)[0], 0) for row in cuts if "FMallocBinned3" in row
+    }
+    allocator_obs_offsets = {
+        int(row.split("\t", 1)[0], 0)
+        for row in obs if "FMallocBinned3 constructor call (cut)" in row
+    }
+    expected_calls = set(spk_engine.ALLOCATOR_CALLS)
+    require(allocator_cut_offsets == expected_calls,
+            "NXNative did not cut both upstream FMallocBinned3 constructors: "
+            f"expected {[hex(x) for x in sorted(expected_calls)]}, got {[hex(x) for x in sorted(allocator_cut_offsets)]}.")
+    require(allocator_obs_offsets == expected_calls,
+            "NXNative did not gate both FMallocBinned3 constructors through x0: "
+            f"expected {[hex(x) for x in sorted(expected_calls)]}, got {[hex(x) for x in sorted(allocator_obs_offsets)]}.")
+    require(f"# UE_MALLOC_VT\t{spk_engine.VTABLE:#x}" in fixups
+            and f"# UE_MALLOC_SLOT\t{spk_engine.GETTER_SLOT:#x}" in fixups,
+            "NXNative fixups do not identify the Sparking! ZERO vtable and getter slot 19.")
+    print("[SpkIOSzero] Upstream allocator audit passed: both constructor calls are cut and gated; "
+          "vtable 0x8703ab8, getter slot 19.", flush=True)
+
     facts = module.pg.build_sources(exefs, module.rfs.source(version_dir), modules)
     graphics = facts["graphics"][0]
     require(graphics == "nvn", f"Sparking! ZERO expected NVN graphics; NXNative detected {graphics}: {facts['graphics'][1]}.")
     ue_flags = {key: bool(facts.get(key, (False, ""))[0]) for key in ("ue_decode", "oodle_packs", "ue_legacy")}
-    require(any(ue_flags.values()), "Extracted SPK files did not identify an Unreal/Oodle shader source; refusing to skip shader discovery.")
+    expected_ue_flags = {"ue_decode": False, "oodle_packs": False, "ue_legacy": True}
+    require(ue_flags == expected_ue_flags,
+            "Sparking! ZERO 2.0.76 shaders must be classified as inline Unreal IoStore packages "
+            "(ue_legacy=True, ue_decode=False, oodle_packs=False). "
+            f"NXNative detected {ue_flags}; this indicates its encrypted PAK index was not opened correctly.")
 
     romfs = version_dir / "RomFS.img"
     aoc_dir = work / "aoc"
@@ -275,18 +352,20 @@ def run_preparation(args) -> dict:
         "input_base_xci_count": int(base_package_type == "XCI"),
         "input_update_nsp_count": 1,
         "input_dlc_nsp_count": 10,
-        "profile_type": "provisional", "modules": modules,
+        "profile_type": "registered", "profile_source": "NXNative pinned built-in Sparking! ZERO profile",
+        "modules": modules,
         "main_build_id": EXPECTED_MAIN_BUILD_ID, "main_sha256": EXPECTED_MAIN_SHA256,
-        "allocator": {"layout": "UE5_SPK", "vtable": f"{spk_engine.VTABLE:#x}",
-            "getter_slot": 23, "constructor_cut": f"{spk_engine.CUT_ADDR:#x}",
-            "object_observation": f"{spk_engine.OBS_ADDR:#x}", "object_register": "x19"},
+        "allocator": {"detector": upstream_allocator["allocator"], "layout": upstream_allocator["layout"],
+            "vtable": upstream_allocator["vtable"], "getter_slot": upstream_allocator["getter_slot"],
+            "constructor_calls": upstream_allocator["constructor_calls"],
+            "object_register": upstream_allocator["object_register"]},
         "graphics_api": graphics, "unreal_shader_sources": ue_flags, "shader_chain": shader_chain,
         "romfs_relative_path": f"extract/{package_version}/RomFS.img",
         "romfs_id_relative_path": f"extract/{package_version}/RomFS.img.id",
         "aoc_relative_dir": "aoc", "romfs_size": romfs.stat().st_size,
         "aoc_images": [{"name": p.name, "size": p.stat().st_size} for p in aoc_images],
         "prepared_stages": ["content_meta_scan", "base_update_DLC_extraction",
-            "RomFS_and_AOC_creation", "build_id_gated_SPK_allocator_and_SpNet_AArch64_rewrite"],
+            "RomFS_and_AOC_creation", "upstream_generic_FMallocBinned3_two_call_AArch64_rewrite"],
         "deferred_stages": ["Unreal_Oodle_decode_on_macOS", "shader_split_on_macOS",
             "iOS_Metal_compile", "game_framework", "Shared_Shell", "ad_hoc_thin_IPA"],
     }

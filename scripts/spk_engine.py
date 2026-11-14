@@ -1,107 +1,105 @@
 #!/usr/bin/env python3
-"""Idempotent, build-ID-gated Sparking! ZERO changes for the pinned NXNative engine."""
+"""Verify Sparking! ZERO support already present in the pinned upstream NXNative engine.
+
+Do not patch patch_nso.py or hle_uemalloc.c: upstream's engine-wide FMallocBinned3
+detector handles both constructor call sites for this game.
+"""
 from __future__ import annotations
 import argparse
 from pathlib import Path
 
+TITLE_ID = "010035F022078000"
 BUILD_ID = "68edafd68c7bc1a1af50b82aac838018"
 MAIN_SHA256 = "a0f8f0644c92384ddb1baac1c21aecbeeace5bc99ad40895e216add61da78efe"
-CUT_ADDR = 0x1e4db30
-CUT_BYTES = "6b740194"
-OBS_ADDR = 0x1e4db34
-OBS_WORD = "f9035293"
-VTABLE = 0x8703ab8
-OBS_UE_MALLOC = 21
-OBS_OBJECT_REGISTER = 19
+VTABLE = 0x8703AB8
+GETTER_SLOT = 19
+LAYOUT = "UE4_27"
+ALLOCATOR_CALLS = (0x1E4DB30, 0x1E4E048)
 
 def fail(message: str) -> None:
     raise SystemExit("[SpkIOSzero] ERROR: " + message)
 
-def replace_once(text: str, old: str, new: str, label: str) -> str:
-    if new in text:
-        return text
-    count = text.count(old)
-    if count != 1:
-        fail(f"{label}: expected one source anchor, found {count}")
-    return text.replace(old, new, 1)
-
-def patch(engine_root: Path) -> None:
+def verify(engine_root: Path) -> dict:
     engine = engine_root.resolve()
-    hle = engine / "dm/host/hle_uemalloc.c"
-    nso = engine / "dm/tools/patch_nso.py"
-    if not hle.is_file() or not nso.is_file():
-        fail(f"pinned NXNative source tree is incomplete: {engine}")
-    h = hle.read_text(encoding="utf-8")
-    h = replace_once(
-        h,
-        "enum { UE5, UE4_27, UE5_6, UE3 };",
-        "enum { UE5, UE4_27, UE5_6, UE5_SPK, UE3 };",
-        "allocator layout enum",
-    )
-    row = (
-        "    [UE5_SPK] = { 23, 27, 3, 4, 5, 6, 7, 8, 9, { 10, 11, 12, 16 }, false },"
-        "   // Sparking! ZERO UE5.1: getter slot 23; vtable main+0x8703ab8"
-    )
-    anchor = (
-        "    [UE5_6] = { 26, 32, 6, 7, 8, 9, 10, 13, 14, { 15, 16, 17, 18, 19, 23 } },"
-    )
-    if "[UE5_SPK]" not in h:
-        h = replace_once(h, anchor, anchor + "\n" + row, "allocator layout row")
-    if "[UE5_SPK]" not in h:
-        fail("UE5_SPK allocator layout was not installed")
+    profile_dir = engine / "dm/games" / TITLE_ID
+    profile_path = profile_dir / "game.tsv"
+    allocator_path = engine / "dm/tools/ue_malloc.py"
+    rewriter_path = engine / "dm/tools/patch_nso.py"
+    hle_path = engine / "dm/host/hle_uemalloc.c"
+    readme_path = profile_dir / "README.md"
 
-    # The HLE only installs its malloc zone for a Build ID in k_ue. A dynamic
-    # object (obj=0) is populated by OBS_UE_MALLOC, whose upper byte selects x19.
-    table_anchor = (
-        'static const struct { const char *build, *what; int layout; uint64_t obj, vtable, cut; uint32_t cut_insn; } k_ue[] = {'
-    )
-    table_row = (
-        '    { "68edafd68c7bc1a1af50b82aac838018", "DRAGON BALL: Sparking! ZERO 2.0.76", '
-        'UE5_SPK, 0, 0x8703ab8, 0x1e4db30, 0xd503201f },'
-        ' // dynamic FMallocBinned3 object arrives through OBS_UE_MALLOC(x19)'
-    )
-    if "DRAGON BALL: Sparking! ZERO 2.0.76" not in h:
-        h = replace_once(h, table_anchor, table_anchor + "\n" + table_row, "allocator Build ID row")
-    if "DRAGON BALL: Sparking! ZERO 2.0.76" not in h:
-        fail("UE5_SPK k_ue Build ID row was not installed")
-    hle.write_text(h, encoding="utf-8")
+    for path in (profile_path, allocator_path, rewriter_path, hle_path, readme_path):
+        if not path.is_file():
+            fail(f"pinned NXNative Sparking! ZERO support file is missing: {path}")
 
-    p = nso.read_text(encoding="utf-8")
-    detect_anchor = "UE_CALLS, UE_VT, UE_SLOT, ue_why = ue_malloc.find(bytes(IMG), TEXT_END, RO_OFF, DATA_OFF)\n"
-    detect_patch = detect_anchor + f'''SPK_FIXED_MAIN = NAME == "main" and BUILD_ID == "{BUILD_ID}"
-if SPK_FIXED_MAIN:
-    # The standard detector deliberately rejects this engine's duplicated lazy
-    # constructors. The inspected main build has a confirmed direct call, vtable
-    # and object register; pin them only to this exact Build ID.
-    assert IMG[{CUT_ADDR:#x}:{CUT_ADDR:#x}+4].hex() == "{CUT_BYTES}", "Sparking! ZERO allocator cut bytes changed"
-    assert IMG[{OBS_ADDR:#x}:{OBS_ADDR:#x}+4].hex() == "{OBS_WORD}", "Sparking! ZERO allocator observation instruction changed"
-    UE_CALLS, UE_VT, UE_SLOT = ({CUT_ADDR:#x},), {VTABLE:#x}, 23
-    ue_why = "DRAGON BALL: Sparking! ZERO UE5.1 fixed allocator layout (reviewed main build)"
-'''
-    p = replace_once(p, detect_anchor, detect_patch, "allocator detection hook")
+    profile = profile_path.read_text(encoding="utf-8")
+    allocator = allocator_path.read_text(encoding="utf-8")
+    rewriter = rewriter_path.read_text(encoding="utf-8")
+    hle = hle_path.read_text(encoding="utf-8")
+    readme = readme_path.read_text(encoding="utf-8")
 
-    obs_anchor = r'''for _c in UE_CALLS or ():
-    assert _c not in kinds and not any(lo <= _c < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]), f'FMallocBinned3 gate conflicts with a rewrite site {_c:#x}'
-    region_obs.append((_c, OBS_UE_MALLOC, f'{NOP:08x}', 'FMallocBinned3 constructor call (cut): the object in x0; the host puts its allocator\'s vtable in (hle_uemalloc.c)'))
-'''
-    obs_patch = f'''if SPK_FIXED_MAIN:
-    # The constructor call is cut at main+{CUT_ADDR:#x}; x19 contains the allocator object
-    # at the following store. Gate there and replace the vtable through that object.
-    assert {OBS_ADDR:#x} not in kinds and not any(lo <= {OBS_ADDR:#x} < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]), "Sparking! ZERO allocator observation conflicts with a rewrite site"
-    region_obs.append(({OBS_ADDR:#x}, OBS_UE_MALLOC | ({OBS_OBJECT_REGISTER} << 8), "{OBS_WORD}", "Sparking! ZERO FMallocBinned3 object in x19; install the host allocator vtable"))
-else:
-    for _c in UE_CALLS or ():
-        assert _c not in kinds and not any(lo <= _c < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]), f'FMallocBinned3 gate conflicts with a rewrite site {{_c:#x}}'
-        region_obs.append((_c, OBS_UE_MALLOC, f'{{NOP:08x}}', 'FMallocBinned3 constructor call (cut): the object in x0; the host puts its allocator\\'s vtable in (hle_uemalloc.c)'))
-'''
-    p = replace_once(p, obs_anchor, obs_patch, "allocator observation gate")
-    nso.write_text(p, encoding="utf-8")
-    print("[SpkIOSzero] UE5_SPK allocator layout and exact-build rewrite/gate patches installed.")
+    expected_build = f"build\tv327680\t2.0.76\tmain={BUILD_ID}"
+    if expected_build not in profile:
+        fail("NXNative's built-in Sparking! ZERO profile does not register the inspected 2.0.76 main Build ID.")
+    if "modules\tmain subsdk0 sdk" not in profile:
+        fail("NXNative's built-in Sparking! ZERO profile has an unexpected module list.")
+    for required in (
+        "mem_reserve\t0xF0000000",
+        "mem_alias\t0xC8000000",
+        "mem_stack\t0x10000000",
+        "app_pool\t0xCD500000",
+        "sys_resource\t0x1e00000",
+        "fps_target\t60",
+        "shader_groups\tGlobalShaderCache=global #Engine/=engine #SparkingZERO/=game",
+    ):
+        if required not in profile:
+            fail(f"NXNative's registered Sparking! ZERO profile is missing: {required}")
+
+    if "19: 'Unreal Engine 4.26 / 4.27'" not in allocator:
+        fail("NXNative ue_malloc.py no longer recognizes the getter slot 19 layout used by Sparking! ZERO.")
+    if "return tuple(calls), vt, slot" not in allocator:
+        fail("NXNative ue_malloc.py no longer returns every constructor call site.")
+    if "for _c in UE_CALLS or ():" not in rewriter:
+        fail("NXNative patch_nso.py no longer cuts every call returned by ue_malloc.find().")
+    if "region_obs.append((_c, OBS_UE_MALLOC" not in rewriter:
+        fail("NXNative patch_nso.py no longer installs the generic x0 allocator observation gate.")
+    if "[UE4_27] = { 19, 21, 3, 4, 5, 6, 7, 8, 9," not in hle:
+        fail("NXNative HLE does not have the 19-slot allocator layout required by the game.")
+    if "if (m->ue_malloc_vt)" not in hle:
+        fail("NXNative HLE no longer installs the allocator from the rewriter's fixups.")
+
+    for address in ("main+0x1e4db30", "main+0x1e4e048"):
+        if address not in readme:
+            fail(f"NXNative's game note does not document expected FMallocBinned3 constructor call {address}.")
+    if (profile_dir / "patches.py").exists():
+        fail("The official Sparking! ZERO profile must not contain a custom patches.py; upstream uses generic allocator and network support.")
+    if "SPK_FIXED_MAIN" in rewriter or "f9035293" in rewriter:
+        fail("A fixed-offset SPK override is present in patch_nso.py; remove it and use upstream's generic detector.")
+
+    result = {
+        "title_id": TITLE_ID,
+        "build_id": BUILD_ID,
+        "main_sha256": MAIN_SHA256,
+        "allocator": "NXNative engine-wide ue_malloc.find",
+        "layout": LAYOUT,
+        "vtable": f"{VTABLE:#x}",
+        "getter_slot": GETTER_SLOT,
+        "constructor_calls": [f"{x:#x}" for x in ALLOCATOR_CALLS],
+        "object_register": "x0",
+        "profile": str(profile_path),
+        "custom_patches": False,
+    }
+    print(
+        "[SpkIOSzero] Verified upstream native support: 2 FMallocBinned3 call sites, "
+        "vtable 0x8703ab8, getter slot 19, generic x0 gates; no local binary patches.",
+        flush=True,
+    )
+    return result
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--engine-root", type=Path, required=True)
-    patch(ap.parse_args().engine_root)
+    verify(ap.parse_args().engine_root)
 
 if __name__ == "__main__":
     main()

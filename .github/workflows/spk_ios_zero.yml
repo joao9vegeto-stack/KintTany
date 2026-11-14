@@ -124,7 +124,7 @@ jobs:
           print("PFS0 NSP + XCI HEAD@0x100 detection: OK")
           PY
 
-      - name: Apply build-ID-gated SPK allocator changes against the exact pinned NXNative
+      - name: Verify native Sparking! ZERO support in the exact pinned NXNative
         shell: bash
         run: |
           set -euo pipefail
@@ -136,26 +136,54 @@ jobs:
           python scripts/spk_engine.py --engine-root "$RUNNER_TEMP/NX2Apple/engine"
           python - <<'PY'
           from pathlib import Path
-          engine = Path(__import__("os").environ["RUNNER_TEMP"]) / "NX2Apple" / "engine"
+          import json, os
+          engine = Path(os.environ["RUNNER_TEMP"]) / "NX2Apple" / "engine"
+          profile = engine / "dm/games/010035F022078000"
+          allocator = (engine / "dm/tools/ue_malloc.py").read_text(encoding="utf-8")
+          rewriter = (engine / "dm/tools/patch_nso.py").read_text(encoding="utf-8")
           hle = (engine / "dm/host/hle_uemalloc.c").read_text(encoding="utf-8")
-          nso = (engine / "dm/tools/patch_nso.py").read_text(encoding="utf-8")
-          assert "UE5_SPK" in hle
-          assert "DRAGON BALL: Sparking! ZERO 2.0.76" in hle
           source = Path("colab/source_spk.py").read_text(encoding="utf-8")
-          assert 'upload_drive_file(api, base_path, spk_folder["id"], f"base{base_extension}")' in source
+          prepare = Path("colab/prepare_spk.py").read_text(encoding="utf-8")
+          shared = Path("scripts/build_spk_shared.py").read_text(encoding="utf-8")
+          actions = Path("scripts/prepare_spk_actions.py").read_text(encoding="utf-8")
+          run_spk = Path("colab/run_spk.py").read_text(encoding="utf-8")
           upstream_builder = (engine / "scripts" / "build_ipa_from_nsp.py").read_text(encoding="utf-8")
+          game_profile = (profile / "game.tsv").read_text(encoding="utf-8")
+          game_note = (profile / "README.md").read_text(encoding="utf-8")
+          notebook = json.loads(Path("colab/SpkIOSzero.ipynb").read_text(encoding="utf-8"))
+          cell9 = "".join(notebook["cells"][9]["source"])
+          assert "build\tv327680\t2.0.76\tmain=68edafd68c7bc1a1af50b82aac838018" in game_profile
+          assert "main+0x1e4db30" in game_note and "main+0x1e4e048" in game_note
+          assert "19: 'Unreal Engine 4.26 / 4.27'" in allocator
+          assert "return tuple(calls), vt, slot" in allocator
+          assert "for _c in UE_CALLS or ():" in rewriter
+          assert "FMallocBinned3 constructor call (cut)" in rewriter
+          assert "[UE4_27] = { 19, 21, 3, 4, 5, 6, 7, 8, 9," in hle
+          assert "SPK_FIXED_MAIN" not in rewriter and "f9035293" not in rewriter
+          assert "spk_engine.verify(nx / \"engine\")" in prepare
+          assert '"--provisional"' not in prepare
+          assert '"Crypto.Cipher", "pycryptodome"' in prepare
+          assert "uepak.aes_decrypt = aes_decrypt" in prepare
+          assert 'sys.modules.pop(module_name, None)' in prepare
+          assert '"uepak", "uepak_extract"' in prepare
+          assert 'expected_ue_flags = {"ue_decode": False, "oodle_packs": False, "ue_legacy": True}' in prepare
+          assert 'expected_ue_flags = {"ue_decode": False, "oodle_packs": False, "ue_legacy": True}' in shared
+          assert 'expected_calls = set(spk_engine.ALLOCATOR_CALLS)' in prepare
+          assert 'profile_dir = nx / "engine" / "dm/games" / TITLE_ID' in prepare
+          assert 'prepared_manifest.get("allocator") != expected_allocator' in actions
+          assert 'prepared.get("unreal_shader_sources") != expected_ue_flags' in run_spk
+          assert 'prepared["profile_type"] == "registered"' in cell9
+          assert '"ue_legacy": True' in cell9
+          assert 'upload_drive_file(api, base_path, spk_folder["id"], f"base{base_extension}")' in source
           assert "return h[:4] == b'PFS0' or h[0x100:] == b'HEAD'" in upstream_builder
           assert "PACKAGE_SUFFIXES = ('.nsp', '.xci', '.nsz', '.xcz')" in upstream_builder
           assert 'PACKAGE_SUFFIXES = {".nsp", ".xci"}' in source
           assert 'header[0x100:0x104] != b"HEAD"' in source
           assert "def find_packages(" in source and "validate_package(" in source
-          prepare = Path("colab/prepare_spk.py").read_text(encoding="utf-8")
           assert 'files_with_suffix(nsp_dir, ".nsp", ".xci")' in prepare
-          assert 'base_package_type = "XCI"' in prepare
-          assert "0x8703ab8" in hle and "0x1e4db30" in hle
-          assert "SPK_FIXED_MAIN" in nso
-          assert "0x1e4db34" in nso and "OBS_UE_MALLOC | (19 << 8)" in nso
-          print("Pinned NXNative allocator/observation patch anchors: OK")
+          assert 'expected_calls = set(spk_engine.ALLOCATOR_CALLS)' in prepare
+          assert 'profile_dir = nx / "engine" / "dm/games" / TITLE_ID' in prepare
+          print("Registered game profile + upstream two-call allocator support: OK")
           PY
 
   build-sparking-zero:
@@ -249,7 +277,7 @@ jobs:
           EXPECTED="81906931262fb25d774cce8bca2db8926439e5a2"
           test "$(cat .upstream-ref)" = "$EXPECTED"
 
-      - name: Install exact-build Sparking! ZERO allocator support in the pinned engine
+      - name: Verify built-in Sparking! ZERO support in the pinned engine
         shell: bash
         run: |
           set -euo pipefail

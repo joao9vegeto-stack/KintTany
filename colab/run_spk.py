@@ -239,10 +239,24 @@ def recover(args, api=None) -> dict | None:
         temp.replace(dest)
         handoff = json.loads(dest.read_text(encoding="utf-8"))
         prepared = handoff.get("prepared") or {}
+        allocator = prepared.get("allocator") or {}
+        upstream_allocator = {
+            "detector": "NXNative engine-wide ue_malloc.find",
+            "layout": "UE4_27",
+            "vtable": "0x8703ab8",
+            "getter_slot": 19,
+            "constructor_calls": ["0x1e4db30", "0x1e4e048"],
+            "object_register": "x0",
+        }
+        expected_ue_flags = {"ue_decode": False, "oodle_packs": False, "ue_legacy": True}
         if (handoff.get("project") != PROJECT or handoff.get("branch") != BRANCH
             or handoff.get("title_id") != TITLE_ID or handoff.get("nx2apple_tag") != NX2APPLE_TAG
             or handoff.get("engine_pin") != ENGINE_PIN or not handoff.get("work_archive", {}).get("id")
             or not handoff.get("game_data", {}).get("romfs", {}).get("id")
+            or prepared.get("profile_type") != "registered"
+            or prepared.get("profile_source") != "NXNative pinned built-in Sparking! ZERO profile"
+            or allocator != upstream_allocator
+            or prepared.get("unreal_shader_sources") != expected_ue_flags
             or handoff.get("package_version") != prepared.get("package_version")
             or not prepared.get("aoc_images") or not handoff.get("game_data", {}).get("aoc")
             or (handoff.get("source") or {}).get("package_count") != 12
@@ -274,6 +288,21 @@ def dispatch(args) -> None:
         or handoff.get("title_id") != TITLE_ID or handoff.get("nx2apple_tag") != NX2APPLE_TAG
         or handoff.get("engine_pin") != ENGINE_PIN):
         fail("Handoff does not belong to this SpkIOSzero branch/game/engine pin.")
+    prepared = handoff.get("prepared") or {}
+    expected_allocator = {
+        "detector": "NXNative engine-wide ue_malloc.find",
+        "layout": "UE4_27",
+        "vtable": "0x8703ab8",
+        "getter_slot": 19,
+        "constructor_calls": ["0x1e4db30", "0x1e4e048"],
+        "object_register": "x0",
+    }
+    expected_ue_flags = {"ue_decode": False, "oodle_packs": False, "ue_legacy": True}
+    if (prepared.get("profile_type") != "registered"
+        or prepared.get("profile_source") != "NXNative pinned built-in Sparking! ZERO profile"
+        or prepared.get("allocator") != expected_allocator
+        or prepared.get("unreal_shader_sources") != expected_ue_flags):
+        fail("Refusing to dispatch a handoff without the registered upstream profile and both allocator call sites.")
     token = getpass.getpass("Fine-grained GitHub token (KintTany repository, Contents: Read and write): ").strip()
     if not token: fail("GitHub token is empty.")
     url = f"https://api.github.com/repos/{REPO}/contents/handoff.json"

@@ -95,6 +95,21 @@ def main() -> None:
         fail("Colab manifest does not identify the reviewed Sparking! ZERO main build.")
     if prepared_manifest.get("main_sha256") != "a0f8f0644c92384ddb1baac1c21aecbeeace5bc99ad40895e216add61da78efe":
         fail("Colab manifest main SHA-256 differs from the reviewed SPK build.")
+    if prepared_manifest.get("profile_type") != "registered" or prepared_manifest.get("profile_source") != "NXNative pinned built-in Sparking! ZERO profile":
+        fail("Colab manifest must use the registered upstream Sparking! ZERO game profile, not a provisional profile.")
+    expected_allocator = {
+        "detector": "NXNative engine-wide ue_malloc.find",
+        "layout": "UE4_27",
+        "vtable": "0x8703ab8",
+        "getter_slot": 19,
+        "constructor_calls": ["0x1e4db30", "0x1e4e048"],
+        "object_register": "x0",
+    }
+    if prepared_manifest.get("allocator") != expected_allocator:
+        fail("Colab manifest does not record the upstream two-call FMallocBinned3 rewrite contract.")
+    expected_ue_flags = {"ue_decode": False, "oodle_packs": False, "ue_legacy": True}
+    if prepared_manifest.get("unreal_shader_sources") != expected_ue_flags:
+        fail("Colab manifest does not use the expected inline IoStore Unreal shader path.")
     source_manifest = handoff.get("source") or {}
     base_type = source_manifest.get("base_type")
     expected_base_extension = ".xci" if base_type == "XCI" else ".nsp"
@@ -152,6 +167,7 @@ def main() -> None:
     if not prep_path.is_file(): fail("Colab spk-ios-zero-linux-prep.json is missing.")
     prep = json.loads(prep_path.read_text(encoding="utf-8"))
     for key in ("project", "title_id", "package_version", "nx2apple_tag", "engine_pin",
+                "profile_type", "profile_source", "allocator", "unreal_shader_sources",
                 "main_build_id", "main_sha256", "modules", "shader_chain",
                 "romfs_relative_path", "romfs_id_relative_path", "aoc_relative_dir"):
         if prep.get(key) != prepared_manifest.get(key):
@@ -201,6 +217,8 @@ def main() -> None:
         "work_dir": str(work), "romfs_path": str(romfs), "romfs_id_path": str(identity),
         "aoc_dir": str(aoc_dir), "aoc_count": len(restored),
         "aoc_images": [p.name for p in restored],
+        "profile_type": prep["profile_type"], "profile_source": prep["profile_source"],
+        "allocator": prep["allocator"],
         "modules": prep["modules"], "shader_chain": prep["shader_chain"],
         "input_package_count": prep["input_package_count"],
         "input_nsp_count": prep["input_nsp_count"],

@@ -50,7 +50,8 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
     if not prep_path.is_file(): fail("Colab Linux preparation manifest is missing.")
     prep = json.loads(prep_path.read_text(encoding="utf-8"))
     for key in ("project", "title_id", "package_version", "nx2apple_tag", "engine_pin",
-                "main_build_id", "main_sha256", "allocator", "modules", "shader_chain",
+                "profile_type", "profile_source", "main_build_id", "main_sha256",
+                "allocator", "modules", "shader_chain",
                 "input_package_count", "input_nsp_count", "input_xci_count",
                 "input_base_package_type", "input_base_package_name",
                 "romfs_relative_path", "romfs_id_relative_path", "aoc_relative_dir",
@@ -58,6 +59,18 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
         if prep.get(key) != prepared.get(key): fail(f"Actions handoff and Colab workspace disagree on {key}.")
     if prep.get("main_build_id") != EXPECTED_MAIN_BUILD_ID or prep.get("main_sha256") != EXPECTED_MAIN_SHA256:
         fail("Colab workspace is not the reviewed Sparking! ZERO main build.")
+    if prep.get("profile_type") != "registered" or prep.get("profile_source") != "NXNative pinned built-in Sparking! ZERO profile":
+        fail("Colab workspace was not prepared from the registered NXNative game profile.")
+    expected_allocator = {
+        "detector": "NXNative engine-wide ue_malloc.find",
+        "layout": "UE4_27",
+        "vtable": "0x8703ab8",
+        "getter_slot": 19,
+        "constructor_calls": ["0x1e4db30", "0x1e4e048"],
+        "object_register": "x0",
+    }
+    if prep.get("allocator") != expected_allocator:
+        fail("Colab workspace allocator contract does not match the upstream two-call FMallocBinned3 support.")
     if prep.get("graphics_api") != "nvn": fail(f"Sparking! ZERO expected NVN; Colab recorded {prep.get('graphics_api')}.")
     base_type = prep.get("input_base_package_type")
     if (prep.get("input_package_count") != 12 or base_type not in ("NSP", "XCI")
@@ -65,8 +78,10 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
         or prep.get("input_xci_count") != (1 if base_type == "XCI" else 0)):
         fail("Restored Colab manifest does not describe exactly one validated base NSP/XCI plus the update and 10 DLC NSPs.")
     ue_flags = prep.get("unreal_shader_sources") or {}
-    if not any(ue_flags.get(k) for k in ("ue_decode", "oodle_packs", "ue_legacy")):
-        fail("Colab did not identify Unreal/Oodle shader sources.")
+    expected_ue_flags = {"ue_decode": False, "oodle_packs": False, "ue_legacy": True}
+    if ue_flags != expected_ue_flags:
+        fail("Sparking! ZERO shader-source classification is not the expected inline-IoStore path: "
+             f"expected {expected_ue_flags}, got {ue_flags}.")
     if builder.chain_of(nx / "engine") != prepared["shader_chain"]:
         fail("NXNative chain header does not match the Colab preparation manifest.")
 
@@ -78,14 +93,20 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
         fail("Unsafe game-data path in Linux manifest.")
     romfs = work.joinpath(*romfs_rel.parts); romfs_id = work.joinpath(*identity_rel.parts)
     patched = work / f"patched_{prepared['package_version']}"
-    profile_root = work / "profile"; profile_dir = profile_root / TITLE_ID
+    profile_root = nx / "engine" / "dm/games"
+    profile_dir = profile_root / TITLE_ID
     for path, description in (
         (exefs / "main", "extracted main"), (exefs / "main.npdm", "main.npdm"),
         (patched / "main.patched.bin", "rewritten main"), (patched / "main.fixups.tsv", "main fixups"),
         (patched / "main.cuts.tsv", "main cut audit"), (patched / "main.obs.tsv", "main observation audit"),
-        (profile_dir / "game.tsv", "provisional game profile"), (profile_dir / "patches.py", "SpNet profile patch"),
+        (profile_dir / "game.tsv", "upstream registered Sparking! ZERO game profile"),
         (romfs, "restored RomFS"), (romfs_id, "RomFS identity sidecar")):
         if not path.is_file(): fail(f"{description} is missing: {path}")
+    if (profile_dir / "patches.py").exists():
+        fail("The upstream Sparking! ZERO profile must not be shadowed by a local build-ID patches.py.")
+    if not any(line.startswith(f"build\tv327680\t2.0.76\tmain={EXPECTED_MAIN_BUILD_ID}")
+               for line in (profile_dir / "game.tsv").read_text(encoding="utf-8").splitlines()):
+        fail("The restored upstream game profile does not register the exact Sparking! ZERO 2.0.76 main build.")
     if builder.build_id(exefs / "main") != EXPECTED_MAIN_BUILD_ID or sha256_file(exefs / "main") != EXPECTED_MAIN_SHA256:
         fail("Extracted main build ID/SHA-256 differs from the reviewed Sparking! ZERO binary.")
     game_data = prepared.get("game_data") or {}; romfs_record = game_data.get("romfs") or {}
@@ -120,15 +141,27 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
     obs = [x for x in (patched / "main.obs.tsv").read_text(errors="replace").splitlines()
            if x.strip() and not x.lstrip().startswith("#")]
     fixups = (patched / "main.fixups.tsv").read_text(encoding="utf-8")
-    if len(cuts) != 2 or not any("0x1e4db30" in x for x in cuts) or not any("0x1b74d70" in x for x in cuts):
-        fail("The final rewrite is missing the exact two expected SPK cuts.")
-    if len(obs) != 1 or "0x1e4db34" not in obs[0]: fail("The final rewrite is missing the exact x19 allocator observation gate.")
-    if "# UE_MALLOC_VT\t0x8703ab8" not in fixups or "# UE_MALLOC_SLOT\t0x17" not in fixups:
-        fail("The final rewrite fixups do not identify the UE5_SPK allocator layout.")
-    if "0x1b74d70" not in (profile_dir / "patches.py").read_text(encoding="utf-8"):
-        fail("The provisional profile does not carry the build-gated SpNet StartupModule patch.")
+    allocator_cut_offsets = {
+        int(row.split("\t", 1)[0], 0) for row in cuts if "FMallocBinned3" in row
+    }
+    allocator_obs_offsets = {
+        int(row.split("\t", 1)[0], 0)
+        for row in obs if "FMallocBinned3 constructor call (cut)" in row
+    }
+    expected_calls = {0x1E4DB30, 0x1E4E048}
+    if allocator_cut_offsets != expected_calls:
+        fail("The final rewrite must cut both upstream FMallocBinned3 calls; "
+             f"expected {[hex(x) for x in sorted(expected_calls)]}, got {[hex(x) for x in sorted(allocator_cut_offsets)]}.")
+    if allocator_obs_offsets != expected_calls:
+        fail("The final rewrite must install the generic x0 allocator gate at both constructor calls; "
+             f"expected {[hex(x) for x in sorted(expected_calls)]}, got {[hex(x) for x in sorted(allocator_obs_offsets)]}.")
+    if "# UE_MALLOC_VT\t0x8703ab8" not in fixups or "# UE_MALLOC_SLOT\t0x13" not in fixups:
+        fail("The final rewrite fixups must identify the upstream Sparking! ZERO vtable and getter slot 19.")
     profile = game_profiles.load(TITLE_ID)
-    if sorted(profile.modules_in(exefs)) != sorted(expected_modules): fail("Loaded provisional profile modules differ from the Colab manifest.")
+    if profile.dir.resolve() != profile_dir.resolve():
+        fail(f"NXNative selected the wrong profile for this build: {profile.dir}")
+    if sorted(profile.modules_in(exefs)) != sorted(expected_modules):
+        fail("Loaded upstream game profile modules differ from the Colab manifest.")
     return profile, version_dir, romfs, romfs_id, aoc_dir, aoc_images, patched, prep, profile_root
 
 def main() -> None:
@@ -145,9 +178,11 @@ def main() -> None:
     engine = nx / "engine"
     repo_scripts = Path(__file__).resolve().parent; sys.path.insert(0, str(repo_scripts))
     import spk_engine
-    spk_engine.patch(engine)
-    profile_root = work / "profile"
-    os.environ["DM_GAMES_DIR"] = str(profile_root); os.environ["DM_GAMES_FIRST"] = "1"; os.environ["DM_GAME"] = TITLE_ID
+    for key in ("DM_GAMES_DIR", "DM_GAMES_FIRST"):
+        os.environ.pop(key, None)
+    os.environ["DM_GAME"] = TITLE_ID
+    spk_engine.verify(engine)
+    profile_root = engine / "dm/games"
     builder, game_profiles, nacp, pg = load_builder(engine)
     profile, version_dir, romfs, romfs_id, aoc_dir, aoc_images, patched, prep, _ = validate_workspace(
         prepared, work, nx, builder, game_profiles)
@@ -156,8 +191,10 @@ def main() -> None:
 
     py = sys.executable
     env = builder.tool_env(); env.setdefault("USER", os.environ.get("USER") or "runner")
-    env.update({"DM_GAME": TITLE_ID, "DM_GAMES_DIR": str(profile_root), "DM_GAMES_FIRST": "1",
-                "DM_ROOT": str(work), "WORK": str(work / "tmp"), "IOS_PULL": "1"})
+    env.pop("DM_GAMES_DIR", None)
+    env.pop("DM_GAMES_FIRST", None)
+    env.update({"DM_GAME": TITLE_ID, "DM_ROOT": str(work),
+                "WORK": str(work / "tmp"), "IOS_PULL": "1"})
     builder.configure_dotnet(env)
     xlate = engine / "dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate"
     builder.PROG.mode = "lines"; builder.PROG.plan(6)
@@ -172,11 +209,13 @@ def main() -> None:
         romfs_source = builder.rfs.source(version_dir); modules = profile.modules_in(version_dir / "ExeFS")
         facts = pg.build_sources(version_dir / "ExeFS", romfs_source, modules)
         if facts["graphics"][0] != "nvn": fail(f"Sparking! ZERO expected NVN; NXNative detected {facts['graphics'][0]}.")
-        for key in ("ue_decode", "oodle_packs", "ue_legacy"):
-            expected = bool(prep["unreal_shader_sources"].get(key)); actual = bool(facts.get(key, (False, ""))[0])
-            if expected != actual: fail(f"Unreal shader-source detection changed between Colab and macOS for {key}: {expected} != {actual}.")
-        if not any(facts.get(key, (False, ""))[0] for key in ("ue_decode", "oodle_packs", "ue_legacy")):
-            fail("Pinned macOS checkout no longer detects this game's Unreal/Oodle shader inputs.")
+        actual_ue_flags = {key: bool(facts.get(key, (False, ""))[0])
+                           for key in ("ue_decode", "oodle_packs", "ue_legacy")}
+        expected_ue_flags = {"ue_decode": False, "oodle_packs": False, "ue_legacy": True}
+        if actual_ue_flags != expected_ue_flags or actual_ue_flags != prep["unreal_shader_sources"]:
+            fail("Sparking! ZERO must use NXNative's inline IoStore shader path on macOS too: "
+                 f"expected {expected_ue_flags}, Colab recorded {prep['unreal_shader_sources']}, "
+                 f"macOS detected {actual_ue_flags}.")
 
         if facts.get("ue_decode", (False, ""))[0]:
             print("[SpkIOSzero] Running NXNative Unreal shader extraction and game-owned Oodle decode on macOS...", flush=True)
