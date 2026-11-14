@@ -1,10 +1,6 @@
 name: 1. Extract Shader Kit + Split
 
 on:
-  push:
-    branches: [SpkIOSzero]
-    paths:
-      - '.github/workflows/1-extract-shader-kit.yml'
   workflow_dispatch:
   schedule:
     - cron: '0 2 * * 0'

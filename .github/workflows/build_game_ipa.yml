@@ -1,9 +1,6 @@
 name: 2. Build Thin IPA - SpNet pulado pelo StartupModule + auditoria 6 (PLT corrigido)
 
 on:
-  push:
-    branches:
-      - SpkIOSZero
   workflow_dispatch:
     inputs:
       github_kit_url:

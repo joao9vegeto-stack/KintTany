@@ -1,12 +1,6 @@
 name: 3. Sonda de shaders - IoStore, ferramentas e cadeia de traducao
 
 on:
-  push:
-    branches:
-      - SpkIOSzero
-      - SpkIOSZero
-    paths:
-      - ".github/workflows/shader_probe.yml"
   workflow_dispatch:
     inputs:
       github_kit_url:

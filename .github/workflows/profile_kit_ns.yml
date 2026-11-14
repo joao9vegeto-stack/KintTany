@@ -1,12 +1,6 @@
 name: 2a. Build ProfileKitNS App IPA (v4.0 - MEGA FINAL)
 
 on:
-  push:
-    branches:
-      - SpkIOSzero
-      - SpkIOSZero
-    paths:
-      - '.github/workflows/profile_kit_ns.yml'
   workflow_dispatch:
 
 permissions:

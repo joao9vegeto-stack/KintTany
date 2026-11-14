@@ -1,12 +1,6 @@
 name: 1b. Build ShaderKitNS App IPA (v1.9 - GIGANTE SPLIT REAL)
 
 on:
-  push:
-    branches:
-      - SpkIOSzero
-      - SpkIOSZero
-    paths:
-      - '.github/workflows/shader_kit_ns.yml'
   workflow_dispatch:
 
 permissions:
