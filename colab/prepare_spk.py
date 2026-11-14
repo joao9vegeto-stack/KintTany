@@ -22,7 +22,7 @@ def install_linux_dependencies(root: Path) -> None:
     missing = [name for name in commands if shutil.which(name) is None]
     packages = ("build-essential", "libssl-dev")
     def installed(name: str) -> bool:
-        result = subprocess.run(["dpkg-query", "-W", "-f=\${db:Status-Status}", name],
+        result = subprocess.run(["dpkg-query", "-W", "-f=${db:Status-Status}", name],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         return result.returncode == 0 and result.stdout.strip() == "installed"
     missing += [name for name in packages if not installed(name)]

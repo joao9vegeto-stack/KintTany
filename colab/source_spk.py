@@ -141,6 +141,10 @@ def install_7zip() -> str:
     fail("Unable to install 7-Zip in Colab.")
     raise AssertionError("unreachable")
 
+def find_nsps(root: Path) -> list[Path]:
+    return sorted(p for p in root.rglob("*") if p.is_file() and p.suffix.lower() == ".nsp")
+
+
 def validate_nsp(path: Path) -> None:
     if not path.is_file() or path.stat().st_size < 4:
         fail(f"NSP is empty or truncated: {path}")
@@ -173,7 +177,7 @@ def extract_single_base(archive: Path, destination: Path, sevenzip: str) -> Path
                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     if r.returncode:
         fail("7-Zip extraction failed: " + r.stdout[-2000:])
-    nsps = sorted(p for p in destination.rglob("*.nsp") if p.is_file())
+    nsps = find_nsps(destination)
     if len(nsps) != 1:
         fail(f"Base 7z must contain exactly one NSP; found {len(nsps)}: " +
              "; ".join(f"{p.relative_to(destination)} ({p.stat().st_size:,} bytes)" for p in nsps))
@@ -199,7 +203,7 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path, archive_url: s
     other_items = [x for x in package_files if x["id"] != update_item["id"]]
     # Drive/spk contains update.nsp + ten DLC NSPs. An optional base.nsp
     # is accepted after the first successful base extraction is checkpointed to Drive.
-    named_base = [x for x in other_items if x.get("name", "").lower() == "base.nsp"]
+    named_base = [x for x in other_items if x.get("name", "").lower().startswith("base")]
     if len(other_items) == 10:
         base_item, dlc_items = None, other_items
     elif len(other_items) == 11 and len(named_base) == 1:
@@ -228,11 +232,11 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path, archive_url: s
         extracted = temp / "extracted"
         temp.mkdir(parents=True, exist_ok=True)
         download_7z(archive_url, archive)
-        if not any(extracted.rglob("*.nsp")):
+        if not find_nsps(extracted):
             sevenzip = install_7zip()
             base_extracted = extract_single_base(archive, extracted, sevenzip)
         else:
-            candidates = sorted(p for p in extracted.rglob("*.nsp") if p.is_file())
+            candidates = find_nsps(extracted)
             if len(candidates) != 1:
                 fail(f"Cached base extraction is ambiguous: {len(candidates)} NSP files.")
             base_extracted = candidates[0]
