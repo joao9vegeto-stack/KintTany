@@ -192,9 +192,13 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path, archive_url: s
         fail("The configured Drive folder must contain the dedicated 'spk' subfolder.")
     spk_items = list_children(api, spk_folder["id"])
 
-    keys_item = by_name(spk_items, "prod.keys")
-    if not keys_item:
-        fail("spk/prod.keys was not found; keys are read exclusively from Drive/<configured folder>/spk.")
+    root_keys = [x for x in root_items if x.get("name", "").lower() == "prod.keys"
+                 and x.get("mimeType") != FOLDER_MIME]
+    spk_keys = [x for x in spk_items if x.get("name", "").lower() == "prod.keys"
+                and x.get("mimeType") != FOLDER_MIME]
+    if len(root_keys) + len(spk_keys) != 1:
+        fail("Place exactly one prod.keys either in the configured Drive root or in Drive/spk.")
+    keys_item = (root_keys or spk_keys)[0]
     update_item = by_name(spk_items, "update.nsp")
     if not update_item:
         fail("spk/update.nsp was not found.")
