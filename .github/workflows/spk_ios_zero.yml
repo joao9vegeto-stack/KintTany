@@ -89,6 +89,9 @@ jobs:
           assert len(notebook["cells"]) == 12
           assert "DRIVE_FOLDER_ID" in notebook_source and ('"spk"' in notebook_source or "'spk'" in notebook_source)
           assert "10 DLCs .nsp" in notebook_source
+          prepare = Path("colab/prepare_spk.py").read_text(encoding="utf-8")
+          assert '"ninja": "ninja-build"' in prepare
+          assert 'apt-get install failed (exit ' in prepare
           assert ".znsp" not in notebook_source.lower()
           assert "run_spk.py dispatch" in notebook_source
           with Path(".github/workflows/spk_ios_zero.yml").open(encoding="utf-8") as f:

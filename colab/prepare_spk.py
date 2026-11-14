@@ -18,18 +18,41 @@ def require(condition: bool, message: str) -> None:
 def install_linux_dependencies(root: Path) -> None:
     require(sys.platform.startswith("linux"), "Colab preparation must run on Linux.")
     require(sys.version_info >= (3, 12), "Python 3.12 or newer is required by NXNative.")
-    commands = ("git", "zstd", "curl", "cmake", "ninja", "pkg-config")
-    missing = [name for name in commands if shutil.which(name) is None]
+    # Debian/Ubuntu package names are not always the same as executable names.
+    command_packages = {
+        "git": "git",
+        "zstd": "zstd",
+        "curl": "curl",
+        "cmake": "cmake",
+        "ninja": "ninja-build",
+        "pkg-config": "pkg-config",
+    }
+    missing_commands = [command for command in command_packages if shutil.which(command) is None]
     packages = ("build-essential", "libssl-dev")
     def installed(name: str) -> bool:
         result = subprocess.run(["dpkg-query", "-W", "-f=${db:Status-Status}", name],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         return result.returncode == 0 and result.stdout.strip() == "installed"
-    missing += [name for name in packages if not installed(name)]
-    if missing:
-        print("[SpkIOSzero] Installing missing Linux dependencies:", ", ".join(missing), flush=True)
-        subprocess.run(["apt-get", "update", "-qq"], check=True)
-        subprocess.run(["apt-get", "install", "-y", "-qq", *missing], check=True)
+    missing_packages = [command_packages[name] for name in missing_commands]
+    missing_packages += [name for name in packages if not installed(name)]
+    # Avoid asking APT to install packages already present under another executable path.
+    missing_packages = list(dict.fromkeys(name for name in missing_packages if not installed(name)))
+    if missing_packages:
+        print("[SpkIOSzero] Installing missing Linux packages:", ", ".join(missing_packages), flush=True)
+        update = subprocess.run(["apt-get", "update", "-qq"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        if update.returncode:
+            fail("apt-get update failed (exit "
+                 + str(update.returncode) + "): " + update.stdout[-3000:])
+        install = subprocess.run(["apt-get", "install", "-y", "-qq", *missing_packages],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        if install.returncode:
+            fail("apt-get install failed (exit " + str(install.returncode)
+                 + ") for " + ", ".join(missing_packages) + ": " + install.stdout[-4000:])
+    still_missing = [name for name in command_packages if shutil.which(name) is None]
+    if still_missing:
+        fail("Linux dependencies are still unavailable after APT installation: "
+             + ", ".join(still_missing))
     python_packages = (
         ("lz4.block", "lz4"), ("capstone", "capstone>=5,<6"),
         ("fontTools", "fonttools"), ("zbic", "zbic"),
