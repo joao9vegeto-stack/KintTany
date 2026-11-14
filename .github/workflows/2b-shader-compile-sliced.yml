@@ -1,20 +1,7 @@
 name: 2b. Shader Build - Compile (Fatiado)
 
 on:
-  workflow_run:
-    workflows: ["2a. Shader Build - Setup Cache"]
-    types: [completed]
-    branches: [SpkIOSzero]
   workflow_dispatch:
-
-permissions:
-  contents: read
-
-env:
-  GAME: "010035F022078000"
-  GAME_NAME: "DRAGON BALL: Sparking! ZERO"
-  TOTAL_SLICES: 4
-
 jobs:
   check_workflow_status:
     runs-on: macos-latest

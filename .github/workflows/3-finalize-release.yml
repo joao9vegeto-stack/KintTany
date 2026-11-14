@@ -1,19 +1,7 @@
 name: 3. Finalize - Commit + Release
 
 on:
-  workflow_run:
-    workflows: ["2b. Shader Build - Compile (Fatiado)"]
-    types: [completed]
-    branches: [SpkIOSzero]
   workflow_dispatch:
-
-permissions:
-  contents: write
-
-env:
-  GAME: "010035F022078000"
-  GAME_NAME: "DRAGON BALL: Sparking! ZERO"
-
 jobs:
   check_workflow_status:
     runs-on: macos-latest

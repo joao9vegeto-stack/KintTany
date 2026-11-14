@@ -9,6 +9,10 @@ on:
       - scripts/spk_engine.py
       - scripts/prepare_spk_actions.py
       - scripts/build_spk_shared.py
+      - colab/source_spk.py
+      - colab/prepare_spk.py
+      - colab/run_spk.py
+      - colab/SpkIOSzero.ipynb
       - .github/workflows/spk_ios_zero.yml
 
 permissions:
@@ -73,6 +77,8 @@ jobs:
           nso = (engine / "dm/tools/patch_nso.py").read_text(encoding="utf-8")
           assert "UE5_SPK" in hle
           assert "DRAGON BALL: Sparking! ZERO 2.0.76" in hle
+          source = Path("colab/source_spk.py").read_text(encoding="utf-8")
+          assert 'upload_drive_file(api, base_path, spk_folder["id"], "base.nsp")' in source
           assert "0x8703ab8" in hle and "0x1e4db30" in hle
           assert "SPK_FIXED_MAIN" in nso
           assert "0x1e4db34" in nso and "OBS_UE_MALLOC | (19 << 8)" in nso

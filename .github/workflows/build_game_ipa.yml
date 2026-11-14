@@ -3,7 +3,6 @@ name: 2. Build Thin IPA - SpNet pulado pelo StartupModule + auditoria 6 (PLT cor
 on:
   push:
     branches:
-      - SpkIOSzero
       - SpkIOSZero
   workflow_dispatch:
     inputs:
