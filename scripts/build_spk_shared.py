@@ -36,6 +36,51 @@ def load_builder(engine: Path):
     module.gamemod = game_profiles; module.nacp = nacp; module.pg = pg
     return module, game_profiles, nacp, pg
 
+PREPARED_SHARED_FIELDS = (
+    "project", "title_id", "package_version", "nx2apple_tag", "engine_pin",
+    "profile_type", "profile_source", "main_build_id", "main_sha256",
+    "allocator", "modules", "shader_chain",
+    "input_package_count", "input_nsp_count", "input_xci_count",
+    "input_base_package_type", "input_base_package_name", "unreal_shader_sources",
+)
+
+def validate_prepared_contract(prepared: dict, prep: dict, work: Path) -> None:
+    """Validate the two manifest schemas without comparing unlike representations.
+
+    Colab's manifest stores workspace-relative paths and AOC records (name/size),
+    while Actions input stores absolute restored paths and the AOC filenames.
+    """
+    for key in PREPARED_SHARED_FIELDS:
+        if prep.get(key) != prepared.get(key):
+            fail(f"Actions input and Colab workspace disagree on {key}.")
+
+    game_data = prepared.get("game_data") or {}
+    if game_data.get("romfs_relative_path") != prep.get("romfs_relative_path"):
+        fail("Drive handoff RomFS path differs from the Colab workspace manifest.")
+    if game_data.get("aoc_relative_dir") != prep.get("aoc_relative_dir"):
+        fail("Drive handoff AOC path differs from the Colab workspace manifest.")
+    romfs_record = game_data.get("romfs") or {}
+    if int(romfs_record.get("size", -1)) != int(prep.get("romfs_size", -2)):
+        fail("Drive handoff RomFS size differs from the Colab workspace manifest.")
+
+    for payload_key, manifest_key, label in (
+        ("romfs_path", "romfs_relative_path", "RomFS"),
+        ("romfs_id_path", "romfs_id_relative_path", "RomFS identity"),
+        ("aoc_dir", "aoc_relative_dir", "AOC"),
+    ):
+        relative = PurePosixPath(str(prep.get(manifest_key, "")))
+        if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+            fail(f"Unsafe {label} path in Colab workspace manifest.")
+        expected_path = work.joinpath(*relative.parts).resolve()
+        supplied = prepared.get(payload_key)
+        if not supplied or Path(supplied).resolve() != expected_path:
+            fail(f"Actions input {payload_key} does not resolve to the Colab {label} path.")
+
+    expected_aoc = {str(item.get("name")) for item in (prep.get("aoc_images") or [])}
+    supplied_aoc = {str(name) for name in (prepared.get("aoc_images") or [])}
+    if not expected_aoc or supplied_aoc != expected_aoc:
+        fail("Actions AOC filename list differs from the Colab AOC records.")
+
 def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profiles):
     if prepared.get("project") != PROJECT or prepared.get("branch") != BRANCH:
         fail("Prepared input does not belong to the SpkIOSzero project/branch.")
@@ -49,14 +94,7 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
     prep_path = work / "spk-ios-zero-linux-prep.json"
     if not prep_path.is_file(): fail("Colab Linux preparation manifest is missing.")
     prep = json.loads(prep_path.read_text(encoding="utf-8"))
-    for key in ("project", "title_id", "package_version", "nx2apple_tag", "engine_pin",
-                "profile_type", "profile_source", "main_build_id", "main_sha256",
-                "allocator", "modules", "shader_chain",
-                "input_package_count", "input_nsp_count", "input_xci_count",
-                "input_base_package_type", "input_base_package_name",
-                "romfs_relative_path", "romfs_id_relative_path", "aoc_relative_dir",
-                "romfs_size", "aoc_images", "graphics_api", "unreal_shader_sources"):
-        if prep.get(key) != prepared.get(key): fail(f"Actions handoff and Colab workspace disagree on {key}.")
+    validate_prepared_contract(prepared, prep, work)
     if prep.get("main_build_id") != EXPECTED_MAIN_BUILD_ID or prep.get("main_sha256") != EXPECTED_MAIN_SHA256:
         fail("Colab workspace is not the reviewed Sparking! ZERO main build.")
     if prep.get("profile_type") != "registered" or prep.get("profile_source") != "NXNative pinned built-in Sparking! ZERO profile":
