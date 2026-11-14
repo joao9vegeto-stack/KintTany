@@ -81,6 +81,13 @@ def validate_prepared_contract(prepared: dict, prep: dict, work: Path) -> None:
     if not expected_aoc or supplied_aoc != expected_aoc:
         fail("Actions AOC filename list differs from the Colab AOC records.")
 
+def validate_shader_map(profile) -> Path:
+    """NXNative writes provisional split tables to the profile, not shader/pkg."""
+    shader_map = Path(profile.table("shader_map.tsv"))
+    if not shader_map.is_file() or shader_map.stat().st_size == 0:
+        fail(f"The shader split did not produce a non-empty profile shader map: {shader_map}")
+    return shader_map
+
 def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profiles):
     if prepared.get("project") != PROJECT or prepared.get("branch") != BRANCH:
         fail("Prepared input does not belong to the SpkIOSzero project/branch.")
@@ -286,8 +293,8 @@ def main() -> None:
         chain_lib = ios_msl / f"b-{actual_chain}"
         if not (chain_lib.is_dir() or Path(str(chain_lib) + ".img").is_file()):
             fail(f"iOS Metal shader libraries are missing: {chain_lib}(.img)")
-        if not (shader_package.is_dir() and any(shader_package.rglob("shader_map.tsv"))):
-            fail("The shader split did not produce shader_map.tsv.")
+        shader_map = validate_shader_map(profile)
+        print(f"[SpkIOSzero] Verified NXNative shader map at {shader_map} ({shader_map.stat().st_size:,} bytes).", flush=True)
         if not (Path(str(chain_lib) + ".img").is_file() or (chain_lib / "inputs.tsv").is_file()):
             fail("The iOS Metal shader output does not contain a full-build library/stamp.")
 
