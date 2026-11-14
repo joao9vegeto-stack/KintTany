@@ -52,7 +52,11 @@ jobs:
           notebook = json.loads(Path("colab/SpkIOSzero.ipynb").read_text(encoding="utf-8"))
           assert notebook["nbformat"] == 4
           notebook_source = "\n".join("".join(c.get("source", [])) for c in notebook["cells"])
+          assert len(notebook["cells"]) == 12
           assert "DRIVE_FOLDER_ID" in notebook_source and "'spk'" in notebook_source
+          assert "10 DLCs .nsp" in notebook_source
+          assert ".znsp" not in notebook_source.lower()
+          assert "run_spk.py dispatch" in notebook_source
           with Path(".github/workflows/spk_ios_zero.yml").open(encoding="utf-8") as f:
               workflow = yaml.load(f, Loader=yaml.BaseLoader)
           assert "validate-spk-source" in workflow["jobs"]
@@ -124,6 +128,15 @@ jobs:
           assert p.get("package_version") == d.get("package_version")
           assert p.get("main_build_id") == "68edafd68c7bc1a1af50b82aac838018"
           assert p.get("main_sha256") == "a0f8f0644c92384ddb1baac1c21aecbeeace5bc99ad40895e216add61da78efe"
+          src = d.get("source", {})
+          assert src.get("package_count") == 12
+          assert src.get("update_nsp_count") == 1
+          assert src.get("dlc_nsp_count") == 10
+          assert p.get("input_package_count") == 12
+          assert p.get("input_nsp_count") == 12
+          assert p.get("input_base_nsp_count") == 1
+          assert p.get("input_update_nsp_count") == 1
+          assert p.get("input_dlc_nsp_count") == 10
           assert p.get("graphics_api") == "nvn"
           assert any((p.get("unreal_shader_sources") or {}).get(k) for k in ("ue_decode", "oodle_packs", "ue_legacy"))
           gd = d.get("game_data", {})

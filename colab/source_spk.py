@@ -188,24 +188,28 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path, archive_url: s
         fail("The configured Drive folder must contain the dedicated 'spk' subfolder.")
     spk_items = list_children(api, spk_folder["id"])
 
-    keys_item = by_name(root_items, "prod.keys") or by_name(spk_items, "prod.keys")
+    keys_item = by_name(spk_items, "prod.keys")
     if not keys_item:
-        fail("prod.keys was not found in the configured Drive folder or its spk subfolder.")
+        fail("spk/prod.keys was not found; keys are read exclusively from Drive/<configured folder>/spk.")
     update_item = by_name(spk_items, "update.nsp")
     if not update_item:
         fail("spk/update.nsp was not found.")
-    dlc_items = sorted((x for x in spk_items if x.get("mimeType") != FOLDER_MIME
-                        and re.fullmatch(r"dlc[^/]*\.nsp", x.get("name", ""), re.I)),
-                       key=lambda x: x.get("name", "").lower())
-    if not dlc_items:
-        fail("No DLC NSP (dlc*.nsp) was found inside Drive/spk.")
     package_files = [x for x in spk_items if x.get("mimeType") != FOLDER_MIME
                      and x.get("name", "").lower().endswith(".nsp")]
-    reserved_ids = {update_item["id"], *(x["id"] for x in dlc_items)}
-    base_items = [x for x in package_files if x["id"] not in reserved_ids]
-    if len(base_items) > 1:
-        fail("Drive/spk contains more than one NSP besides update.nsp and dlc*.nsp; keep exactly one base NSP.")
-    base_item = base_items[0] if base_items else None
+    other_items = [x for x in package_files if x["id"] != update_item["id"]]
+    # Drive/spk contains update.nsp + ten DLC NSPs. An optional base.nsp
+    # is accepted after the first successful base extraction is checkpointed to Drive.
+    named_base = [x for x in other_items if x.get("name", "").lower() == "base.nsp"]
+    if len(other_items) == 10:
+        base_item, dlc_items = None, other_items
+    elif len(other_items) == 11 and len(named_base) == 1:
+        base_item = named_base[0]
+        dlc_items = [x for x in other_items if x["id"] != base_item["id"]]
+    else:
+        fail(f"Expected update.nsp + exactly 10 DLC NSPs in Drive/spk (optional base.nsp); found {len(other_items)} other NSP files.")
+    dlc_items = sorted(dlc_items, key=lambda x: x.get("name", "").lower())
+    if len(dlc_items) != 10:
+        fail(f"Expected exactly 10 DLC .nsp files in Drive/spk; found {len(dlc_items)}.")
 
     input_dir = runtime_root / "input-packages"
     keys_path = runtime_root / "keys" / "prod.keys"
@@ -258,7 +262,9 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path, archive_url: s
         if old.resolve() not in expected:
             old.unlink()
     base_bytes = sum(p.stat().st_size for p in package_paths)
-    print(f"[SpkIOSzero] Source set: {len(package_paths)} packages (base + update + {len(dlc_records)} DLC), {base_bytes/2**30:.2f} GiB; Drive source folder is {spk_folder['name']}.")
+    if len(package_paths) != 12 or len(dlc_records) != 10:
+        fail(f"Expected exactly 12 NSP packages (1 base + 1 update + 10 DLC); found {len(package_paths)}.")
+    print(f"[SpkIOSzero] Source set: 12 .nsp packages (1 base + 1 update + 10 DLC), {base_bytes/2**30:.2f} GiB; Drive source folder is {spk_folder['name']}.")
     return {
         "package_dir": str(input_dir), "keys_path": str(keys_path),
         "source_folder_id": spk_folder["id"], "source_folder_name": spk_folder["name"],

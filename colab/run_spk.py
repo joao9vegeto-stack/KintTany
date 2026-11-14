@@ -131,7 +131,9 @@ def prepare(args, api=None) -> dict:
     from source_spk import prepare_source
     source = prepare_source(api, args.drive_folder_id, root, os.environ.get("SPK_BASE_ARCHIVE_URL", "").strip())
     input_dir, keys = Path(source["package_dir"]), Path(source["keys_path"])
-    print(f"[SpkIOSzero] Source ready: {source['package_count']} NSPs from Drive/{source['source_folder_name']}; BOTW inputs were not read.", flush=True)
+    if source.get("package_count") != 12 or source.get("dlc_nsp_count") != 10:
+        fail("Drive/spk must contain exactly 1 base NSP + update.nsp + 10 DLC .nsp files.")
+    print(f"[SpkIOSzero] Source ready: 1 base NSP + 1 update.nsp + 10 DLC NSPs from Drive/{source['source_folder_name']}; BOTW inputs were not read.", flush=True)
 
     from prepare_spk import run_preparation
     nx = install_nx2apple(root)
@@ -140,7 +142,8 @@ def prepare(args, api=None) -> dict:
         # Keep source files and keys, but start a new game-build workspace to avoid stale manifests.
         shutil.rmtree(work)
     work.mkdir(parents=True)
-    prep = run_preparation(argparse.Namespace(nx2apple_root=nx, nsp_dir=input_dir, keys=keys, work_dir=work))
+    prep = run_preparation(argparse.Namespace(nx2apple_root=nx, nsp_dir=input_dir, keys=keys,
+        expected_dlc_count=10, expected_package_count=12, work_dir=work))
     if prep.get("project") != PROJECT or prep.get("title_id") != TITLE_ID:
         fail("Colab preparation manifest does not belong to Sparking! ZERO.")
     if prep.get("nx2apple_tag") != NX2APPLE_TAG or prep.get("engine_pin") != ENGINE_PIN:
@@ -176,6 +179,14 @@ def prepare(args, api=None) -> dict:
         "drive_output_folder_id": output_id,
         "drive_output_folder_url": f"https://drive.google.com/drive/folders/{output_id}",
         "work_archive": archive_record,
+        "source": {
+            "folder_name": source["source_folder_name"],
+            "package_count": source["package_count"],
+            "base_type": source["base_type"],
+            "update_nsp_count": source["update_nsp_count"],
+            "dlc_nsp_count": source["dlc_nsp_count"],
+            "dlc_files": source["dlc_files"],
+        },
         "game_data": {
             "folder_id": game_id, "folder_url": f"https://drive.google.com/drive/folders/{game_id}",
             "romfs": romfs_record, "aoc": aoc_records,
@@ -223,7 +234,11 @@ def recover(args, api=None) -> dict | None:
             or handoff.get("engine_pin") != ENGINE_PIN or not handoff.get("work_archive", {}).get("id")
             or not handoff.get("game_data", {}).get("romfs", {}).get("id")
             or handoff.get("package_version") != prepared.get("package_version")
-            or not prepared.get("aoc_images") or not handoff.get("game_data", {}).get("aoc")):
+            or not prepared.get("aoc_images") or not handoff.get("game_data", {}).get("aoc")
+            or (handoff.get("source") or {}).get("package_count") != 12
+            or (handoff.get("source") or {}).get("dlc_nsp_count") != 10
+            or prepared.get("input_package_count") != 12
+            or prepared.get("input_dlc_nsp_count") != 10):
             dest.unlink(missing_ok=True)
             continue
         print("[SpkIOSzero] Completed Sparking! ZERO handoff recovered from Drive; no NSP download, extraction or rewrite was repeated.")

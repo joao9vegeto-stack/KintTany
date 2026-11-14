@@ -22,7 +22,7 @@ def install_linux_dependencies(root: Path) -> None:
     missing = [name for name in commands if shutil.which(name) is None]
     packages = ("build-essential", "libssl-dev")
     def installed(name: str) -> bool:
-        result = subprocess.run(["dpkg-query", "-W", "-f=${db:Status-Status}", name],
+        result = subprocess.run(["dpkg-query", "-W", "-f=\${db:Status-Status}", name],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         return result.returncode == 0 and result.stdout.strip() == "installed"
     missing += [name for name in packages if not installed(name)]
@@ -125,8 +125,12 @@ def run_preparation(args) -> dict:
     package_files = module.files_with_suffix(nsp_dir, ".nsp", ".xci")
     nsp_files = [p for p in package_files if p.suffix.lower() == ".nsp"]
     xci_files = [p for p in package_files if p.suffix.lower() == ".xci"]
-    require(len(nsp_files) >= 2 and not xci_files,
-            f"Drive/spk must resolve to one base NSP plus update/DLC NSPs; found {len(nsp_files)} NSP(s) and {len(xci_files)} XCI(s).")
+    expected_dlc_count = int(getattr(args, "expected_dlc_count", 10))
+    expected_package_count = int(getattr(args, "expected_package_count", 12))
+    require(expected_dlc_count == 10 and expected_package_count == 12,
+            "SpkIOSzero input contract is exactly 1 base NSP + 1 update NSP + 10 DLC NSPs.")
+    require(len(nsp_files) == expected_package_count and not xci_files,
+            f"Expected exactly 12 NSP packages (base + update + 10 DLC); found {len(nsp_files)} NSP(s) and {len(xci_files)} XCI(s).")
     for path in nsp_files: require(module.is_package(path), f"Invalid PFS0 NSP header: {path.name}")
 
     original_rewrite = module.rewrite
@@ -229,6 +233,7 @@ def run_preparation(args) -> dict:
         "format": 1, "project": "SpkIOSzero", "title_id": TITLE_ID,
         "package_version": package_version, "nx2apple_tag": NX2APPLE_TAG, "engine_pin": pin,
         "input_package_count": len(package_files), "input_nsp_count": len(nsp_files),
+        "input_base_nsp_count": 1, "input_update_nsp_count": 1, "input_dlc_nsp_count": 10,
         "profile_type": "provisional", "modules": modules,
         "main_build_id": EXPECTED_MAIN_BUILD_ID, "main_sha256": EXPECTED_MAIN_SHA256,
         "allocator": {"layout": "UE5_SPK", "vtable": f"{spk_engine.VTABLE:#x}",

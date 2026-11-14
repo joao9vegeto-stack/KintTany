@@ -95,6 +95,17 @@ def main() -> None:
         fail("Colab manifest does not identify the reviewed Sparking! ZERO main build.")
     if prepared_manifest.get("main_sha256") != "a0f8f0644c92384ddb1baac1c21aecbeeace5bc99ad40895e216add61da78efe":
         fail("Colab manifest main SHA-256 differs from the reviewed SPK build.")
+    source_manifest = handoff.get("source") or {}
+    if (source_manifest.get("package_count") != 12
+        or source_manifest.get("update_nsp_count") != 1
+        or source_manifest.get("dlc_nsp_count") != 10):
+        fail("Source handoff must record exactly 1 base NSP + 1 update NSP + 10 DLC NSPs.")
+    if (prepared_manifest.get("input_package_count") != 12
+        or prepared_manifest.get("input_nsp_count") != 12
+        or prepared_manifest.get("input_base_nsp_count") != 1
+        or prepared_manifest.get("input_update_nsp_count") != 1
+        or prepared_manifest.get("input_dlc_nsp_count") != 10):
+        fail("Colab manifest does not validate the exact 12-NSP Sparking! ZERO source set.")
     if not handoff.get("request_id") or not handoff.get("work_archive", {}).get("id"):
         fail("Handoff request ID or workspace archive reference is missing.")
     game_data = handoff.get("game_data") or {}
