@@ -81,7 +81,8 @@ jobs:
           assert 0 <= cell7.find("HANDOFF_READY = False") < cell7.find("if not HANDOFF_READY")
           assert "drive_api_client = build(" in cell7 and "import run_spk" in cell7
           assert "RECOVERED_HANDOFF = run_spk.recover(" in cell7
-          assert 'HANDOFF_PATH.write_text(json.dumps(HANDOFF, indent=2) + "\\n"' not in cell7
+          handoff_write = next(line for line in cell7.splitlines() if "HANDOFF_PATH.write_text" in line)
+          assert handoff_write.count("\\") == 1, "Handoff JSON must use one escaped newline"
           assert len(notebook["cells"]) == 12
           assert "DRIVE_FOLDER_ID" in notebook_source and ('"spk"' in notebook_source or "'spk'" in notebook_source)
           assert "10 DLCs .nsp" in notebook_source
