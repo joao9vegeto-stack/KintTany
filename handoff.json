@@ -1,0 +1,1886 @@
+{
+  "format": 2,
+  "project": "Mugiwara4iOS",
+  "branch": "Mugiwara4iOS",
+  "request_id": "a7ed8a65-a001-435c-bc3a-0873eed60edf",
+  "title_id": "01008FE00E2F6000",
+  "package_version": "v1179648",
+  "nx2apple_tag": "v1.3.1-rc2",
+  "engine_pin": "81906931262fb25d774cce8bca2db8926439e5a2",
+  "drive_source_folder_id": "17kHkERsGo2P7u_peAtAxUL4FEVEYi9hN",
+  "drive_source_folder_name": "mugi",
+  "drive_output_folder_id": "10aO-q1XdWHiJKiQp_HaMU7SRyRnoAgrn",
+  "drive_output_folder_url": "https://drive.google.com/drive/folders/10aO-q1XdWHiJKiQp_HaMU7SRyRnoAgrn",
+  "work_archive": {
+    "id": "1sS_lhD2Q2SQeJwvDufX2khOXR_70sZPK",
+    "name": "mugiwara4ios-work.tar.zst",
+    "size": 33364046,
+    "sha256": "4449e82328d50dfedd67ff872c200a351d9def1b4ca39fec1b00e511932ae9a5"
+  },
+  "source": {
+    "folder_name": "mugi",
+    "package_count": 46,
+    "base_type": "NSP",
+    "base_extension": ".nsp",
+    "base_file_name": "000_base.nsp",
+    "update_file_name": "001_update.nsp",
+    "input_nsp_count": 46,
+    "input_xci_count": 0,
+    "update_nsp_count": 1,
+    "dlc_nsp_count": 44,
+    "base": {
+      "name": "000_base.nsp",
+      "drive_name": "Mugiwara4iOS_BASE_v0.nsp",
+      "size": 12941585148,
+      "sha256": "225dc557d07951f42f7c0967a26e67c5c20a70b9682f0c9e23f02f9ff401e91c",
+      "source": "drive-cache",
+      "url_sha256": ""
+    },
+    "update": {
+      "name": "001_update.nsp",
+      "drive_name": "Mugiwara4iOS_UPDATE_v1.8.7.nsp",
+      "size": 1882419993,
+      "sha256": "79e56ead5a24ccefa837ee36f4a144cc4bce0e39f83c56c8a404a9e3b5ca120e",
+      "source": "drive-cache",
+      "url_sha256": ""
+    },
+    "dlc_files": [
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [character_pack_7_future_island_egghead_pack_DLC][US].nsp",
+        "local_name": "002_One_Piece_Pirate_Warriors_4_character_pack_7_future_island_egghead_pack_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "d0304c5e2e5bcd14c57a07c1df4c639675fb09e1566f58a3fb82070984d2eb5e",
+        "drive_id": "1c5IbkcdYDl4tL0pLszwESTF1z7iqCCc8"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [character_pack_8_special_selection_DLC][US].nsp",
+        "local_name": "003_One_Piece_Pirate_Warriors_4_character_pack_8_special_selection_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "d91d58e07657c85b6f2964d83da6cfc57a1956214b10886b9219350ae79bf842",
+        "drive_id": "18xiOsnNEvKigHBc7FDHGCLY2YtR89Gis"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [charlotte_katakuri_early_unlock_DLC][US].nsp",
+        "local_name": "004_One_Piece_Pirate_Warriors_4_charlotte_katakuri_early_unlock_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "ddcde34768055dc71d72caf88d7484674fc1c598b7698a929b17b6fad9b23900",
+        "drive_id": "1DwtJZ-PojndMCBmUQdGubyjLbCr4_yIv"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [Coming Soon Character Pack 1][01008FE00E2F7014][US][v0].nsp",
+        "local_name": "005_ONE_PIECE_PIRATE_WARRIORS_4_Coming_Soon_Character_Pack_1_01008FE00E2F7014_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "54079a57b92459bce4e29cf0fb09fd47089bb25c82aa298a49cc512489ee4324",
+        "drive_id": "1dDus8nI-Vku5_EnxFUkt3cHKVXmm64Xw"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [Coming Soon Character Pack 2][01008FE00E2F7015][US][v0].nsp",
+        "local_name": "006_ONE_PIECE_PIRATE_WARRIORS_4_Coming_Soon_Character_Pack_2_01008FE00E2F7015_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "3ded6567d5e12760c8c6e8871b108f01cc536a75b5df87b76f986a519fd85f73",
+        "drive_id": "1rRDv4i37VZON9XG9dAC0stXJ_Vu19rWf"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [Coming Soon Character Pack 3][01008FE00E2F7016][US][v0].nsp",
+        "local_name": "007_ONE_PIECE_PIRATE_WARRIORS_4_Coming_Soon_Character_Pack_3_01008FE00E2F7016_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "be04a0983b23ec6a9991a8f7295e766483425745ad2b5304ea1fc35116821f2b",
+        "drive_id": "1gBYkJc5bBBPcu6UFDrN03wuLvhyCS8Pp"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [dynasty_warriors_hancock_costume_DLC][US].nsp",
+        "local_name": "008_One_Piece_Pirate_Warriors_4_dynasty_warriors_hancock_costume_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "0b8293be295f373fe77139f1d81eb065016a5d4cf3ede2999d83d1791aa0ebcb",
+        "drive_id": "1jIEzlygSfaZUb6Bpw60BgBs39qF02X5y"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [dynasty_warriors_law_costume_DLC][US].nsp",
+        "local_name": "009_One_Piece_Pirate_Warriors_4_dynasty_warriors_law_costume_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "274c9ae701f3cb4cf36af88fee42262a19bd25d9f210d947adb4c3fd294b6fa7",
+        "drive_id": "1fcudM9l74P7KvQRwldq5cAjatRa5occz"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [Kobys Combat Chronicle and Soul Map 2 DLC][01008FE00E2F701B][USA][v0].nsp",
+        "local_name": "010_One_Piece_Pirate_Warriors_4_Kobys_Combat_Chronicle_and_Soul_Map_2_DLC_01008FE00E2F701B_USA_v0_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "3eb2059ebec8a6993470296dc49d19aff975c14323a0f1ee51e5e0989f312f40",
+        "drive_id": "1ByuBRNteiJWn-xjbBUFEzS6gGWhZb-8I"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [kobys_combat_chronicle_and_soul_map_2_DLC][US].nsp",
+        "local_name": "011_One_Piece_Pirate_Warriors_4_kobys_combat_chronicle_and_soul_map_2_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "3eb2059ebec8a6993470296dc49d19aff975c14323a0f1ee51e5e0989f312f40",
+        "drive_id": "1ZsoDf1krSkZOhfS9eJwmiSpura163Lcp"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [land_of_wano_pack_DLC][US].nsp",
+        "local_name": "012_One_Piece_Pirate_Warriors_4_land_of_wano_pack_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "1b1a33b02f9f7e4073bed010c71cc104687e22ef43a40622c0f6831ea77ae719",
+        "drive_id": "106vL9KEo5-MS4E2wh_GhdSBX8RTLmUwv"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [Legend Dawn Pack DLC][01008FE00E2F7019][USA][v0].nsp",
+        "local_name": "013_One_Piece_Pirate_Warriors_4_Legend_Dawn_Pack_DLC_01008FE00E2F7019_USA_v0_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "3db7a865b16e470b621f69a5edb5e5e449795683d3ad7df149b09fb0e2a91ebe",
+        "drive_id": "12WiKbtki7zFLRGGBeSC1oRLTs-2Rocur"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [legend_dawn_pack_DLC][US].nsp",
+        "local_name": "014_One_Piece_Pirate_Warriors_4_legend_dawn_pack_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "3db7a865b16e470b621f69a5edb5e5e449795683d3ad7df149b09fb0e2a91ebe",
+        "drive_id": "1Vlh8IpQlua7UBZLxdWs5HYR1BhW_euo0"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [luffy_costume_luffytaro_DLC][US].nsp",
+        "local_name": "015_One_Piece_Pirate_Warriors_4_luffy_costume_luffytaro_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 122015,
+        "sha256": "bf4b083f2d0b12fd0ff23da9b9366bc3592f95cc998b1e5c4c86c8fc7ca2c9db",
+        "drive_id": "1MGpzVaTosYNM84cnPt8Is0i5ZnqkCPPO"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [nami_costume_onami_DLC][US].nsp",
+        "local_name": "016_One_Piece_Pirate_Warriors_4_nami_costume_onami_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 122015,
+        "sha256": "95c5af2fb3b279a87549d01318bfe825a58b65702d97e3a20912b3f07247f4d3",
+        "drive_id": "1YEHBj9CQTIeADoE9AEWf_L_F1lXxE5Zw"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [One Piece Film Red Pack DLC][01008FE00E2F7018][USA][v0].nsp",
+        "local_name": "017_One_Piece_Pirate_Warriors_4_One_Piece_Film_Red_Pack_DLC_01008FE00E2F7018_USA_v0_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "eef941724d9de2e9065d76c3f3dc7b088a940016aa6fdf66e3cd386e9b032a2d",
+        "drive_id": "1WrzTnyxHtZpJQE4CPELVmH85pwzyH3OT"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [ONE PIECE PIRATE WARRIORS 4 Anime Song Pack][01008FE00E2F700C][US][v0].nsp",
+        "local_name": "018_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Anime_Song_Pack_01008FE00E2F700C_US_v0_.nsp",
+        "type": "NSP",
+        "size": 373199497,
+        "sha256": "d847c0954fcc16b7a7c610a0590c75ff3f4a5fba94679624e223e884193725e9",
+        "drive_id": "13Q9lTuxxT6DqbVAtuvFH7SOKDlgD9ZKL"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [ONE PIECE PIRATE WARRIORS 4 Charlotte Katakuri Early Unlock][01008FE00E2F700B][US][v0].nsp",
+        "local_name": "019_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Charlotte_Katakuri_Early_Unlock_01008FE00E2F700B_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "bce13bfac676f4d47fe84e1955f971f5c0804c7bcc6c650bc30d34e30c41aded",
+        "drive_id": "1K0mOvY8a2fp8dSEG7p9_8gYuqHLR7x1-"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [ONE PIECE PIRATE WARRIORS 4 DYNASTY WARRIORS Hancock Costume][01008FE00E2F7005][US][v0].nsp",
+        "local_name": "020_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_DYNASTY_WARRIORS_Hancock_Costume_01008FE00E2F7005_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "45b5715b25b3f5ed246d432e784e0839cba66875a2216aa62967e5dfea5fee2c",
+        "drive_id": "1eTM3XqO2m3fCpubw58TP8kf-nqR8nGy_"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [ONE PIECE PIRATE WARRIORS 4 DYNASTY WARRIORS Law Costume][01008FE00E2F7006][US][v0].nsp",
+        "local_name": "021_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_DYNASTY_WARRIORS_Law_Costume_01008FE00E2F7006_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "516f610f2d3b4c21e83d350b9a27062dc6f552a304e8283480f96b62ba968c7e",
+        "drive_id": "1YplOXSuQT78h4XGHv9EsQf8QU23I6TZb"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [ONE PIECE PIRATE WARRIORS 4 Luffy Costume Luffytaro][01008FE00E2F7001][US][v0].nsp",
+        "local_name": "022_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Luffy_Costume_Luffytaro_01008FE00E2F7001_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "c0e8d8744b8673a3b54595bbab50f184ad1747cb4451934a682abbab316c003d",
+        "drive_id": "1GrL_wx4SwUx62vqf2J3MY4DOds5r_ck4"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [ONE PIECE PIRATE WARRIORS 4 Nami Costume Onami][01008FE00E2F7003][US][v0].nsp",
+        "local_name": "023_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Nami_Costume_Onami_01008FE00E2F7003_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "a300ec5227cf721ca86c5ec850f9377dabbbae9984f53f5733fc5e0a66fa1eaa",
+        "drive_id": "1DVDtrFeeXZ39uEwQXdnf1aTicthqG3SE"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [ONE PIECE PIRATE WARRIORS 4 Sanji Costume Soba Mask][01008FE00E2F7004][US][v0].nsp",
+        "local_name": "024_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Sanji_Costume_Soba_Mask_01008FE00E2F7004_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "790e726d11241a9150204611b0ad8a71562999a39d25f167d271d64d3e39691f",
+        "drive_id": "11AYCTRfa2rV-cQ0cazYUwYJrINynnpdU"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [ONE PIECE PIRATE WARRIORS 4 Vinsmoke Ichiji Early Unlock][01008FE00E2F7008][US][v0].nsp",
+        "local_name": "025_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Vinsmoke_Ichiji_Early_Unlock_01008FE00E2F7008_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "bbf569e10a0b407aee1edb09dcee8bf10a613da5ddfa3519b7eb157be2dadfec",
+        "drive_id": "1fY6Ohv0-qAMkVo5oAoFxwgJjODpuSWMY"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [ONE PIECE PIRATE WARRIORS 4 Vinsmoke Niji Early Unlock][01008FE00E2F7009][US][v0].nsp",
+        "local_name": "026_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Vinsmoke_Niji_Early_Unlock_01008FE00E2F7009_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "3ca534c3b6f5dd5e63540f23a7c773189504bb0eb515c62573786ba2bc537087",
+        "drive_id": "1AzbQSXFlrprl6gq2AISHDqj5g02hRRA5"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [ONE PIECE PIRATE WARRIORS 4 Vinsmoke Yonji Early Unlock][01008FE00E2F700A][US][v0].nsp",
+        "local_name": "027_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Vinsmoke_Yonji_Early_Unlock_01008FE00E2F700A_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "cfc767721f5ec9c1a7b09d8e82f4a593631a9f605cdb238a36b6f075fe6599c7",
+        "drive_id": "1Zq-aQKi4yxOa7goVPXCQ8fMedg7PZxK4"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [ONE PIECE PIRATE WARRIORS 4 Zoro Costume Zorojuro][01008FE00E2F7002][US][v0].nsp",
+        "local_name": "028_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Zoro_Costume_Zorojuro_01008FE00E2F7002_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "45a2886516088b37a9ee380b766bcddffd0dd822f8ba0157ccdda7df3e69e9d0",
+        "drive_id": "1C8P8VDe3LHIRTRJev6QfsaseGG2e5FEX"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [one_piece_film_red_pack_DLC][US].nsp",
+        "local_name": "029_One_Piece_Pirate_Warriors_4_one_piece_film_red_pack_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "eef941724d9de2e9065d76c3f3dc7b088a940016aa6fdf66e3cd386e9b032a2d",
+        "drive_id": "1iZdXfHKfht9VtJxENdRktDlzveqp-qbJ"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [Onigashima Battle Law Costume DLC][01008FE00E2F7001D][USA].nsp",
+        "local_name": "030_One_Piece_Pirate_Warriors_4_Onigashima_Battle_Law_Costume_DLC_01008FE00E2F7001D_USA_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "02595e60d83606337642aeebe2fbc3fec65ef585b40d0fd92257d6ee9975aa7f",
+        "drive_id": "1r1l9yHhm0UfH9-ypT8ODMTuFFFeWZDLK"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [onigashima_battle_law_costume_DLC][US].nsp",
+        "local_name": "031_One_Piece_Pirate_Warriors_4_onigashima_battle_law_costume_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "02595e60d83606337642aeebe2fbc3fec65ef585b40d0fd92257d6ee9975aa7f",
+        "drive_id": "1g1XDkm2MzXHNEz6dA2D92sO1AbIMBJkT"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [Path to the King of the Pirates and Soul Map 3 DLC][01008FE00E2F701C][USA][v0].nsp",
+        "local_name": "032_One_Piece_Pirate_Warriors_4_Path_to_the_King_of_the_Pirates_and_Soul_Map_3_DLC_01008FE00E2F701C_USA_v0_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "2fd0f0ae8a95c8915198b8c103dabfa5f022d09cfa8d7de254c2d1fb69686cf7",
+        "drive_id": "17FI-ayze9uL32x-j9oNeN93ZOdcY-tz-"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [path_to_the_king_of_the_pirates_and_soul_map_3_DLC][US].nsp",
+        "local_name": "033_One_Piece_Pirate_Warriors_4_path_to_the_king_of_the_pirates_and_soul_map_3_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "2fd0f0ae8a95c8915198b8c103dabfa5f022d09cfa8d7de254c2d1fb69686cf7",
+        "drive_id": "1Uu3ixyp6sME-tE50rdNzrqpW5RV2_XJ8"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [sanji_costume_soba_mask_DLC][US].nsp",
+        "local_name": "034_One_Piece_Pirate_Warriors_4_sanji_costume_soba_mask_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 122015,
+        "sha256": "83205a1bbd683f9dcf091349b83896a541c8be225176c3b22323268e356d3b75",
+        "drive_id": "1wNb9PZ-6WK36D8rV2ecTwk-rp8aTLrhO"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [shanks_special_move_divine_departures_DLC][US].nsp",
+        "local_name": "035_One_Piece_Pirate_Warriors_4_shanks_special_move_divine_departures_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "535b0ab0bb708239615a60d44a07bcacc8587e8b93d6e2d8013df792f40dfc56",
+        "drive_id": "1odvgl5TlRmjwwsdTSuGVTkBRw7eQBJFp"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [The Battle of Onigashima Pack DLC][01008FE00E2F7017][USA].nsp",
+        "local_name": "036_One_Piece_Pirate_Warriors_4_The_Battle_of_Onigashima_Pack_DLC_01008FE00E2F7017_USA_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "7e7bdbcb45578a8e7632db2e750daa96ef64f8503020384669b1da3d9f90e914",
+        "drive_id": "1QlN9mVF92y1w9-ayiNj32l_WUDi80PXX"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [the_battle_of_onigashima_pack_DLC][US].nsp",
+        "local_name": "037_One_Piece_Pirate_Warriors_4_the_battle_of_onigashima_pack_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "7e7bdbcb45578a8e7632db2e750daa96ef64f8503020384669b1da3d9f90e914",
+        "drive_id": "1mk7gHYrpyCvwYwpxJj6ROZGjcu7eZRKb"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [the_worst_generation_pack_DLC][US].nsp",
+        "local_name": "038_One_Piece_Pirate_Warriors_4_the_worst_generation_pack_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "58cd52b1cbcdfeb69d0eee1d903390e64d97a2c9ff84899e6d73dfd11b856488",
+        "drive_id": "1jRXc7baTcfPP-rjyaBJHcuBrjl_nxIlS"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [vinsmoke_ichiji_early_unlock_DLC][US].nsp",
+        "local_name": "039_One_Piece_Pirate_Warriors_4_vinsmoke_ichiji_early_unlock_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "844ec99b5e811cd64c6bcabe5c9319275681b6b33bb22c201721c005fe731855",
+        "drive_id": "1p6DB6ybH2GpCIFPs7JeEvb3alOHiaUGb"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [vinsmoke_niji_early_unlock_DLC][US].nsp",
+        "local_name": "040_One_Piece_Pirate_Warriors_4_vinsmoke_niji_early_unlock_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "dd9572220b32fcd0d461a7088c6bce9538e639048b844662068da5c8b109dd86",
+        "drive_id": "1b9tJRVqwjZZgZkjxQ6mQUsgcoMygY0_W"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [vinsmoke_yonji_early_unlock_DLC][US].nsp",
+        "local_name": "041_One_Piece_Pirate_Warriors_4_vinsmoke_yonji_early_unlock_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "34d889dd9ce06dded4452101518af69cd9fc042cac7946d80c44b83a23344169",
+        "drive_id": "1ptsV_jlwl-YC1L4tgICzpbfkGVDyKslo"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [whole_cake_island_pack_DLC][US].nsp",
+        "local_name": "042_One_Piece_Pirate_Warriors_4_whole_cake_island_pack_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "8afa781eda7fc51709e305e33bbcfb6d803c0d5cd51c6ff32a48adfc2e535447",
+        "drive_id": "1fnHiCr0mBrD8Ui7rwW9BECF-rTMe8tJA"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [Yamatos Grand Tour Logbook and Soul Map 1 DLC][01008FE00E2F701A][USA].nsp",
+        "local_name": "043_One_Piece_Pirate_Warriors_4_Yamatos_Grand_Tour_Logbook_and_Soul_Map_1_DLC_01008FE00E2F701A_USA_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "e39562e39ccfa60a605fad4c33c44cf6553aa91e45ab54bef83b132e8da51769",
+        "drive_id": "1cukw7RAKuqjmXybp--UpOb3jqcqQZ-qV"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [yamatos_grand_tour_logbook_and_soul_map_1_DLC][US].nsp",
+        "local_name": "044_One_Piece_Pirate_Warriors_4_yamatos_grand_tour_logbook_and_soul_map_1_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "e39562e39ccfa60a605fad4c33c44cf6553aa91e45ab54bef83b132e8da51769",
+        "drive_id": "1s_KdD1ugymD0EUFp0deoRyiKXJxkpLAb"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [zoro_costume_zorojuro_DLC][US].nsp",
+        "local_name": "045_One_Piece_Pirate_Warriors_4_zoro_costume_zorojuro_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 122015,
+        "sha256": "e42585a7dfbcd5a375f74aa547d1e5ed2252549495fb539be839c29d89056f9f",
+        "drive_id": "1lnCXoE4p60Z0MVpphfGWhzAOSFERKwKC"
+      }
+    ]
+  },
+  "game_data": {
+    "folder_id": "1ZJt_C-VjKXKVbudxqFIxMxOA7qvEHsT0",
+    "folder_url": "https://drive.google.com/drive/folders/1ZJt_C-VjKXKVbudxqFIxMxOA7qvEHsT0",
+    "romfs": {
+      "id": "1eLG_Hy4yQwS9xFsXjo0gsLkEekYLse0x",
+      "name": "romfs.img",
+      "size": 15082435598,
+      "sha256": "d52646fd14f4dd9b48506b26b63ca909f6a5144c7813a79f9261ea74cde1eb48"
+    },
+    "aoc": [
+      {
+        "id": "1t0SA3DwLEnZxdfsVz7v4RUgtjb-Hd6IO",
+        "name": "1.img",
+        "size": 159,
+        "sha256": "2071ca1470d4bd29923d7bfcb65761101efc53c8214ee1c6a04fd409fbb3773b",
+        "role": "aoc",
+        "title_id": "01008FE00E2F7001",
+        "aoc_index": 1
+      },
+      {
+        "id": "1y1hcZ0_BwUmejej1jYzHXFXucgJ10fQa",
+        "name": "10.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "role": "aoc",
+        "title_id": "01008FE00E2F700A",
+        "aoc_index": 10
+      },
+      {
+        "id": "1oFjwg7sAsK38FSEwTq-OglZ7d1qoNyhF",
+        "name": "11.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "role": "aoc",
+        "title_id": "01008FE00E2F700B",
+        "aoc_index": 11
+      },
+      {
+        "id": "1XImkHxT7Tz9Yzg2xiQNIKDQWQaIsuKx7",
+        "name": "12.img",
+        "size": 372359346,
+        "sha256": "10efa74972188997be4da889d7335d03f23b161657a059839a57c16287484403",
+        "role": "aoc",
+        "title_id": "01008FE00E2F700C",
+        "aoc_index": 12
+      },
+      {
+        "id": "1KjamtKs430uukAc0xjbhsL4AysA77ICl",
+        "name": "2.img",
+        "size": 159,
+        "sha256": "f723dcb22aa19255d8be5c4ce74aa478c8f5f6e75f588e6f45248573a4c41f23",
+        "role": "aoc",
+        "title_id": "01008FE00E2F7002",
+        "aoc_index": 2
+      },
+      {
+        "id": "1p3KfzF5aFc-C7g2PXLTKqol0D6tyLO6m",
+        "name": "20.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "role": "aoc",
+        "title_id": "01008FE00E2F7014",
+        "aoc_index": 20
+      },
+      {
+        "id": "15IRpH3hnOEYseQlN_Mtt6FkLqsCVsuQu",
+        "name": "21.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "role": "aoc",
+        "title_id": "01008FE00E2F7015",
+        "aoc_index": 21
+      },
+      {
+        "id": "1_9AKP2pwS5zOxcNxvvMBMWTkXNBshsAI",
+        "name": "22.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "role": "aoc",
+        "title_id": "01008FE00E2F7016",
+        "aoc_index": 22
+      },
+      {
+        "id": "1_z5YXGDbApb7wQjpoiSagejbsHwp1OfQ",
+        "name": "23.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "role": "aoc",
+        "title_id": "01008FE00E2F7017",
+        "aoc_index": 23
+      },
+      {
+        "id": "1VFKP5pH_zCFnpC3WC1ISLmlUn8cX62NH",
+        "name": "24.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "role": "aoc",
+        "title_id": "01008FE00E2F7018",
+        "aoc_index": 24
+      },
+      {
+        "id": "134bAkTK0zwI_PntnykqXfIB_eaV6qAQb",
+        "name": "25.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "role": "aoc",
+        "title_id": "01008FE00E2F7019",
+        "aoc_index": 25
+      },
+      {
+        "id": "13eh3pGoMXRHhaIc0QkNGmzy0_wDGGQcq",
+        "name": "26.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "role": "aoc",
+        "title_id": "01008FE00E2F701A",
+        "aoc_index": 26
+      },
+      {
+        "id": "12e6QPb_b9kKqtVKZAXEUxm36-aABRRdG",
+        "name": "27.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "role": "aoc",
+        "title_id": "01008FE00E2F701B",
+        "aoc_index": 27
+      },
+      {
+        "id": "1OrRz8E-aS-BvyLIAeCn71IOEwOU123S2",
+        "name": "28.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "role": "aoc",
+        "title_id": "01008FE00E2F701C",
+        "aoc_index": 28
+      },
+      {
+        "id": "17hxIUrI9LsH7SQW36gs9uuoW09jveVub",
+        "name": "29.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "role": "aoc",
+        "title_id": "01008FE00E2F701D",
+        "aoc_index": 29
+      },
+      {
+        "id": "1cvMHm5hiG5M-yqI4NKFRoO0MBuZYUdyP",
+        "name": "3.img",
+        "size": 159,
+        "sha256": "cdad2c9d6076103f05dfb6acab325fb7592cbf7fddd64e261f29452e43182146",
+        "role": "aoc",
+        "title_id": "01008FE00E2F7003",
+        "aoc_index": 3
+      },
+      {
+        "id": "1-iIVhbmBn7hWivD71w8kdfWnkImPOsmB",
+        "name": "39.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "role": "aoc",
+        "title_id": "01008FE00E2F7027",
+        "aoc_index": 39
+      },
+      {
+        "id": "16V0SKCdgW4NwMkjZcYRVkFsITlZQ5gsz",
+        "name": "4.img",
+        "size": 159,
+        "sha256": "8aa631e3fc57c82c520b2a905569b3cd08a2c0c91a6d205250cb21bea77dd4de",
+        "role": "aoc",
+        "title_id": "01008FE00E2F7004",
+        "aoc_index": 4
+      },
+      {
+        "id": "11Akm4kD7KvIyTOFAPrb3JPn54Oppo7v0",
+        "name": "42.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "role": "aoc",
+        "title_id": "01008FE00E2F702A",
+        "aoc_index": 42
+      },
+      {
+        "id": "1iZtRxevrxwa4TDYkUZ9LQGRYPUxZoFGP",
+        "name": "44.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "role": "aoc",
+        "title_id": "01008FE00E2F702C",
+        "aoc_index": 44
+      },
+      {
+        "id": "1fR-Q3A1tTpW18IkGE4-hulT_lSGWPOtW",
+        "name": "5.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "role": "aoc",
+        "title_id": "01008FE00E2F7005",
+        "aoc_index": 5
+      },
+      {
+        "id": "1VJck_fPEM0KV9mQtwvvTObRfD4E7Hare",
+        "name": "6.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "role": "aoc",
+        "title_id": "01008FE00E2F7006",
+        "aoc_index": 6
+      },
+      {
+        "id": "1K36DwhSjvJG69p35GreJY4U20KhSHSAU",
+        "name": "8.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "role": "aoc",
+        "title_id": "01008FE00E2F7008",
+        "aoc_index": 8
+      },
+      {
+        "id": "1mGw_QAyBx7D6UwW7ub0AIN5N8kKhxiCm",
+        "name": "9.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "role": "aoc",
+        "title_id": "01008FE00E2F7009",
+        "aoc_index": 9
+      }
+    ],
+    "romfs_relative_path": "extract/v1179648/RomFS.img",
+    "romfs_id_relative_path": "extract/v1179648/RomFS.img.id",
+    "aoc_relative_dir": "aoc",
+    "aoc_count": 24,
+    "aoc_title_ids": [
+      "01008FE00E2F7001",
+      "01008FE00E2F7002",
+      "01008FE00E2F7003",
+      "01008FE00E2F7004",
+      "01008FE00E2F7005",
+      "01008FE00E2F7006",
+      "01008FE00E2F7008",
+      "01008FE00E2F7009",
+      "01008FE00E2F700A",
+      "01008FE00E2F700B",
+      "01008FE00E2F700C",
+      "01008FE00E2F7014",
+      "01008FE00E2F7015",
+      "01008FE00E2F7016",
+      "01008FE00E2F7017",
+      "01008FE00E2F7018",
+      "01008FE00E2F7019",
+      "01008FE00E2F701A",
+      "01008FE00E2F701B",
+      "01008FE00E2F701C",
+      "01008FE00E2F701D",
+      "01008FE00E2F7027",
+      "01008FE00E2F702A",
+      "01008FE00E2F702C"
+    ]
+  },
+  "prepared": {
+    "format": 4,
+    "project": "Mugiwara4iOS",
+    "title_id": "01008FE00E2F6000",
+    "package_version": "v1179648",
+    "display_version": "1.8.7",
+    "base_content_version": 0,
+    "update_content_version": 1179648,
+    "nx2apple_tag": "v1.3.1-rc2",
+    "engine_pin": "81906931262fb25d774cce8bca2db8926439e5a2",
+    "profile_type": "provisional",
+    "profile_source": "NXNative-generated provisional profile from One Piece: Pirate Warriors 4 base/update content metadata and ExeFS/RomFS survey",
+    "profile_relative_dir": "profile/01008FE00E2F6000",
+    "modules": [
+      "main",
+      "subsdk0",
+      "sdk"
+    ],
+    "main_build_id": "033ac7a47cbe4097a9f7d5af316aa585",
+    "main_sha256": "35699a4432f089436d4fc0983f1e68bc3cded88d7112ec1ce78d54c253c15205",
+    "input_package_count": 46,
+    "input_nsp_count": 46,
+    "input_xci_count": 0,
+    "input_base_package_type": "NSP",
+    "input_base_package_name": "000_base.nsp",
+    "input_update_nsp_count": 1,
+    "input_dlc_nsp_count": 44,
+    "input_packages": [
+      {
+        "role": "base",
+        "drive_name": "Mugiwara4iOS_BASE_v0.nsp",
+        "local_name": "000_base.nsp",
+        "id": "1u4XC2NyzmuM8iZr4LEKjjmUDmUTVydnF",
+        "name": "000_base.nsp",
+        "size": 12941585148,
+        "sha256": "225dc557d07951f42f7c0967a26e67c5c20a70b9682f0c9e23f02f9ff401e91c",
+        "type": "NSP",
+        "source": "drive-cache",
+        "url_sha256": ""
+      },
+      {
+        "role": "update",
+        "drive_name": "Mugiwara4iOS_UPDATE_v1.8.7.nsp",
+        "local_name": "001_update.nsp",
+        "id": "1meiAZFws8OxsTflOSO5JU_XgqyZqXzaK",
+        "name": "001_update.nsp",
+        "size": 1882419993,
+        "sha256": "79e56ead5a24ccefa837ee36f4a144cc4bce0e39f83c56c8a404a9e3b5ca120e",
+        "type": "NSP",
+        "source": "drive-cache",
+        "url_sha256": ""
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [character_pack_7_future_island_egghead_pack_DLC][US].nsp",
+        "local_name": "002_One_Piece_Pirate_Warriors_4_character_pack_7_future_island_egghead_pack_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "d0304c5e2e5bcd14c57a07c1df4c639675fb09e1566f58a3fb82070984d2eb5e",
+        "drive_id": "1c5IbkcdYDl4tL0pLszwESTF1z7iqCCc8"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [character_pack_8_special_selection_DLC][US].nsp",
+        "local_name": "003_One_Piece_Pirate_Warriors_4_character_pack_8_special_selection_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "d91d58e07657c85b6f2964d83da6cfc57a1956214b10886b9219350ae79bf842",
+        "drive_id": "18xiOsnNEvKigHBc7FDHGCLY2YtR89Gis"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [charlotte_katakuri_early_unlock_DLC][US].nsp",
+        "local_name": "004_One_Piece_Pirate_Warriors_4_charlotte_katakuri_early_unlock_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "ddcde34768055dc71d72caf88d7484674fc1c598b7698a929b17b6fad9b23900",
+        "drive_id": "1DwtJZ-PojndMCBmUQdGubyjLbCr4_yIv"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [Coming Soon Character Pack 1][01008FE00E2F7014][US][v0].nsp",
+        "local_name": "005_ONE_PIECE_PIRATE_WARRIORS_4_Coming_Soon_Character_Pack_1_01008FE00E2F7014_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "54079a57b92459bce4e29cf0fb09fd47089bb25c82aa298a49cc512489ee4324",
+        "drive_id": "1dDus8nI-Vku5_EnxFUkt3cHKVXmm64Xw"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [Coming Soon Character Pack 2][01008FE00E2F7015][US][v0].nsp",
+        "local_name": "006_ONE_PIECE_PIRATE_WARRIORS_4_Coming_Soon_Character_Pack_2_01008FE00E2F7015_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "3ded6567d5e12760c8c6e8871b108f01cc536a75b5df87b76f986a519fd85f73",
+        "drive_id": "1rRDv4i37VZON9XG9dAC0stXJ_Vu19rWf"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [Coming Soon Character Pack 3][01008FE00E2F7016][US][v0].nsp",
+        "local_name": "007_ONE_PIECE_PIRATE_WARRIORS_4_Coming_Soon_Character_Pack_3_01008FE00E2F7016_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "be04a0983b23ec6a9991a8f7295e766483425745ad2b5304ea1fc35116821f2b",
+        "drive_id": "1gBYkJc5bBBPcu6UFDrN03wuLvhyCS8Pp"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [dynasty_warriors_hancock_costume_DLC][US].nsp",
+        "local_name": "008_One_Piece_Pirate_Warriors_4_dynasty_warriors_hancock_costume_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "0b8293be295f373fe77139f1d81eb065016a5d4cf3ede2999d83d1791aa0ebcb",
+        "drive_id": "1jIEzlygSfaZUb6Bpw60BgBs39qF02X5y"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [dynasty_warriors_law_costume_DLC][US].nsp",
+        "local_name": "009_One_Piece_Pirate_Warriors_4_dynasty_warriors_law_costume_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "274c9ae701f3cb4cf36af88fee42262a19bd25d9f210d947adb4c3fd294b6fa7",
+        "drive_id": "1fcudM9l74P7KvQRwldq5cAjatRa5occz"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [Kobys Combat Chronicle and Soul Map 2 DLC][01008FE00E2F701B][USA][v0].nsp",
+        "local_name": "010_One_Piece_Pirate_Warriors_4_Kobys_Combat_Chronicle_and_Soul_Map_2_DLC_01008FE00E2F701B_USA_v0_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "3eb2059ebec8a6993470296dc49d19aff975c14323a0f1ee51e5e0989f312f40",
+        "drive_id": "1ByuBRNteiJWn-xjbBUFEzS6gGWhZb-8I"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [kobys_combat_chronicle_and_soul_map_2_DLC][US].nsp",
+        "local_name": "011_One_Piece_Pirate_Warriors_4_kobys_combat_chronicle_and_soul_map_2_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "3eb2059ebec8a6993470296dc49d19aff975c14323a0f1ee51e5e0989f312f40",
+        "drive_id": "1ZsoDf1krSkZOhfS9eJwmiSpura163Lcp"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [land_of_wano_pack_DLC][US].nsp",
+        "local_name": "012_One_Piece_Pirate_Warriors_4_land_of_wano_pack_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "1b1a33b02f9f7e4073bed010c71cc104687e22ef43a40622c0f6831ea77ae719",
+        "drive_id": "106vL9KEo5-MS4E2wh_GhdSBX8RTLmUwv"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [Legend Dawn Pack DLC][01008FE00E2F7019][USA][v0].nsp",
+        "local_name": "013_One_Piece_Pirate_Warriors_4_Legend_Dawn_Pack_DLC_01008FE00E2F7019_USA_v0_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "3db7a865b16e470b621f69a5edb5e5e449795683d3ad7df149b09fb0e2a91ebe",
+        "drive_id": "12WiKbtki7zFLRGGBeSC1oRLTs-2Rocur"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [legend_dawn_pack_DLC][US].nsp",
+        "local_name": "014_One_Piece_Pirate_Warriors_4_legend_dawn_pack_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "3db7a865b16e470b621f69a5edb5e5e449795683d3ad7df149b09fb0e2a91ebe",
+        "drive_id": "1Vlh8IpQlua7UBZLxdWs5HYR1BhW_euo0"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [luffy_costume_luffytaro_DLC][US].nsp",
+        "local_name": "015_One_Piece_Pirate_Warriors_4_luffy_costume_luffytaro_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 122015,
+        "sha256": "bf4b083f2d0b12fd0ff23da9b9366bc3592f95cc998b1e5c4c86c8fc7ca2c9db",
+        "drive_id": "1MGpzVaTosYNM84cnPt8Is0i5ZnqkCPPO"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [nami_costume_onami_DLC][US].nsp",
+        "local_name": "016_One_Piece_Pirate_Warriors_4_nami_costume_onami_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 122015,
+        "sha256": "95c5af2fb3b279a87549d01318bfe825a58b65702d97e3a20912b3f07247f4d3",
+        "drive_id": "1YEHBj9CQTIeADoE9AEWf_L_F1lXxE5Zw"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [One Piece Film Red Pack DLC][01008FE00E2F7018][USA][v0].nsp",
+        "local_name": "017_One_Piece_Pirate_Warriors_4_One_Piece_Film_Red_Pack_DLC_01008FE00E2F7018_USA_v0_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "eef941724d9de2e9065d76c3f3dc7b088a940016aa6fdf66e3cd386e9b032a2d",
+        "drive_id": "1WrzTnyxHtZpJQE4CPELVmH85pwzyH3OT"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [ONE PIECE PIRATE WARRIORS 4 Anime Song Pack][01008FE00E2F700C][US][v0].nsp",
+        "local_name": "018_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Anime_Song_Pack_01008FE00E2F700C_US_v0_.nsp",
+        "type": "NSP",
+        "size": 373199497,
+        "sha256": "d847c0954fcc16b7a7c610a0590c75ff3f4a5fba94679624e223e884193725e9",
+        "drive_id": "13Q9lTuxxT6DqbVAtuvFH7SOKDlgD9ZKL"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [ONE PIECE PIRATE WARRIORS 4 Charlotte Katakuri Early Unlock][01008FE00E2F700B][US][v0].nsp",
+        "local_name": "019_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Charlotte_Katakuri_Early_Unlock_01008FE00E2F700B_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "bce13bfac676f4d47fe84e1955f971f5c0804c7bcc6c650bc30d34e30c41aded",
+        "drive_id": "1K0mOvY8a2fp8dSEG7p9_8gYuqHLR7x1-"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [ONE PIECE PIRATE WARRIORS 4 DYNASTY WARRIORS Hancock Costume][01008FE00E2F7005][US][v0].nsp",
+        "local_name": "020_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_DYNASTY_WARRIORS_Hancock_Costume_01008FE00E2F7005_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "45b5715b25b3f5ed246d432e784e0839cba66875a2216aa62967e5dfea5fee2c",
+        "drive_id": "1eTM3XqO2m3fCpubw58TP8kf-nqR8nGy_"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [ONE PIECE PIRATE WARRIORS 4 DYNASTY WARRIORS Law Costume][01008FE00E2F7006][US][v0].nsp",
+        "local_name": "021_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_DYNASTY_WARRIORS_Law_Costume_01008FE00E2F7006_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "516f610f2d3b4c21e83d350b9a27062dc6f552a304e8283480f96b62ba968c7e",
+        "drive_id": "1YplOXSuQT78h4XGHv9EsQf8QU23I6TZb"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [ONE PIECE PIRATE WARRIORS 4 Luffy Costume Luffytaro][01008FE00E2F7001][US][v0].nsp",
+        "local_name": "022_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Luffy_Costume_Luffytaro_01008FE00E2F7001_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "c0e8d8744b8673a3b54595bbab50f184ad1747cb4451934a682abbab316c003d",
+        "drive_id": "1GrL_wx4SwUx62vqf2J3MY4DOds5r_ck4"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [ONE PIECE PIRATE WARRIORS 4 Nami Costume Onami][01008FE00E2F7003][US][v0].nsp",
+        "local_name": "023_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Nami_Costume_Onami_01008FE00E2F7003_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "a300ec5227cf721ca86c5ec850f9377dabbbae9984f53f5733fc5e0a66fa1eaa",
+        "drive_id": "1DVDtrFeeXZ39uEwQXdnf1aTicthqG3SE"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [ONE PIECE PIRATE WARRIORS 4 Sanji Costume Soba Mask][01008FE00E2F7004][US][v0].nsp",
+        "local_name": "024_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Sanji_Costume_Soba_Mask_01008FE00E2F7004_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "790e726d11241a9150204611b0ad8a71562999a39d25f167d271d64d3e39691f",
+        "drive_id": "11AYCTRfa2rV-cQ0cazYUwYJrINynnpdU"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [ONE PIECE PIRATE WARRIORS 4 Vinsmoke Ichiji Early Unlock][01008FE00E2F7008][US][v0].nsp",
+        "local_name": "025_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Vinsmoke_Ichiji_Early_Unlock_01008FE00E2F7008_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "bbf569e10a0b407aee1edb09dcee8bf10a613da5ddfa3519b7eb157be2dadfec",
+        "drive_id": "1fY6Ohv0-qAMkVo5oAoFxwgJjODpuSWMY"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [ONE PIECE PIRATE WARRIORS 4 Vinsmoke Niji Early Unlock][01008FE00E2F7009][US][v0].nsp",
+        "local_name": "026_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Vinsmoke_Niji_Early_Unlock_01008FE00E2F7009_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "3ca534c3b6f5dd5e63540f23a7c773189504bb0eb515c62573786ba2bc537087",
+        "drive_id": "1AzbQSXFlrprl6gq2AISHDqj5g02hRRA5"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [ONE PIECE PIRATE WARRIORS 4 Vinsmoke Yonji Early Unlock][01008FE00E2F700A][US][v0].nsp",
+        "local_name": "027_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Vinsmoke_Yonji_Early_Unlock_01008FE00E2F700A_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "cfc767721f5ec9c1a7b09d8e82f4a593631a9f605cdb238a36b6f075fe6599c7",
+        "drive_id": "1Zq-aQKi4yxOa7goVPXCQ8fMedg7PZxK4"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "ONE PIECE PIRATE WARRIORS 4 [ONE PIECE PIRATE WARRIORS 4 Zoro Costume Zorojuro][01008FE00E2F7002][US][v0].nsp",
+        "local_name": "028_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Zoro_Costume_Zorojuro_01008FE00E2F7002_US_v0_.nsp",
+        "type": "NSP",
+        "size": 119430,
+        "sha256": "45a2886516088b37a9ee380b766bcddffd0dd822f8ba0157ccdda7df3e69e9d0",
+        "drive_id": "1C8P8VDe3LHIRTRJev6QfsaseGG2e5FEX"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [one_piece_film_red_pack_DLC][US].nsp",
+        "local_name": "029_One_Piece_Pirate_Warriors_4_one_piece_film_red_pack_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "eef941724d9de2e9065d76c3f3dc7b088a940016aa6fdf66e3cd386e9b032a2d",
+        "drive_id": "1iZdXfHKfht9VtJxENdRktDlzveqp-qbJ"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [Onigashima Battle Law Costume DLC][01008FE00E2F7001D][USA].nsp",
+        "local_name": "030_One_Piece_Pirate_Warriors_4_Onigashima_Battle_Law_Costume_DLC_01008FE00E2F7001D_USA_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "02595e60d83606337642aeebe2fbc3fec65ef585b40d0fd92257d6ee9975aa7f",
+        "drive_id": "1r1l9yHhm0UfH9-ypT8ODMTuFFFeWZDLK"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [onigashima_battle_law_costume_DLC][US].nsp",
+        "local_name": "031_One_Piece_Pirate_Warriors_4_onigashima_battle_law_costume_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "02595e60d83606337642aeebe2fbc3fec65ef585b40d0fd92257d6ee9975aa7f",
+        "drive_id": "1g1XDkm2MzXHNEz6dA2D92sO1AbIMBJkT"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [Path to the King of the Pirates and Soul Map 3 DLC][01008FE00E2F701C][USA][v0].nsp",
+        "local_name": "032_One_Piece_Pirate_Warriors_4_Path_to_the_King_of_the_Pirates_and_Soul_Map_3_DLC_01008FE00E2F701C_USA_v0_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "2fd0f0ae8a95c8915198b8c103dabfa5f022d09cfa8d7de254c2d1fb69686cf7",
+        "drive_id": "17FI-ayze9uL32x-j9oNeN93ZOdcY-tz-"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [path_to_the_king_of_the_pirates_and_soul_map_3_DLC][US].nsp",
+        "local_name": "033_One_Piece_Pirate_Warriors_4_path_to_the_king_of_the_pirates_and_soul_map_3_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "2fd0f0ae8a95c8915198b8c103dabfa5f022d09cfa8d7de254c2d1fb69686cf7",
+        "drive_id": "1Uu3ixyp6sME-tE50rdNzrqpW5RV2_XJ8"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [sanji_costume_soba_mask_DLC][US].nsp",
+        "local_name": "034_One_Piece_Pirate_Warriors_4_sanji_costume_soba_mask_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 122015,
+        "sha256": "83205a1bbd683f9dcf091349b83896a541c8be225176c3b22323268e356d3b75",
+        "drive_id": "1wNb9PZ-6WK36D8rV2ecTwk-rp8aTLrhO"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [shanks_special_move_divine_departures_DLC][US].nsp",
+        "local_name": "035_One_Piece_Pirate_Warriors_4_shanks_special_move_divine_departures_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "535b0ab0bb708239615a60d44a07bcacc8587e8b93d6e2d8013df792f40dfc56",
+        "drive_id": "1odvgl5TlRmjwwsdTSuGVTkBRw7eQBJFp"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [The Battle of Onigashima Pack DLC][01008FE00E2F7017][USA].nsp",
+        "local_name": "036_One_Piece_Pirate_Warriors_4_The_Battle_of_Onigashima_Pack_DLC_01008FE00E2F7017_USA_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "7e7bdbcb45578a8e7632db2e750daa96ef64f8503020384669b1da3d9f90e914",
+        "drive_id": "1QlN9mVF92y1w9-ayiNj32l_WUDi80PXX"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [the_battle_of_onigashima_pack_DLC][US].nsp",
+        "local_name": "037_One_Piece_Pirate_Warriors_4_the_battle_of_onigashima_pack_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "7e7bdbcb45578a8e7632db2e750daa96ef64f8503020384669b1da3d9f90e914",
+        "drive_id": "1mk7gHYrpyCvwYwpxJj6ROZGjcu7eZRKb"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [the_worst_generation_pack_DLC][US].nsp",
+        "local_name": "038_One_Piece_Pirate_Warriors_4_the_worst_generation_pack_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "58cd52b1cbcdfeb69d0eee1d903390e64d97a2c9ff84899e6d73dfd11b856488",
+        "drive_id": "1jRXc7baTcfPP-rjyaBJHcuBrjl_nxIlS"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [vinsmoke_ichiji_early_unlock_DLC][US].nsp",
+        "local_name": "039_One_Piece_Pirate_Warriors_4_vinsmoke_ichiji_early_unlock_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "844ec99b5e811cd64c6bcabe5c9319275681b6b33bb22c201721c005fe731855",
+        "drive_id": "1p6DB6ybH2GpCIFPs7JeEvb3alOHiaUGb"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [vinsmoke_niji_early_unlock_DLC][US].nsp",
+        "local_name": "040_One_Piece_Pirate_Warriors_4_vinsmoke_niji_early_unlock_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "dd9572220b32fcd0d461a7088c6bce9538e639048b844662068da5c8b109dd86",
+        "drive_id": "1b9tJRVqwjZZgZkjxQ6mQUsgcoMygY0_W"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [vinsmoke_yonji_early_unlock_DLC][US].nsp",
+        "local_name": "041_One_Piece_Pirate_Warriors_4_vinsmoke_yonji_early_unlock_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "34d889dd9ce06dded4452101518af69cd9fc042cac7946d80c44b83a23344169",
+        "drive_id": "1ptsV_jlwl-YC1L4tgICzpbfkGVDyKslo"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [whole_cake_island_pack_DLC][US].nsp",
+        "local_name": "042_One_Piece_Pirate_Warriors_4_whole_cake_island_pack_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "8afa781eda7fc51709e305e33bbcfb6d803c0d5cd51c6ff32a48adfc2e535447",
+        "drive_id": "1fnHiCr0mBrD8Ui7rwW9BECF-rTMe8tJA"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [Yamatos Grand Tour Logbook and Soul Map 1 DLC][01008FE00E2F701A][USA].nsp",
+        "local_name": "043_One_Piece_Pirate_Warriors_4_Yamatos_Grand_Tour_Logbook_and_Soul_Map_1_DLC_01008FE00E2F701A_USA_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "e39562e39ccfa60a605fad4c33c44cf6553aa91e45ab54bef83b132e8da51769",
+        "drive_id": "1cukw7RAKuqjmXybp--UpOb3jqcqQZ-qV"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [yamatos_grand_tour_logbook_and_soul_map_1_DLC][US].nsp",
+        "local_name": "044_One_Piece_Pirate_Warriors_4_yamatos_grand_tour_logbook_and_soul_map_1_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 124112,
+        "sha256": "e39562e39ccfa60a605fad4c33c44cf6553aa91e45ab54bef83b132e8da51769",
+        "drive_id": "1s_KdD1ugymD0EUFp0deoRyiKXJxkpLAb"
+      },
+      {
+        "role": "dlc",
+        "drive_name": "One Piece Pirate Warriors 4 [zoro_costume_zorojuro_DLC][US].nsp",
+        "local_name": "045_One_Piece_Pirate_Warriors_4_zoro_costume_zorojuro_DLC_US_.nsp",
+        "type": "NSP",
+        "size": 122015,
+        "sha256": "e42585a7dfbcd5a375f74aa547d1e5ed2252549495fb539be839c29d89056f9f",
+        "drive_id": "1lnCXoE4p60Z0MVpphfGWhzAOSFERKwKC"
+      }
+    ],
+    "dlc_content_meta_count": 44,
+    "dlc_content_meta": [
+      {
+        "title_id": "01008FE00E2F7001",
+        "content_version": 0,
+        "source_package": "015_One_Piece_Pirate_Warriors_4_luffy_costume_luffytaro_DLC_US_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7001",
+        "content_version": 0,
+        "source_package": "022_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Luffy_Costume_Luffytaro_01008FE00E2F7001_US_v0_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7002",
+        "content_version": 0,
+        "source_package": "028_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Zoro_Costume_Zorojuro_01008FE00E2F7002_US_v0_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7002",
+        "content_version": 0,
+        "source_package": "045_One_Piece_Pirate_Warriors_4_zoro_costume_zorojuro_DLC_US_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7003",
+        "content_version": 0,
+        "source_package": "016_One_Piece_Pirate_Warriors_4_nami_costume_onami_DLC_US_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7003",
+        "content_version": 0,
+        "source_package": "023_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Nami_Costume_Onami_01008FE00E2F7003_US_v0_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7004",
+        "content_version": 0,
+        "source_package": "024_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Sanji_Costume_Soba_Mask_01008FE00E2F7004_US_v0_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7004",
+        "content_version": 0,
+        "source_package": "034_One_Piece_Pirate_Warriors_4_sanji_costume_soba_mask_DLC_US_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7005",
+        "content_version": 0,
+        "source_package": "008_One_Piece_Pirate_Warriors_4_dynasty_warriors_hancock_costume_DLC_US_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7005",
+        "content_version": 0,
+        "source_package": "020_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_DYNASTY_WARRIORS_Hancock_Costume_01008FE00E2F7005_US_v0_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7006",
+        "content_version": 0,
+        "source_package": "009_One_Piece_Pirate_Warriors_4_dynasty_warriors_law_costume_DLC_US_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7006",
+        "content_version": 0,
+        "source_package": "021_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_DYNASTY_WARRIORS_Law_Costume_01008FE00E2F7006_US_v0_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7008",
+        "content_version": 0,
+        "source_package": "025_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Vinsmoke_Ichiji_Early_Unlock_01008FE00E2F7008_US_v0_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7008",
+        "content_version": 0,
+        "source_package": "039_One_Piece_Pirate_Warriors_4_vinsmoke_ichiji_early_unlock_DLC_US_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7009",
+        "content_version": 0,
+        "source_package": "026_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Vinsmoke_Niji_Early_Unlock_01008FE00E2F7009_US_v0_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7009",
+        "content_version": 0,
+        "source_package": "040_One_Piece_Pirate_Warriors_4_vinsmoke_niji_early_unlock_DLC_US_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F700A",
+        "content_version": 0,
+        "source_package": "027_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Vinsmoke_Yonji_Early_Unlock_01008FE00E2F700A_US_v0_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F700A",
+        "content_version": 0,
+        "source_package": "041_One_Piece_Pirate_Warriors_4_vinsmoke_yonji_early_unlock_DLC_US_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F700B",
+        "content_version": 0,
+        "source_package": "004_One_Piece_Pirate_Warriors_4_charlotte_katakuri_early_unlock_DLC_US_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F700B",
+        "content_version": 0,
+        "source_package": "019_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Charlotte_Katakuri_Early_Unlock_01008FE00E2F700B_US_v0_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F700C",
+        "content_version": 0,
+        "source_package": "018_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Anime_Song_Pack_01008FE00E2F700C_US_v0_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7014",
+        "content_version": 0,
+        "source_package": "005_ONE_PIECE_PIRATE_WARRIORS_4_Coming_Soon_Character_Pack_1_01008FE00E2F7014_US_v0_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7014",
+        "content_version": 0,
+        "source_package": "042_One_Piece_Pirate_Warriors_4_whole_cake_island_pack_DLC_US_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7015",
+        "content_version": 0,
+        "source_package": "006_ONE_PIECE_PIRATE_WARRIORS_4_Coming_Soon_Character_Pack_2_01008FE00E2F7015_US_v0_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7015",
+        "content_version": 0,
+        "source_package": "038_One_Piece_Pirate_Warriors_4_the_worst_generation_pack_DLC_US_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7016",
+        "content_version": 0,
+        "source_package": "007_ONE_PIECE_PIRATE_WARRIORS_4_Coming_Soon_Character_Pack_3_01008FE00E2F7016_US_v0_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7016",
+        "content_version": 0,
+        "source_package": "012_One_Piece_Pirate_Warriors_4_land_of_wano_pack_DLC_US_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7017",
+        "content_version": 0,
+        "source_package": "036_One_Piece_Pirate_Warriors_4_The_Battle_of_Onigashima_Pack_DLC_01008FE00E2F7017_USA_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7017",
+        "content_version": 0,
+        "source_package": "037_One_Piece_Pirate_Warriors_4_the_battle_of_onigashima_pack_DLC_US_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7018",
+        "content_version": 0,
+        "source_package": "017_One_Piece_Pirate_Warriors_4_One_Piece_Film_Red_Pack_DLC_01008FE00E2F7018_USA_v0_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7018",
+        "content_version": 0,
+        "source_package": "029_One_Piece_Pirate_Warriors_4_one_piece_film_red_pack_DLC_US_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7019",
+        "content_version": 0,
+        "source_package": "013_One_Piece_Pirate_Warriors_4_Legend_Dawn_Pack_DLC_01008FE00E2F7019_USA_v0_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7019",
+        "content_version": 0,
+        "source_package": "014_One_Piece_Pirate_Warriors_4_legend_dawn_pack_DLC_US_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F701A",
+        "content_version": 0,
+        "source_package": "043_One_Piece_Pirate_Warriors_4_Yamatos_Grand_Tour_Logbook_and_Soul_Map_1_DLC_01008FE00E2F701A_USA_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F701A",
+        "content_version": 0,
+        "source_package": "044_One_Piece_Pirate_Warriors_4_yamatos_grand_tour_logbook_and_soul_map_1_DLC_US_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F701B",
+        "content_version": 0,
+        "source_package": "010_One_Piece_Pirate_Warriors_4_Kobys_Combat_Chronicle_and_Soul_Map_2_DLC_01008FE00E2F701B_USA_v0_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F701B",
+        "content_version": 0,
+        "source_package": "011_One_Piece_Pirate_Warriors_4_kobys_combat_chronicle_and_soul_map_2_DLC_US_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F701C",
+        "content_version": 0,
+        "source_package": "032_One_Piece_Pirate_Warriors_4_Path_to_the_King_of_the_Pirates_and_Soul_Map_3_DLC_01008FE00E2F701C_USA_v0_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F701C",
+        "content_version": 0,
+        "source_package": "033_One_Piece_Pirate_Warriors_4_path_to_the_king_of_the_pirates_and_soul_map_3_DLC_US_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F701D",
+        "content_version": 0,
+        "source_package": "030_One_Piece_Pirate_Warriors_4_Onigashima_Battle_Law_Costume_DLC_01008FE00E2F7001D_USA_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F701D",
+        "content_version": 0,
+        "source_package": "031_One_Piece_Pirate_Warriors_4_onigashima_battle_law_costume_DLC_US_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F7027",
+        "content_version": 0,
+        "source_package": "035_One_Piece_Pirate_Warriors_4_shanks_special_move_divine_departures_DLC_US_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F702A",
+        "content_version": 0,
+        "source_package": "002_One_Piece_Pirate_Warriors_4_character_pack_7_future_island_egghead_pack_DLC_US_.nsp"
+      },
+      {
+        "title_id": "01008FE00E2F702C",
+        "content_version": 0,
+        "source_package": "003_One_Piece_Pirate_Warriors_4_character_pack_8_special_selection_DLC_US_.nsp"
+      }
+    ],
+    "aoc_relative_dir": "aoc",
+    "aoc_count": 24,
+    "aoc_title_ids": [
+      "01008FE00E2F7001",
+      "01008FE00E2F7002",
+      "01008FE00E2F7003",
+      "01008FE00E2F7004",
+      "01008FE00E2F7005",
+      "01008FE00E2F7006",
+      "01008FE00E2F7008",
+      "01008FE00E2F7009",
+      "01008FE00E2F700A",
+      "01008FE00E2F700B",
+      "01008FE00E2F700C",
+      "01008FE00E2F7014",
+      "01008FE00E2F7015",
+      "01008FE00E2F7016",
+      "01008FE00E2F7017",
+      "01008FE00E2F7018",
+      "01008FE00E2F7019",
+      "01008FE00E2F701A",
+      "01008FE00E2F701B",
+      "01008FE00E2F701C",
+      "01008FE00E2F701D",
+      "01008FE00E2F7027",
+      "01008FE00E2F702A",
+      "01008FE00E2F702C"
+    ],
+    "aoc_contents": [
+      {
+        "title_id": "01008FE00E2F7001",
+        "aoc_index": 1,
+        "name": "1.img",
+        "content_version": 0,
+        "source_package": "015_One_Piece_Pirate_Warriors_4_luffy_costume_luffytaro_DLC_US_.nsp",
+        "source_size": 122015,
+        "source_sha256": "bf4b083f2d0b12fd0ff23da9b9366bc3592f95cc998b1e5c4c86c8fc7ca2c9db"
+      },
+      {
+        "title_id": "01008FE00E2F7002",
+        "aoc_index": 2,
+        "name": "2.img",
+        "content_version": 0,
+        "source_package": "045_One_Piece_Pirate_Warriors_4_zoro_costume_zorojuro_DLC_US_.nsp",
+        "source_size": 122015,
+        "source_sha256": "e42585a7dfbcd5a375f74aa547d1e5ed2252549495fb539be839c29d89056f9f"
+      },
+      {
+        "title_id": "01008FE00E2F7003",
+        "aoc_index": 3,
+        "name": "3.img",
+        "content_version": 0,
+        "source_package": "016_One_Piece_Pirate_Warriors_4_nami_costume_onami_DLC_US_.nsp",
+        "source_size": 122015,
+        "source_sha256": "95c5af2fb3b279a87549d01318bfe825a58b65702d97e3a20912b3f07247f4d3"
+      },
+      {
+        "title_id": "01008FE00E2F7004",
+        "aoc_index": 4,
+        "name": "4.img",
+        "content_version": 0,
+        "source_package": "034_One_Piece_Pirate_Warriors_4_sanji_costume_soba_mask_DLC_US_.nsp",
+        "source_size": 122015,
+        "source_sha256": "83205a1bbd683f9dcf091349b83896a541c8be225176c3b22323268e356d3b75"
+      },
+      {
+        "title_id": "01008FE00E2F7005",
+        "aoc_index": 5,
+        "name": "5.img",
+        "content_version": 0,
+        "source_package": "008_One_Piece_Pirate_Warriors_4_dynasty_warriors_hancock_costume_DLC_US_.nsp",
+        "source_size": 124112,
+        "source_sha256": "0b8293be295f373fe77139f1d81eb065016a5d4cf3ede2999d83d1791aa0ebcb"
+      },
+      {
+        "title_id": "01008FE00E2F7006",
+        "aoc_index": 6,
+        "name": "6.img",
+        "content_version": 0,
+        "source_package": "009_One_Piece_Pirate_Warriors_4_dynasty_warriors_law_costume_DLC_US_.nsp",
+        "source_size": 124112,
+        "source_sha256": "274c9ae701f3cb4cf36af88fee42262a19bd25d9f210d947adb4c3fd294b6fa7"
+      },
+      {
+        "title_id": "01008FE00E2F7008",
+        "aoc_index": 8,
+        "name": "8.img",
+        "content_version": 0,
+        "source_package": "039_One_Piece_Pirate_Warriors_4_vinsmoke_ichiji_early_unlock_DLC_US_.nsp",
+        "source_size": 124112,
+        "source_sha256": "844ec99b5e811cd64c6bcabe5c9319275681b6b33bb22c201721c005fe731855"
+      },
+      {
+        "title_id": "01008FE00E2F7009",
+        "aoc_index": 9,
+        "name": "9.img",
+        "content_version": 0,
+        "source_package": "040_One_Piece_Pirate_Warriors_4_vinsmoke_niji_early_unlock_DLC_US_.nsp",
+        "source_size": 124112,
+        "source_sha256": "dd9572220b32fcd0d461a7088c6bce9538e639048b844662068da5c8b109dd86"
+      },
+      {
+        "title_id": "01008FE00E2F700A",
+        "aoc_index": 10,
+        "name": "10.img",
+        "content_version": 0,
+        "source_package": "041_One_Piece_Pirate_Warriors_4_vinsmoke_yonji_early_unlock_DLC_US_.nsp",
+        "source_size": 124112,
+        "source_sha256": "34d889dd9ce06dded4452101518af69cd9fc042cac7946d80c44b83a23344169"
+      },
+      {
+        "title_id": "01008FE00E2F700B",
+        "aoc_index": 11,
+        "name": "11.img",
+        "content_version": 0,
+        "source_package": "004_One_Piece_Pirate_Warriors_4_charlotte_katakuri_early_unlock_DLC_US_.nsp",
+        "source_size": 124112,
+        "source_sha256": "ddcde34768055dc71d72caf88d7484674fc1c598b7698a929b17b6fad9b23900"
+      },
+      {
+        "title_id": "01008FE00E2F700C",
+        "aoc_index": 12,
+        "name": "12.img",
+        "content_version": 0,
+        "source_package": "018_ONE_PIECE_PIRATE_WARRIORS_4_ONE_PIECE_PIRATE_WARRIORS_4_Anime_Song_Pack_01008FE00E2F700C_US_v0_.nsp",
+        "source_size": 373199497,
+        "source_sha256": "d847c0954fcc16b7a7c610a0590c75ff3f4a5fba94679624e223e884193725e9"
+      },
+      {
+        "title_id": "01008FE00E2F7014",
+        "aoc_index": 20,
+        "name": "20.img",
+        "content_version": 0,
+        "source_package": "042_One_Piece_Pirate_Warriors_4_whole_cake_island_pack_DLC_US_.nsp",
+        "source_size": 124112,
+        "source_sha256": "8afa781eda7fc51709e305e33bbcfb6d803c0d5cd51c6ff32a48adfc2e535447"
+      },
+      {
+        "title_id": "01008FE00E2F7015",
+        "aoc_index": 21,
+        "name": "21.img",
+        "content_version": 0,
+        "source_package": "038_One_Piece_Pirate_Warriors_4_the_worst_generation_pack_DLC_US_.nsp",
+        "source_size": 124112,
+        "source_sha256": "58cd52b1cbcdfeb69d0eee1d903390e64d97a2c9ff84899e6d73dfd11b856488"
+      },
+      {
+        "title_id": "01008FE00E2F7016",
+        "aoc_index": 22,
+        "name": "22.img",
+        "content_version": 0,
+        "source_package": "012_One_Piece_Pirate_Warriors_4_land_of_wano_pack_DLC_US_.nsp",
+        "source_size": 124112,
+        "source_sha256": "1b1a33b02f9f7e4073bed010c71cc104687e22ef43a40622c0f6831ea77ae719"
+      },
+      {
+        "title_id": "01008FE00E2F7017",
+        "aoc_index": 23,
+        "name": "23.img",
+        "content_version": 0,
+        "source_package": "036_One_Piece_Pirate_Warriors_4_The_Battle_of_Onigashima_Pack_DLC_01008FE00E2F7017_USA_.nsp",
+        "source_size": 124112,
+        "source_sha256": "7e7bdbcb45578a8e7632db2e750daa96ef64f8503020384669b1da3d9f90e914"
+      },
+      {
+        "title_id": "01008FE00E2F7018",
+        "aoc_index": 24,
+        "name": "24.img",
+        "content_version": 0,
+        "source_package": "017_One_Piece_Pirate_Warriors_4_One_Piece_Film_Red_Pack_DLC_01008FE00E2F7018_USA_v0_.nsp",
+        "source_size": 124112,
+        "source_sha256": "eef941724d9de2e9065d76c3f3dc7b088a940016aa6fdf66e3cd386e9b032a2d"
+      },
+      {
+        "title_id": "01008FE00E2F7019",
+        "aoc_index": 25,
+        "name": "25.img",
+        "content_version": 0,
+        "source_package": "013_One_Piece_Pirate_Warriors_4_Legend_Dawn_Pack_DLC_01008FE00E2F7019_USA_v0_.nsp",
+        "source_size": 124112,
+        "source_sha256": "3db7a865b16e470b621f69a5edb5e5e449795683d3ad7df149b09fb0e2a91ebe"
+      },
+      {
+        "title_id": "01008FE00E2F701A",
+        "aoc_index": 26,
+        "name": "26.img",
+        "content_version": 0,
+        "source_package": "043_One_Piece_Pirate_Warriors_4_Yamatos_Grand_Tour_Logbook_and_Soul_Map_1_DLC_01008FE00E2F701A_USA_.nsp",
+        "source_size": 124112,
+        "source_sha256": "e39562e39ccfa60a605fad4c33c44cf6553aa91e45ab54bef83b132e8da51769"
+      },
+      {
+        "title_id": "01008FE00E2F701B",
+        "aoc_index": 27,
+        "name": "27.img",
+        "content_version": 0,
+        "source_package": "010_One_Piece_Pirate_Warriors_4_Kobys_Combat_Chronicle_and_Soul_Map_2_DLC_01008FE00E2F701B_USA_v0_.nsp",
+        "source_size": 124112,
+        "source_sha256": "3eb2059ebec8a6993470296dc49d19aff975c14323a0f1ee51e5e0989f312f40"
+      },
+      {
+        "title_id": "01008FE00E2F701C",
+        "aoc_index": 28,
+        "name": "28.img",
+        "content_version": 0,
+        "source_package": "032_One_Piece_Pirate_Warriors_4_Path_to_the_King_of_the_Pirates_and_Soul_Map_3_DLC_01008FE00E2F701C_USA_v0_.nsp",
+        "source_size": 124112,
+        "source_sha256": "2fd0f0ae8a95c8915198b8c103dabfa5f022d09cfa8d7de254c2d1fb69686cf7"
+      },
+      {
+        "title_id": "01008FE00E2F701D",
+        "aoc_index": 29,
+        "name": "29.img",
+        "content_version": 0,
+        "source_package": "030_One_Piece_Pirate_Warriors_4_Onigashima_Battle_Law_Costume_DLC_01008FE00E2F7001D_USA_.nsp",
+        "source_size": 124112,
+        "source_sha256": "02595e60d83606337642aeebe2fbc3fec65ef585b40d0fd92257d6ee9975aa7f"
+      },
+      {
+        "title_id": "01008FE00E2F7027",
+        "aoc_index": 39,
+        "name": "39.img",
+        "content_version": 0,
+        "source_package": "035_One_Piece_Pirate_Warriors_4_shanks_special_move_divine_departures_DLC_US_.nsp",
+        "source_size": 124112,
+        "source_sha256": "535b0ab0bb708239615a60d44a07bcacc8587e8b93d6e2d8013df792f40dfc56"
+      },
+      {
+        "title_id": "01008FE00E2F702A",
+        "aoc_index": 42,
+        "name": "42.img",
+        "content_version": 0,
+        "source_package": "002_One_Piece_Pirate_Warriors_4_character_pack_7_future_island_egghead_pack_DLC_US_.nsp",
+        "source_size": 124112,
+        "source_sha256": "d0304c5e2e5bcd14c57a07c1df4c639675fb09e1566f58a3fb82070984d2eb5e"
+      },
+      {
+        "title_id": "01008FE00E2F702C",
+        "aoc_index": 44,
+        "name": "44.img",
+        "content_version": 0,
+        "source_package": "003_One_Piece_Pirate_Warriors_4_character_pack_8_special_selection_DLC_US_.nsp",
+        "source_size": 124112,
+        "source_sha256": "d91d58e07657c85b6f2964d83da6cfc57a1956214b10886b9219350ae79bf842"
+      }
+    ],
+    "aoc_images": [
+      {
+        "name": "1.img",
+        "size": 159,
+        "sha256": "2071ca1470d4bd29923d7bfcb65761101efc53c8214ee1c6a04fd409fbb3773b",
+        "title_id": "01008FE00E2F7001",
+        "aoc_index": 1
+      },
+      {
+        "name": "10.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "title_id": "01008FE00E2F700A",
+        "aoc_index": 10
+      },
+      {
+        "name": "11.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "title_id": "01008FE00E2F700B",
+        "aoc_index": 11
+      },
+      {
+        "name": "12.img",
+        "size": 372359346,
+        "sha256": "10efa74972188997be4da889d7335d03f23b161657a059839a57c16287484403",
+        "title_id": "01008FE00E2F700C",
+        "aoc_index": 12
+      },
+      {
+        "name": "2.img",
+        "size": 159,
+        "sha256": "f723dcb22aa19255d8be5c4ce74aa478c8f5f6e75f588e6f45248573a4c41f23",
+        "title_id": "01008FE00E2F7002",
+        "aoc_index": 2
+      },
+      {
+        "name": "20.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "title_id": "01008FE00E2F7014",
+        "aoc_index": 20
+      },
+      {
+        "name": "21.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "title_id": "01008FE00E2F7015",
+        "aoc_index": 21
+      },
+      {
+        "name": "22.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "title_id": "01008FE00E2F7016",
+        "aoc_index": 22
+      },
+      {
+        "name": "23.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "title_id": "01008FE00E2F7017",
+        "aoc_index": 23
+      },
+      {
+        "name": "24.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "title_id": "01008FE00E2F7018",
+        "aoc_index": 24
+      },
+      {
+        "name": "25.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "title_id": "01008FE00E2F7019",
+        "aoc_index": 25
+      },
+      {
+        "name": "26.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "title_id": "01008FE00E2F701A",
+        "aoc_index": 26
+      },
+      {
+        "name": "27.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "title_id": "01008FE00E2F701B",
+        "aoc_index": 27
+      },
+      {
+        "name": "28.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "title_id": "01008FE00E2F701C",
+        "aoc_index": 28
+      },
+      {
+        "name": "29.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "title_id": "01008FE00E2F701D",
+        "aoc_index": 29
+      },
+      {
+        "name": "3.img",
+        "size": 159,
+        "sha256": "cdad2c9d6076103f05dfb6acab325fb7592cbf7fddd64e261f29452e43182146",
+        "title_id": "01008FE00E2F7003",
+        "aoc_index": 3
+      },
+      {
+        "name": "39.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "title_id": "01008FE00E2F7027",
+        "aoc_index": 39
+      },
+      {
+        "name": "4.img",
+        "size": 159,
+        "sha256": "8aa631e3fc57c82c520b2a905569b3cd08a2c0c91a6d205250cb21bea77dd4de",
+        "title_id": "01008FE00E2F7004",
+        "aoc_index": 4
+      },
+      {
+        "name": "42.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "title_id": "01008FE00E2F702A",
+        "aoc_index": 42
+      },
+      {
+        "name": "44.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "title_id": "01008FE00E2F702C",
+        "aoc_index": 44
+      },
+      {
+        "name": "5.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "title_id": "01008FE00E2F7005",
+        "aoc_index": 5
+      },
+      {
+        "name": "6.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "title_id": "01008FE00E2F7006",
+        "aoc_index": 6
+      },
+      {
+        "name": "8.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "title_id": "01008FE00E2F7008",
+        "aoc_index": 8
+      },
+      {
+        "name": "9.img",
+        "size": 407,
+        "sha256": "be67da98dfa1c18185c21256c46af78ab0a8f606d645bed122d0a1cf92460e83",
+        "title_id": "01008FE00E2F7009",
+        "aoc_index": 9
+      }
+    ],
+    "rewrite_audit": {
+      "main_build_id": "033ac7a47cbe4097a9f7d5af316aa585",
+      "main_sha256": "35699a4432f089436d4fc0983f1e68bc3cded88d7112ec1ce78d54c253c15205",
+      "main_cut_rows": 0,
+      "main_observation_rows": 0,
+      "fixups_sha256": "61050b7b530b6fbd2f1e9b437409cb16066ef8fa108a01be6e43530dd9a62758",
+      "modules": [
+        "main",
+        "subsdk0",
+        "sdk"
+      ],
+      "module_artifacts": [
+        {
+          "name": "main",
+          "patched_sha256": "dccb7191f57588321d3a1af62f322ffaebda721cb616bae5c012bc09f85530bd",
+          "fixups_sha256": "61050b7b530b6fbd2f1e9b437409cb16066ef8fa108a01be6e43530dd9a62758"
+        },
+        {
+          "name": "subsdk0",
+          "patched_sha256": "6bd8c892eddeb5825adf006acbb7c942e9de2ad5f3c09f322efd5f2b05dad1e8",
+          "fixups_sha256": "c02727fca89f2665cead7d8d6a9d72f09d9959625b6b98554dd889fddaf10ab7"
+        },
+        {
+          "name": "sdk",
+          "patched_sha256": "0ce8783fddb24a5459092d20c12fb86a7b665ac7d07f65c044515abae6f7aded",
+          "fixups_sha256": "9f9ae07b08285090d31560fbcb4ff3aca3da04f28541c72c8a27df4772b107dd"
+        }
+      ]
+    },
+    "graphics_api": "nvn",
+    "graphics_reason": "main imports nvnBootstrapLoader",
+    "jit_required": false,
+    "shader_source_flags": {
+      "ue_decode": false,
+      "oodle_packs": false,
+      "ue_legacy": false,
+      "glslc_capture": false,
+      "vk_capture": false,
+      "gl_capture": false
+    },
+    "shader_source_reasons": {
+      "ue_decode": "0 Unreal pak(s): the shaders are Oodle-compressed in their shader code archives (Octopath Traveler 0), decoded by booting the game on the Mac",
+      "oodle_packs": "0 Unreal Engine 3 package(s) with Oodle-compressed chunks (Batman: Arkham Knight, its combined shader cache among them), Oodle-compressed: the shader split decodes them with the game's own decoder in the Mac host (dm/host/hle_oodle.c DM_OODLE_SERVE)",
+      "ue_legacy": "0 Unreal pak(s) with the shaders inline in the cooked packages (legacy, version 4, UE 4.18: DRAGON QUEST XI S, LZ5, decoded by the game's own decoder in the Mac host, dm/host/hle_oodle.c DM_OODLE_SERVE; version 11 without shader code archives, UE 4.27: OCTOPATH TRAVELER II, Zlib, or with the cooked packages in an IoStore container beside it: Mario & Luigi: Brothership, Oodle): the shader split reads them file by file",
+      "glslc_capture": "main holds 0 GLSL sources and calls glslcCompile in no module it loads: shaders compiled at run time (Fire Emblem: Three Houses), captured by booting it on the Mac",
+      "vk_capture": "no SPIR-V file in the RomFS: the game generates its shaders at run time (Super Mario Galaxy), captured by booting it on the Mac",
+      "gl_capture": "no GLSL source in the RomFS or main: the game puts its shaders together at run time (L\u00d6VE: Balatro), captured by booting it on the Mac"
+    },
+    "shader_source_audit": {
+      "graphics_api": "nvn",
+      "flags": {
+        "ue_decode": false,
+        "oodle_packs": false,
+        "ue_legacy": false,
+        "glslc_capture": false,
+        "vk_capture": false,
+        "gl_capture": false
+      },
+      "reasons": {
+        "ue_decode": "0 Unreal pak(s): the shaders are Oodle-compressed in their shader code archives (Octopath Traveler 0), decoded by booting the game on the Mac",
+        "oodle_packs": "0 Unreal Engine 3 package(s) with Oodle-compressed chunks (Batman: Arkham Knight, its combined shader cache among them), Oodle-compressed: the shader split decodes them with the game's own decoder in the Mac host (dm/host/hle_oodle.c DM_OODLE_SERVE)",
+        "ue_legacy": "0 Unreal pak(s) with the shaders inline in the cooked packages (legacy, version 4, UE 4.18: DRAGON QUEST XI S, LZ5, decoded by the game's own decoder in the Mac host, dm/host/hle_oodle.c DM_OODLE_SERVE; version 11 without shader code archives, UE 4.27: OCTOPATH TRAVELER II, Zlib, or with the cooked packages in an IoStore container beside it: Mario & Luigi: Brothership, Oodle): the shader split reads them file by file",
+        "glslc_capture": "main holds 0 GLSL sources and calls glslcCompile in no module it loads: shaders compiled at run time (Fire Emblem: Three Houses), captured by booting it on the Mac",
+        "vk_capture": "no SPIR-V file in the RomFS: the game generates its shaders at run time (Super Mario Galaxy), captured by booting it on the Mac",
+        "gl_capture": "no GLSL source in the RomFS or main: the game puts its shaders together at run time (L\u00d6VE: Balatro), captured by booting it on the Mac"
+      }
+    },
+    "shader_chain": "0c434f1b68df",
+    "romfs_relative_path": "extract/v1179648/RomFS.img",
+    "romfs_id_relative_path": "extract/v1179648/RomFS.img.id",
+    "romfs_size": 15082435598,
+    "romfs_sha256": "d52646fd14f4dd9b48506b26b63ca909f6a5144c7813a79f9261ea74cde1eb48",
+    "survey_relative_path": "survey/survey.md",
+    "survey_size": 14024,
+    "survey_sha256": "8c4aeb590b1921a93372ed18b870f65a08977fa0e08d2e178671946878cea735",
+    "prepared_stages": [
+      "mugi_content_meta_scan_1_base_1_update_44_DLC_NSPs_dynamic_unique_title_IDs",
+      "NXNative_base_update_RomFS_and_one_AOC_per_unique_DLC_Title_ID",
+      "NXNative_survey_and_provisional_game_profile",
+      "ARM64_NSO_rewrite_and_fixup_audit",
+      "RomFS_and_AOC_externalization",
+      "engine_shader_source_classification_from_profile_guess"
+    ],
+    "deferred_stages": [
+      "conditional_game_owned_Oodle_decode_on_macOS_ARM64",
+      "shader_split_and_shader_tables_on_macOS_ARM64",
+      "iOS_Metal_compile_and_chain_stamp_validation",
+      "DmGame_framework",
+      "Shared_Shell",
+      "ad_hoc_thin_IPA"
+    ],
+    "shader_boundary": "shader_split"
+  },
+  "created_utc": "2026-11-15T05:28:12.192126+00:00"
+}
