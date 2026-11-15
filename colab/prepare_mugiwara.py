@@ -198,8 +198,8 @@ def run_preparation(args) -> dict:
     required_free = sum(path.stat().st_size for path in package_files) * 2 + 20 * 1024**3
     free_bytes = shutil.disk_usage(work.parent).free
     require(free_bytes >= required_free,
-            f"Insufficient Colab disk space for 46 NSPs, the merged RomFS and 44 extracted DLC AOC images: {free_bytes / 2**30:.1f} GiB free; estimate {required_free / 2**30:.1f} GiB (twice all source bytes plus 20 GiB headroom).")
-    print(f"[Mugiwara4iOS] Colab disk preflight for 46 NSPs + 44 AOC outputs: {free_bytes / 2**30:.1f} GiB free; estimate {required_free / 2**30:.1f} GiB.", flush=True)
+            f"Insufficient Colab disk space for 46 NSPs, the merged RomFS and up to 44 unique-title-ID AOC images: {free_bytes / 2**30:.1f} GiB free; estimate {required_free / 2**30:.1f} GiB (twice all source bytes plus 20 GiB headroom).")
+    print(f"[Mugiwara4iOS] Colab disk preflight for 46 NSPs + up to 44 unique-title-ID AOC outputs: {free_bytes / 2**30:.1f} GiB free; estimate {required_free / 2**30:.1f} GiB.", flush=True)
     work.mkdir(parents=True, exist_ok=True)
     install_linux_dependencies(work.parent)
     module = load_builder(nx / "engine")
@@ -223,11 +223,50 @@ def run_preparation(args) -> dict:
     dlc_family = family.get("dlc", [])
     dlc_paths = {item[2].name for item in dlc_family}
     expected_dlc_paths = {item["local_name"] for item in dlc_items}
-    dlc_title_ids = {int(item[0]) for item in dlc_family}
-    require(len(dlc_family) == 44 and len(dlc_title_ids) == 44
-            and dlc_paths == expected_dlc_paths,
-            "NXNative did not resolve the 44 source NSPs as 44 distinct AddOnContent entries for this title. "
-            f"Detected {len(dlc_family)} entries/{len(dlc_title_ids)} unique title IDs and {len(dlc_paths)} source files.")
+    dlc_title_ids = sorted({int(item[0]) for item in dlc_family})
+    require(len(dlc_family) >= len(expected_dlc_paths)
+            and dlc_paths == expected_dlc_paths
+            and 1 <= len(dlc_title_ids) <= 44,
+            "NXNative did not classify every one of the 44 source NSPs as AddOnContent for this title. "
+            f"Detected {len(dlc_family)} content-meta entries/{len(dlc_title_ids)} unique DLC title IDs "
+            f"across {len(dlc_paths)} source files; expected all {len(expected_dlc_paths)} source files.")
+
+    # NXNative intentionally accepts several NSPs for one DLC Title ID (different content versions).
+    # extract_aoc() selects the highest content version, then the largest package on a version tie.
+    # Mirror that exact selection here so the external AOC manifest proves which source package won.
+    title_base = app & ~0xFFF
+    best_dlc = {}
+    for tid, version, source_path in dlc_family:
+        selection_key = (int(version or 0), source_path.stat().st_size)
+        previous = best_dlc.get(int(tid))
+        if previous is None or selection_key > previous[0]:
+            best_dlc[int(tid)] = (selection_key, source_path, int(version or 0))
+
+    dlc_content_meta = [
+        {"title_id": f"{int(tid):016X}", "content_version": int(version or 0),
+         "source_package": source_path.name}
+        for tid, version, source_path in sorted(
+            dlc_family, key=lambda item: (int(item[0]), int(item[1] or 0), item[2].name))
+    ]
+    aoc_contents = []
+    for tid in sorted(best_dlc):
+        _, selected_path, selected_version = best_dlc[tid]
+        aoc_index = int(tid) - title_base - 0x1000
+        require(aoc_index > 0, f"Invalid NXNative DLC index for title ID {int(tid):016X}.")
+        selected_source = source_by_local.get(selected_path.name)
+        require(selected_source is not None,
+                f"NXNative selected a DLC source package outside the verified 44-NSP inventory: {selected_path.name}.")
+        aoc_contents.append({
+            "title_id": f"{int(tid):016X}", "aoc_index": aoc_index,
+            "name": f"{aoc_index}.img", "content_version": selected_version,
+            "source_package": selected_path.name,
+            "source_size": int(selected_source["size"]),
+            "source_sha256": selected_source["sha256"],
+        })
+    require(len(aoc_contents) == len(dlc_title_ids)
+            and {item["title_id"] for item in aoc_contents}
+                == {f"{tid:016X}" for tid in dlc_title_ids},
+            "Internal AOC selection did not preserve each unique DLC Title ID.")
     print("[Mugiwara4iOS] Nintendo content-meta audit passed: 1 base + 1 update + 44 distinct DLC title IDs.", flush=True)
     work.mkdir(parents=True, exist_ok=True)
     for key in ("DM_GAMES_DIR", "DM_GAMES_FIRST"):
@@ -344,14 +383,22 @@ def run_preparation(args) -> dict:
     facts = module.pg.build_sources(exefs, module.rfs.source(version_dir), modules)
     aoc_dir = work / "aoc"
     aoc_images = sorted(path for path in aoc_dir.glob("*.img") if path.is_file()) if aoc_dir.is_dir() else []
-    expected_aoc_names = {f"{int(tid) - app - 0x1000}.img" for tid, _, _ in dlc_family}
-    require(len(aoc_images) == 44 and {path.name for path in aoc_images} == expected_aoc_names,
-            "NXNative did not extract all 44 DLCs into the expected AOC image set. "
-            f"Found {[path.name for path in aoc_images]}; expected {sorted(expected_aoc_names)}.")
+    expected_aoc_names = {item["name"] for item in aoc_contents}
+    require(len(aoc_images) == len(aoc_contents)
+            and {path.name for path in aoc_images} == expected_aoc_names,
+            "NXNative AOC extraction does not match the unique DLC Title IDs selected from content meta. "
+            f"Found {[path.name for path in aoc_images]}; expected {sorted(expected_aoc_names)} "
+            f"for {len(aoc_contents)} unique DLC Title IDs from 44 source NSPs.")
     require(all(path.stat().st_size > 0 for path in aoc_images), "At least one extracted DLC AOC image is empty.")
-    aoc_records = [{"name": path.name, "size": path.stat().st_size, "sha256": sha256_file(path)}
-                   for path in aoc_images]
-    print("[Mugiwara4iOS] NXNative extracted and verified 44 external DLC AOC images.", flush=True)
+    aoc_by_name = {item["name"]: item for item in aoc_contents}
+    aoc_records = [
+        {"name": path.name, "size": path.stat().st_size, "sha256": sha256_file(path),
+         "title_id": aoc_by_name[path.name]["title_id"],
+         "aoc_index": aoc_by_name[path.name]["aoc_index"]}
+        for path in aoc_images
+    ]
+    print(f"[Mugiwara4iOS] NXNative extracted and verified {len(aoc_images)} unique-title-ID AOC images "
+          f"from all 44 source DLC NSPs.", flush=True)
 
     display_version = module.nacp.version(version_dir / "control.nacp")
     require(display_version == "1.8.7",
@@ -384,7 +431,7 @@ def run_preparation(args) -> dict:
             "RomFS identity sidecar does not match the extracted RomFS bytes.")
 
     result = {
-        "format": 3, "project": PROJECT, "title_id": TITLE_ID,
+        "format": 4, "project": PROJECT, "title_id": TITLE_ID,
         "package_version": package_version, "display_version": display_version,
         "base_content_version": 0, "update_content_version": int(updates[0][0]),
         "nx2apple_tag": NX2APPLE_TAG,
@@ -396,7 +443,11 @@ def run_preparation(args) -> dict:
         "input_base_package_type": "NSP", "input_base_package_name": base_items[0]["local_name"],
         "input_update_nsp_count": 1, "input_dlc_nsp_count": 44,
         "input_packages": [{**item, "sha256": item["sha256"]} for item in source_packages],
-        "aoc_relative_dir": "aoc", "aoc_count": len(aoc_images), "aoc_images": aoc_records,
+        "dlc_content_meta_count": len(dlc_content_meta),
+        "dlc_content_meta": dlc_content_meta,
+        "aoc_relative_dir": "aoc", "aoc_count": len(aoc_images),
+        "aoc_title_ids": [item["title_id"] for item in aoc_contents],
+        "aoc_contents": aoc_contents, "aoc_images": aoc_records,
         "rewrite_audit": rewrite_audit,
         "graphics_api": graphics, "graphics_reason": facts["graphics"][1],
         "jit_required": jit_required,
@@ -409,7 +460,8 @@ def run_preparation(args) -> dict:
         "survey_size": survey_copy.stat().st_size,
         "survey_sha256": sha256_file(survey_copy),
         "prepared_stages": [
-            "mugi_content_meta_scan_1_base_1_update_44_DLC", "NXNative_base_update_RomFS_and_44_AOC_extraction",
+            "mugi_content_meta_scan_1_base_1_update_44_DLC_NSPs_dynamic_unique_title_IDs",
+            "NXNative_base_update_RomFS_and_one_AOC_per_unique_DLC_Title_ID",
             "NXNative_survey_and_provisional_game_profile",
             "ARM64_NSO_rewrite_and_fixup_audit", "RomFS_and_AOC_externalization",
             "engine_shader_source_classification_from_profile_guess",
