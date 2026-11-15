@@ -380,17 +380,34 @@ def main() -> None:
     py = sys.executable
     env = builder.tool_env()
     env.setdefault("USER", os.environ.get("USER") or "runner")
+    runner_cpus = os.cpu_count() or 0
+    if runner_cpus < 5:
+        fail(
+            f"Shader compilation requires xcode-27-xlarge (5 CPU / 14 GB class); "
+            f"this runner exposes only {runner_cpus} logical CPUs. Refusing an undersized six-hour build."
+        )
+    # One CPU is reserved for J=1 translation; the remaining four finish shaders
+    # through independent processes. Never oversubscribe the standard 3-CPU M1 runner.
+    dmsh_procs = min(4, runner_cpus - 1)
+    memory_bytes = int(subprocess.run(
+        ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, check=True
+    ).stdout.strip())
+    if memory_bytes < 12 * 1024**3:
+        fail(
+            f"Shader compilation requires at least 12 GiB RAM; this runner exposes "
+            f"{memory_bytes / 1024**3:.1f} GiB."
+        )
     env.update({"DM_GAME": TITLE_ID, "DM_GAMES_DIR": str(profile_parent),
                 "DM_GAMES_FIRST": "1", "DM_ROOT": str(work),
                 "WORK": str(work / "tmp"), "IOS_PULL": "1",
-                "J": "1", "DMSH_PROCS": "4",
+                "J": "1", "DMSH_PROCS": str(dmsh_procs),
                 "DMSH_RATE_GUARD_SECONDS": "300",
                 "DMSH_MIN_SHADERS_PER_SEC": "1.6"})
     print(
         f"[Mugiwara4iOS] Metal worker backport verified in own_compilers.py; "
         f"J={env['J']}, DMSH_PROCS={env['DMSH_PROCS']}, "
         f"fail-fast floor=1.6 shader/s after 300s, "
-        f"runner logical CPUs={os.cpu_count()}.",
+        f"runner={runner_cpus} CPUs/{memory_bytes / 1024**3:.1f} GiB RAM.",
         flush=True,
     )
     builder.configure_dotnet(env)
