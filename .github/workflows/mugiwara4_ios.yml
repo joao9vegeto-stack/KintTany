@@ -62,20 +62,16 @@ jobs:
               os.ftruncate(fd, 16)
               actions_module._drive_pwrite_all(fd, b"RANGE", 5)
               assert os.pread(fd, 5, 5) == b"RANGE"
-          worker_src = Path("scripts/patch_mugiwara_shader_workers.py").read_text()
           build_src = Path("scripts/build_mugiwara_shared.py").read_text()
-          assert "ProcessPoolExecutor" in worker_src and "STORE.forked()" in worker_src
+          workflow_src = Path(".github/workflows/mugiwara4_ios.yml").read_text()
           assert "shader_threads = 8" in build_src
-          assert "dmsh_procs = 0" in build_src
           assert '"J": str(shader_threads)' in build_src
-          assert '"DMSH_PROCS": str(dmsh_procs)' in build_src
-          assert "ShaderCacheCheckpoint.from_environment" in build_src
-          checkpoint_src = Path("scripts/mugiwara_shader_checkpoint.py").read_text()
-          assert "INTERVAL_SECONDS = 600" in checkpoint_src
-          assert "source.backup(target" in checkpoint_src and "quick_check(1)" in checkpoint_src
-          assert "storageQuotaExceeded" in checkpoint_src
-          assert "DMSH_RATE_GUARD_SECONDS" in worker_src and 'DMSH_MIN_SHADERS_PER_SEC", "1.6"' in worker_src
-          print("Drive range planner, positional writes, SpkIOSzero-proven J=8 thread scheduler and throughput guard: OK")
+          assert "DMSH_PROCS" not in build_src
+          assert "dmsh_build_workers.py" not in build_src
+          assert "ShaderCacheCheckpoint" not in build_src
+          assert "patch_mugiwara_shader_workers.py" not in workflow_src
+          assert "dmsh_build_workers.py" not in workflow_src
+          print("Drive range planner, positional writes and stock SpkIOSzero-proven NXNative J=8 scheduler: OK")
 
           # Regression fixture: 44 source DLC NSPs, but two versions of 20 DLC IDs,
           # giving the same 24 unique AOC IDs reported by the Colab content-meta scan.
@@ -202,9 +198,7 @@ jobs:
             colab/run_mugiwara.py \
             scripts/prepare_mugiwara_actions.py \
             scripts/build_mugiwara_shared.py \
-            scripts/patch_mugiwara_shader_workers.py \
-            scripts/mugiwara_contract.py \
-            scripts/mugiwara_shader_checkpoint.py
+            scripts/mugiwara_contract.py
           python - <<'PY'
           import ast, json, sys, tempfile, yaml
           from pathlib import Path
@@ -297,11 +291,6 @@ jobs:
           git clone --depth 1 --branch v1.3.1-rc2 https://github.com/LNPANDY/NX2Apple.git NX2Apple
           python NX2Apple/tools/engine.py sync
           test "$(cat NX2Apple/.upstream-ref)" = "81906931262fb25d774cce8bca2db8926439e5a2"
-      - name: Apply HookLink2iOS Metal process-worker implementation to the pinned NXNative engine
-        shell: bash
-        run: |
-          set -euo pipefail
-          python scripts/patch_mugiwara_shader_workers.py --engine-root NX2Apple/engine
       - name: Restore workspace, parallel-range RomFS and concurrent unique-title-ID AOC images from Drive (SHA-256)
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
