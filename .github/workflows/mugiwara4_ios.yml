@@ -242,7 +242,7 @@ jobs:
           assert workflow.get("jobs", {}).get("validate-handoff")
           build_job = workflow.get("jobs", {}).get("build-pirate-warriors-4")
           runner_spec = str((build_job or {}).get("runs-on", ""))
-          assert runner_spec.startswith(chr(36) + "{{ vars.MUGIWARA_RUNNER ||") and "xcode-27" in runner_spec, runner_spec
+          assert runner_spec == chr(36) + "{{ vars.MUGIWARA_RUNNER || 'xcode-27' }}", runner_spec
           print("Mugiwara Python, 12-cell notebook, 46-NSP/44-DLC-NSP/unique-title-ID-AOC contract and workflow YAML: OK")
           PY
 
