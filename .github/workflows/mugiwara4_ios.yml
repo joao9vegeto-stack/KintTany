@@ -234,14 +234,15 @@ jobs:
               assert source_mugiwara.validate_package(xci) == "XCI"
           workflow = yaml.safe_load(Path(".github/workflows/mugiwara4_ios.yml").read_text(encoding="utf-8"))
           assert workflow.get("jobs", {}).get("validate-handoff")
-          assert workflow.get("jobs", {}).get("build-pirate-warriors-4")
+          build_job = workflow.get("jobs", {}).get("build-pirate-warriors-4")
+          assert build_job and build_job.get("runs-on") == "xcode-27-xlarge"
           print("Mugiwara Python, 12-cell notebook, 46-NSP/44-DLC-NSP/unique-title-ID-AOC contract and workflow YAML: OK")
           PY
 
   build-pirate-warriors-4:
     needs: validate-handoff
     if: github.ref == 'refs/heads/Mugiwara4iOS' && github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Queue Mugiwara4iOS build ')
-    runs-on: xcode-27
+    runs-on: xcode-27-xlarge
     timeout-minutes: 360
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
@@ -256,8 +257,13 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/Mugiwara4iOS"
-          test -d "$DEVELOPER_DIR" || { echo "::error::Xcode 27.2 is missing from xcode-27"; exit 1; }
+          test -d "$DEVELOPER_DIR" || { echo "::error::Xcode 27.2 is missing from xcode-27-xlarge"; exit 1; }
           test "$(uname -m)" = "arm64"
+          CPU_COUNT="$(sysctl -n hw.ncpu)"
+          MEMORY_BYTES="$(sysctl -n hw.memsize)"
+          echo "Xcode 27 xlarge capacity: ${CPU_COUNT} CPUs, ${MEMORY_BYTES} bytes RAM"
+          test "$CPU_COUNT" -ge 5 || { echo "::error::Shader compilation requires the 5-CPU xcode-27-xlarge runner; found $CPU_COUNT"; exit 1; }
+          test "$MEMORY_BYTES" -ge 12884901888 || { echo "::error::Shader compilation requires at least 12 GiB RAM; found $MEMORY_BYTES bytes"; exit 1; }
           xcode-select -p
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
