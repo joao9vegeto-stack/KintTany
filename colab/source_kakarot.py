@@ -176,6 +176,16 @@ def _akirabox_file_code(url: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _akirabox_signed_download_code(url: str) -> str | None:
+    """Return the file code from an already signed, user-authorized download URL."""
+    parsed = urlparse(url)
+    if (parsed.scheme != "https"
+            or (parsed.hostname or "").lower() != "akirabox.com"):
+        return None
+    match = re.fullmatch(r"/download/([A-Za-z0-9_-]+)/([^/]+)", parsed.path or "")
+    return match.group(1) if match else None
+
+
 def _akirabox_metadata(url: str) -> dict:
     """Call AkiraBox's documented public file-status endpoint."""
     import requests
@@ -327,6 +337,7 @@ def download_blob(url: str, destination: Path, retries: int = 10) -> dict:
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     is_akira = _akirabox_file_code(url) is not None
+    signed_download_code = _akirabox_signed_download_code(url)
     if is_akira:
         session, request_url, page_url, metadata = _resolve_akirabox_download(url)
         metadata_name = metadata["name"]
@@ -343,6 +354,8 @@ def download_blob(url: str, destination: Path, retries: int = 10) -> dict:
         session = requests.Session()
         request_url, metadata_name = url, None
         request_headers = {"User-Agent": "Mozilla/5.0", "Accept-Encoding": "identity"}
+        if signed_download_code:
+            request_headers["Referer"] = f"https://akirabox.com/{signed_download_code}/file"
 
     last_error = None
     for attempt in range(1, retries + 1):
@@ -376,8 +389,13 @@ def download_blob(url: str, destination: Path, retries: int = 10) -> dict:
                     )
                 remote_name = (
                     parse_disposition_name(response.headers.get("Content-Disposition"))
-                    or url_name(response.url) or metadata_name or url_name(url)
+                    or metadata_name
                 )
+                # Signed AkiraBox URLs end in an opaque token, not a filename.
+                # Let BASE_PART_NAMES / UPDATE_PART_NAMES provide the verified
+                # original RAR name when Content-Disposition is absent.
+                if not remote_name and not signed_download_code:
+                    remote_name = url_name(response.url) or url_name(url)
                 length = response.headers.get("Content-Length")
                 total = offset + int(length) if length is not None else 0
                 if not total:
