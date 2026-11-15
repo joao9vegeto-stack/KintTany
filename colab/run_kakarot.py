@@ -285,7 +285,7 @@ def prepare(args, api=None) -> dict:
             header = stream.read(0x104)
         if header[:4] != b"PFS0" and header[0x100:0x104] != b"HEAD":
             dest.unlink(missing_ok=True)
-            fail(f"Existing DLC file {item[\"name\"]} is not a valid NSP/XCI package.")
+            fail("Existing DLC file " + str(item.get("name")) + " is not a valid NSP/XCI package.")
         staged += 1
     source["dlc_drive_items"] = [{"id": x["id"], "name": x["name"]} for x in dlc_items]
     print(f"[KaKaRoTiOS] Existing DLC packages staged from Drive/kakarot: {staged}.", flush=True)
