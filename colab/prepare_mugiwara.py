@@ -301,7 +301,9 @@ def run_preparation(args) -> dict:
                                 "glslc_capture", "vk_capture", "gl_capture")}
     shader_reasons = {key: str(facts[key][1]) for key in shader_flags if key in facts}
     audit = shader_source_audit(facts, shader_flags, shader_reasons)
+    jit_required = bool(module.uses_jit(exefs))
     print("[Mugiwara4iOS] Shader source flags/reasons recorded from actual ExeFS/RomFS survey; no KTGL container is presumed.")
+    print(f"[Mugiwara4iOS] nn::jit import detected: {jit_required}; if needed, NXNative will capture its AOT image on the Mac host for iOS (no runtime JIT).", flush=True)
 
     chain = module.chain_of(nx / "engine")
     require(bool(chain), "NXNative shader-chain version is missing after Linux preparation.")
@@ -319,7 +321,7 @@ def run_preparation(args) -> dict:
             "RomFS identity sidecar does not match the extracted RomFS bytes.")
 
     result = {
-        "format": 1, "project": PROJECT, "title_id": TITLE_ID,
+        "format": 2, "project": PROJECT, "title_id": TITLE_ID,
         "package_version": package_version, "nx2apple_tag": NX2APPLE_TAG,
         "engine_pin": pin, "profile_type": profile_type,
         "profile_source": "NXNative-generated provisional profile from One Piece: Pirate Warriors 4 base/update content metadata and ExeFS/RomFS survey",
@@ -327,6 +329,7 @@ def run_preparation(args) -> dict:
         "modules": modules, "main_build_id": build_id, "main_sha256": main_sha,
         "rewrite_audit": rewrite_audit,
         "graphics_api": graphics, "graphics_reason": facts["graphics"][1],
+        "jit_required": jit_required,
         "shader_source_flags": shader_flags, "shader_source_reasons": shader_reasons,
 "shader_source_audit": audit, "shader_chain": chain,
         "romfs_relative_path": f"extract/{package_version}/RomFS.img",
