@@ -189,10 +189,11 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
         (patched / "main.obs.tsv", "main observation audit"),
         (romfs, "external RomFS"),
         (identity, "RomFS identity sidecar"),
-        (aoc_dir, "external DLC AOC directory"),
     ):
         if not path.is_file():
             fail(f"{label} is missing: {path}")
+    if not aoc_dir.is_dir():
+        fail(f"External DLC AOC directory is missing: {aoc_dir}")
     if builder.build_id(exefs / "main") != prep["main_build_id"]:
         fail("Extracted main Build ID differs from Colab.")
     if sha256_file(exefs / "main") != prep["main_sha256"]:
