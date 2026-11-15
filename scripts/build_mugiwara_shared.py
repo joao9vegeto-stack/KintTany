@@ -98,7 +98,7 @@ def valid_aoc_manifest(prep: dict) -> bool:
                     or any(ch not in "0123456789abcdef" for ch in digest.lower())):
                 return False
         return True
-    except (KeyError, TypeError, ValueError, OverflowError):
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
         return False
 
 
@@ -615,7 +615,7 @@ def main() -> None:
                 "Colab URL download and NSP/XCI validation",
                 "NXNative metadata scan and One Piece: Pirate Warriors 4 provisional profile",
                 "NXNative ARM64 rewrite and fixup audit",
-                "Drive workspace/RomFS split and all 44 external DLC AOC SHA-256 validations",
+                "Drive workspace/RomFS split and SHA-256 validation of every unique-title-ID AOC image from 44 DLC NSPs",
                 "GitHub Actions macOS ARM64 conditional GLSLC/UE/Oodle processing",
                 "engine-detected shader split and profile shader table generation",
                 "iOS Metal compile, c1_full/cb_extent and chain/input stamp validation",
