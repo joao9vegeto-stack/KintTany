@@ -29,6 +29,92 @@ ROOT = Path("/content/mugi")
 def fail(message: str) -> None:
     raise SystemExit("[Mugiwara4iOS] ERROR: " + message)
 
+def valid_aoc_manifest(prep: dict, drive_records: list[dict] | None = None) -> bool:
+    """Validate one external AOC per unique DLC Title ID, not one per source NSP."""
+    try:
+        count = prep.get("aoc_count")
+        title_ids = prep.get("aoc_title_ids")
+        contents = prep.get("aoc_contents")
+        images = prep.get("aoc_images")
+        dlc_meta = prep.get("dlc_content_meta")
+        packages = prep.get("input_packages")
+        if type(count) is not int or not 1 <= count <= 44:
+            return False
+        if not all(isinstance(x, list) for x in (title_ids, contents, images, dlc_meta, packages)):
+            return False
+        if (len(title_ids) != count or len(set(title_ids)) != count
+                or len(contents) != count or len(images) != count
+                or len(dlc_meta) < 44 or prep.get("dlc_content_meta_count") != len(dlc_meta)):
+            return False
+        app = int(TITLE_ID, 16)
+        dlc_packages = {
+            item.get("local_name"): item for item in packages
+            if item.get("role") == "dlc" and item.get("type") == "NSP"
+        }
+        if len(dlc_packages) != 44:
+            return False
+        best = {}
+        for item in dlc_meta:
+            tid_text = item.get("title_id", "")
+            if (not isinstance(tid_text, str) or len(tid_text) != 16
+                    or f"{int(tid_text, 16):016X}" != tid_text
+                    or item.get("source_package") not in dlc_packages):
+                return False
+            tid = int(tid_text, 16)
+            version = int(item.get("content_version", -1))
+            package = dlc_packages[item["source_package"]]
+            key = (version, int(package.get("size", 0)))
+            if version < 0 or key[1] <= 0:
+                return False
+            if tid not in best or key > best[tid][0]:
+                best[tid] = (key, item["source_package"], version)
+        if set(title_ids) != {f"{tid:016X}" for tid in best}:
+            return False
+        if {item.get("source_package") for item in dlc_meta} != set(dlc_packages):
+            return False
+        content_by_title = {item.get("title_id"): item for item in contents}
+        if len(content_by_title) != count or set(content_by_title) != set(title_ids):
+            return False
+        expected_names = set()
+        for tid in sorted(best):
+            title = f"{tid:016X}"
+            index = tid - app - 0x1000
+            name = f"{index}.img"
+            expected_names.add(name)
+            item = content_by_title[title]
+            selected_package = dlc_packages[best[tid][1]]
+            if (index <= 0 or item.get("aoc_index") != index or item.get("name") != name
+                    or item.get("content_version") != best[tid][2]
+                    or item.get("source_package") != best[tid][1]
+                    or item.get("source_size") != int(selected_package.get("size", 0))
+                    or item.get("source_sha256") != selected_package.get("sha256")):
+                return False
+        image_by_name = {item.get("name"): item for item in images}
+        if len(image_by_name) != count or set(image_by_name) != expected_names:
+            return False
+        for title, content in content_by_title.items():
+            image = image_by_name[content["name"]]
+            digest = image.get("sha256", "")
+            if (image.get("title_id") != title or image.get("aoc_index") != content["aoc_index"]
+                    or int(image.get("size", 0)) <= 0 or len(digest) != 64
+                    or any(ch not in "0123456789abcdef" for ch in digest.lower())):
+                return False
+        if drive_records is not None:
+            drive_by_name = {item.get("name"): item for item in drive_records}
+            if len(drive_by_name) != count or set(drive_by_name) != expected_names:
+                return False
+            for name, image in image_by_name.items():
+                record = drive_by_name[name]
+                if (not record.get("id") or record.get("title_id") != image.get("title_id")
+                        or record.get("aoc_index") != image.get("aoc_index")
+                        or int(record.get("size", 0)) != int(image.get("size", -1))
+                        or record.get("sha256") != image.get("sha256")):
+                    return False
+        return True
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+
+
 def drive_api():
     from googleapiclient.discovery import build
     try:
