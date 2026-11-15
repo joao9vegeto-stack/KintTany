@@ -287,7 +287,7 @@ def recover(args, api=None) -> dict | None:
             print("Request:", handoff["request_id"])
             print("Drive:", handoff.get("drive_output_folder_url"))
             print("Package:", handoff["package_version"])
-    print("nn::jit static AOT required:", prepared["jit_required"])
+            print("nn::jit static AOT required:", prepared["jit_required"])
             print("Local manifest:", local)
             return handoff
     print("[Mugiwara4iOS] No completed Mugiwara4iOS handoff was found in Drive.")
