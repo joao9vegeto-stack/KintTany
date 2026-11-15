@@ -40,11 +40,11 @@ KaKaRoTiOS_<request>/
     └── kakarot-work.tar.zst
 ```
 
-The workspace archive excludes source packages, `prod.keys`, external `RomFS.img`, and AOC images. RomFS and AOC are uploaded separately. Base and update are also uploaded as complete package files—not as RAR volumes.
+The workspace archive excludes source packages, `prod.keys`, external `RomFS.img`, and AOC images. Run folders, package uploads, RomFS, AOC and pipeline artifacts are all created under `Drive/kakarot/`. RomFS and AOC are uploaded separately. Base and update are also uploaded as complete package files—not as RAR volumes.
 
 Uploads are recorded with size, SHA-256 and Drive's server-side MD5 checksum. Before deleting the six RAR volumes, Colab writes a small `pipeline/source-manifest.json` checkpoint containing the six URL fingerprints, all six volume hashes, the reconstructed package hashes and the Drive file IDs. If the Colab runtime resets after the package uploads, a new runtime can match the same six link fingerprints and recover base/update from Drive instead of downloading the RAR volumes again. The six downloaded RAR volumes and their extraction scratch are deleted from Colab **only after both reconstructed package uploads have passed verification**. The original packages remain in Drive.
 
-The NXNative `extract_aoc` stage only produces AOC images when DLC packages are present in the scanned input set. This notebook currently asks for base + update only; therefore `aoc_count=0` is valid and an empty Drive `aoc/` folder is retained. It does not fabricate DLC data. Actual DLC AOC images can only be produced when the matching DLC packages are supplied and recognized.
+Existing DLC `.nsp`/`.xci` packages are discovered in `Drive/kakarot/` and its immediate `DLC/` or `AOC/` subfolder, validated by package header, and staged as separate `dlc_` inputs alongside base and update for NXNative. The `prod.keys` file is read only from `Drive/kakarot/prod.keys`. The NXNative `extract_aoc` stage produces AOC images only when those supplied DLC packages are recognized; no DLC data is fabricated.
 
 ## Colab / NXNative preparation
 
@@ -71,7 +71,7 @@ AOC stays external to the thin IPA and is listed in the build report/Drive hando
 
 Set:
 
-- `DRIVE_FOLDER_ID` — the existing configured Drive root containing `prod.keys` at the root, under `kakarot/`, or under the existing `spk/` folder.
+- `DRIVE_FOLDER_ID` — the existing configured Drive root. It must contain one `kakarot/` folder with `prod.keys` and the existing DLC packages.
 - `BASE_PART_URLS` — the three direct URLs in volume order.
 - `UPDATE_PART_URLS` — the three direct URLs in volume order.
 - `BASE_PART_NAMES` / `UPDATE_PART_NAMES` — optional exact source names when the download host does not expose them.
