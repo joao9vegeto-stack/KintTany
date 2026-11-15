@@ -9,7 +9,7 @@ on:
 
 concurrency:
   group: mugiwara4ios-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -175,6 +175,7 @@ jobs:
             colab/run_mugiwara.py \
             scripts/prepare_mugiwara_actions.py \
             scripts/build_mugiwara_shared.py \
+            scripts/patch_mugiwara_shader_workers.py \
             scripts/mugiwara_contract.py
           python - <<'PY'
           import ast, json, sys, tempfile, yaml
@@ -261,6 +262,11 @@ jobs:
           git clone --depth 1 --branch v1.3.1-rc2 https://github.com/LNPANDY/NX2Apple.git NX2Apple
           python NX2Apple/tools/engine.py sync
           test "$(cat NX2Apple/.upstream-ref)" = "81906931262fb25d774cce8bca2db8926439e5a2"
+      - name: Apply HookLink2iOS Metal process-worker implementation to the pinned NXNative engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/patch_mugiwara_shader_workers.py --engine-root NX2Apple/engine
       - name: Restore workspace, external RomFS and unique-title-ID AOC images from Drive (SHA-256)
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
