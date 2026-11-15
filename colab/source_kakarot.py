@@ -154,7 +154,13 @@ class AkiraBoxDownloadPageParser(HTMLParser):
         if tag.lower() != "a":
             return
         values = {key.lower(): value or "" for key, value in attrs}
-        if values.get("id") == "download-button" and values.get("href"):
+        classes = set(values.get("class", "").split())
+        # Current AkiraBox markup: a#download.download-ready inside
+        # #download-button.download-file-link. Keep the older anchor ID as
+        # a compatibility fallback, but never select an unready anchor.
+        current_button = values.get("id") == "download" and "download-ready" in classes
+        legacy_button = values.get("id") == "download-button"
+        if (current_button or legacy_button) and values.get("href"):
             self.download_href = values["href"]
 
 

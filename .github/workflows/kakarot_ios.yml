@@ -92,6 +92,9 @@ jobs:
           from pathlib import Path
           sys.path.insert(0, "colab")
           import source_kakarot
+          page = source_kakarot.AkiraBoxDownloadPageParser()
+          page.feed('<div id="download-button" class="download-file-link"><a id="download" class="download-ready" href="/download/abcdefgh1234/signedtoken">Download</a></div>')
+          assert page.download_href == "/download/abcdefgh1234/signedtoken"
           with tempfile.TemporaryDirectory(prefix="kakarot-package-contract-") as tmp:
               root = Path(tmp)
               nsp = root / "base.nsp"

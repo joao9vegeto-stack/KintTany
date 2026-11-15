@@ -13,7 +13,7 @@ The Colab notebook `colab/KaKaRoTiOS.ipynb` accepts exactly:
 
 Before downloading any RAR bytes, Colab calls AkiraBox's documented `GET /api/files?url=...` status endpoint for all six links. It checks that all six IDs are distinct and that each returned filename exactly matches the configured RAR name, Title ID, package version and expected part number. The base and update groups are never mixed.
 
-For each link, the downloader then opens the share page in a normal HTTP session and reads the standard `#download-button` URL. It does not automate or bypass CAPTCHA, Cloudflare or other human-verification steps. If AkiraBox requires a browser session or human verification, the notebook stops with an explicit message rather than retrying the same forbidden request ten times. The file status API preflight is not itself proof that the RAR payload can be downloaded; the actual download is verified by its RAR signature, size and SHA-256.
+For each link, the downloader opens the share page in a normal HTTP session and reads the ready anchor `#download-button.download-file-link a#download.download-ready[href]` (with a legacy selector fallback). AkiraBox currently requires a human-verification checkbox for some free downloads. The notebook therefore also accepts the short-lived signed `/download/{id}/{token}` URL copied from the ready button after the user completes the provider's own check in a browser. It does not automate or bypass CAPTCHA, Cloudflare or other human-verification steps. If the page still requires browser verification, the downloader stops clearly rather than retrying the challenge. The file status API preflight is not itself proof that the RAR payload can be downloaded; the actual download is verified by its RAR signature, size and SHA-256.
 
 Supported multi-volume layouts:
 
@@ -76,6 +76,7 @@ Set:
 - `DRIVE_FOLDER_ID` — the existing configured Drive root reused from Link2iOS/SpkIOSzero. It must contain one `kakarot/` folder with the 20 named DLC packages; `prod.keys` may be in the root or inside `kakarot/`.
 - `BASE_PART_URLS` — the three AkiraBox share-page URLs in volume order.
 - `UPDATE_PART_URLS` — the three AkiraBox share-page URLs in volume order.
+- `BASE_DIRECT_URLS` / `UPDATE_DIRECT_URLS` — optional signed download-button URLs in volume order. Leave all six blank for normal share-page resolution. When AkiraBox presents a human-verification checkbox, complete it manually in Safari, copy the actual ready button URL (the `/download/{id}/{token}` link) into these arrays, and rerun the self-contained preparation cell. Tokens are used only in memory; the handoff stores URL fingerprints, not the signed URLs.
 - `BASE_PART_NAMES` / `UPDATE_PART_NAMES` — expected original RAR filenames, used to reject a wrong/misordered file before extraction.
 
 The source URLs themselves are not written into the Drive handoff; only their SHA-256 fingerprints and the volume/package integrity records are retained.
