@@ -250,6 +250,12 @@ class ShaderCacheCheckpoint:
                         flush=True,
                     )
             except Exception as exc:
+                message = str(exc)
+                if "storageQuotaExceeded" in message or "Service Accounts do not have storage quota" in message:
+                    raise RuntimeError(
+                        "Google Drive service accounts cannot store this Metal CAS checkpoint in My Drive. "
+                        "Use a Shared Drive or OAuth user delegation."
+                    ) from exc
                 failures += 1
                 if failures > 12:
                     raise RuntimeError(
