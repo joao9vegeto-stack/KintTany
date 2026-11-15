@@ -38,7 +38,82 @@ jobs:
           import json, re, sys
           from pathlib import Path
           sys.path.insert(0, "colab")
-          from run_mugiwara import valid_aoc_manifest
+          from run_mugiwara import valid_aoc_manifest as colab_aoc_valid
+          import importlib.util
+          def load_module(name, path):
+              spec = importlib.util.spec_from_file_location(name, path)
+              module = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(module)
+              return module
+          actions_module = load_module("mugiwara_actions_validation", "scripts/prepare_mugiwara_actions.py")
+          build_module = load_module("mugiwara_build_validation", "scripts/build_mugiwara_shared.py")
+
+          # Regression fixture: 44 source DLC NSPs, but two versions of 20 DLC IDs,
+          # giving the same 24 unique AOC IDs reported by the Colab content-meta scan.
+          app_id = int("01008FE00E2F6000", 16)
+          source_dlc = [
+              {"role": "dlc", "type": "NSP", "local_name": f"dlc_{i:02d}.nsp",
+               "size": 100000 + i, "sha256": f"{i + 1:064x}"}
+              for i in range(44)
+          ]
+          meta_rows = []
+          cursor = 0
+          for index in range(24):
+              versions = (0, 65536) if index < 20 else (0,)
+              for version in versions:
+                  meta_rows.append({
+                      "title_id": f"{app_id + 0x1001 + index:016X}",
+                      "content_version": version,
+                      "source_package": source_dlc[cursor]["local_name"],
+                  })
+                  cursor += 1
+          assert cursor == 44 and len(meta_rows) == 44
+          by_name = {item["local_name"]: item for item in source_dlc}
+          best = {}
+          for row in meta_rows:
+              tid = int(row["title_id"], 16)
+              package = by_name[row["source_package"]]
+              key = (row["content_version"], package["size"])
+              if tid not in best or key > best[tid][0]:
+                  best[tid] = (key, row["source_package"], row["content_version"])
+          aoc_contents, aoc_images, drive_aoc = [], [], []
+          for tid in sorted(best):
+              title = f"{tid:016X}"
+              index = tid - app_id - 0x1000
+              name = f"{index}.img"
+              _, source_name, version = best[tid]
+              package = by_name[source_name]
+              aoc_contents.append({
+                  "title_id": title, "aoc_index": index, "name": name,
+                  "content_version": version, "source_package": source_name,
+                  "source_size": package["size"], "source_sha256": package["sha256"],
+              })
+              image = {
+                  "title_id": title, "aoc_index": index, "name": name,
+                  "size": 4096 + index, "sha256": f"{0xABC000 + index:064x}",
+              }
+              aoc_images.append(image)
+              drive_aoc.append({**image, "id": f"drive-aoc-{index}"})
+          fixture = {
+              "aoc_count": 24,
+              "aoc_title_ids": [item["title_id"] for item in aoc_contents],
+              "aoc_contents": aoc_contents,
+              "aoc_images": aoc_images,
+              "dlc_content_meta_count": len(meta_rows),
+              "dlc_content_meta": meta_rows,
+              "input_packages": [
+                  {"role": "base", "type": "NSP", "local_name": "000_base.nsp", "size": 1, "sha256": "a" * 64},
+                  {"role": "update", "type": "NSP", "local_name": "001_update.nsp", "size": 1, "sha256": "b" * 64},
+                  *source_dlc,
+              ],
+          }
+          assert all(item["content_version"] == 65536 for item in aoc_contents[:20])
+          assert colab_aoc_valid(fixture, drive_aoc)
+          assert actions_module.valid_aoc_manifest(fixture, drive_aoc)
+          assert build_module.valid_aoc_manifest(fixture)
+          assert not colab_aoc_valid({**fixture, "aoc_images": aoc_images[:-1]}, drive_aoc[:-1])
+          print("NXNative AOC regression fixture: 44 DLC NSPs -> 24 unique Title IDs/images: OK")
+
           h = json.loads(Path("handoff.json").read_text(encoding="utf-8"))
           p = h.get("prepared") or {}
           assert h.get("project") == "Mugiwara4iOS"
