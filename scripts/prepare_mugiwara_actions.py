@@ -560,7 +560,11 @@ def main() -> None:
     if romfs_sha != str(prep["romfs_sha256"]).lower():
         fail("Restored RomFS SHA-256 differs from the Colab manifest.")
 
-    print(f"[Mugiwara4iOS] Restoring {prep['aoc_count']} unique-title-ID AOC images in parallel...", flush=True)
+    print(
+        f"[Mugiwara4iOS] Restoring {prep['aoc_count']} unique-title-ID AOC images; "
+        "large AOC blobs also use parallel byte ranges...",
+        flush=True,
+    )
     aoc_dir.mkdir(parents=True, exist_ok=True)
     expected_aoc = {item["name"]: item for item in prep_aoc}
     for record in aoc_records:
@@ -571,21 +575,13 @@ def main() -> None:
             or str(expected.get("sha256", "")).lower() != str(record.get("sha256", "")).lower()
         ):
             fail(f"Drive AOC record differs from the NXNative preparation manifest: {record['name']}.")
-
-    def restore_aoc(record):
         destination = aoc_dir / record["name"]
         digest = download_drive_file(
-            api, credentials, record, destination, parallel_workers=2
+            api, credentials, record, destination, parallel_workers=4
         )
-        expected = expected_aoc[record["name"]]
         if digest != str(expected["sha256"]).lower():
             fail(f"Restored AOC SHA-256 differs from Colab: {record['name']}.")
-        return record["name"]
-
-    with cf.ThreadPoolExecutor(max_workers=min(4, len(aoc_records))) as pool:
-        futures = [pool.submit(restore_aoc, record) for record in aoc_records]
-        for future in cf.as_completed(futures):
-            print(f"[Mugiwara4iOS] AOC restored and verified: {future.result()}", flush=True)
+        print(f"[Mugiwara4iOS] AOC restored and SHA-256 verified: {record['name']}", flush=True)
     restored_aoc = sorted(item.name for item in aoc_dir.glob("*.img") if item.is_file())
     if restored_aoc != sorted(expected_aoc):
         fail(f"Restored AOC filename set differs from the {prep['aoc_count']} unique DLC Title IDs: {restored_aoc}.")
