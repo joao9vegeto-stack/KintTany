@@ -394,7 +394,7 @@ def run_preparation(args) -> dict:
         "graphics_api": graphics, "graphics_reason": facts["graphics"][1],
         "jit_required": jit_required,
         "shader_source_flags": shader_flags, "shader_source_reasons": shader_reasons,
-"shader_source_audit": audit, "shader_chain": chain,
+        "shader_source_audit": audit, "shader_chain": chain,
         "romfs_relative_path": f"extract/{package_version}/RomFS.img",
         "romfs_id_relative_path": f"extract/{package_version}/RomFS.img.id",
         "romfs_size": romfs_size, "romfs_sha256": romfs_sha,
