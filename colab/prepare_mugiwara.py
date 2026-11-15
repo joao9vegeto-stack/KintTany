@@ -215,6 +215,8 @@ def run_preparation(args) -> dict:
     require(app == int(TITLE_ID, 16), f"Content metadata belongs to {app:016X}, not {TITLE_ID}.")
     require(family.get("base") is not None and family["base"].name == base_items[0]["local_name"],
             "NXNative content metadata did not identify the supplied base NSP for the requested Title ID.")
+    require(int(family.get("base_version", -1)) == 0,
+            f"The supplied base NSP must be content version v0; NXNative read v{family.get('base_version')}.")
     updates = family.get("updates", [])
     require(len(updates) == 1 and updates[0][1].name == update_items[0]["local_name"],
             f"NXNative content metadata must identify exactly the supplied update NSP; found {[x[1].name for x in updates]}.")
@@ -351,6 +353,9 @@ def run_preparation(args) -> dict:
                    for path in aoc_images]
     print("[Mugiwara4iOS] NXNative extracted and verified 44 external DLC AOC images.", flush=True)
 
+    display_version = module.nacp.version(version_dir / "control.nacp")
+    require(display_version == "1.8.7",
+            f"The extracted update NACP display version must be 1.8.7; NXNative extracted {display_version or '(empty)'}.")
     graphics = facts["graphics"][0]
     require(graphics == "nvn",
             f"One Piece: Pirate Warriors 4 was expected to use NVN; NXNative detected {graphics}: {facts['graphics'][1]}")
@@ -380,7 +385,9 @@ def run_preparation(args) -> dict:
 
     result = {
         "format": 3, "project": PROJECT, "title_id": TITLE_ID,
-        "package_version": package_version, "nx2apple_tag": NX2APPLE_TAG,
+        "package_version": package_version, "display_version": display_version,
+        "base_content_version": 0, "update_content_version": int(updates[0][0]),
+        "nx2apple_tag": NX2APPLE_TAG,
         "engine_pin": pin, "profile_type": profile_type,
         "profile_source": "NXNative-generated provisional profile from One Piece: Pirate Warriors 4 base/update content metadata and ExeFS/RomFS survey",
         "profile_relative_dir": f"profile/{TITLE_ID}",
