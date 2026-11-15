@@ -385,11 +385,11 @@ def main() -> None:
                 "WORK": str(work / "tmp"), "IOS_PULL": "1",
                 "J": "1", "DMSH_PROCS": "4",
                 "DMSH_RATE_GUARD_SECONDS": "300",
-                "DMSH_MIN_SHADERS_PER_SEC": "1.2"})
+                "DMSH_MIN_SHADERS_PER_SEC": "1.6"})
     print(
         f"[Mugiwara4iOS] Metal worker backport verified in own_compilers.py; "
         f"J={env['J']}, DMSH_PROCS={env['DMSH_PROCS']}, "
-        f"fail-fast floor=1.2 shader/s after 300s, "
+        f"fail-fast floor=1.6 shader/s after 300s, "
         f"runner logical CPUs={os.cpu_count()}.",
         flush=True,
     )
