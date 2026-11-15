@@ -49,11 +49,23 @@ jobs:
           assert h.get("package_version") == p.get("package_version")
           assert p.get("profile_type") == "provisional"
           assert p.get("graphics_api") == "nvn"
-          assert p.get("input_package_count") == 2
-          assert len(p.get("input_packages", [])) == 2
-          assert all(x.get("type") in ("NSP", "XCI") for x in p["input_packages"])
+          inputs = p.get("input_packages", [])
+          dlc_inputs = [x for x in inputs if str(x.get("name", "")).startswith("dlc_")]
+          assert p.get("input_package_count") == 22
+          assert len(inputs) == 22
+          assert p.get("input_dlc_package_count") == 20
+          assert len(dlc_inputs) == 20
+          assert len({x.get("name") for x in inputs}) == 22
+          assert all(x.get("type") in ("NSP", "XCI") and x.get("size", 0) > 0 and len(x.get("sha256", "")) == 64 for x in inputs)
+          assert sum(x.get("name") in ("base.nsp", "base.xci") for x in inputs) == 1
+          assert sum(x.get("name") in ("update.nsp", "update.xci") for x in inputs) == 1
           src = h.get("source") or {}
+          src_dlcs = src.get("dlc_packages") or []
           assert src.get("package_count") == 2
+          assert src.get("dlc_package_count") == 20
+          assert len(src_dlcs) == 20
+          assert src.get("dlc_inventory", {}).get("total") == 20
+          assert {x.get("local_name"): x.get("size") for x in src_dlcs} == {x.get("name"): x.get("size") for x in dlc_inputs}
           assert src.get("rar_parts_deleted_after_upload") is True
           for label in ("base", "update"):
               item = src.get(label) or {}

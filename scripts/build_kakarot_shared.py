@@ -157,13 +157,16 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
                 "romfs_relative_path", "romfs_id_relative_path",
                 "romfs_size", "romfs_sha256", "aoc_relative_dir", "aoc_count", "aoc_images",
                 "survey_relative_path", "survey_size", "survey_sha256",
-                "input_package_count", "input_packages"):
+                "input_package_count", "input_dlc_package_count", "input_packages"):
         if prepared.get(key) != prep.get(key):
             fail(f"Actions input and Colab workspace disagree on {key}.")
     if prep.get("profile_type") != "provisional":
         fail("Route C expects the Kakarot profile generated from the actual NSP/XCI content.")
-    if prep.get("input_package_count") != 2 or len(prep.get("input_packages", [])) != 2:
-        fail("Route C expects exactly a base and update package.")
+    input_packages = prep.get("input_packages", [])
+    input_dlcs = [item for item in input_packages if str(item.get("name", "")).startswith("dlc_")]
+    if (prep.get("input_package_count") != 22 or len(input_packages) != 22
+            or prep.get("input_dlc_package_count") != 20 or len(input_dlcs) != 20):
+        fail("Route C expects exactly base + update + 20 DLC inputs (22 NXNative packages).")
     if prep.get("graphics_api") != "nvn":
         fail(f"Kakarot graphics API is not NVN: {prep.get('graphics_api')}.")
     if builder.chain_of(nx / "engine") != prepared.get("shader_chain"):

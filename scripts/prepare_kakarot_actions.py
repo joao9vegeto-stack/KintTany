@@ -128,10 +128,27 @@ def main() -> None:
         fail("Handoff and preparation package versions disagree.")
     if prep_handoff.get("profile_type") != "provisional" or prep_handoff.get("graphics_api") != "nvn":
         fail("Expected the generated Kakarot provisional NVN profile.")
-    if (prep_handoff.get("input_package_count") != 2
-            or len(prep_handoff.get("input_packages", [])) != 2):
-        fail("Preparation manifest does not contain exactly one base and one update package.")
-    for pkg in prep_handoff["input_packages"]:
+    scanned_packages = prep_handoff.get("input_packages", [])
+    scanned_dlcs = [pkg for pkg in scanned_packages if str(pkg.get("name", "")).startswith("dlc_")]
+    if (prep_handoff.get("input_package_count") != 22 or len(scanned_packages) != 22
+            or prep_handoff.get("input_dlc_package_count") != 20 or len(scanned_dlcs) != 20):
+        fail("Preparation manifest must contain exactly base + update + 20 DLCs (22 inputs).")
+    source_record = handoff.get("source") or {}
+    source_dlcs = source_record.get("dlc_packages") or []
+    if (source_record.get("package_count") != 2
+            or source_record.get("dlc_package_count") != 20 or len(source_dlcs) != 20):
+        fail("Handoff source inventory must record the base/update pair and exactly 20 DLC Drive files.")
+    scanned_dlc_by_name = {pkg.get("name"): pkg for pkg in scanned_dlcs}
+    if len(scanned_dlc_by_name) != 20:
+        fail("NXNative DLC input filenames are duplicated.")
+    for item in source_dlcs:
+        local_name = item.get("local_name")
+        scanned = scanned_dlc_by_name.get(local_name)
+        if (not scanned or int(scanned.get("size", -1)) != int(item.get("size", -2))
+                or scanned.get("type") not in ("NSP", "XCI")
+                or not scanned.get("sha256")):
+            fail(f"NXNative input does not match the staged DLC Drive inventory: {local_name}")
+    for pkg in scanned_packages:
         if pkg.get("type") not in ("NSP", "XCI") or int(pkg.get("size", 0)) <= 0 or not pkg.get("sha256"):
             fail("Input package metadata is incomplete or has an unsupported package type.")
     if not handoff.get("request_id") or not handoff.get("work_archive", {}).get("id"):
@@ -230,7 +247,7 @@ def main() -> None:
         "romfs_relative_path", "romfs_id_relative_path",
         "romfs_size", "romfs_sha256", "aoc_relative_dir", "aoc_count", "aoc_images",
         "survey_relative_path", "survey_size", "survey_sha256",
-        "input_package_count", "input_packages",
+        "input_package_count", "input_dlc_package_count", "input_packages",
     )
     for key in compare_keys:
         if prep.get(key) != prep_handoff.get(key):
@@ -338,6 +355,8 @@ def main() -> None:
         "profile_type": prep["profile_type"],
         "profile_source": prep["profile_source"],
         "modules": prep["modules"],
+        "input_package_count": prep["input_package_count"],
+        "input_dlc_package_count": prep["input_dlc_package_count"],
         "main_build_id": prep["main_build_id"],
         "main_sha256": prep["main_sha256"],
         "rewrite_audit": prep["rewrite_audit"],

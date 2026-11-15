@@ -395,7 +395,7 @@ def prepare(args, api=None) -> dict:
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)
-    from prepare_kakarot import run_preparation
+    from .prepare_kakarot import run_preparation
     prep = run_preparation(argparse.Namespace(
         nx2apple_root=nx, package_dir=input_dir, keys=keys, work_dir=work))
     if prep.get("project") != PROJECT or prep.get("title_id") != TITLE_ID:
@@ -404,6 +404,11 @@ def prepare(args, api=None) -> dict:
         fail("Preparation manifest uses another NX2Apple/NXNative pin.")
     if prep.get("package_version") == "v0":
         fail("NXNative selected the base-only v0 extraction; refusing to continue without the supplied update.")
+    scanned_packages = prep.get("input_packages", [])
+    scanned_dlcs = [item for item in scanned_packages if str(item.get("name", "")).startswith("dlc_")]
+    if (prep.get("input_package_count") != 22 or len(scanned_packages) != 22
+            or prep.get("input_dlc_package_count") != 20 or len(scanned_dlcs) != 20):
+        fail("NXNative scan must contain exactly base + update + 20 staged DLC packages.")
 
     romfs_rel = Path(prep["romfs_relative_path"])
     if romfs_rel.is_absolute() or ".." in romfs_rel.parts:
@@ -471,6 +476,9 @@ def prepare(args, api=None) -> dict:
             "base_drive": base_record,
             "update_drive": update_record,
             "rar_parts_deleted_after_upload": True,
+            "dlc_package_count": len(source.get("dlc_drive_items", [])),
+            "dlc_packages": source.get("dlc_drive_items", []),
+            "dlc_inventory": source.get("dlc_inventory", {}),
         },
         "game_data": {
             "folder_id": game_id,
@@ -529,6 +537,10 @@ def recover(args, api=None) -> dict | None:
             print(f"[KaKaRoTiOS] Skipping incomplete Drive run {folder['name']}: {exc}", flush=True)
             continue
         prepared = handoff.get("prepared") or {}
+        source = handoff.get("source") or {}
+        scanned = prepared.get("input_packages", [])
+        scanned_dlcs = [item for item in scanned if str(item.get("name", "")).startswith("dlc_")]
+        source_dlcs = source.get("dlc_packages", [])
         if (handoff.get("project") == PROJECT and handoff.get("branch") == BRANCH
                 and handoff.get("title_id") == TITLE_ID
                 and handoff.get("nx2apple_tag") == NX2APPLE_TAG
@@ -540,6 +552,10 @@ def recover(args, api=None) -> dict | None:
                 and handoff.get("game_data", {}).get("romfs", {}).get("id")
                 and handoff.get("game_data", {}).get("aoc_folder_id")
                 and int(handoff.get("game_data", {}).get("aoc_count", -1)) == len(handoff.get("game_data", {}).get("aoc", []))
+                and source.get("package_count") == 2
+                and source.get("dlc_package_count") == 20 and len(source_dlcs) == 20
+                and prepared.get("input_package_count") == 22 and len(scanned) == 22
+                and prepared.get("input_dlc_package_count") == 20 and len(scanned_dlcs) == 20
                 and prepared.get("profile_type") == "provisional"
                 and prepared.get("graphics_api") == "nvn"):
             print("[KaKaRoTiOS] Verified handoff recovered from Drive; package download, extraction and rewrite need not be repeated.")
@@ -563,8 +579,16 @@ def dispatch(args) -> None:
             or handoff.get("engine_pin") != ENGINE_PIN):
         fail("Refusing to dispatch a handoff that does not belong to KaKaRoTiOS/Kakarot.")
     prepared = handoff.get("prepared") or {}
-    if prepared.get("profile_type") != "provisional" or prepared.get("graphics_api") != "nvn":
-        fail("Refusing dispatch: expected the Kakarot provisional NVN profile.")
+    source = handoff.get("source") or {}
+    scanned = prepared.get("input_packages", [])
+    scanned_dlcs = [item for item in scanned if str(item.get("name", "")).startswith("dlc_")]
+    source_dlcs = source.get("dlc_packages", [])
+    if (prepared.get("profile_type") != "provisional" or prepared.get("graphics_api") != "nvn"
+            or source.get("package_count") != 2
+            or source.get("dlc_package_count") != 20 or len(source_dlcs) != 20
+            or prepared.get("input_package_count") != 22 or len(scanned) != 22
+            or prepared.get("input_dlc_package_count") != 20 or len(scanned_dlcs) != 20):
+        fail("Refusing dispatch: handoff must contain base + update + exactly 20 DLCs (22 NXNative inputs).")
     token = getpass.getpass("Fine-grained GitHub token (KintTany repository, Contents: Read and write): ").strip()
     if not token:
         fail("GitHub token is empty.")

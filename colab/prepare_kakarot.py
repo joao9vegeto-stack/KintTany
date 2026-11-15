@@ -190,8 +190,10 @@ def run_preparation(args) -> dict:
     require(base_package.is_file() and update_package.is_file(),
             "The package input directory must contain the reconstructed base and update separately.")
     dlc_packages = [p for p in package_files if p.name.startswith("dlc_")]
-    require(len(package_files) == 2 + len(dlc_packages),
-            "Unexpected NSP/XCI in input directory; only base, update and staged DLC packages are allowed.")
+    require(len(dlc_packages) == 20,
+            f"Expected exactly 20 staged Kakarot DLC packages; found {len(dlc_packages)}.")
+    require(len(package_files) == 22 and len(package_files) == 2 + len(dlc_packages),
+            "Kakarot input must be exactly one base + one update + 20 DLC packages.")
     for path in package_files:
         with path.open("rb") as stream:
             header = stream.read(0x104)
@@ -377,6 +379,7 @@ def run_preparation(args) -> dict:
         "survey_size": survey_copy.stat().st_size,
         "survey_sha256": sha256_file(survey_copy),
         "input_package_count": len(package_files),
+        "input_dlc_package_count": len(dlc_packages),
         "input_packages": [{"name": p.name, "type": "XCI" if p.suffix.lower() == ".xci" else "NSP",
                             "size": p.stat().st_size, "sha256": sha256_file(p)} for p in package_files],
         "prepared_stages": [

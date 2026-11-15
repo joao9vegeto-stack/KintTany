@@ -22,7 +22,7 @@ Supported multi-volume layouts:
 
 The three names must prove they belong to one ordered set. Each group is extracted once by starting UnRAR with its first volume; the extractor follows the other volumes and verifies the archive's file CRC. The script does not concatenate RAR volumes manually. A group must yield exactly one complete `.nsp` or `.xci`; the package is then checked by its actual header (`PFS0` for NSP, `HEAD` at offset `0x100` for XCI), not just its filename.
 
-The source package copies are normalized as `input-packages/base.nsp|xci` and `input-packages/update.nsp|xci`. Their size, SHA-256 and MD5 are recorded.
+The source package copies are normalized as input-packages/base.nsp or base.xci and input-packages/update.nsp or update.xci. Their size, SHA-256 and MD5 are recorded. Each of the 20 DLC files is staged independently with a dlc_ scanner prefix. The Colab manifest records 22 NXNative inputs; source.package_count remains 2 because it counts only the RAR-reconstructed base/update pair.
 
 ## Google Drive layout
 
@@ -54,7 +54,7 @@ Exactly 20 DLC `.nsp`/`.xci` packages are discovered as direct children of `Driv
 2. Prove each three-volume naming sequence and extract base/update independently using RARLAB UnRAR.
 3. Identify the complete NSP/XCI by file header and create normalized base/update package files.
 4. Upload base and update to Drive, verify size + server MD5 + local SHA-256, then delete all six RAR volumes.
-5. Pass the reconstructed base/update and all 20 separately staged, header-verified DLC packages to the pinned NXNative `scripts/build_ipa_from_nsp.py` scanner/extractor.
+5. Pass the reconstructed base/update and all 20 separately staged, header-verified DLC packages to the pinned NXNative scanner/extractor. The scan contract is exactly 22 inputs: one base, one update and 20 DLC packages.
 6. Extract the selected update version, externalize RomFS, generate the provisional Kakarot profile, rewrite actual ARM64 modules, and retain the survey, Build IDs and fixup/cut/observation audits.
 7. If NXNative extracts AOC data, audit and upload each `.img` separately. Otherwise record zero AOC images.
 8. Upload RomFS and the separated workspace, then produce a handoff manifest.
