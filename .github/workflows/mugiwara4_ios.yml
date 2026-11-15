@@ -45,6 +45,8 @@ jobs:
           assert h.get("nx2apple_tag") == "v1.3.1-rc2"
           assert h.get("engine_pin") == "81906931262fb25d774cce8bca2db8926439e5a2"
           assert h.get("package_version") == p.get("package_version") and p.get("package_version") != "v0"
+          assert p.get("format") == 2
+          assert isinstance(p.get("jit_required"), bool)
           assert p.get("profile_type") == "provisional"
           assert p.get("graphics_api") == "nvn"
           assert p.get("input_package_count") == 2
