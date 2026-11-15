@@ -4,25 +4,18 @@ Title ID: `010051C0134F8000`
 
 This isolated branch is based on the architecture of `SpkIOSzero` and `Link2iOS`. It does not modify or dispatch workflows from either branch.
 
-## Input: six AkiraBox share links
+# Input: three BASE RAR volumes + one direct UPDATE NSP
 
-The Colab notebook `colab/KaKaRoTiOS.ipynb` accepts exactly:
+The Colab notebook accepts exactly four private MegaDL URLs:
 
-- Base game: three AkiraBox share pages, in part 1, 2, 3 order.
-- Update: three AkiraBox share pages, in part 1, 2, 3 order.
+- BASE: `part1.rar`, `part2.rar`, `part3.rar`, in order, Title ID `010051C0134F8000`, version `v0`.
+- UPDATE: one direct `.nsp`, Title ID `010051C0134F8800`, version `v1048576`, tagged `UPD1.70`.
 
-Before downloading any RAR bytes, Colab calls AkiraBox's documented `GET /api/files?url=...` status endpoint for all six links. It checks that all six IDs are distinct and that each returned filename exactly matches the configured RAR name, Title ID, package version and expected part number. The base and update groups are never mixed.
+The notebook asks for the four signed URLs with hidden Colab `getpass` prompts only when a completed Drive handoff cannot be recovered. It validates host, path, Title ID, version, part ordering, NSP suffix and the `download_token` parameter. Raw token-bearing URLs are not written to the public notebook, Git, Drive manifest or Actions handoff. Only URL SHA-256 fingerprints, package metadata and file hashes are retained.
 
-For each link, the downloader opens the share page in a normal HTTP session and reads the ready anchor `#download-button.download-file-link a#download.download-ready[href]` (with a legacy selector fallback). AkiraBox currently requires a human-verification checkbox for some free downloads. The notebook therefore also accepts the signed `/download/{id}/{token}` URL copied from the ready button after the user completes the provider's own check in a browser. It does not automate or bypass CAPTCHA, Cloudflare or other human-verification steps. If the page still requires browser verification, the downloader stops clearly rather than retrying the challenge. The file status API preflight is not itself proof that the RAR payload can be downloaded; the actual download is verified by its RAR signature, size and SHA-256.
+Only BASE is a multipart RAR. Its three path filenames must share a common prefix and be ordered `.part1.rar`, `.part2.rar`, `.part3.rar`; RARLAB UnRAR extracts it once from part 1 and checks archive CRC. The BASE result must be one NSP/XCI with a matching `PFS0` or `HEAD@0x100` header. UPDATE is downloaded directly as one NSP, checked for `PFS0`, size and SHA-256. No UPDATE RAR archive or synthetic RAR volume records are created.
 
-Supported multi-volume layouts:
-
-- Modern: `name.part1.rar`, `name.part2.rar`, `name.part3.rar` (zero-padded numbering is also accepted when consistent).
-- Legacy: `name.rar`, `name.r00`, `name.r01`.
-
-The three names must prove they belong to one ordered set. Each group is extracted once by starting UnRAR with its first volume; the extractor follows the other volumes and verifies the archive's file CRC. The script does not concatenate RAR volumes manually. A group must yield exactly one complete `.nsp` or `.xci`; the package is then checked by its actual header (`PFS0` for NSP, `HEAD` at offset `0x100` for XCI), not just its filename.
-
-The source package copies are normalized as input-packages/base.nsp or base.xci and input-packages/update.nsp or update.xci. Their size, SHA-256 and MD5 are recorded. Each of the 20 DLC files is staged independently with a dlc_ scanner prefix. The Colab manifest records 22 NXNative inputs; source.package_count remains 2 because it counts only the RAR-reconstructed base/update pair.
+The BASE package is normalized as `input-packages/base.nsp` or `base.xci`; the direct UPDATE is normalized as `input-packages/update.nsp`. Their size, SHA-256 and MD5 are recorded. Each of the 20 DLC files is staged independently with a `dlc_` scanner prefix. The Colab manifest records 22 NXNative inputs; `source.package_count` remains 2 because it counts BASE and UPDATE packages, though only BASE came from RAR.
 
 ## Google Drive layout
 
@@ -44,16 +37,16 @@ KaKaRoTiOS_<request>/
 
 The workspace archive excludes source packages, `prod.keys`, external `RomFS.img`, and AOC images. Run folders, package uploads, RomFS, AOC and pipeline artifacts are all created under `Drive/kakarot/`. RomFS and AOC are uploaded separately. Base and update are also uploaded as complete package files—not as RAR volumes.
 
-Uploads are recorded with size, SHA-256 and Drive's server-side MD5 checksum. Before deleting the six RAR volumes, Colab writes a small `pipeline/source-manifest.json` checkpoint containing the six URL fingerprints, all six volume hashes, the reconstructed package hashes and the Drive file IDs. If the Colab runtime resets after the package uploads, a new runtime can match the same six link fingerprints and recover base/update from Drive instead of downloading the RAR volumes again. The six downloaded RAR volumes and their extraction scratch are deleted from Colab **only after both reconstructed package uploads have passed verification**. The original packages remain in Drive.
+Uploads are recorded with size, SHA-256 and Drive's server-side MD5 checksum. Before deleting the three BASE RAR volumes, Colab writes `pipeline/source-manifest.json` containing the four URL fingerprints, the three BASE volume hashes, both package hashes and Drive file IDs. If Colab resets, a new runtime can match those fingerprints and recover BASE/UPDATE packages from Drive. The three BASE RAR volumes and extraction scratch are deleted from Colab **only after both package uploads have passed verification**; the direct UPDATE NSP remains a separate verified Drive package.
 
 Exactly 20 DLC `.nsp`/`.xci` packages are discovered as direct children of `Drive/<configured-root>/kakarot/`. Their original filenames are retained; there is no `dlc1.nsp`/`dlc2.nsp` naming requirement. The inventory is checked against the supplied size profile (17 around 124 KB and 3 around 106 KB), and each file is header-validated before being staged independently for NXNative. The `prod.keys` file may be in the already-configured Drive root or in its `kakarot/` child, matching the Link2iOS/SpkIOSzero convention. The NXNative `extract_aoc` stage produces AOC images only when those supplied DLC packages are recognized; no DLC data is fabricated.
 
 ## Colab / NXNative preparation
 
-1. Validate all six AkiraBox share links against the official status API; resolve the ordinary download button and download each RAR with HTTP Range resume and per-volume SHA-256.
-2. Prove each three-volume naming sequence and extract base/update independently using RARLAB UnRAR.
-3. Identify the complete NSP/XCI by file header and create normalized base/update package files.
-4. Upload base and update to Drive, verify size + server MD5 + local SHA-256, then delete all six RAR volumes.
+1. Validate the three BASE RAR URLs and one UPDATE NSP URL by host, Title ID, version, suffix and part order; collect signed tokens privately in Colab.
+2. Download BASE parts 1–3 with HTTP Range resume, per-volume SHA-256 and RAR signature checks; extract once using RARLAB UnRAR and verify CRC.
+3. Download UPDATE as one NSP with HTTP Range resume; verify complete transfer, `PFS0` header and SHA-256. No RAR extraction is performed for UPDATE.
+4. Upload BASE and UPDATE separately to Drive, verify size + server MD5 + local SHA-256, then delete the three BASE RAR volumes.
 5. Pass the reconstructed base/update and all 20 separately staged, header-verified DLC packages to the pinned NXNative scanner/extractor. The scan contract is exactly 22 inputs: one base, one update and 20 DLC packages.
 6. Extract the selected update version, externalize RomFS, generate the provisional Kakarot profile, rewrite actual ARM64 modules, and retain the survey, Build IDs and fixup/cut/observation audits.
 7. If NXNative extracts AOC data, audit and upload each `.img` separately. Otherwise record zero AOC images.
@@ -74,10 +67,8 @@ AOC stays external to the thin IPA and is listed in the build report/Drive hando
 Set:
 
 - `DRIVE_FOLDER_ID` — the existing configured Drive root reused from Link2iOS/SpkIOSzero. It must contain one `kakarot/` folder with the 20 named DLC packages; `prod.keys` may be in the root or inside `kakarot/`.
-- `BASE_PART_URLS` — the three AkiraBox share-page URLs in volume order.
-- `UPDATE_PART_URLS` — the three AkiraBox share-page URLs in volume order.
-- `BASE_DIRECT_URLS` / `UPDATE_DIRECT_URLS` — optional signed download-button URLs in volume order. Leave all six blank for normal share-page resolution. When AkiraBox presents a human-verification checkbox, complete it manually in Safari, copy the actual ready button URL (the `/download/{id}/{token}` link) into these arrays, and rerun the self-contained preparation cell. Tokens are used only in memory; the handoff stores URL fingerprints, not the signed URLs. If the signed response omits Content-Disposition, the configured BASE_PART_NAMES and UPDATE_PART_NAMES remain the authoritative volume filenames; the opaque token is never treated as a RAR filename.
-- `BASE_PART_NAMES` / `UPDATE_PART_NAMES` — expected original RAR filenames, used to reject a wrong/misordered file before extraction.
+- The four MegaDL signed URLs are collected at runtime through hidden prompts: BASE parts 1, 2, 3, followed by the single UPDATE NSP. Do not paste signed tokens into notebook source or GitHub; they remain in memory only.
+- BASE filenames are derived from and validated against their URL paths. UPDATE is stored locally as `update.nsp` and must pass the actual NSP header check.
 
 The source URLs themselves are not written into the Drive handoff; only their SHA-256 fingerprints and the volume/package integrity records are retained.
 
@@ -93,4 +84,4 @@ The last notebook cell is deliberately opt-in. `DISPATCH_TO_GITHUB` defaults to 
 
 ## Current validation boundary
 
-The six AkiraBox share URLs are now registered in the notebook, and the official API/name/order preflight is implemented. This repository edit did not execute Colab or query the six live share links, so their current availability and exact metadata are not yet confirmed here. When the notebook runs, all six must pass the API check and filename/order validation before any RAR transfer begins. The actual RAR download, extraction, base/update package output extensions and sizes, Kakarot Build ID, update version, module set, PAK inventory, shader count, AOC inventory and device behavior remain unmeasured until that run completes. No successful IPA or iPhone gameplay result is claimed until the real packages pass the Colab survey and the Mac build.
+The four MegaDL URLs were supplied in the conversation and their path structure is statically validated by the notebook, but this edit did not fetch the signed URLs. Tokens may expire; actual BASE transfer/CRC and UPDATE NSP transfer/header/hash remain unverified until a real Colab run. Package sizes/hashes, Kakarot Build ID, module set, PAK inventory, shader count, AOC inventory and device behavior remain unmeasured. No IPA or iPhone gameplay success is claimed until the real packages pass Colab preparation and macOS build.
