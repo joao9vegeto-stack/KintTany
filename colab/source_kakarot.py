@@ -515,6 +515,15 @@ def prepare_source(api, drive_root_id: str, runtime_root: Path,
             downloaded.append(record)
         names = resolve_volume_names(downloaded, overrides, label)
         name_info = validate_volume_sequence(names, label)
+        rar_group_bytes = sum(int(item["size"]) for item in downloaded)
+        free_bytes = shutil.disk_usage(runtime_root).free
+        minimum_free = int(rar_group_bytes * 2.0 + 3 * 1024**3)
+        if free_bytes < minimum_free:
+            fail(f"{label}: not enough Colab disk space to extract this three-volume set safely. "
+                 f"{free_bytes / 2**30:.1f} GiB free; require at least {minimum_free / 2**30:.1f} GiB "
+                 "(twice the downloaded RAR bytes plus 3 GiB). The downloaded volumes are retained for retry.")
+        print(f"[KaKaRoTiOS] {label} disk preflight: {free_bytes / 2**30:.1f} GiB free; "
+              f"{minimum_free / 2**30:.1f} GiB extraction budget.", flush=True)
         final_paths = []
         for record, name in zip(downloaded, names):
             destination = volume_dir / name
