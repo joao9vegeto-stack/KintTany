@@ -352,7 +352,7 @@ def main() -> None:
     worker_sidecar = engine / "dm/gfx/tools/dmsh_build_workers.py"
     worker_wrapper = engine / "dm/gfx/tools/own_compilers.py"
     if not worker_sidecar.is_file() or not worker_wrapper.is_file():
-        fail("HookLink2iOS DMSH_PROCS worker backport is missing; refusing a slow thread-only Metal build.")
+        fail("Mugiwara shader progress/rate-guard sidecar is missing; refusing an uninstrumented shader build.")
     worker_source = worker_sidecar.read_text(encoding="utf-8")
     wrapper_source = worker_wrapper.read_text(encoding="utf-8")
     required_worker_markers = (
@@ -387,10 +387,12 @@ def main() -> None:
             f"NXNative shader compilation requires at least 3 Apple Silicon CPUs; "
             f"this runner exposes only {runner_cpus} logical CPUs."
         )
-    # Match the proven HookLink2iOS configuration exactly: three visible CPUs,
-    # one serial translator (J=1), and two independent Metal-finishing processes.
-    # Do not scale this to four: the xcode-27 runtime exposed only three logical CPUs.
-    dmsh_procs = 2
+    # Match the successful SpkIOSzero scheduler on this same xcode-27 label and NXNative pin.
+    # J=8 provides eight translator lanes and batches of 32 shaders; DMSH_PROCS=0
+    # keeps finalization on the same eight-thread pool that completed SpkIOSzero.
+    # The two-process HookLink configuration capped this workload too aggressively.
+    shader_threads = 8
+    dmsh_procs = 0
     memory_bytes = int(subprocess.run(
         ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, check=True
     ).stdout.strip())
@@ -402,13 +404,13 @@ def main() -> None:
     env.update({"DM_GAME": TITLE_ID, "DM_GAMES_DIR": str(profile_parent),
                 "DM_GAMES_FIRST": "1", "DM_ROOT": str(work),
                 "WORK": str(work / "tmp"), "IOS_PULL": "1",
-                "J": "1", "DMSH_PROCS": str(dmsh_procs),
+                "J": str(shader_threads), "DMSH_PROCS": str(dmsh_procs),
                 "DMSH_RATE_GUARD_SECONDS": "300",
                 "DMSH_MIN_SHADERS_PER_SEC": "1.6"})
     print(
-        f"[Mugiwara4iOS] Metal worker backport verified in own_compilers.py; "
-        f"J={env['J']}, DMSH_PROCS={env['DMSH_PROCS']}, "
-        f"HookLink2iOS process configuration; fail-fast floor=1.6 shader/s after 300s, "
+        f"[Mugiwara4iOS] SpkIOSzero-proven NXNative thread scheduler wired through own_compilers.py; "
+        f"J={env['J']}, DMSH_PROCS={env['DMSH_PROCS']} (8 translation/finish lanes, batch=32); "
+        f"fail-fast floor=1.6 shader/s after 300s, "
         f"runner={runner_cpus} CPUs/{memory_bytes / 1024**3:.1f} GiB RAM.",
         flush=True,
     )
