@@ -120,10 +120,12 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
     if not prep_path.is_file():
         fail("Colab Linux preparation manifest is missing.")
     prep = json.loads(prep_path.read_text(encoding="utf-8"))
+    if prep.get("format") != 2 or not isinstance(prep.get("jit_required"), bool):
+        fail("Colab prep manifest is outdated or missing the NXNative nn::jit/AOT decision; rerun Colab preparation.")
     for key in ("project", "title_id", "package_version", "nx2apple_tag", "engine_pin",
                 "profile_type", "profile_source", "profile_relative_dir",
                 "modules", "main_build_id", "main_sha256", "rewrite_audit",
-                "graphics_api", "shader_source_flags", "shader_source_reasons", "shader_source_audit", "shader_chain",
+                "graphics_api", "jit_required", "shader_source_flags", "shader_source_reasons", "shader_source_audit", "shader_chain",
                 "romfs_relative_path", "romfs_id_relative_path",
                 "romfs_size", "romfs_sha256", "survey_relative_path", "survey_size",
         "survey_sha256", "input_package_count", "input_packages"):
@@ -155,6 +157,9 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
 
     version_dir = work / "extract" / prep["package_version"]
     exefs = version_dir / "ExeFS"
+    actual_jit = bool(builder.uses_jit(exefs))
+    if actual_jit != prep["jit_required"]:
+        fail(f"nn::jit import scan differs between Colab and macOS: {actual_jit} != {prep['jit_required']}.")
     romfs_rel = safe_relative(prep["romfs_relative_path"], "RomFS")
     identity_rel = safe_relative(prep["romfs_id_relative_path"], "RomFS identity")
     romfs = work.joinpath(*romfs_rel.parts)
@@ -351,6 +356,17 @@ def main() -> None:
         table_stamp = validate_table_stamp(profile, ios_msl, actual_chain)
         print("[Mugiwara4iOS] c1_full.tsv, cb_extent.tsv and Metal chain input stamp all verified.", flush=True)
 
+        jit_image = None
+        if prep["jit_required"]:
+            print("[Mugiwara4iOS] NXNative detected nn::jit: capturing the plugin output on the Mac and compiling its static iOS AOT image (the iPhone runs no JIT compiler)...", flush=True)
+            builder.PROG.add(1)
+            jit_image = builder.capture_jit(py, engine, version_dir, patched, work, env, logs, profile)
+            for name in ("jit.img", "jit.tsv", "jit.out"):
+                artifact = jit_image / name
+                if not artifact.is_file() or artifact.stat().st_size == 0:
+                    fail(f"NXNative nn::jit AOT capture is incomplete; missing {artifact}.")
+            print(f"[Mugiwara4iOS] Static nn::jit image ready for DmGame.framework: {jit_image / 'jit.img'}", flush=True)
+
         control = builder.languages_control(version_dir)
         display_name = nacp.name(control) or profile.get("name") or "ONE PIECE: PIRATE WARRIORS 4"
         display_version = nacp.version(version_dir / "control.nacp") or "1.0.0"
@@ -467,6 +483,9 @@ def main() -> None:
             "main_build_id": prep["main_build_id"], "main_sha256": prep["main_sha256"],
             "modules": modules, "rewrite_audit": prep["rewrite_audit"],
             "graphics_api": prep["graphics_api"],
+            "jit_required": prep["jit_required"],
+            "jit_image_embedded": bool(prep["jit_required"]),
+            "runtime_jit": False,
             "shader_source_flags": actual_flags, "shader_source_audit": prep["shader_source_audit"],
             "shader_chain": actual_chain, "shader_package_key": package_key,
             "metal_validation": table_stamp,
@@ -479,6 +498,7 @@ def main() -> None:
                 "GitHub Actions macOS ARM64 conditional GLSLC/UE/Oodle processing",
                 "engine-detected shader split and profile shader table generation",
                 "iOS Metal compile, c1_full/cb_extent and chain/input stamp validation",
+                "conditional nn::jit Mac capture and static AOT image embedding (iPhone runtime JIT disabled)",
                 "DmGame.framework build", "NX2Apple Shared Shell build",
                 "ad-hoc signature and thin IPA packaging",
             ],
