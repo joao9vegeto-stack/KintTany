@@ -9,7 +9,7 @@ This branch adapts the SpkIOSzero / Link2iOS pipeline to Pirate Warriors 4. It d
 
 ## Pipeline
 
-1. **Colab package acquisition** — downloads one base package and one update package from the direct URLs supplied by the user. Each can be NSP or XCI; extension and actual content header must agree (NSP `PFS0`, XCI `HEAD` at offset `0x100`). The source scanner groups package contents using their internal content metadata and Title IDs, not their filenames. The selected merged package version must be an update, not `v0`.
+1. **Colab package acquisition** — reuses the existing Drive `mugi/` source: one base NSP, one update NSP v1.8.7, 44 DLC NSPs and `prod.keys`. The source scanner groups DLC contents using internal content metadata and Title IDs, not filenames; repeated package versions are resolved by highest content version, yielding one external AOC image per unique AddOnContent Title ID. The current handoff records 46 source NSPs in total.
 2. **Keys and source isolation** — reads the existing `prod.keys` from the configured Drive root, `mugiwara4ios/`, or the existing `spk/` folder. It remains in the Colab runtime and is excluded from the archive. Base/update packages are also excluded from the Drive workspace archive.
 3. **NXNative survey and provisional profile** — invokes the pinned `scripts/build_ipa_from_nsp.py` with Title ID `01008FE00E2F6000`. The pinned engine has no registered profile for this title, so NXNative must create `<Title ID>_survey/survey.md` and a generated provisional `game.tsv`. The survey captures content version, ExeFS modules/build IDs, SDK/API/engine markers, RomFS inventory, imports, instruction census and profile guesses.
 4. **ARM64 rewrite** — NXNative's own NSO rewrite runs on Colab/Linux. Each rewritten module and its fixup/cut/observation reports are recorded in the preparation manifest. No other title's allocator offset, vtable, module list, memory layout, FPS patch or binary patch is transplanted.
@@ -24,7 +24,7 @@ This branch adapts the SpkIOSzero / Link2iOS pipeline to Pirate Warriors 4. It d
 - Existing Koei Tecmo/KTGL profiles such as Hyrule Warriors and Fire Emblem: Three Houses are technical references for the *generic host layer only*. Their profile values, module lists, shaders, captures, heap values and frame patches are not copied.
 - GLSLC capture, UE decode and Oodle are conditional on the actual survey. A KTGL title is not automatically treated as Unreal.
 - No custom `patches.py`, memory override or FPS lock is added before the real Build ID and runtime evidence exist. The first objective is to boot and validate menus/battle; then establish a stable 30 FPS baseline before considering 60 FPS.
-- This branch currently expects base + update only. DLC extraction is deliberately not imposed until the base/update path is validated and the supplied packages' content metadata is inspected.
+- The current prepared handoff includes 1 base NSP + 1 update NSP + 44 DLC NSPs. The 44 source DLC packages resolve to 24 unique AddOnContent Title IDs, so 24 AOC `.img` images are externalized and verified; the source inventory still retains all 44 NSP records.
 - An IPA build is not proof of iPhone gameplay. Device-side startup, memory pressure, rendering, input and frame pacing remain to be tested after an artifact is produced.
 
 ## Colab
@@ -47,4 +47,4 @@ The default Drive lookup reuses `prod.keys` in the current `spk/` folder; it doe
 
 ## Current validation boundary
 
-The branch scaffolding is prepared, but the actual Pirate Warriors 4 NSP/XCI has not yet been supplied to Colab. Therefore the exact update package version, main Build ID/hash, actual module list, shader counts/captures, memory split, runtime patches and IPA/device result are intentionally not fabricated. They will be generated from the base/update files when their links are supplied.
+The Colab preparation and Drive checkpoint for the current handoff are complete: base NSP, update v1.8.7, 44 DLC NSPs, RomFS and 24 unique-title-ID AOC images have been inventoried and hashed. The GitHub Actions Route C build has not yet produced a verified IPA. Shader/Metal compilation, final framework packaging and device-side gameplay remain unverified.

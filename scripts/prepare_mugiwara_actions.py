@@ -7,9 +7,15 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tarfile
 import time
 from pathlib import Path, PurePosixPath
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+from mugiwara_contract import copy_prepared_manifest, prepared_manifest_mismatches
 
 PROJECT = "Mugiwara4iOS"
 BRANCH = "Mugiwara4iOS"
@@ -300,22 +306,13 @@ def main() -> None:
             or not isinstance(prep.get("jit_required"), bool)):
         fail("Restored Colab prep manifest is outdated or missing the format-4 unique-title-ID AOC/AOT contract.")
 
-    compare_keys = (
-        "format", "project", "title_id", "package_version", "display_version",
-        "base_content_version", "update_content_version", "nx2apple_tag", "engine_pin",
-        "profile_type", "profile_source", "profile_relative_dir", "modules",
-        "main_build_id", "main_sha256", "rewrite_audit", "graphics_api", "jit_required",
-        "shader_source_flags", "shader_source_reasons", "shader_source_audit", "shader_chain",
-        "romfs_relative_path", "romfs_id_relative_path", "romfs_size", "romfs_sha256",
-        "aoc_relative_dir", "aoc_count", "aoc_title_ids", "aoc_contents", "aoc_images",
-        "dlc_content_meta_count", "dlc_content_meta",
-        "survey_relative_path", "survey_size", "survey_sha256",
-        "input_package_count", "input_nsp_count", "input_xci_count",
-        "input_update_nsp_count", "input_dlc_nsp_count", "input_packages",
-    )
-    for key in compare_keys:
-        if prep.get(key) != prepared_handoff.get(key):
-            fail(f"Workspace and Drive handoff disagree on {key}.")
+    mismatches = prepared_manifest_mismatches(prep, prepared_handoff)
+    if mismatches:
+        fail("Workspace and Drive handoff disagree on " + mismatches[0] + ".")
+    try:
+        prepared_contract = copy_prepared_manifest(prep)
+    except ValueError as exc:
+        fail(str(exc))
     if prep.get("package_version") != handoff["package_version"]:
         fail("Restored package version differs from the Drive handoff.")
     forbidden = [
@@ -413,38 +410,20 @@ def main() -> None:
         if not path.is_file():
             fail(f"Restored source/rewrite artifact missing: {path.relative_to(work)}")
 
-    prepared = {
-        "format": 4,
-        "project": PROJECT, "branch": BRANCH, "title_id": TITLE_ID,
-        "package_version": prep["package_version"], "display_version": prep["display_version"],
-        "base_content_version": prep["base_content_version"],
-        "update_content_version": prep["update_content_version"],
-        "nx2apple_tag": NX2APPLE_TAG, "engine_pin": ENGINE_PIN,
+    prepared = dict(prepared_contract)
+    prepared.update({
+        "branch": BRANCH,
         "request_id": handoff["request_id"],
         "work_dir": str(work),
         "romfs_path": str(romfs), "romfs_id_path": str(identity),
-        "aoc_dir": str(aoc_dir), "aoc_relative_dir": prep["aoc_relative_dir"],
-        "aoc_count": len(restored_aoc), "aoc_title_ids": prep["aoc_title_ids"],
-        "aoc_contents": prep["aoc_contents"], "aoc_images": prep["aoc_images"],
-        "dlc_content_meta_count": prep["dlc_content_meta_count"],
-        "dlc_content_meta": prep["dlc_content_meta"],
-        "aoc_restored_names": restored_aoc,
-        "survey_path": str(survey), "survey_sha256": prep["survey_sha256"],
+        "aoc_dir": str(aoc_dir), "aoc_restored_names": restored_aoc,
+        "survey_path": str(survey),
         "profile_dir": str(profile_dir), "exefs_dir": str(exefs), "patched_dir": str(patched),
-        "profile_type": prep["profile_type"], "profile_source": prep["profile_source"],
-        "modules": prep["modules"], "main_build_id": prep["main_build_id"],
-        "main_sha256": prep["main_sha256"], "rewrite_audit": prep["rewrite_audit"],
-        "graphics_api": prep["graphics_api"], "jit_required": prep["jit_required"],
-        "shader_source_flags": prep["shader_source_flags"],
-        "shader_source_reasons": prep["shader_source_reasons"],
-        "shader_source_audit": prep["shader_source_audit"], "shader_chain": prep["shader_chain"],
-        "input_package_count": prep["input_package_count"],
-        "input_nsp_count": prep["input_nsp_count"], "input_xci_count": prep["input_xci_count"],
-        "input_update_nsp_count": prep["input_update_nsp_count"],
-        "input_dlc_nsp_count": prep["input_dlc_nsp_count"],
-        "input_packages": prep["input_packages"],
         "game_data": game_data,
-    }
+    })
+    mismatches = prepared_manifest_mismatches(prepared, prep)
+    if mismatches:
+        fail("Generated Actions input lost or changed canonical field " + mismatches[0] + ".")
     output_path = root / "actions-input.json"
     output_path.write_text(json.dumps(prepared, indent=2) + "\n", encoding="utf-8")
     print("[Mugiwara4iOS] Actions input validated:", output_path)

@@ -116,6 +116,15 @@ jobs:
 
           h = json.loads(Path("handoff.json").read_text(encoding="utf-8"))
           p = h.get("prepared") or {}
+          canonical = actions_module.copy_prepared_manifest(p)
+          assert canonical == {key: p[key] for key in actions_module.PREPARED_MANIFEST_KEYS}
+          assert not actions_module.prepared_manifest_mismatches(canonical, p)
+          for field in actions_module.PREPARED_MANIFEST_KEYS:
+              reduced = dict(canonical)
+              reduced.pop(field)
+              assert field in actions_module.prepared_manifest_mismatches(reduced, p), (
+                  f"Manifest projection regression: omission of {field} was not detected"
+              )
           assert h.get("project") == "Mugiwara4iOS"
           assert h.get("branch") == "Mugiwara4iOS"
           assert h.get("title_id") == "01008FE00E2F6000"
@@ -162,7 +171,8 @@ jobs:
             colab/prepare_mugiwara.py \
             colab/run_mugiwara.py \
             scripts/prepare_mugiwara_actions.py \
-            scripts/build_mugiwara_shared.py
+            scripts/build_mugiwara_shared.py \
+            scripts/mugiwara_contract.py
           python - <<'PY'
           import ast, json, sys, tempfile, yaml
           from pathlib import Path

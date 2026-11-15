@@ -14,6 +14,11 @@ import sys
 import zipfile
 from pathlib import Path, PurePosixPath
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+from mugiwara_contract import PREPARED_MANIFEST_KEYS, prepared_manifest_mismatches
+
 TITLE_ID = "01008FE00E2F6000"
 PROJECT = "Mugiwara4iOS"
 BRANCH = "Mugiwara4iOS"
@@ -197,18 +202,9 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
     prep = json.loads(prep_path.read_text(encoding="utf-8"))
     if prep.get("format") != 4 or not isinstance(prep.get("jit_required"), bool):
         fail("Colab prep manifest is outdated or missing the unique-title-ID AOC and NXNative nn::jit/AOT contract; rerun Colab preparation.")
-    for key in ("format", "project", "title_id", "package_version", "display_version",
-                "base_content_version", "update_content_version", "nx2apple_tag", "engine_pin",
-                "profile_type", "profile_source", "profile_relative_dir",
-                "modules", "main_build_id", "main_sha256", "rewrite_audit",
-                "graphics_api", "jit_required", "shader_source_flags", "shader_source_reasons", "shader_source_audit", "shader_chain",
-                "romfs_relative_path", "romfs_id_relative_path", "romfs_size", "romfs_sha256",
-                "aoc_relative_dir", "aoc_count", "aoc_title_ids", "aoc_contents", "aoc_images",
-                "dlc_content_meta_count", "dlc_content_meta", "survey_relative_path", "survey_size",
-                "survey_sha256", "input_package_count", "input_nsp_count", "input_xci_count",
-                "input_update_nsp_count", "input_dlc_nsp_count", "input_packages"):
-        if prepared.get(key) != prep.get(key):
-            fail(f"Actions input and Colab workspace disagree on {key}.")
+    mismatches = prepared_manifest_mismatches(prepared, prep)
+    if mismatches:
+        fail("Actions input and Colab workspace disagree on " + mismatches[0] + ".")
     if (prep.get("display_version") != "1.8.7" or prep.get("base_content_version") != 0
             or int(prep.get("update_content_version", 0)) <= 0):
         fail("Route C expects base content v0 and the update NACP display version 1.8.7.")
