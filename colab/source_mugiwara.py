@@ -88,6 +88,8 @@ def download_url(url: str, destination: Path, retries: int = 10) -> dict:
                     mode = "wb"
                     offset = 0
                 else:
+                    if response.status_code in (401, 403):
+                        fail(f"The signed URL for {destination.name} was rejected (HTTP {response.status_code}); it may have expired. Replace the signed URL in the notebook and rerun. Any already-persisted base/update in Drive/mugi will be reused.")
                     response.raise_for_status()
                     raise RuntimeError(f"unexpected HTTP status {response.status_code}")
                 content_type = response.headers.get("Content-Type", "").lower()
