@@ -267,7 +267,7 @@ def run_preparation(args) -> dict:
             and {item["title_id"] for item in aoc_contents}
                 == {f"{tid:016X}" for tid in dlc_title_ids},
             "Internal AOC selection did not preserve each unique DLC Title ID.")
-    print("[Mugiwara4iOS] Nintendo content-meta audit passed: 1 base + 1 update + 44 distinct DLC title IDs.", flush=True)
+    print(f"[Mugiwara4iOS] Nintendo content-meta audit passed: 1 base + 1 update + {len(dlc_family)} DLC entries from 44 source NSPs / {len(dlc_title_ids)} unique Title IDs.", flush=True)
     work.mkdir(parents=True, exist_ok=True)
     for key in ("DM_GAMES_DIR", "DM_GAMES_FIRST"):
         os.environ.pop(key, None)
