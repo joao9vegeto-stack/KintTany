@@ -435,24 +435,15 @@ def prepare_source(api, drive_root_id: str, runtime_root: Path,
         if len(urls) != VOLUME_COUNT or any(not str(x).strip() for x in urls):
             fail(f"{label}_PART_URLS must contain exactly three non-empty direct-download URLs.")
     root_items = list_children(api, drive_root_id)
-    game_folders = [x for x in root_items if x.get("mimeType") == FOLDER_MIME
-                    and x.get("name", "").lower() == "kakarot"]
-    if len(game_folders) > 1:
-        fail("More than one Drive/kakarot folder exists; cannot choose a unique prod.keys source.")
-    spk_folders = [x for x in root_items if x.get("mimeType") == FOLDER_MIME
-                   and x.get("name", "").lower() == "spk"]
-    if len(spk_folders) > 1:
-        fail("More than one Drive/spk folder exists; cannot choose a unique prod.keys source.")
-    candidates = [
-        ("root", [x for x in root_items if x.get("name", "").lower() == "prod.keys" and x.get("mimeType") != FOLDER_MIME]),
-        ("kakarot", [x for x in list_children(api, game_folders[0]["id"]) if x.get("name", "").lower() == "prod.keys" and x.get("mimeType") != FOLDER_MIME] if game_folders else []),
-        ("spk", [x for x in list_children(api, spk_folders[0]["id"]) if x.get("name", "").lower() == "prod.keys" and x.get("mimeType") != FOLDER_MIME] if spk_folders else []),
-    ]
-    found = [(location, item) for location, items in candidates for item in items]
-    if any(len(items) > 1 for _, items in candidates) or len(found) != 1:
-        counts = ", ".join(f"{location}={len(items)}" for location, items in candidates)
-        fail(f"Expected exactly one prod.keys in Drive root, Drive/kakarot, or Drive/spk; found {counts}.")
-    keys_item = found[0][1]
+    kakarot_folders = [x for x in root_items if x.get("mimeType") == FOLDER_MIME and x.get("name", "").lower() == "kakarot"]
+    if len(kakarot_folders) != 1:
+        fail(f"Expected exactly one Drive/kakarot workspace folder; found {len(kakarot_folders)}.")
+    drive_root_id = kakarot_folders[0]["id"]
+    root_items = list_children(api, drive_root_id)
+    keys_items = [x for x in root_items if x.get("name", "").lower() == "prod.keys" and x.get("mimeType") != FOLDER_MIME]
+    if len(keys_items) != 1:
+        fail(f"Expected exactly one prod.keys directly inside Drive/kakarot; found {len(keys_items)}.")
+    keys_item = keys_items[0]
 
     runtime_root.mkdir(parents=True, exist_ok=True)
     keys_path = runtime_root / "keys" / "prod.keys"
@@ -568,6 +559,7 @@ def prepare_source(api, drive_root_id: str, runtime_root: Path,
         "base_path": outputs["base"]["path"],
         "update_path": outputs["update"]["path"],
         "keys_drive_id": keys_item["id"],
+        "drive_kakarot_folder_id": drive_root_id,
         "input_nsp_count": int(outputs["base"]["type"] == "NSP") + int(outputs["update"]["type"] == "NSP"),
         "input_xci_count": int(outputs["base"]["type"] == "XCI") + int(outputs["update"]["type"] == "XCI"),
     }
