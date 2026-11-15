@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Backport NXNative's tested DMSH_PROCS shader workers without replacing NX2Apple's pinned engine."""
+"""Backport NXNative's GIL-free Metal shader finalizer to the pinned engine."""
 from __future__ import annotations
 
 import argparse
@@ -13,7 +13,10 @@ MARKER = "# Mugiwara4iOS DMSH_PROCS worker backport"
 def replace_once(text: str, old: str, new: str, label: str) -> str:
     count = text.count(old)
     if count != 1:
-        raise SystemExit(f"[Mugiwara4iOS] Refusing unsafe NXNative patch for {label}: expected one anchor, found {count}.")
+        raise SystemExit(
+            f"[Mugiwara4iOS] Refusing unsafe NXNative patch for {label}: "
+            f"expected one anchor, found {count}."
+        )
     return text.replace(old, new, 1)
 
 
@@ -23,7 +26,7 @@ LAST_RATE_LOG = 0.0
 
 
 def finished(*_):
-    """Count completed shaders, report the measured rate, and refresh build progress."""
+    """Count completed shaders, report measured throughput and refresh progress."""
     global LAST_RATE_LOG
     with _prog['lock']:
         DONE['n'] += 1
@@ -42,8 +45,9 @@ def finished(*_):
         )
 
 
-# The worker processes finish the MSL rewrite/reflection/Metal part without the GIL.
-# Fork only after all profile/cache state is loaded and before any thread is started.
+# Finalization (MSL rewriting, reflection, outputs and cache) is Python and was
+# serialized by the GIL in the old ThreadPoolExecutor. Fork after all tables,
+# fingerprints and cache state are loaded, but before any build thread starts.
 COUNTERS = (PRE_STATS, VIN_STATS, PULL_STATS, SIDE_STATS, BF_STATS, MTL.stats)
 
 
@@ -96,6 +100,13 @@ def results(futures):
     return output
 
 
+def _prime_worker():
+    # Keep each submitted task alive long enough for the pool manager to start
+    # the configured workers before the first real shader batch is dispatched.
+    time.sleep(0.75)
+    return os.getpid()
+
+
 px = (
     cf.ProcessPoolExecutor(
         PROCS,
@@ -106,25 +117,22 @@ px = (
     else None
 )
 if px:
-    # Metal's shared precompiled headers must exist before fork; workers must not each
-    # create their own header. Start/fork every child before ThreadPoolExecutor starts.
+    # Generate shared Metal PCH files in the parent before forking. Otherwise
+    # each child would redundantly compile its own copies.
     if "mac" in TARGETS:
         dmsh_pch.header(MAC_RUN + METAL_DEPTH)
     if IOSOUT:
         dmsh_pch.header(ios_metal.METAL + ios_metal.DEPTH)
-    px.submit(int).result()
-    active_workers = sorted(
-        process.pid for process in px._processes.values() if process.is_alive()
-    )
-    if len(active_workers) != PROCS:
+    prime = [px.submit(_prime_worker) for _ in range(PROCS)]
+    worker_pids = sorted({future.result() for future in prime})
+    if len(worker_pids) != PROCS:
         sys.exit(
-            f"[RED] expected {PROCS} live Metal finish workers, "
-            f"but only {len(active_workers)} started: {active_workers}"
+            f"[RED] Mugiwara4iOS requested {PROCS} Metal finish workers, "
+            f"but only {len(worker_pids)} distinct workers started: {worker_pids}."
         )
     print(
-        f"[Mugiwara4iOS] Metal process pool ACTIVE: {len(active_workers)} workers "
-        f"(PIDs {active_workers}); target={','.join(sorted(TARGETS))}, "
-        f"J={NJ}, batch={BATCH}.",
+        f"[Mugiwara4iOS] Metal process pool ACTIVE: {len(worker_pids)} workers "
+        f"(PIDs {worker_pids}); J={NJ}, batch={BATCH}, target={','.join(sorted(TARGETS))}.",
         flush=True,
     )
 
@@ -132,7 +140,7 @@ if px:
 '''
 
 ORCHESTRATION = r'''# Two phases: paired vertex shaders read their pixel shaders' MSL (vs_pad), so they go last.
-# Translate the next batch while the current batch is being finished by the worker pool.
+# Translate the next batch while the current batch is being finalized by the worker pool.
 batches = [
     batch[i:i + BATCH]
     for batch in (
@@ -142,7 +150,6 @@ batches = [
     for i in range(0, len(batch), BATCH)
 ]
 res, busy = [], []
-
 
 RATE_GUARD_SECONDS = float(os.environ.get("DMSH_RATE_GUARD_SECONDS", "300"))
 MIN_SHADERS_PER_SEC = float(os.environ.get("DMSH_MIN_SHADERS_PER_SEC", "1.6"))
@@ -178,11 +185,11 @@ try:
             busy.append((wb, submit(batch, wb)))
             collect(1)
         collect(0)
-except cf.process.BrokenProcessPool:
+except BrokenProcessPool as exc:
     sys.exit(
-        f"[RED] a shader build worker process stopped (killed or out of memory) "
-        f"with {len(keys) - len(res)} of {len(keys)} shaders unfinished; "
-        "retry with fewer DMSH_PROCS workers. Completed work remains in cas.db."
+        f"[RED] a Metal shader finish worker process stopped (killed or out of memory): "
+        f"{exc}; {len(keys) - len(res)} shaders remain unfinished. "
+        "Retry with fewer DMSH_PROCS workers; completed cache entries remain reusable."
     )
 if px:
     px.shutdown()
@@ -197,8 +204,6 @@ def main() -> None:
     args = parser.parse_args()
 
     engine = args.engine_root.resolve()
-    # NX2Apple's engine.py stores the upstream stamp at the NX2Apple repo root,
-    # one directory above engine/ (the workflow validates the same location).
     pin_file = engine.parent / ".upstream-ref"
     pin = pin_file.read_text(encoding="utf-8").strip() if pin_file.is_file() else ""
     if pin != ENGINE_PIN:
@@ -216,24 +221,42 @@ def main() -> None:
     cache_source = cache_file.read_text(encoding="utf-8")
     wrapper_source = wrapper_file.read_text(encoding="utf-8")
 
-    # The process-worker implementation is based on the exact HookLink2iOS worker
-    # algorithm. It runs as a sidecar, so dmsh_chain.py still hashes the untouched,
-    # pinned dmsh_build.py and the 70 NX2Apple patches remain intact.
-    build_source = replace_once(
-        build_source,
-        "import atexit, bisect, inspect, os, re, sys, json, mmap, struct, hashlib, shutil, subprocess, tempfile, time, collections, threading, concurrent.futures as cf\n",
-        "import atexit, bisect, inspect, multiprocessing, os, re, sys, json, mmap, struct, hashlib, shutil, subprocess, tempfile, time, collections, threading, concurrent.futures as cf\n",
-        "multiprocessing import",
+    if MARKER in build_source:
+        raise SystemExit("[Mugiwara4iOS] Refusing to patch the upstream dmsh_build.py in place.")
+    if worker_file.is_file() and "dmsh_build_workers.py" in wrapper_source:
+        required = (
+            "ProcessPoolExecutor", "STORE.forked()", "BrokenProcessPool",
+            "DMSH_RATE_GUARD_SECONDS", "Metal process pool ACTIVE",
+        )
+        saved = worker_file.read_text(encoding="utf-8")
+        missing = [token for token in required if token not in saved]
+        if missing:
+            raise SystemExit(f"[Mugiwara4iOS] Existing worker sidecar is incomplete: {missing}")
+        print("[Mugiwara4iOS] Verified existing process-worker backport.", flush=True)
+        return
+
+    old_import = (
+        "import atexit, bisect, inspect, os, re, sys, json, mmap, struct, hashlib, "
+        "shutil, subprocess, tempfile, time, collections, threading, concurrent.futures as cf\n"
     )
+    new_import = (
+        "import atexit, bisect, inspect, multiprocessing, os, re, sys, json, mmap, struct, "
+        "hashlib, shutil, subprocess, tempfile, time, collections, threading, "
+        "concurrent.futures as cf\n"
+        "from concurrent.futures.process import BrokenProcessPool\n"
+    )
+    build_source = replace_once(build_source, old_import, new_import, "multiprocessing imports")
     build_source = replace_once(
         build_source,
         "NJ = int(os.environ.get('J', '8'))\nBATCH = 4 * NJ",
-        "NJ = int(os.environ.get('J', '8'))\nPROCS = int(os.environ.get('DMSH_PROCS', NJ))\nBATCH = 4 * NJ",
+        "NJ = int(os.environ.get('J', '8'))\n"
+        "PROCS = int(os.environ.get('DMSH_PROCS', NJ))\nBATCH = 4 * NJ",
         "DMSH_PROCS setting",
     )
     build_source = replace_once(
         build_source,
-        "        with _prog['lock']: DONE['n'] += 1; n = DONE['n']\n        progress('compiling', n, len(keys), cached=len(cache_hits), misses=NMISS)\n",
+        "        with _prog['lock']: DONE['n'] += 1; n = DONE['n']\n"
+        "        progress('compiling', n, len(keys), cached=len(cache_hits), misses=NMISS)\n",
         "        finished()\n",
         "worker progress callback",
     )
@@ -245,8 +268,7 @@ def main() -> None:
     pass_at = build_source.index(pass_marker, phase_at)
     if pass_at <= phase_at:
         raise SystemExit("[Mugiwara4iOS] Refusing worker patch: invalid shader orchestration range.")
-    build_source = build_source[:phase_at] + PROCESS_WORKERS + ORCHESTRATION + build_source[pass_at:]
-    build_source = MARKER + "\n" + build_source
+    build_source = build_source[:phase_at] + MARKER + "\n" + PROCESS_WORKERS + ORCHESTRATION + build_source[pass_at:]
 
     if "    def forked(self):" not in cache_source:
         cache_source = replace_once(
@@ -263,7 +285,7 @@ def main() -> None:
 
     old_wrapper_line = "    sys.argv = [os.path.join(HERE, 'dmsh_build.py'), *sys.argv[1:]]\n"
     new_wrapper_line = (
-        "    # Mugiwara4iOS: use the tested process-worker sidecar while keeping the pinned chain source unchanged.\n"
+        "    # Mugiwara4iOS: run the GIL-free process-worker finalizer; dmsh_build.py stays pinned.\n"
         "    sys.argv = [os.path.join(HERE, 'dmsh_build_workers.py'), *sys.argv[1:]]\n"
     )
     if "dmsh_build_workers.py" not in wrapper_source:
@@ -271,7 +293,6 @@ def main() -> None:
     if "dmsh_build_workers.py" not in wrapper_source:
         raise SystemExit("[Mugiwara4iOS] own_compilers.py did not select the worker sidecar.")
 
-    # Compile every generated/modified entry point before writing any of them.
     compile(build_source, str(worker_file), "exec")
     compile(cache_source, str(cache_file), "exec")
     compile(wrapper_source, str(wrapper_file), "exec")
@@ -280,20 +301,26 @@ def main() -> None:
     cache_file.write_text(cache_source, encoding="utf-8")
     wrapper_file.write_text(wrapper_source, encoding="utf-8")
 
-    # Re-read the files and verify the runner will actually invoke two worker processes.
     saved_worker = worker_file.read_text(encoding="utf-8")
     saved_cache = cache_file.read_text(encoding="utf-8")
     saved_wrapper = wrapper_file.read_text(encoding="utf-8")
-    for token in ("PROCS = int(os.environ.get('DMSH_PROCS', NJ))", "ProcessPoolExecutor", "STORE.forked()"):
+    for token in (
+        "PROCS = int(os.environ.get('DMSH_PROCS', NJ))",
+        "ProcessPoolExecutor",
+        "STORE.forked()",
+        "BrokenProcessPool",
+        "DMSH_RATE_GUARD_SECONDS",
+        "Metal process pool ACTIVE",
+    ):
         if token not in saved_worker:
             raise SystemExit(f"[Mugiwara4iOS] Worker backport verification failed: {token}")
     if "def forked(self):" not in saved_cache or "dmsh_build_workers.py" not in saved_wrapper:
         raise SystemExit("[Mugiwara4iOS] Worker backport verification failed after writing files.")
 
     print(
-        "[Mugiwara4iOS] HookLink2iOS process-worker backport applied; "
-        "runtime J/DMSH_PROCS are selected and capacity-checked by build_mugiwara_shared.py; "
-        "pinned dmsh_build.py/chain hash preserved; NX2Apple engine patches retained.",
+        "[Mugiwara4iOS] GIL-free Metal finish workers applied; "
+        "pinned dmsh_build.py/own_compilers.py chain source preserved; "
+        "DMSH_PROCS is bounded by the selected Apple Silicon runner.",
         flush=True,
     )
 
