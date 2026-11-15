@@ -195,15 +195,16 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
     if not prep_path.is_file():
         fail("Colab Linux preparation manifest is missing.")
     prep = json.loads(prep_path.read_text(encoding="utf-8"))
-    if prep.get("format") != 3 or not isinstance(prep.get("jit_required"), bool):
-        fail("Colab prep manifest is outdated or missing the 44-DLC/AOC and NXNative nn::jit/AOT contract; rerun Colab preparation.")
+    if prep.get("format") != 4 or not isinstance(prep.get("jit_required"), bool):
+        fail("Colab prep manifest is outdated or missing the unique-title-ID AOC and NXNative nn::jit/AOT contract; rerun Colab preparation.")
     for key in ("format", "project", "title_id", "package_version", "display_version",
                 "base_content_version", "update_content_version", "nx2apple_tag", "engine_pin",
                 "profile_type", "profile_source", "profile_relative_dir",
                 "modules", "main_build_id", "main_sha256", "rewrite_audit",
                 "graphics_api", "jit_required", "shader_source_flags", "shader_source_reasons", "shader_source_audit", "shader_chain",
                 "romfs_relative_path", "romfs_id_relative_path", "romfs_size", "romfs_sha256",
-                "aoc_relative_dir", "aoc_count", "aoc_images", "survey_relative_path", "survey_size",
+                "aoc_relative_dir", "aoc_count", "aoc_title_ids", "aoc_contents", "aoc_images",
+                "dlc_content_meta_count", "dlc_content_meta", "survey_relative_path", "survey_size",
                 "survey_sha256", "input_package_count", "input_nsp_count", "input_xci_count",
                 "input_update_nsp_count", "input_dlc_nsp_count", "input_packages"):
         if prepared.get(key) != prep.get(key):
@@ -217,8 +218,8 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
             or prep.get("input_xci_count") != 0 or prep.get("input_update_nsp_count") != 1
             or prep.get("input_dlc_nsp_count") != 44 or len(prep.get("input_packages", [])) != 46):
         fail("Route C expects exactly 1 base NSP + 1 update NSP + 44 DLC NSPs.")
-    if prep.get("aoc_count") != 44 or len(prep.get("aoc_images", [])) != 44:
-        fail("Route C expects all 44 DLCs to have been extracted into separate AOC images.")
+    if not valid_aoc_manifest(prep):
+        fail("Route C AOC manifest does not match the 44 source DLC NSPs and NXNative's unique-title-ID/highest-version selection.")
     if prep.get("graphics_api") != "nvn":
         fail(f"One Piece: Pirate Warriors 4 graphics API is not NVN: {prep.get('graphics_api')}.")
     if builder.chain_of(nx / "engine") != prepared.get("shader_chain"):
@@ -293,21 +294,23 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
 
     aoc_images = sorted(path for path in aoc_dir.glob("*.img") if path.is_file())
     prepared_aoc = {item["name"]: item for item in prep["aoc_images"]}
-    if len(aoc_images) != 44 or {path.name for path in aoc_images} != set(prepared_aoc):
-        fail("Restored AOC directory does not contain the same 44 DLC images as the Colab manifest.")
+    if len(aoc_images) != prep["aoc_count"] or {path.name for path in aoc_images} != set(prepared_aoc):
+        fail("Restored AOC directory does not contain the same unique-title-ID images as the Colab manifest.")
     handoff_aoc = ((prepared.get("game_data") or {}).get("aoc") or [])
-    if len(handoff_aoc) != 44 or {item.get("name") for item in handoff_aoc} != set(prepared_aoc):
-        fail("Drive handoff AOC records do not match the 44 Colab AOC images.")
+    if len(handoff_aoc) != prep["aoc_count"] or {item.get("name") for item in handoff_aoc} != set(prepared_aoc):
+        fail("Drive handoff AOC records do not match the unique-title-ID Colab AOC images.")
     for image in aoc_images:
         meta = prepared_aoc[image.name]
         drive_meta = next((item for item in handoff_aoc if item.get("name") == image.name), None)
         if (not drive_meta or image.stat().st_size != int(meta["size"])
                 or image.stat().st_size != int(drive_meta.get("size", -1))
                 or sha256_file(image) != meta["sha256"]
-                or meta["sha256"] != drive_meta.get("sha256")):
-            fail(f"DLC AOC SHA-256/size mismatch: {image.name}.")
-    if prepared.get("aoc_dir") != str(aoc_dir) or prepared.get("aoc_count") != 44:
-        fail("Actions input does not point to the restored Drive AOC directory with 44 images.")
+                or meta["sha256"] != drive_meta.get("sha256")
+                or drive_meta.get("title_id") != meta.get("title_id")
+                or drive_meta.get("aoc_index") != meta.get("aoc_index")):
+            fail(f"DLC AOC SHA-256/size/Title-ID mismatch: {image.name}.")
+    if prepared.get("aoc_dir") != str(aoc_dir) or prepared.get("aoc_count") != prep["aoc_count"]:
+        fail("Actions input does not point to the restored Drive AOC directory with the derived image count.")
 
     modules = profile.modules_in(exefs)
     if sorted(modules) != sorted(prep["modules"]):
