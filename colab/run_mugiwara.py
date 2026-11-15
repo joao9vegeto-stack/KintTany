@@ -281,12 +281,12 @@ def prepare(args, api=None) -> dict:
         fail("NXNative preparation manifest does not belong to Mugiwara4iOS/One Piece: Pirate Warriors 4.")
     if prep.get("nx2apple_tag") != NX2APPLE_TAG or prep.get("engine_pin") != ENGINE_PIN:
         fail("Preparation manifest uses another NX2Apple/NXNative pin.")
-    if (prep.get("format") != 3 or prep.get("display_version") != "1.8.7"
+    if (prep.get("format") != 4 or prep.get("display_version") != "1.8.7"
             or prep.get("base_content_version") != 0 or int(prep.get("update_content_version", 0)) <= 0
             or prep.get("input_package_count") != 46
             or prep.get("input_dlc_nsp_count") != 44 or prep.get("input_update_nsp_count") != 1
-            or prep.get("aoc_count") != 44 or len(prep.get("aoc_images", [])) != 44):
-        fail("NXNative did not complete the required 46-NSP / 44-DLC / 44-AOC preparation contract.")
+            or not valid_aoc_manifest(prep)):
+        fail("NXNative preparation contract failed: expected 46 source NSPs (1 base + 1 update + 44 DLCs) and one AOC per unique DLC Title ID.")
     if prep.get("package_version") == "v0":
         fail("The update NSP was not selected; refusing a base-only build.")
 
@@ -313,8 +313,8 @@ def prepare(args, api=None) -> dict:
             or identity.get("bytes") != prep["romfs_size"]
             or identity.get("sha256") != prep["romfs_sha256"]):
         fail("RomFS identity sidecar does not match the game/version/size/SHA-256.")
-    if len(aoc_files) != 44 or {p.name for p in aoc_files} != expected_aoc:
-        fail(f"Prepared AOC files differ from the NXNative manifest: {len(aoc_files)} files, expected {len(expected_aoc)} names.")
+    if len(aoc_files) != prep["aoc_count"] or {p.name for p in aoc_files} != expected_aoc:
+        fail(f"Prepared AOC files differ from the NXNative manifest: {len(aoc_files)} files, expected {prep['aoc_count']} unique-title-ID images.")
 
     request_id = str(uuid.uuid4())
     # Every persistent build output/checkpoint is inside the user's existing Drive/mugi folder.
@@ -323,14 +323,21 @@ def prepare(args, api=None) -> dict:
     games_id = create_folder(api, "games", output_id)
     game_id = create_folder(api, TITLE_ID.lower(), games_id)
     aoc_id = create_folder(api, "aoc", game_id)
-    print("[Mugiwara4iOS] Uploading external RomFS and all 44 DLC AOC images under Drive/mugi/Mugiwara4iOS_*/games/...", flush=True)
+    print(f"[Mugiwara4iOS] Uploading external RomFS and {len(aoc_files)} unique-title-ID AOC images "
+          "under Drive/mugi/Mugiwara4iOS_*/games/...", flush=True)
     romfs_record = upload_drive_file(api, romfs, game_id, "romfs.img")
-    aoc_records = [upload_drive_file(api, image, aoc_id, image.name) for image in aoc_files]
-    for record in aoc_records:
+    aoc_by_name = {item["name"]: item for item in prep["aoc_images"]}
+    aoc_records = []
+    for image in aoc_files:
+        record = upload_drive_file(api, image, aoc_id, image.name)
+        meta = aoc_by_name[image.name]
         record["role"] = "aoc"
+        record["title_id"] = meta["title_id"]
+        record["aoc_index"] = meta["aoc_index"]
+        aoc_records.append(record)
 
     archive = ROOT / "mugiwara4ios-work.tar.zst"
-    print("[Mugiwara4iOS] Archiving the build workspace only; excluding all 46 source NSPs, prod.keys, RomFS.img and 44 AOC images.", flush=True)
+    print(f"[Mugiwara4iOS] Archiving workspace only; excluding 46 source NSPs, prod.keys, RomFS.img and {len(aoc_files)} AOC images.", flush=True)
     build_work_archive(work, archive)
     archive_record = upload_drive_file(api, archive, pipeline_id, "mugiwara4ios-work.tar.zst")
 
@@ -361,6 +368,7 @@ def prepare(args, api=None) -> dict:
             "romfs_relative_path": prep["romfs_relative_path"],
             "romfs_id_relative_path": prep["romfs_id_relative_path"],
             "aoc_relative_dir": prep["aoc_relative_dir"],
+            "aoc_count": prep["aoc_count"], "aoc_title_ids": prep["aoc_title_ids"],
         },
         "prepared": prep,
         "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -414,17 +422,15 @@ def recover(args, api=None) -> dict | None:
                 and handoff.get("drive_source_folder_id") == mugi_folder["id"]
                 and handoff.get("work_archive", {}).get("id")
                 and (handoff.get("game_data") or {}).get("romfs", {}).get("id")
-                and prepared.get("format") == 3 and isinstance(prepared.get("jit_required"), bool)
+                and prepared.get("format") == 4 and isinstance(prepared.get("jit_required"), bool)
                 and prepared.get("profile_type") == "provisional" and prepared.get("graphics_api") == "nvn"
                 and source.get("package_count") == 46 and source.get("base_type") == "NSP"
                 and source.get("update_nsp_count") == 1 and source.get("dlc_nsp_count") == 44
                 and prepared.get("input_package_count") == 46 and prepared.get("input_nsp_count") == 46
                 and prepared.get("input_xci_count") == 0 and prepared.get("input_update_nsp_count") == 1
                 and prepared.get("input_dlc_nsp_count") == 44
-                and prepared.get("aoc_count") == 44 and len(prepared.get("aoc_images", [])) == 44
-                and len(aoc) == 44
-                and {x.get("name") for x in aoc} == {x.get("name") for x in prepared.get("aoc_images", [])}):
-            print("[Mugiwara4iOS] Valid 46-package/44-DLC handoff recovered from Drive/mugi; no NSP download, extraction or rewrite repeated.")
+                and valid_aoc_manifest(prepared, aoc)):
+            print("[Mugiwara4iOS] Valid 46-package/44-DLC-NSP handoff with unique-title-ID AOC set recovered from Drive/mugi; no NSP download, extraction or rewrite repeated.")
             print("Request:", handoff["request_id"])
             print("Drive:", handoff.get("drive_output_folder_url"))
             print("Package:", handoff["package_version"])
@@ -450,7 +456,7 @@ def dispatch(args) -> None:
     prepared = handoff.get("prepared") or {}
     source = handoff.get("source") or {}
     aoc = (handoff.get("game_data") or {}).get("aoc") or []
-    if (handoff.get("format") != 2 or prepared.get("format") != 3
+    if (handoff.get("format") != 2 or prepared.get("format") != 4
             or not isinstance(prepared.get("jit_required"), bool)
             or prepared.get("profile_type") != "provisional" or prepared.get("graphics_api") != "nvn"
             or prepared.get("display_version") != "1.8.7" or prepared.get("base_content_version") != 0
@@ -460,9 +466,8 @@ def dispatch(args) -> None:
             or prepared.get("input_package_count") != 46 or prepared.get("input_nsp_count") != 46
             or prepared.get("input_xci_count") != 0 or prepared.get("input_update_nsp_count") != 1
             or prepared.get("input_dlc_nsp_count") != 44
-            or prepared.get("aoc_count") != 44 or len(aoc) != 44
-            or {x.get("name") for x in aoc} != {x.get("name") for x in prepared.get("aoc_images", [])}):
-        fail("Refusing dispatch: expected 1 base + 1 update + 44 DLCs, 44 AOC images and the generated provisional NVN profile.")
+            or not valid_aoc_manifest(prepared, aoc)):
+        fail("Refusing dispatch: expected 1 base + 1 update + 44 DLC NSPs, one AOC image per unique DLC Title ID and the generated provisional NVN profile.")
     token = getpass.getpass("Fine-grained GitHub token (KintTany repository, Contents: Read and write): ").strip()
     if not token:
         fail("GitHub token is empty.")
