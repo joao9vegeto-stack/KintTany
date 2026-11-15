@@ -9,8 +9,9 @@ import shutil
 import subprocess
 import time
 from email.message import Message
+from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urlparse, urljoin
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
 PACKAGE_SUFFIXES = {".nsp", ".xci"}
@@ -143,11 +144,158 @@ def install_unrar() -> str:
     print("[KaKaRoTiOS] RAR extractor ready: " + (version[0] if version else executable), flush=True)
     return executable
 
+class AkiraBoxDownloadPageParser(HTMLParser):
+    """Read the normal download anchor; never solve CAPTCHAs or anti-bot checks."""
+    def __init__(self) -> None:
+        super().__init__()
+        self.download_href: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() != "a":
+            return
+        values = {key.lower(): value or "" for key, value in attrs}
+        if values.get("id") == "download-button" and values.get("href"):
+            self.download_href = values["href"]
+
+
+_AKIRABOX_METADATA_CACHE: dict[str, dict] = {}
+
+
+def _akirabox_file_code(url: str) -> str | None:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if host not in {"akirabox.to", "www.akirabox.to", "akirabox.com", "www.akirabox.com"}:
+        return None
+    match = re.fullmatch(r"/([A-Za-z0-9_-]+)/file/?", parsed.path or "")
+    return match.group(1) if match else None
+
+
+def _akirabox_metadata(url: str) -> dict:
+    """Call AkiraBox's documented public file-status endpoint."""
+    import requests
+    code = _akirabox_file_code(url)
+    if not code:
+        raise RuntimeError(f"Not a supported AkiraBox share URL: {url}")
+    if url in _AKIRABOX_METADATA_CACHE:
+        return _AKIRABOX_METADATA_CACHE[url]
+
+    canonical_share_url = f"https://akirabox.com/{code}/file"
+    try:
+        response = requests.get(
+            "https://akirabox.com/api/files",
+            params={"url": canonical_share_url},
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+            timeout=(20, 45),
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        raise RuntimeError(
+            f"AkiraBox status API could not validate {url}: {type(exc).__name__}: {exc}"
+        ) from exc
+
+    api_status = payload.get("status", response.status_code) if isinstance(payload, dict) else response.status_code
+    if response.status_code != 200 or api_status != 200:
+        message = payload.get("message", "file unavailable") if isinstance(payload, dict) else "invalid API response"
+        raise RuntimeError(
+            f"AkiraBox reports {url} unavailable (HTTP {response.status_code}, status {api_status}): {message}"
+        )
+    name = str(payload.get("name") or "").strip()
+    if not name or payload.get("type", "file") != "file":
+        raise RuntimeError(f"AkiraBox status API did not identify {url} as a file: {payload}")
+    metadata = {
+        "file_code": code, "name": name, "size": payload.get("size"),
+        "mime": payload.get("mime"), "url": payload.get("url") or canonical_share_url,
+    }
+    _AKIRABOX_METADATA_CACHE[url] = metadata
+    return metadata
+
+
+def preflight_akirabox_links(groups: list[dict]) -> list[dict]:
+    """Validate six share URLs and each returned filename before any RAR transfer."""
+    seen_codes: set[str] = set()
+    checked: list[dict] = []
+    for group in groups:
+        label, urls, names = str(group["label"]), list(group["urls"]), list(group["names"])
+        if len(urls) != VOLUME_COUNT or len(names) != VOLUME_COUNT:
+            raise RuntimeError(f"{label}: expected exactly three AkiraBox URLs and three expected filenames.")
+        for index, (url, expected_name) in enumerate(zip(urls, names), 1):
+            metadata = _akirabox_metadata(str(url).strip())
+            if metadata["file_code"] in seen_codes:
+                raise RuntimeError(f"{label} part{index}: duplicate AkiraBox file ID {metadata['file_code']}.")
+            seen_codes.add(metadata["file_code"])
+            actual_name = PurePosixPath(metadata["name"].replace("\\", "/")).name
+            if actual_name.casefold() != str(expected_name).casefold():
+                raise RuntimeError(
+                    f"{label} part{index}: AkiraBox identifies this file as {actual_name!r}, "
+                    f"not the expected {expected_name!r}. No download was started."
+                )
+            lower_name = actual_name.lower()
+            if (str(group["title_id"]).lower() not in lower_name
+                    or str(group["version"]).lower() not in lower_name
+                    or not lower_name.endswith(f".part{index}.rar")):
+                raise RuntimeError(
+                    f"{label} part{index}: AkiraBox filename does not match Title ID, version and order: {actual_name!r}."
+                )
+            checked.append({"group": label, "part": index, **metadata})
+            print(
+                f"[KaKaRoTiOS] AkiraBox link verified: {label} part{index}/3 — "
+                f"{actual_name}; size={metadata['size']}; ID={metadata['file_code']}.",
+                flush=True,
+            )
+    if len(checked) != 6:
+        raise RuntimeError(f"AkiraBox preflight expected six files, validated {len(checked)}.")
+    print("[KaKaRoTiOS] All six AkiraBox share links passed metadata/name/order preflight.", flush=True)
+    return checked
+
+
+def _resolve_akirabox_download(url: str):
+    """Open the share page normally and read its download button without evading human checks."""
+    import requests
+    metadata = _akirabox_metadata(url)
+    session = requests.Session()
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    try:
+        page = session.get(url, headers=headers, allow_redirects=True, timeout=(25, 60))
+        page.raise_for_status()
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "unknown"
+        if status in (401, 403, 429):
+            raise RuntimeError(
+                f"AkiraBox share page returned HTTP {status} for {url}. "
+                "It requires a browser session or human verification; no CAPTCHA/anti-bot bypass was attempted."
+            ) from exc
+        raise RuntimeError(f"AkiraBox share page could not be opened ({status}): {url}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"Could not open AkiraBox share page {url}: {type(exc).__name__}: {exc}") from exc
+
+    parser = AkiraBoxDownloadPageParser()
+    parser.feed(page.text or "")
+    if not parser.download_href:
+        lowered = (page.text or "").lower()
+        if any(token in lowered for token in (
+            "captcha", "verify you are human", "cf-chl-", "challenge-platform",
+            "cloudflare", "human verification",
+        )):
+            reason = "the page requires human/Cloudflare verification"
+        else:
+            reason = "the normal download button was not present in the returned page"
+        raise RuntimeError(
+            f"AkiraBox confirmed the file metadata ({metadata['name']}) but {reason}. "
+            "Open the share link in Safari and complete the provider's own verification; "
+            "this downloader will not attempt to bypass it."
+        )
+    return session, urljoin(page.url, parser.download_href), page.url, metadata
+
+
 def download_blob(url: str, destination: Path, retries: int = 10) -> dict:
-    """Download one RAR volume with HTTP Range resume; keep source filename metadata."""
+    """Download one RAR volume from a direct URL or an AkiraBox share page."""
     import requests
     if not url or not url.startswith(("https://", "http://")):
-        fail(f"No valid direct URL supplied for {destination.name}.")
+        fail(f"No valid source URL supplied for {destination.name}.")
     fingerprint = hashlib.sha256(url.encode("utf-8")).hexdigest()
     part = destination.with_suffix(destination.suffix + ".part")
     source_path = destination.with_suffix(destination.suffix + ".source.json")
@@ -171,17 +319,39 @@ def download_blob(url: str, destination: Path, retries: int = 10) -> dict:
     marker = part.with_suffix(part.suffix + ".urlsha256")
     marker.write_text(fingerprint + "\n", encoding="utf-8")
     destination.parent.mkdir(parents=True, exist_ok=True)
+
+    is_akira = _akirabox_file_code(url) is not None
+    if is_akira:
+        session, request_url, page_url, metadata = _resolve_akirabox_download(url)
+        metadata_name = metadata["name"]
+        request_headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Accept-Encoding": "identity",
+            "Referer": page_url,
+        }
+        print(
+            f"[KaKaRoTiOS] AkiraBox download button resolved for {metadata_name}; "
+            f"provider size={metadata['size']}.", flush=True
+        )
+    else:
+        session = requests.Session()
+        request_url, metadata_name = url, None
+        request_headers = {"User-Agent": "Mozilla/5.0", "Accept-Encoding": "identity"}
+
     last_error = None
-    remote_name = None
     for attempt in range(1, retries + 1):
         offset = part.stat().st_size if part.exists() else 0
-        headers = {"User-Agent": "Mozilla/5.0"}
+        headers = dict(request_headers)
         if offset:
             headers["Range"] = f"bytes={offset}-"
+        response = None
         try:
-            print(f"[KaKaRoTiOS] Downloading RAR volume {destination.name}; attempt {attempt}/{retries}; resume={offset:,} bytes.", flush=True)
-            with requests.get(url, headers=headers, stream=True, allow_redirects=True,
-                              timeout=(30, 240)) as response:
+            print(
+                f"[KaKaRoTiOS] Downloading RAR volume {destination.name}; "
+                f"attempt {attempt}/{retries}; resume={offset:,} bytes.", flush=True
+            )
+            with session.get(request_url, headers=headers, stream=True,
+                             allow_redirects=True, timeout=(30, 240)) as response:
                 if response.status_code == 206:
                     content_range = response.headers.get("Content-Range", "")
                     if not content_range.startswith(f"bytes {offset}-"):
@@ -194,10 +364,14 @@ def download_blob(url: str, destination: Path, retries: int = 10) -> dict:
                     raise RuntimeError(f"unexpected HTTP status {response.status_code}")
                 content_type = response.headers.get("Content-Type", "").lower()
                 if "text/html" in content_type:
-                    raise RuntimeError("server returned an HTML page, not a RAR volume; use the direct download URL")
-                response.raise_for_status()
-                remote_name = (parse_disposition_name(response.headers.get("Content-Disposition"))
-                               or url_name(response.url) or url_name(url))
+                    raise RuntimeError(
+                        "AkiraBox returned an HTML verification page instead of RAR bytes; "
+                        "human verification is required and will not be bypassed."
+                    )
+                remote_name = (
+                    parse_disposition_name(response.headers.get("Content-Disposition"))
+                    or url_name(response.url) or metadata_name or url_name(url)
+                )
                 length = response.headers.get("Content-Length")
                 total = offset + int(length) if length is not None else 0
                 if not total:
@@ -233,18 +407,35 @@ def download_blob(url: str, destination: Path, retries: int = 10) -> dict:
         except Exception as exc:
             last_error = exc
             current = part.stat().st_size if part.exists() else 0
-            print(f"[KaKaRoTiOS] RAR download interrupted at {current:,} bytes: {type(exc).__name__}: {exc}", flush=True)
+            print(
+                f"[KaKaRoTiOS] RAR download interrupted at {current:,} bytes: "
+                f"{type(exc).__name__}: {exc}", flush=True
+            )
+            status = response.status_code if response is not None else None
+            if status in (400, 401, 403, 404, 410, 429):
+                break
+            if isinstance(exc, RuntimeError) and any(
+                token in str(exc).lower() for token in ("verification", "human", "captcha")
+            ):
+                break
             if attempt < retries:
                 delay = min(2 ** min(attempt, 5), 30)
                 print(f"[KaKaRoTiOS] Retrying after {delay}s.", flush=True)
                 time.sleep(delay)
-    raise RuntimeError(f"Could not download {destination.name} after {retries} attempts: {last_error}") from last_error
+    raise RuntimeError(f"Could not download {destination.name}; last result: {last_error}") from last_error
 
 def resolve_volume_names(records: list[dict], overrides: list[str] | None, label: str) -> list[str]:
     if overrides:
         if len(overrides) != VOLUME_COUNT or any(not str(x).strip() for x in overrides):
             fail(f"{label}_PART_NAMES must contain three complete original filenames or be left entirely blank.")
         names = [safe_volume_name(x, label) for x in overrides]
+        for record, expected in zip(records, names):
+            actual = str(record.get("remote_name") or "").strip()
+            if actual and PurePosixPath(actual.replace("\\", "/")).name.casefold() != expected.casefold():
+                fail(
+                    f"{label}: AkiraBox returned filename {actual!r}, but notebook expects {expected!r}; "
+                    "refusing to combine volumes from different archives."
+                )
     else:
         names = [safe_volume_name(x["remote_name"], label) if x.get("remote_name") else ""
                  for x in records]
