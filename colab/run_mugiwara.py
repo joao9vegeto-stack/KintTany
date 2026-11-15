@@ -264,7 +264,7 @@ def prepare(args, api=None) -> dict:
         "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
     handoff_path = ROOT / "handoff.json"
-    handoff_path.write_text(json.dumps(handoff, indent=2) + "\\n", encoding="utf-8")
+    handoff_path.write_text(json.dumps(handoff, indent=2) + "\n", encoding="utf-8")
     handoff_record = upload_drive_file(api, handoff_path, output_id, "handoff.json")
     print("\\n[Mugiwara4iOS] Colab/Linux preparation and Drive checkpoints completed.", flush=True)
     print("Request:", request_id)
