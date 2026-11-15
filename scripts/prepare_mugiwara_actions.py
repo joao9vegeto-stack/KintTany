@@ -112,6 +112,8 @@ def main() -> None:
         fail("Handoff is not for Mugiwara4iOS/One Piece: Pirate Warriors 4 or uses a different pinned engine.")
     if handoff.get("package_version") != prep_handoff.get("package_version"):
         fail("Handoff and preparation package versions disagree.")
+    if prep_handoff.get("format") != 2 or not isinstance(prep_handoff.get("jit_required"), bool):
+        fail("Preparation manifest is outdated or missing the NXNative nn::jit/AOT decision; rerun the Colab preparation.")
     if prep_handoff.get("profile_type") != "provisional" or prep_handoff.get("graphics_api") != "nvn":
         fail("Expected the generated One Piece: Pirate Warriors 4 provisional NVN profile.")
     if (prep_handoff.get("input_package_count") != 2
@@ -158,7 +160,7 @@ def main() -> None:
         "project", "title_id", "package_version", "nx2apple_tag", "engine_pin",
         "profile_type", "profile_source", "profile_relative_dir",
         "modules", "main_build_id", "main_sha256", "rewrite_audit",
-        "graphics_api", "shader_source_flags", "shader_source_reasons", "shader_source_audit", "shader_chain",
+        "graphics_api", "jit_required", "shader_source_flags", "shader_source_reasons", "shader_source_audit", "shader_chain",
         "romfs_relative_path", "romfs_id_relative_path",
         "romfs_size", "romfs_sha256", "survey_relative_path", "survey_size",
         "survey_sha256", "input_package_count", "input_packages",
@@ -251,6 +253,7 @@ def main() -> None:
         "main_sha256": prep["main_sha256"],
         "rewrite_audit": prep["rewrite_audit"],
         "graphics_api": prep["graphics_api"],
+        "jit_required": prep["jit_required"],
         "shader_source_flags": prep["shader_source_flags"],
         "shader_source_reasons": prep["shader_source_reasons"],
         "shader_source_audit": prep["shader_source_audit"],
