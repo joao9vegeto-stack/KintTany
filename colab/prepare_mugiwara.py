@@ -163,24 +163,71 @@ def run_preparation(args) -> dict:
     require(pin_file.is_file(), "NX2Apple .upstream-ref is missing.")
     pin = pin_file.read_text(encoding="utf-8").strip()
     require(pin == ENGINE_PIN, f"Wrong NXNative pin {pin}; expected {ENGINE_PIN}.")
+    source_manifest_path = Path(getattr(args, "source_manifest", packages.parent / "source-manifest.json")).resolve()
+    require(source_manifest_path.is_file(), f"mugi source manifest is missing: {source_manifest_path}")
+    source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
+    require(source_manifest.get("package_count") == 46
+            and source_manifest.get("update_nsp_count") == 1
+            and source_manifest.get("dlc_nsp_count") == 44
+            and source_manifest.get("base_type") == "NSP",
+            "Drive/mugi must provide exactly 1 base NSP + 1 update NSP + 44 DLC NSPs.")
     package_files = sorted(p for p in packages.iterdir() if p.is_file()
                            and p.suffix.lower() in (".nsp", ".xci"))
-    require(len(package_files) == 2, f"Expected exactly base + update (.nsp/.xci); found {len(package_files)} package files.")
+    require(len(package_files) == 46, f"Expected 46 package files in mugi (1 base + 1 update + 44 DLC); found {len(package_files)}.")
+    require(all(path.suffix.lower() == ".nsp" for path in package_files),
+            "This Mugiwara4iOS source set must contain 46 NSPs; no XCI is expected for this title's supplied links/DLCs.")
+    source_packages = source_manifest.get("packages") or []
+    require(len(source_packages) == 46, "mugi source manifest does not enumerate all 46 package files.")
+    source_by_local = {item.get("local_name"): item for item in source_packages}
+    require(set(source_by_local) == {path.name for path in package_files},
+            "The local package directory differs from the 46-file source inventory recorded from Drive/mugi.")
     for path in package_files:
         with path.open("rb") as stream:
             header = stream.read(0x104)
-        detected = "NSP" if header[:4] == b"PFS0" else "XCI" if header[0x100:0x104] == b"HEAD" else None
-        expected = "XCI" if path.suffix.lower() == ".xci" else "NSP"
-        require(detected == expected, f"Invalid or mismatched package header in {path.name}: expected {expected}, detected {detected}.")
-    required_free = sum(path.stat().st_size for path in package_files) * 2 + 10 * 1024**3
+        require(header[:4] == b"PFS0",
+                f"{path.name}: every base/update/DLC input must be a valid NSP (PFS0 header).")
+        expected = source_by_local[path.name]
+        require(path.stat().st_size == int(expected.get("size", -1))
+                and sha256_file(path) == expected.get("sha256"),
+                f"{path.name}: local size/SHA-256 differs from the Drive/mugi source manifest.")
+    base_items = [item for item in source_packages if item.get("role") == "base"]
+    update_items = [item for item in source_packages if item.get("role") == "update"]
+    dlc_items = [item for item in source_packages if item.get("role") == "dlc"]
+    require(len(base_items) == 1 and len(update_items) == 1 and len(dlc_items) == 44,
+            "Source inventory roles must be exactly 1 base + 1 update + 44 DLCs.")
+    required_free = sum(path.stat().st_size for path in package_files) * 2 + 20 * 1024**3
     free_bytes = shutil.disk_usage(work.parent).free
     require(free_bytes >= required_free,
-            f"Insufficient Colab disk space before extraction: {free_bytes / 2**30:.1f} GiB free; estimated requirement is {required_free / 2**30:.1f} GiB (twice base+update bytes plus 10 GiB).")
-    print(f"[Mugiwara4iOS] Colab disk preflight: {free_bytes / 2**30:.1f} GiB free; {required_free / 2**30:.1f} GiB estimated requirement.", flush=True)
+            f"Insufficient Colab disk space for 46 NSPs, the merged RomFS and 44 extracted DLC AOC images: {free_bytes / 2**30:.1f} GiB free; estimate {required_free / 2**30:.1f} GiB (twice all source bytes plus 20 GiB headroom).")
+    print(f"[Mugiwara4iOS] Colab disk preflight for 46 NSPs + 44 AOC outputs: {free_bytes / 2**30:.1f} GiB free; estimate {required_free / 2**30:.1f} GiB.", flush=True)
     work.mkdir(parents=True, exist_ok=True)
     install_linux_dependencies(work.parent)
     module = load_builder(nx / "engine")
     install_linux_aes_compat()
+
+    # Verify the Nintendo content metadata before the expensive extraction/rewrite.
+    # File names do not classify DLC: NXNative uses each NSP's actual AddOnContent title ID.
+    probe_env = module.tool_env()
+    module.configure_dotnet(probe_env)
+    with module.package_reader(nx / "engine", keys, probe_env) as reader:
+        app, family = module.scan_nsps(packages, reader.contents, int(TITLE_ID, 16))
+        reader.check_keys(family)
+    require(app == int(TITLE_ID, 16), f"Content metadata belongs to {app:016X}, not {TITLE_ID}.")
+    require(family.get("base") is not None and family["base"].name == base_items[0]["local_name"],
+            "NXNative content metadata did not identify the supplied base NSP for the requested Title ID.")
+    updates = family.get("updates", [])
+    require(len(updates) == 1 and updates[0][1].name == update_items[0]["local_name"],
+            f"NXNative content metadata must identify exactly the supplied update NSP; found {[x[1].name for x in updates]}.")
+    dlc_family = family.get("dlc", [])
+    dlc_paths = {item[2].name for item in dlc_family}
+    expected_dlc_paths = {item["local_name"] for item in dlc_items}
+    dlc_title_ids = {int(item[0]) for item in dlc_family}
+    require(len(dlc_family) == 44 and len(dlc_title_ids) == 44
+            and dlc_paths == expected_dlc_paths,
+            "NXNative did not resolve the 44 source NSPs as 44 distinct AddOnContent entries for this title. "
+            f"Detected {len(dlc_family)} entries/{len(dlc_title_ids)} unique title IDs and {len(dlc_paths)} source files.")
+    print("[Mugiwara4iOS] Nintendo content-meta audit passed: 1 base + 1 update + 44 distinct DLC title IDs.", flush=True)
+    work.mkdir(parents=True, exist_ok=True)
     for key in ("DM_GAMES_DIR", "DM_GAMES_FIRST"):
         os.environ.pop(key, None)
     os.environ["DM_GAME"] = TITLE_ID
@@ -293,6 +340,17 @@ def run_preparation(args) -> dict:
         "module_artifacts": module_artifacts,
     }
     facts = module.pg.build_sources(exefs, module.rfs.source(version_dir), modules)
+    aoc_dir = work / "aoc"
+    aoc_images = sorted(path for path in aoc_dir.glob("*.img") if path.is_file()) if aoc_dir.is_dir() else []
+    expected_aoc_names = {f"{int(tid) - app - 0x1000}.img" for tid, _, _ in dlc_family}
+    require(len(aoc_images) == 44 and {path.name for path in aoc_images} == expected_aoc_names,
+            "NXNative did not extract all 44 DLCs into the expected AOC image set. "
+            f"Found {[path.name for path in aoc_images]}; expected {sorted(expected_aoc_names)}.")
+    require(all(path.stat().st_size > 0 for path in aoc_images), "At least one extracted DLC AOC image is empty.")
+    aoc_records = [{"name": path.name, "size": path.stat().st_size, "sha256": sha256_file(path)}
+                   for path in aoc_images]
+    print("[Mugiwara4iOS] NXNative extracted and verified 44 external DLC AOC images.", flush=True)
+
     graphics = facts["graphics"][0]
     require(graphics == "nvn",
             f"One Piece: Pirate Warriors 4 was expected to use NVN; NXNative detected {graphics}: {facts['graphics'][1]}")
@@ -321,12 +379,17 @@ def run_preparation(args) -> dict:
             "RomFS identity sidecar does not match the extracted RomFS bytes.")
 
     result = {
-        "format": 2, "project": PROJECT, "title_id": TITLE_ID,
+        "format": 3, "project": PROJECT, "title_id": TITLE_ID,
         "package_version": package_version, "nx2apple_tag": NX2APPLE_TAG,
         "engine_pin": pin, "profile_type": profile_type,
         "profile_source": "NXNative-generated provisional profile from One Piece: Pirate Warriors 4 base/update content metadata and ExeFS/RomFS survey",
         "profile_relative_dir": f"profile/{TITLE_ID}",
         "modules": modules, "main_build_id": build_id, "main_sha256": main_sha,
+        "input_package_count": 46, "input_nsp_count": 46, "input_xci_count": 0,
+        "input_base_package_type": "NSP", "input_base_package_name": base_items[0]["local_name"],
+        "input_update_nsp_count": 1, "input_dlc_nsp_count": 44,
+        "input_packages": [{**item, "sha256": item["sha256"]} for item in source_packages],
+        "aoc_relative_dir": "aoc", "aoc_count": len(aoc_images), "aoc_images": aoc_records,
         "rewrite_audit": rewrite_audit,
         "graphics_api": graphics, "graphics_reason": facts["graphics"][1],
         "jit_required": jit_required,
@@ -342,9 +405,9 @@ def run_preparation(args) -> dict:
         "input_packages": [{"name": p.name, "type": "XCI" if p.suffix.lower() == ".xci" else "NSP",
                             "size": p.stat().st_size, "sha256": sha256_file(p)} for p in package_files],
         "prepared_stages": [
-            "base_update_content_meta_scan", "base_update_NSP_XCI_extraction",
+            "mugi_content_meta_scan_1_base_1_update_44_DLC", "NXNative_base_update_RomFS_and_44_AOC_extraction",
             "NXNative_survey_and_provisional_game_profile",
-            "ARM64_NSO_rewrite_and_fixup_audit", "RomFS_externalization",
+            "ARM64_NSO_rewrite_and_fixup_audit", "RomFS_and_AOC_externalization",
             "engine_shader_source_classification_from_profile_guess",
         ],
         "deferred_stages": [
@@ -366,6 +429,7 @@ def main() -> None:
     parser.add_argument("--package-dir", type=Path, required=True)
     parser.add_argument("--keys", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, required=True)
+    parser.add_argument("--source-manifest", type=Path, required=True)
     run_preparation(parser.parse_args())
 
 if __name__ == "__main__":
