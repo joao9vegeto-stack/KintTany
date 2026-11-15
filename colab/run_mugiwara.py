@@ -311,8 +311,11 @@ def recover(args, api=None) -> dict | None:
                 and (handoff.get("game_data") or {}).get("romfs", {}).get("id")
                 and prepared.get("format") == 3 and isinstance(prepared.get("jit_required"), bool)
                 and prepared.get("profile_type") == "provisional" and prepared.get("graphics_api") == "nvn"
-                and source.get("package_count") == 46 and source.get("dlc_nsp_count") == 44
-                and prepared.get("input_package_count") == 46 and prepared.get("input_dlc_nsp_count") == 44
+                and source.get("package_count") == 46 and source.get("base_type") == "NSP"
+                and source.get("update_nsp_count") == 1 and source.get("dlc_nsp_count") == 44
+                and prepared.get("input_package_count") == 46 and prepared.get("input_nsp_count") == 46
+                and prepared.get("input_xci_count") == 0 and prepared.get("input_update_nsp_count") == 1
+                and prepared.get("input_dlc_nsp_count") == 44
                 and prepared.get("aoc_count") == 44 and len(prepared.get("aoc_images", [])) == 44
                 and len(aoc) == 44
                 and {x.get("name") for x in aoc} == {x.get("name") for x in prepared.get("aoc_images", [])}):
@@ -345,8 +348,11 @@ def dispatch(args) -> None:
     if (handoff.get("format") != 2 or prepared.get("format") != 3
             or not isinstance(prepared.get("jit_required"), bool)
             or prepared.get("profile_type") != "provisional" or prepared.get("graphics_api") != "nvn"
-            or source.get("package_count") != 46 or source.get("dlc_nsp_count") != 44
-            or prepared.get("input_package_count") != 46 or prepared.get("input_dlc_nsp_count") != 44
+            or source.get("package_count") != 46 or source.get("base_type") != "NSP"
+            or source.get("update_nsp_count") != 1 or source.get("dlc_nsp_count") != 44
+            or prepared.get("input_package_count") != 46 or prepared.get("input_nsp_count") != 46
+            or prepared.get("input_xci_count") != 0 or prepared.get("input_update_nsp_count") != 1
+            or prepared.get("input_dlc_nsp_count") != 44
             or prepared.get("aoc_count") != 44 or len(aoc) != 44
             or {x.get("name") for x in aoc} != {x.get("name") for x in prepared.get("aoc_images", [])}):
         fail("Refusing dispatch: expected 1 base + 1 update + 44 DLCs, 44 AOC images and the generated provisional NVN profile.")
