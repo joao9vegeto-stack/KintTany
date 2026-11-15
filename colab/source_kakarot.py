@@ -874,9 +874,12 @@ def prepare_source(api, drive_root_id: str, runtime_root: Path,
     # BASE: three ordered direct RAR downloads.
     base_dir = rar_root / "base"
     base_dir.mkdir(parents=True, exist_ok=True)
+    # Download directly to the final original volume filename. The .source.json
+    # sidecar then stays beside the completed RAR, allowing an interrupted Colab
+    # rerun to reuse already verified volumes instead of fetching them again.
     downloaded = []
-    for index, url in enumerate(base_part_urls, 1):
-        downloaded.append(download_blob(str(url).strip(), base_dir / f"volume-{index}.download"))
+    for url, name in zip(base_part_urls, base_names):
+        downloaded.append(download_blob(str(url).strip(), base_dir / name))
     names = resolve_volume_names(downloaded, base_names, "BASE")
     volume_scheme = validate_volume_sequence(names, "BASE")
     rar_bytes = sum(int(item["size"]) for item in downloaded)
@@ -888,10 +891,8 @@ def prepare_source(api, drive_root_id: str, runtime_root: Path,
     volume_paths = []
     for record, name in zip(downloaded, names):
         destination = base_dir / name
-        source_path = Path(record["path"])
-        if source_path.resolve() != destination.resolve():
-            destination.unlink(missing_ok=True)
-            source_path.replace(destination)
+        if Path(record["path"]).resolve() != destination.resolve():
+            fail(f"BASE volume was not saved under its final filename: {destination.name}")
         if not is_rar_volume(destination):
             fail(f"BASE volume {destination.name} has an invalid RAR signature.")
         volume_paths.append(destination)
