@@ -401,9 +401,6 @@ def run_preparation(args) -> dict:
         "survey_relative_path": "survey/survey.md",
         "survey_size": survey_copy.stat().st_size,
         "survey_sha256": sha256_file(survey_copy),
-        "input_package_count": len(package_files),
-        "input_packages": [{"name": p.name, "type": "XCI" if p.suffix.lower() == ".xci" else "NSP",
-                            "size": p.stat().st_size, "sha256": sha256_file(p)} for p in package_files],
         "prepared_stages": [
             "mugi_content_meta_scan_1_base_1_update_44_DLC", "NXNative_base_update_RomFS_and_44_AOC_extraction",
             "NXNative_survey_and_provisional_game_profile",
