@@ -434,16 +434,28 @@ def prepare_source(api, drive_root_id: str, runtime_root: Path,
     for label, urls in (("BASE", base_part_urls), ("UPDATE", update_part_urls)):
         if len(urls) != VOLUME_COUNT or any(not str(x).strip() for x in urls):
             fail(f"{label}_PART_URLS must contain exactly three non-empty direct-download URLs.")
-    root_items = list_children(api, drive_root_id)
-    kakarot_folders = [x for x in root_items if x.get("mimeType") == FOLDER_MIME and x.get("name", "").lower() == "kakarot"]
+    configured_root_id = drive_root_id
+    configured_root_items = list_children(api, configured_root_id)
+    kakarot_folders = [x for x in configured_root_items
+                       if x.get("mimeType") == FOLDER_MIME
+                       and x.get("name", "").lower() == "kakarot"]
     if len(kakarot_folders) != 1:
-        fail(f"Expected exactly one Drive/kakarot workspace folder; found {len(kakarot_folders)}.")
-    drive_root_id = kakarot_folders[0]["id"]
-    root_items = list_children(api, drive_root_id)
-    keys_items = [x for x in root_items if x.get("name", "").lower() == "prod.keys" and x.get("mimeType") != FOLDER_MIME]
-    if len(keys_items) != 1:
-        fail(f"Expected exactly one prod.keys directly inside Drive/kakarot; found {len(keys_items)}.")
-    keys_item = keys_items[0]
+        fail(f"Expected exactly one 'kakarot' folder under the already-configured Drive root; found {len(kakarot_folders)}.")
+    kakarot_folder_id = kakarot_folders[0]["id"]
+    kakarot_items = list_children(api, kakarot_folder_id)
+
+    # Match the existing Link2iOS/SpkIOSzero convention: prod.keys may be
+    # in the configured shared root or inside the game-specific subfolder.
+    root_keys = [x for x in configured_root_items
+                 if x.get("name", "").lower() == "prod.keys"
+                 and x.get("mimeType") != FOLDER_MIME]
+    kakarot_keys = [x for x in kakarot_items
+                    if x.get("name", "").lower() == "prod.keys"
+                    and x.get("mimeType") != FOLDER_MIME]
+    if len(root_keys) > 1 or len(kakarot_keys) > 1 or not (root_keys or kakarot_keys):
+        fail("Expected at most one prod.keys in the configured Drive root and at most one in Drive/kakarot, with at least one available.")
+    keys_item = (kakarot_keys or root_keys)[0]
+    drive_root_id = kakarot_folder_id
 
     runtime_root.mkdir(parents=True, exist_ok=True)
     keys_path = runtime_root / "keys" / "prod.keys"
@@ -471,6 +483,8 @@ def prepare_source(api, drive_root_id: str, runtime_root: Path,
                                 and package_type(path) == item["type"])
             if reusable:
                 cached["keys_path"] = str(keys_path)
+                cached["drive_kakarot_folder_id"] = drive_root_id
+                cached["drive_configured_root_id"] = configured_root_id
                 cached["archive_dir"] = str(runtime_root / "rar-volumes")
                 cached["rar_parts_cleanup_pending"] = (runtime_root / "rar-volumes").exists()
                 print("[KaKaRoTiOS] Reusing the already reconstructed and SHA-256-verified base/update packages; RAR redownload is not needed.", flush=True)
@@ -481,6 +495,8 @@ def prepare_source(api, drive_root_id: str, runtime_root: Path,
     recovered = recover_uploaded_packages(api, drive_root_id, runtime_root,
                                           url_fingerprints, keys_path)
     if recovered is not None:
+        recovered["drive_kakarot_folder_id"] = drive_root_id
+        recovered["drive_configured_root_id"] = configured_root_id
         return recovered
 
     unrar = install_unrar()
@@ -560,6 +576,7 @@ def prepare_source(api, drive_root_id: str, runtime_root: Path,
         "update_path": outputs["update"]["path"],
         "keys_drive_id": keys_item["id"],
         "drive_kakarot_folder_id": drive_root_id,
+        "drive_configured_root_id": configured_root_id,
         "input_nsp_count": int(outputs["base"]["type"] == "NSP") + int(outputs["update"]["type"] == "NSP"),
         "input_xci_count": int(outputs["base"]["type"] == "XCI") + int(outputs["update"]["type"] == "XCI"),
     }
