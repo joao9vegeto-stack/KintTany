@@ -370,10 +370,10 @@ def main() -> None:
             f"NXNative shader compilation requires at least 3 Apple Silicon CPUs; "
             f"this runner exposes only {runner_cpus} logical CPUs."
         )
-    # Keep the proven J=8 translator/batch configuration, but move Python-heavy
-    # shader finalization off the GIL into at most one process per runner CPU.
+    # Match the current NXNative scheduler: DMSH_PROCS defaults to J. Do not
+    # cap finish workers to hw.ncpu; SPKIOSzero's successful cold build used J=8.
     shader_threads = 8
-    dmsh_procs = min(3, runner_cpus)
+    dmsh_procs = shader_threads
     memory_bytes = int(subprocess.run(
         ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, check=True
     ).stdout.strip())
@@ -385,13 +385,11 @@ def main() -> None:
     env.update({"DM_GAME": TITLE_ID, "DM_GAMES_DIR": str(profile_parent),
                 "DM_GAMES_FIRST": "1", "DM_ROOT": str(work),
                 "WORK": str(work / "tmp"), "IOS_PULL": "1",
-                "J": str(shader_threads), "DMSH_PROCS": str(dmsh_procs),
-                "DMSH_RATE_GUARD_SECONDS": "300",
-                "DMSH_MIN_SHADERS_PER_SEC": "1.6"})
+                "J": str(shader_threads), "DMSH_PROCS": str(dmsh_procs)})
     print(
-        f"[Mugiwara4iOS] Pinned NXNative with GIL-free Metal finish workers; "
-        f"J={env['J']}, DMSH_PROCS={env['DMSH_PROCS']} (8 translator lanes, batch=32); "
-        f"throughput floor=1.6 shader/s after 300s; "
+        f"[Mugiwara4iOS] NXNative GIL-free Metal finish workers; "
+        f"J={env['J']}, DMSH_PROCS={env['DMSH_PROCS']} (same as upstream default J); "
+        f"8 translator lanes, batch=32; no fixed-rate abort; "
         f"runner={runner_cpus} CPUs/{memory_bytes / 1024**3:.1f} GiB RAM.",
         flush=True,
     )

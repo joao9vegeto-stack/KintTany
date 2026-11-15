@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Backport NXNative's GIL-free Metal shader finalizer to the pinned engine."""
+"""Backport NXNative's GIL-free Metal finalizer and fork-safe cache broker to the pinned engine."""
 from __future__ import annotations
 
 import argparse
@@ -22,38 +22,48 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 
 PROCESS_WORKERS = r'''
 BUILD_STARTED = time.monotonic()
-LAST_RATE_LOG = 0.0
+LAST_RATE_LOG = BUILD_STARTED
+LAST_RATE_COUNT = 0
 
 
 def finished(*_):
-    """Count completed shaders, report measured throughput and refresh progress."""
-    global LAST_RATE_LOG
+    """Count completed shaders and report rolling/cumulative throughput without aborting."""
+    global LAST_RATE_LOG, LAST_RATE_COUNT
     with _prog['lock']:
         DONE['n'] += 1
         n = DONE['n']
         now = time.monotonic()
         emit_rate = bool(PROGRESS and now - LAST_RATE_LOG >= 60)
         if emit_rate:
+            interval = max(now - LAST_RATE_LOG, 0.001)
+            interval_done = n - LAST_RATE_COUNT
             LAST_RATE_LOG = now
+            LAST_RATE_COUNT = n
     progress('compiling', n, len(keys), cached=len(cache_hits), misses=NMISS)
     if emit_rate:
         elapsed = max(now - BUILD_STARTED, 0.001)
+        rolling = interval_done / interval
+        overall = n / elapsed
         print(
-            f"[Mugiwara4iOS] Metal throughput: {n / elapsed:.2f} shader/s "
-            f"({n}/{len(keys)} finished, {PROCS} process workers).",
+            f"[Mugiwara4iOS] Metal throughput: rolling={rolling:.2f} shader/s, "
+            f"overall={overall:.2f} shader/s ({n}/{len(keys)} finished, "
+            f"{PROCS} process workers).",
             flush=True,
         )
 
 
-# Finalization (MSL rewriting, reflection, outputs and cache) is Python and was
-# serialized by the GIL in the old ThreadPoolExecutor. Fork after all tables,
-# fingerprints and cache state are loaded, but before any build thread starts.
+# The Python-heavy finalizer is run in independent processes rather than threads,
+# so its MSL rewriting/reflection work is not serialized by one interpreter GIL.
+# Workers are forked after all tables/cache keys are loaded and before build threads.
 COUNTERS = (PRE_STATS, VIN_STATS, PULL_STATS, SIDE_STATS, BF_STATS, MTL.stats)
 
 
 def worker_start():
-    global PROGRESS
-    STORE.forked()
+    global PROGRESS, STORE
+    assert SERVED is not None
+    # Apple SQLite must remain in the parent process: children proxy cache calls
+    # over their own pipe to a parent thread (NXNative issue #2354).
+    STORE = MTL.store = SERVED.worker()
     PROGRESS = None
 
 
@@ -101,12 +111,12 @@ def results(futures):
 
 
 def _prime_worker():
-    # Keep each submitted task alive long enough for the pool manager to start
-    # the configured workers before the first real shader batch is dispatched.
+    # Keep tasks alive briefly so every process is started before the pool check.
     time.sleep(0.75)
     return os.getpid()
 
 
+SERVED = shader_cache.Served(STORE, PROCS) if PROCS and keys else None
 px = (
     cf.ProcessPoolExecutor(
         PROCS,
@@ -117,8 +127,8 @@ px = (
     else None
 )
 if px:
-    # Generate shared Metal PCH files in the parent before forking. Otherwise
-    # each child would redundantly compile its own copies.
+    # Precompile the shared Metal PCH in the parent; a child-created PCH would
+    # be duplicated per worker and left behind when that worker exits.
     if "mac" in TARGETS:
         dmsh_pch.header(MAC_RUN + METAL_DEPTH)
     if IOSOUT:
@@ -130,14 +140,17 @@ if px:
             f"[RED] Mugiwara4iOS requested {PROCS} Metal finish workers, "
             f"but only {len(worker_pids)} distinct workers started: {worker_pids}."
         )
+    assert SERVED is not None
+    SERVED.start()
     print(
         f"[Mugiwara4iOS] Metal process pool ACTIVE: {len(worker_pids)} workers "
-        f"(PIDs {worker_pids}); J={NJ}, batch={BATCH}, target={','.join(sorted(TARGETS))}.",
+        f"(PIDs {worker_pids}); fork-safe SQLite broker ACTIVE; "
+        f"J={NJ}, batch={BATCH}, target={','.join(sorted(TARGETS))}.",
         flush=True,
     )
 
 
-'''
+''';
 
 ORCHESTRATION = r'''# Two phases: paired vertex shaders read their pixel shaders' MSL (vs_pad), so they go last.
 # Translate the next batch while the current batch is being finalized by the worker pool.
@@ -151,26 +164,12 @@ batches = [
 ]
 res, busy = [], []
 
-RATE_GUARD_SECONDS = float(os.environ.get("DMSH_RATE_GUARD_SECONDS", "300"))
-MIN_SHADERS_PER_SEC = float(os.environ.get("DMSH_MIN_SHADERS_PER_SEC", "1.6"))
-
 
 def collect(left):
     while len(busy) > left:
         wb, futures = busy.pop(0)
         res.extend(results(futures))
         shutil.rmtree(wb, ignore_errors=True)
-        elapsed = time.monotonic() - BUILD_STARTED
-        if elapsed >= RATE_GUARD_SECONDS:
-            completed = DONE["n"]
-            rate = completed / max(elapsed, 0.001)
-            if rate < MIN_SHADERS_PER_SEC:
-                sys.exit(
-                    f"[RED] Mugiwara4iOS shader throughput guard stopped the build: "
-                    f"{rate:.2f} shader/s after {elapsed:.0f}s "
-                    f"({completed}/{len(keys)}); minimum is {MIN_SHADERS_PER_SEC:.2f}. "
-                    "The run will not consume the six-hour runner budget at this rate."
-                )
 
 
 try:
@@ -189,11 +188,152 @@ except BrokenProcessPool as exc:
     sys.exit(
         f"[RED] a Metal shader finish worker process stopped (killed or out of memory): "
         f"{exc}; {len(keys) - len(res)} shaders remain unfinished. "
-        "Retry with fewer DMSH_PROCS workers; completed cache entries remain reusable."
+        "The cache broker keeps SQLite in the parent; reduce DMSH_PROCS only if "
+        "the runner actually runs out of memory."
     )
 if px:
     px.shutdown()
 
+
+''';
+
+
+SERVED_CLASSES = r'''
+
+# Mugiwara4iOS backport of NXNative's fork-safe cache broker (issue #2354).
+# Only the parent process owns the SQLite connection; forked workers send calls
+# through one pipe each. This avoids Apple's SQLite os_signpost crash after fork.
+class _Gone(Exception):
+    pass
+
+
+class _Abort(Exception):
+    pass
+
+
+class Served:
+    OPS = ('get', 'has', 'names', 'put', 'delete_prefix')
+
+    def __init__(self, store, n):
+        ctx = multiprocessing.get_context('fork')
+        self.store = store
+        self.pipes = [ctx.Pipe() for _ in range(n)]
+        self.taken = ctx.Value('i', 0)
+
+    def start(self):
+        for here, there in self.pipes:
+            there.close()
+            threading.Thread(target=self._serve, args=(here,), daemon=True).start()
+
+    def worker(self):
+        with self.taken.get_lock():
+            i = self.taken.value
+            self.taken.value += 1
+        for j, (here, there) in enumerate(self.pipes):
+            here.close()
+            if j != i:
+                there.close()
+        return Remote(self.pipes[i][1])
+
+    def _serve(self, conn):
+        with contextlib.suppress(_Gone, EOFError, OSError):
+            self._calls(conn, False)
+
+    def _calls(self, conn, inside):
+        store = self.store
+        while True:
+            try:
+                op, args = conn.recv()
+            except (EOFError, OSError):
+                if inside:
+                    raise _Gone from None
+                return
+            if op == 'end' and inside:
+                return
+            if op == 'abort' and inside:
+                raise _Abort
+            try:
+                if op == 'begin' and not inside:
+                    try:
+                        with store.batch():
+                            conn.send((True, None, store.full))
+                            self._calls(conn, True)
+                    except _Abort:
+                        pass
+                    value = None
+                elif op in self.OPS:
+                    value = getattr(store, op)(*args)
+                else:
+                    raise ValueError(f'shader cache: no call {op!r}')
+            except _Gone:
+                raise
+            except Exception as exc:
+                conn.send((False, exc, store.full))
+            else:
+                conn.send((True, value, store.full))
+
+
+class Remote:
+    def __init__(self, conn):
+        self.conn = conn
+        self.lock = threading.RLock()
+        self.inside = False
+        self.full = False
+
+    def _call(self, op, *args):
+        with self.lock:
+            self.conn.send((op, args))
+            ok, value, self.full = self.conn.recv()
+        if not ok:
+            raise value
+        return value
+
+    def get(self, name):
+        return self._call('get', name)
+
+    def has(self, name):
+        return self._call('has', name)
+
+    def names(self, prefix):
+        return self._call('names', prefix)
+
+    def put(self, name, data, when=None):
+        self._call('put', name, data, when)
+
+    def put_file(self, name, path):
+        with open(path, 'rb') as stream:
+            self.put(name, stream.read())
+
+    def to_file(self, name, path):
+        data = self.get(name)
+        if data is None:
+            return False
+        tmp = f'{path}.tmp-{os.getpid()}-{threading.get_ident()}'
+        with open(tmp, 'wb') as stream:
+            stream.write(data)
+        os.replace(tmp, path)
+        return True
+
+    def delete_prefix(self, prefix):
+        self._call('delete_prefix', prefix)
+
+    @contextlib.contextmanager
+    def batch(self):
+        with self.lock:
+            if self.inside:
+                yield
+                return
+            self._call('begin')
+            self.inside = True
+            try:
+                yield
+            except BaseException:
+                self.inside = False
+                self._call('abort')
+                raise
+            else:
+                self.inside = False
+                self._call('end')
 
 '''
 
@@ -223,16 +363,27 @@ def main() -> None:
 
     if MARKER in build_source:
         raise SystemExit("[Mugiwara4iOS] Refusing to patch the upstream dmsh_build.py in place.")
+
     if worker_file.is_file() and "dmsh_build_workers.py" in wrapper_source:
         required = (
-            "ProcessPoolExecutor", "STORE.forked()", "BrokenProcessPool",
-            "DMSH_RATE_GUARD_SECONDS", "Metal process pool ACTIVE",
+            "ProcessPoolExecutor",
+            "shader_cache.Served(STORE, PROCS)",
+            "STORE = MTL.store = SERVED.worker()",
+            "SERVED.start()",
+            "BrokenProcessPool",
+            "rolling={rolling:.2f} shader/s",
         )
         saved = worker_file.read_text(encoding="utf-8")
         missing = [token for token in required if token not in saved]
-        if missing:
-            raise SystemExit(f"[Mugiwara4iOS] Existing worker sidecar is incomplete: {missing}")
-        print("[Mugiwara4iOS] Verified existing process-worker backport.", flush=True)
+        if missing or "STORE.forked()" in saved or "DMSH_RATE_GUARD_SECONDS" in saved:
+            raise SystemExit(
+                f"[Mugiwara4iOS] Existing worker sidecar is outdated/incomplete: "
+                f"missing={missing}, direct_sqlite={'STORE.forked()' in saved}, "
+                f"hard_rate_guard={'DMSH_RATE_GUARD_SECONDS' in saved}."
+            )
+        if "class Served:" not in cache_source or "class Remote:" not in cache_source:
+            raise SystemExit("[Mugiwara4iOS] Existing cache broker classes are missing.")
+        print("[Mugiwara4iOS] Verified existing GIL-free workers and fork-safe cache broker.", flush=True)
         return
 
     old_import = (
@@ -260,6 +411,7 @@ def main() -> None:
         "        finished()\n",
         "worker progress callback",
     )
+
     phase_marker = "# Two phases: paired vertex shaders read their pixel shaders' MSL (vs_pad)"
     pass_marker = "# Passthrough geometry as mesh shaders (dmsh_mesh.py):"
     if build_source.count(phase_marker) != 1 or build_source.count(pass_marker) != 1:
@@ -268,24 +420,27 @@ def main() -> None:
     pass_at = build_source.index(pass_marker, phase_at)
     if pass_at <= phase_at:
         raise SystemExit("[Mugiwara4iOS] Refusing worker patch: invalid shader orchestration range.")
-    build_source = build_source[:phase_at] + MARKER + "\n" + PROCESS_WORKERS + ORCHESTRATION + build_source[pass_at:]
+    build_source = (
+        build_source[:phase_at] + MARKER + "\n" + PROCESS_WORKERS + ORCHESTRATION
+        + build_source[pass_at:]
+    )
 
-    if "    def forked(self):" not in cache_source:
-        cache_source = replace_once(
-            cache_source,
-            "    def _damage(self, e):",
-            "    def forked(self):\n"
-            "        \"\"\"Open a worker-local SQLite connection after multiprocessing fork.\"\"\"\n"
-            "        self._inherited = self.db\n"
-            "        self.lock = threading.RLock()\n"
-            "        self._open()\n\n"
-            "    def _damage(self, e):",
-            "worker-local SQLite connection",
-        )
+    cache_import = (
+        "import contextlib, hashlib, json, os, re, shutil, sqlite3, tarfile, threading, time\n"
+    )
+    cache_import_new = (
+        "import contextlib, hashlib, json, multiprocessing, os, re, shutil, sqlite3, "
+        "tarfile, threading, time\n"
+    )
+    cache_source = replace_once(cache_source, cache_import, cache_import_new, "cache multiprocessing import")
+    if "class Served:" not in cache_source and "class Remote:" not in cache_source:
+        cache_source = cache_source.rstrip() + "\n" + SERVED_CLASSES
+    elif not ("class Served:" in cache_source and "class Remote:" in cache_source):
+        raise SystemExit("[Mugiwara4iOS] Refusing partial/ambiguous Served cache broker patch.")
 
     old_wrapper_line = "    sys.argv = [os.path.join(HERE, 'dmsh_build.py'), *sys.argv[1:]]\n"
     new_wrapper_line = (
-        "    # Mugiwara4iOS: run the GIL-free process-worker finalizer; dmsh_build.py stays pinned.\n"
+        "    # Mugiwara4iOS: use GIL-free finish workers; keep the pinned chain file intact.\n"
         "    sys.argv = [os.path.join(HERE, 'dmsh_build_workers.py'), *sys.argv[1:]]\n"
     )
     if "dmsh_build_workers.py" not in wrapper_source:
@@ -307,20 +462,25 @@ def main() -> None:
     for token in (
         "PROCS = int(os.environ.get('DMSH_PROCS', NJ))",
         "ProcessPoolExecutor",
-        "STORE.forked()",
+        "shader_cache.Served(STORE, PROCS)",
+        "STORE = MTL.store = SERVED.worker()",
+        "SERVED.start()",
         "BrokenProcessPool",
-        "DMSH_RATE_GUARD_SECONDS",
-        "Metal process pool ACTIVE",
+        "rolling={rolling:.2f} shader/s",
     ):
         if token not in saved_worker:
             raise SystemExit(f"[Mugiwara4iOS] Worker backport verification failed: {token}")
-    if "def forked(self):" not in saved_cache or "dmsh_build_workers.py" not in saved_wrapper:
-        raise SystemExit("[Mugiwara4iOS] Worker backport verification failed after writing files.")
+    if "DMSH_RATE_GUARD_SECONDS" in saved_worker or "STORE.forked()" in saved_worker:
+        raise SystemExit("[Mugiwara4iOS] Unsafe direct-SQLite worker or fixed-rate abort remains.")
+    if not ("import multiprocessing" in saved_cache and "class Served:" in saved_cache
+            and "class Remote:" in saved_cache):
+        raise SystemExit("[Mugiwara4iOS] Fork-safe cache broker verification failed.")
+    if "dmsh_build_workers.py" not in saved_wrapper:
+        raise SystemExit("[Mugiwara4iOS] own_compilers.py dispatch verification failed.")
 
     print(
-        "[Mugiwara4iOS] GIL-free Metal finish workers applied; "
-        "pinned dmsh_build.py/own_compilers.py chain source preserved; "
-        "DMSH_PROCS is bounded by the selected Apple Silicon runner.",
+        "[Mugiwara4iOS] GIL-free finish workers and fork-safe Served/Remote cache broker applied; "
+        "upstream dmsh_build.py and the pinned translation chain remain unchanged.",
         flush=True,
     )
 

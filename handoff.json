@@ -1885,5 +1885,5 @@
   "created_utc": "2026-11-15T05:28:12.192126+00:00",
   "manual_dispatch_nonce": "retry-a7ed8a65-after-actions-input-format-fix-8056be6",
   "audit_requeue_nonce": "2026-11-15-regression-assertion-fix-21adbebf",
-  "actions_build_nonce": "nxnative-gil-free-metal-finish-j8-procs3-guard300-run17-20261115"
+  "actions_build_nonce": "nxnative-j8-eight-finish-workers-served-cache-no-rate-abort-run18-20261115"
 }
