@@ -181,7 +181,9 @@ def prepare(args, api=None) -> dict:
         fail("NXNative preparation manifest does not belong to Mugiwara4iOS/One Piece: Pirate Warriors 4.")
     if prep.get("nx2apple_tag") != NX2APPLE_TAG or prep.get("engine_pin") != ENGINE_PIN:
         fail("Preparation manifest uses another NX2Apple/NXNative pin.")
-    if (prep.get("format") != 3 or prep.get("input_package_count") != 46
+    if (prep.get("format") != 3 or prep.get("display_version") != "1.8.7"
+            or prep.get("base_content_version") != 0 or int(prep.get("update_content_version", 0)) <= 0
+            or prep.get("input_package_count") != 46
             or prep.get("input_dlc_nsp_count") != 44 or prep.get("input_update_nsp_count") != 1
             or prep.get("aoc_count") != 44 or len(prep.get("aoc_images", [])) != 44):
         fail("NXNative did not complete the required 46-NSP / 44-DLC / 44-AOC preparation contract.")
@@ -306,6 +308,9 @@ def recover(args, api=None) -> dict | None:
                 and handoff.get("branch") == BRANCH and handoff.get("title_id") == TITLE_ID
                 and handoff.get("nx2apple_tag") == NX2APPLE_TAG and handoff.get("engine_pin") == ENGINE_PIN
                 and handoff.get("package_version") == prepared.get("package_version")
+                and prepared.get("display_version") == "1.8.7"
+                and prepared.get("base_content_version") == 0
+                and int(prepared.get("update_content_version", 0)) > 0
                 and handoff.get("drive_source_folder_id") == mugi_folder["id"]
                 and handoff.get("work_archive", {}).get("id")
                 and (handoff.get("game_data") or {}).get("romfs", {}).get("id")
@@ -348,6 +353,8 @@ def dispatch(args) -> None:
     if (handoff.get("format") != 2 or prepared.get("format") != 3
             or not isinstance(prepared.get("jit_required"), bool)
             or prepared.get("profile_type") != "provisional" or prepared.get("graphics_api") != "nvn"
+            or prepared.get("display_version") != "1.8.7" or prepared.get("base_content_version") != 0
+            or int(prepared.get("update_content_version", 0)) <= 0
             or source.get("package_count") != 46 or source.get("base_type") != "NSP"
             or source.get("update_nsp_count") != 1 or source.get("dlc_nsp_count") != 44
             or prepared.get("input_package_count") != 46 or prepared.get("input_nsp_count") != 46
