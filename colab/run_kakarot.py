@@ -361,18 +361,18 @@ def prepare(args, api=None) -> dict:
         digest = sha256_file(path)
         if digest != item["sha256"]:
             fail(f"NXNative AOC image SHA-256 mismatch: {item['name']}")
-        drive_item = upload_drive_file(api, path, aoc_id, item["name"])
+        drive_item = upsert_drive_file(api, path, aoc_id, item["name"])
         if drive_item["sha256"] != digest:
             fail(f"AOC SHA-256 changed during upload: {item['name']}")
         aoc_records.append(drive_item)
     print(f"[KaKaRoTiOS] AOC images found and uploaded: {len(aoc_records)}.", flush=True)
 
     print("[KaKaRoTiOS] Uploading RomFS.img as a separate Drive object...", flush=True)
-    romfs_record = upload_drive_file(api, romfs, game_id, "romfs.img")
+    romfs_record = upsert_drive_file(api, romfs, game_id, "romfs.img")
     archive = ROOT / "kakarot-work.tar.zst"
     print("[KaKaRoTiOS] Archiving rewritten ExeFS, provisional profile, survey and audits; excluding source packages, prod.keys, RomFS and AOC.", flush=True)
     build_work_archive(work, archive)
-    archive_record = upload_drive_file(api, archive, pipeline_id, "kakarot-work.tar.zst")
+    archive_record = upsert_drive_file(api, archive, pipeline_id, "kakarot-work.tar.zst")
 
     handoff = {
         "format": 2,
@@ -413,7 +413,7 @@ def prepare(args, api=None) -> dict:
     }
     handoff_path = ROOT / "handoff.json"
     handoff_path.write_text(json.dumps(handoff, indent=2) + "\n", encoding="utf-8")
-    handoff_record = upload_drive_file(api, handoff_path, output_id, "handoff.json")
+    handoff_record = upsert_drive_file(api, handoff_path, output_id, "handoff.json")
     print("\n[KaKaRoTiOS] Six-volume reconstruction, package uploads and Colab preparation completed.", flush=True)
     print("Request:", request_id)
     print("Drive:", handoff["drive_output_folder_url"])
