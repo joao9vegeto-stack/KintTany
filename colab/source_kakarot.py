@@ -777,8 +777,8 @@ def recover_uploaded_packages(api, drive_root_id: str, runtime_root: Path,
             saved["package_dir"] = str(package_dir)
             saved["keys_path"] = str(keys_path)
             saved["archive_dir"] = str(runtime_root / "rar-volumes")
-            # The previous runtime is gone; its six RAR volumes are not required
-            # because both complete NSP/XCI files have already been recovered.
+            # The previous runtime is gone; the three BASE RAR volumes are
+            # not required because both complete BASE/UPDATE packages were recovered.
             saved["rar_parts_cleanup_pending"] = False
             saved["rar_parts_deleted_after_drive_upload"] = True
             (runtime_root / "source-manifest.json").write_text(
