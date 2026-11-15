@@ -380,8 +380,8 @@ def prepare(args, api=None) -> dict:
     source["drive_update_package"] = update_record
     source["rar_parts_cleanup_pending"] = Path(source["archive_dir"]).exists()
     persist_source_manifest(source)
-    # Publish a recovery checkpoint before deleting the six RAR parts. A fresh
-    # Colab runtime can use these Drive package IDs if the survey is interrupted.
+    # Publish a recovery checkpoint before deleting the three BASE RAR parts.
+    # The direct UPDATE NSP remains a separate verified package in Drive.
     source_checkpoint = upsert_drive_file(
         api, ROOT / "source-manifest.json", pipeline_id, "source-manifest.json")
     print(f"[KaKaRoTiOS] Drive source checkpoint saved ({source_checkpoint['id']}); now removing local RAR volumes...", flush=True)
