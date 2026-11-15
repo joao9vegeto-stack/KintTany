@@ -67,7 +67,7 @@ jobs:
             scripts/prepare_mugiwara_actions.py \
             scripts/build_mugiwara_shared.py
           python - <<'PY'
-          import json
+          import ast, json
           from pathlib import Path
           n = json.loads(Path("colab/Mugiwara4iOS.ipynb").read_text(encoding="utf-8"))
           assert n["nbformat"] == 4 and len(n["cells"]) == 6
@@ -75,7 +75,10 @@ jobs:
           assert "Mugiwara4iOS" in joined and "01008FE00E2F6000" in joined
           assert "DISPATCH_TO_GITHUB = False" in joined
           assert "KaKaRoTiOS" not in joined and "SpkIOSzero" in joined
-          print("Colab notebook JSON/branch guard: OK")
+          for index, cell in enumerate(n["cells"]):
+              if cell.get("cell_type") == "code":
+                  ast.parse("".join(cell.get("source", [])), filename=f"Mugiwara4iOS.ipynb:cell-{index}")
+          print("Colab notebook JSON, Python cells and branch guard: OK")
           PY
 
   build-pirate-warriors-4:

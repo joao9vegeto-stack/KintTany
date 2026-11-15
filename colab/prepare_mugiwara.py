@@ -9,7 +9,6 @@ import os
 import re
 import shutil
 import subprocess
-import struct
 import sys
 from pathlib import Path
 
@@ -67,7 +66,6 @@ def install_linux_dependencies(root: Path) -> None:
         ("lz4.block", "lz4"), ("capstone", "capstone>=5,<6"),
         ("fontTools", "fonttools"), ("zbic", "zbic"),
         ("backports.zstd", "backports.zstd"), ("requests", "requests"),
-        ("Crypto.Cipher", "pycryptodome"),
     )
     missing_pip = []
     for module_name, package_name in python_packages:
@@ -126,21 +124,6 @@ def load_builder(engine: Path):
     spec.loader.exec_module(module)
     return module
 
-def install_linux_aes_compat() -> None:
-    """Keep Unreal PAK index inspection working if this package build uses AES-encrypted indices."""
-    from Crypto.Cipher import AES
-    key = bytes(range(32))
-    plain = bytes.fromhex("00112233445566778899aabbccddeeff")
-    cipher = bytes.fromhex("8ea2b7ca516745bfeafc49904b496089")
-    require(AES.new(key, AES.MODE_ECB).decrypt(cipher) == plain,
-            "PyCryptodome AES-256-ECB self-test failed.")
-    import uepak
-    def decrypt(key_bytes: bytes, data: bytes) -> bytes:
-        if len(key_bytes) != 32 or not data or len(data) % 16:
-            raise ValueError("Unreal PAK AES-256-ECB requires a 32-byte key and 16-byte-aligned data.")
-        return AES.new(key_bytes, AES.MODE_ECB).decrypt(data)
-    uepak.aes_decrypt = decrypt
-
 def shader_source_audit(facts: dict, flags: dict, reasons: dict) -> dict:
     """Persist NXNative profile_guess evidence; do not assume KTGL uses Unreal PAKs."""
     return {"graphics_api": str(facts["graphics"][0]), "flags": dict(flags), "reasons": dict(reasons)}
@@ -173,7 +156,6 @@ def run_preparation(args) -> dict:
     work.mkdir(parents=True, exist_ok=True)
     install_linux_dependencies(work.parent)
     module = load_builder(nx / "engine")
-    install_linux_aes_compat()
     for key in ("DM_GAMES_DIR", "DM_GAMES_FIRST"):
         os.environ.pop(key, None)
     os.environ["DM_GAME"] = TITLE_ID
@@ -334,7 +316,7 @@ def run_preparation(args) -> dict:
         "prepared_stages": [
             "base_update_content_meta_scan", "base_update_NSP_XCI_extraction",
             "NXNative_survey_and_provisional_game_profile",
-            "ARM64_NS0_rewrite_and_fixup_audit", "RomFS_externalization",
+            "ARM64_NSO_rewrite_and_fixup_audit", "RomFS_externalization",
             "engine_shader_source_classification_from_profile_guess",
         ],
         "deferred_stages": [
