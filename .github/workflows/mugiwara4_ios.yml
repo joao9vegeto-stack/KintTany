@@ -122,7 +122,8 @@ jobs:
           for field in actions_module.PREPARED_MANIFEST_KEYS:
               reduced = dict(canonical)
               reduced.pop(field)
-              assert field in actions_module.prepared_manifest_mismatches(reduced, p), (
+              missing = actions_module.prepared_manifest_mismatches(reduced, p)
+              assert any(issue.startswith(field + " (missing from left manifest)") for issue in missing), (
                   f"Manifest projection regression: omission of {field} was not detected"
               )
           assert h.get("project") == "Mugiwara4iOS"
