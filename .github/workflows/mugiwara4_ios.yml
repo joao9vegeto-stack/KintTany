@@ -45,14 +45,29 @@ jobs:
           assert h.get("nx2apple_tag") == "v1.3.1-rc2"
           assert h.get("engine_pin") == "81906931262fb25d774cce8bca2db8926439e5a2"
           assert h.get("package_version") == p.get("package_version") and p.get("package_version") != "v0"
-          assert p.get("format") == 2
+          assert h.get("format") == 2
+          assert p.get("format") == 3
           assert isinstance(p.get("jit_required"), bool)
           assert p.get("profile_type") == "provisional"
           assert p.get("graphics_api") == "nvn"
-          assert p.get("input_package_count") == 2
-          assert len(p.get("input_packages", [])) == 2
+          assert p.get("input_package_count") == 46
+          assert p.get("input_nsp_count") == 46 and p.get("input_xci_count") == 0
+          assert p.get("input_update_nsp_count") == 1 and p.get("input_dlc_nsp_count") == 44
+          assert len(p.get("input_packages", [])) == 46
+          assert h.get("source", {}).get("package_count") == 46
+          assert h.get("source", {}).get("dlc_nsp_count") == 44
+          assert len(h.get("source", {}).get("dlc_files", [])) == 44
           for item in p["input_packages"]:
-              assert item.get("type") in ("NSP", "XCI")
+              assert item.get("type") == "NSP"
+              assert item.get("role") in ("base", "update", "dlc")
+              assert int(item.get("size", 0)) > 0
+              assert re.fullmatch(r"[0-9a-f]{64}", item.get("sha256", ""))
+          assert p.get("aoc_count") == 44 and len(p.get("aoc_images", [])) == 44
+          aoc = h.get("game_data", {}).get("aoc", [])
+          assert len(aoc) == 44
+          assert {x.get("name") for x in aoc} == {x.get("name") for x in p["aoc_images"]}
+          for item in aoc:
+              assert item.get("name", "").endswith(".img")
               assert int(item.get("size", 0)) > 0
               assert re.fullmatch(r"[0-9a-f]{64}", item.get("sha256", ""))
           assert isinstance(p.get("shader_source_flags"), dict)
@@ -75,11 +90,14 @@ jobs:
           sys.path.insert(0, "colab")
           import source_mugiwara
           n = json.loads(Path("colab/Mugiwara4iOS.ipynb").read_text(encoding="utf-8"))
-          assert n["nbformat"] == 4 and len(n["cells"]) == 6
+          assert n["nbformat"] == 4 and len(n["cells"]) == 12
           joined = "\n".join("".join(c.get("source", [])) for c in n["cells"])
           assert "Mugiwara4iOS" in joined and "01008FE00E2F6000" in joined
-          assert "DISPATCH_TO_GITHUB = False" in joined
-          assert "KaKaRoTiOS" not in joined and "SpkIOSzero" in joined
+          assert "DRIVE_FOLDER_ID" in joined and 'ROOT = Path("/content/mugi")' in joined
+          assert "BASE_URL" in joined and "UPDATE_URL" in joined
+          assert "44" in joined and "Mugiwara4iOS_UPDATE_v1.8.7.nsp" in joined
+          assert "HANDOFF_READY" in joined
+          assert "dispatch" in joined
           for index, cell in enumerate(n["cells"]):
               if cell.get("cell_type") != "code":
                   continue
@@ -105,7 +123,7 @@ jobs:
           workflow = yaml.safe_load(Path(".github/workflows/mugiwara4_ios.yml").read_text(encoding="utf-8"))
           assert workflow.get("jobs", {}).get("validate-handoff")
           assert workflow.get("jobs", {}).get("build-pirate-warriors-4")
-          print("Mugiwara Python, notebook cells, NSP/XCI contract and workflow YAML: OK")
+          print("Mugiwara Python, 12-cell notebook, 46-NSP/44-AOC contract and workflow YAML: OK")
           PY
 
   build-pirate-warriors-4:
@@ -151,7 +169,7 @@ jobs:
           git clone --depth 1 --branch v1.3.1-rc2 https://github.com/LNPANDY/NX2Apple.git NX2Apple
           python NX2Apple/tools/engine.py sync
           test "$(cat NX2Apple/.upstream-ref)" = "81906931262fb25d774cce8bca2db8926439e5a2"
-      - name: Restore workspace and external RomFS from Drive (size + SHA-256)
+      - name: Restore workspace, external RomFS and 44 DLC AOC images from Drive (SHA-256)
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         shell: bash
@@ -160,7 +178,7 @@ jobs:
           python scripts/prepare_mugiwara_actions.py \
             --handoff handoff.json \
             --destination "$RUNNER_TEMP/mugiwara-actions"
-      - name: Oodle when detected, GLSLC capture, NVN shader split, Metal and Route C IPA
+      - name: Oodle/GLSLC when detected, NVN shader split with 44 DLCs, Metal and Route C IPA
         shell: bash
         run: |
           set -euo pipefail
