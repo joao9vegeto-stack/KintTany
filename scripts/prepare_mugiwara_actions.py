@@ -156,8 +156,10 @@ def main() -> None:
     if not prep_path.is_file():
         fail("mugiwara4ios-linux-prep.json is missing from the restored workspace.")
     prep = json.loads(prep_path.read_text(encoding="utf-8"))
+    if prep.get("format") != 2 or not isinstance(prep.get("jit_required"), bool):
+        fail("Restored Colab prep manifest is outdated or missing the NXNative nn::jit/AOT decision.")
     compare_keys = (
-        "project", "title_id", "package_version", "nx2apple_tag", "engine_pin",
+        "format", "project", "title_id", "package_version", "nx2apple_tag", "engine_pin",
         "profile_type", "profile_source", "profile_relative_dir",
         "modules", "main_build_id", "main_sha256", "rewrite_audit",
         "graphics_api", "jit_required", "shader_source_flags", "shader_source_reasons", "shader_source_audit", "shader_chain",
