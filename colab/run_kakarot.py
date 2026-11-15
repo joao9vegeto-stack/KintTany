@@ -253,7 +253,10 @@ def prepare(args, api=None) -> dict:
     api = api or drive_api()
     ROOT.mkdir(parents=True, exist_ok=True)
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from source_kakarot import cleanup_rar_parts, prepare_source
+    # Use the package-qualified module shared with the notebook preflight.
+    # This prevents a stale top-level "source_kakarot" in sys.modules from
+    # shadowing the freshly fetched branch source after a Colab rerun.
+    from .source_kakarot import cleanup_rar_parts, prepare_source
     source = prepare_source(
         api, args.drive_folder_id, ROOT,
         args.base_part_urls, args.update_part_urls,
