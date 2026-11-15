@@ -18,7 +18,6 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 from mugiwara_contract import PREPARED_MANIFEST_KEYS, prepared_manifest_mismatches
-from mugiwara_shader_checkpoint import ShaderCacheCheckpoint
 
 TITLE_ID = "01008FE00E2F6000"
 PROJECT = "Mugiwara4iOS"
@@ -349,25 +348,9 @@ def main() -> None:
     repo_scripts = Path(__file__).resolve().parent
     sys.path.insert(0, str(repo_scripts))
     builder, game_profiles, nacp, pg = load_builder(engine)
-    worker_sidecar = engine / "dm/gfx/tools/dmsh_build_workers.py"
-    worker_wrapper = engine / "dm/gfx/tools/own_compilers.py"
-    if not worker_sidecar.is_file() or not worker_wrapper.is_file():
-        fail("Mugiwara shader progress/rate-guard sidecar is missing; refusing an uninstrumented shader build.")
-    worker_source = worker_sidecar.read_text(encoding="utf-8")
-    wrapper_source = worker_wrapper.read_text(encoding="utf-8")
-    required_worker_markers = (
-        "Mugiwara4iOS DMSH_PROCS worker backport",
-        "ProcessPoolExecutor",
-        "STORE.forked()",
-        "def fin_worker(",
-        "def submit(",
-    )
-    missing_worker_markers = [marker for marker in required_worker_markers if marker not in worker_source]
-    if missing_worker_markers or "dmsh_build_workers.py" not in wrapper_source:
-        fail(
-            "The actual own_compilers.py invocation is not wired to the verified process-worker sidecar; "
-            f"missing markers: {missing_worker_markers}."
-        )
+    # Keep NXNative's pinned dmsh_build.py and own_compilers.py untouched.
+    # SpkIOSzero run #41 completed 14,842 shaders using this exact engine pin and
+    # the upstream J=8 ThreadPoolExecutor scheduler; do not replace it with a sidecar.
     # The provisional profile must be first in all engine-side lookups.
     profile_parent = work / "profile"
     os.environ.update({"DM_GAMES_DIR": str(profile_parent), "DM_GAMES_FIRST": "1", "DM_GAME": TITLE_ID})
@@ -387,12 +370,9 @@ def main() -> None:
             f"NXNative shader compilation requires at least 3 Apple Silicon CPUs; "
             f"this runner exposes only {runner_cpus} logical CPUs."
         )
-    # Match the successful SpkIOSzero scheduler on this same xcode-27 label and NXNative pin.
-    # J=8 provides eight translator lanes and batches of 32 shaders; DMSH_PROCS=0
-    # keeps finalization on the same eight-thread pool that completed SpkIOSzero.
-    # The two-process HookLink configuration capped this workload too aggressively.
+    # Same upstream default used by SpkIOSzero: eight translation/finish threads,
+    # batches of 32. No process-worker backport and no scheduler replacement.
     shader_threads = 8
-    dmsh_procs = 0
     memory_bytes = int(subprocess.run(
         ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, check=True
     ).stdout.strip())
@@ -404,13 +384,10 @@ def main() -> None:
     env.update({"DM_GAME": TITLE_ID, "DM_GAMES_DIR": str(profile_parent),
                 "DM_GAMES_FIRST": "1", "DM_ROOT": str(work),
                 "WORK": str(work / "tmp"), "IOS_PULL": "1",
-                "J": str(shader_threads), "DMSH_PROCS": str(dmsh_procs),
-                "DMSH_RATE_GUARD_SECONDS": "300",
-                "DMSH_MIN_SHADERS_PER_SEC": "1.6"})
+                "J": str(shader_threads)})
     print(
-        f"[Mugiwara4iOS] SpkIOSzero-proven NXNative thread scheduler wired through own_compilers.py; "
-        f"J={env['J']}, DMSH_PROCS={env['DMSH_PROCS']} (8 translation/finish lanes, batch=32); "
-        f"fail-fast floor=1.6 shader/s after 300s, "
+        f"[Mugiwara4iOS] Unmodified pinned NXNative scheduler (same as SpkIOSzero); "
+        f"J={env['J']} (8 translation/finish lanes, batch=32); "
         f"runner={runner_cpus} CPUs/{memory_bytes / 1024**3:.1f} GiB RAM.",
         flush=True,
     )
@@ -507,34 +484,12 @@ def main() -> None:
         pull = builder.ios_wants_pulling(profile, gpu_selection, False, env)
         print(f"[Mugiwara4iOS] Compiling iOS Metal libraries; pulling libraries: {'yes' if pull else 'no'}...", flush=True)
 
-        # HookLink2iOS checkpoints NXNative's SQLite CAS every 15 minutes. Reuse the
-        # exact mechanism so a runner timeout never throws away already-finished shaders.
-        checkpoint = ShaderCacheCheckpoint.from_environment(
-            prepared,
-            work,
-            engine_pin=ENGINE_PIN,
-            title_id=TITLE_ID,
-            shader_chain=actual_chain,
-            shader_package_key=package_key,
-        )
-        restored_bytes = checkpoint.restore()
-        print(
-            f"[Mugiwara4iOS] Resumable Metal cache ready: "
-            f"{restored_bytes:,} bytes restored; J=1, DMSH_PROCS=2.",
-            flush=True,
-        )
-        checkpoint.start()
-        try:
-            ios_msl = builder.build_shaders(
-                py, engine, work / "shader", xlate, env, logs, profile,
-                pkg_key=package_key, mac=False, seen=None, pull=pull)
-        except BaseException:
-            checkpoint.stop(force=True)
-            raise
-        else:
-            checkpoint.stop(force=False)
-            # Persist the completed cache as well, so a later Route C retry can reuse it.
-            checkpoint.checkpoint()
+        # Use NXNative's stock scheduler directly. The previous custom sidecar was
+        # slower than SpkIOSzero and has been removed; Drive service-account uploads
+        # to this My Drive folder cannot store CAS snapshots (no storage quota).
+        ios_msl = builder.build_shaders(
+            py, engine, work / "shader", xlate, env, logs, profile,
+            pkg_key=package_key, mac=False, seen=None, pull=pull)
         chain_lib = ios_msl / f"b-{actual_chain}"
         chain_img = Path(str(chain_lib) + ".img")
         if not (chain_lib.is_dir() or chain_img.is_file()):
