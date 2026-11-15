@@ -12,6 +12,7 @@ from urllib.parse import unquote
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
 PACKAGE_SUFFIXES = {".nsp", ".xci"}
+CHUNK = 64 * 1024 * 1024
 
 def fail(message: str) -> None:
     raise SystemExit("[Mugiwara4iOS] ERROR: " + message)
