@@ -24,7 +24,7 @@ NX2APPLE_TAG = "v1.3.1-rc2"
 ENGINE_PIN = "81906931262fb25d774cce8bca2db8926439e5a2"
 CHUNK = 64 * 1024 * 1024
 FOLDER_MIME = "application/vnd.google-apps.folder"
-ROOT = Path("/content/mugiwara4ios")
+ROOT = Path("/content/mugi")
 
 def fail(message: str) -> None:
     raise SystemExit("[Mugiwara4iOS] ERROR: " + message)
@@ -125,6 +125,7 @@ def build_work_archive(work: Path, destination: Path) -> None:
         "tar", "-C", str(work),
         "--exclude=./tools", "--exclude=./tmp",
         "--exclude=./extract/*/RomFS.img", "--exclude=*/RomFS.img",
+        "--exclude=./aoc/*.img", "--exclude=*/aoc/*.img",
         "--exclude=./extract/*/RomFS.img.part",
         "-cf", "-", ".",
     ]
@@ -161,11 +162,12 @@ def prepare(args, api=None) -> dict:
     from source_mugiwara import prepare_source
     source = prepare_source(api, args.drive_folder_id, ROOT,
         args.base_url, args.update_url, args.base_filename, args.update_filename)
+    if (source.get("package_count") != 46 or source.get("update_nsp_count") != 1
+            or source.get("dlc_nsp_count") != 44 or source.get("base_type") != "NSP"):
+        fail("Drive/mugi source contract failed: expected 1 base NSP + 1 update NSP + 44 arbitrarily named DLC NSPs.")
     input_dir, keys = Path(source["package_dir"]), Path(source["keys_path"])
-    print(
-        f"[Mugiwara4iOS] Source verified: base {source['base']['type']} ({source['base']['name']}) "
-        f"+ update {source['update']['type']} ({source['update']['name']}).",
-        flush=True)
+    print("[Mugiwara4iOS] Source inventory verified: 1 base + 1 update + 44 DLCs in Drive/mugi.", flush=True)
+
     nx = install_nx2apple(ROOT)
     work = ROOT / "work"
     if work.exists():
@@ -173,23 +175,34 @@ def prepare(args, api=None) -> dict:
     work.mkdir(parents=True)
     from prepare_mugiwara import run_preparation
     prep = run_preparation(argparse.Namespace(
-        nx2apple_root=nx, package_dir=input_dir, keys=keys, work_dir=work))
+        nx2apple_root=nx, package_dir=input_dir, keys=keys, work_dir=work,
+        source_manifest=Path(source["manifest_path"])))
     if prep.get("project") != PROJECT or prep.get("title_id") != TITLE_ID:
         fail("NXNative preparation manifest does not belong to Mugiwara4iOS/One Piece: Pirate Warriors 4.")
     if prep.get("nx2apple_tag") != NX2APPLE_TAG or prep.get("engine_pin") != ENGINE_PIN:
         fail("Preparation manifest uses another NX2Apple/NXNative pin.")
+    if (prep.get("format") != 3 or prep.get("input_package_count") != 46
+            or prep.get("input_dlc_nsp_count") != 44 or prep.get("input_update_nsp_count") != 1
+            or prep.get("aoc_count") != 44 or len(prep.get("aoc_images", [])) != 44):
+        fail("NXNative did not complete the required 46-NSP / 44-DLC / 44-AOC preparation contract.")
     if prep.get("package_version") == "v0":
-        print("[Mugiwara4iOS] NOTE: selected package is base v0; confirm update content metadata was recognized.", flush=True)
+        fail("The update NSP was not selected; refusing a base-only build.")
 
-    romfs_rel = Path(prep["romfs_relative_path"])
-    if romfs_rel.is_absolute() or ".." in romfs_rel.parts:
-        fail("Unsafe RomFS path in the preparation manifest.")
-    romfs = work.joinpath(*romfs_rel.parts)
-    romfs_id = work / prep["romfs_id_relative_path"]
+    def relative_file(key: str) -> Path:
+        rel = Path(prep[key])
+        if rel.is_absolute() or ".." in rel.parts:
+            fail(f"Unsafe {key} path in the preparation manifest: {rel}")
+        return work.joinpath(*rel.parts)
+
+    romfs = relative_file("romfs_relative_path")
+    romfs_id = relative_file("romfs_id_relative_path")
+    aoc_dir = relative_file("aoc_relative_dir")
+    aoc_files = sorted(p for p in aoc_dir.glob("*.img") if p.is_file())
+    expected_aoc = {x["name"] for x in prep.get("aoc_images", [])}
     if not romfs.is_file() or romfs.stat().st_size != int(prep["romfs_size"]):
-        fail("Extracted RomFS size differs from the preparation manifest.")
+        fail("Prepared external RomFS is missing or has the wrong size.")
     if sha256_file(romfs) != prep["romfs_sha256"]:
-        fail("Extracted RomFS SHA-256 differs from the preparation manifest.")
+        fail("Prepared RomFS SHA-256 differs from the Linux preparation manifest.")
     if not romfs_id.is_file():
         fail("NXNative RomFS identity sidecar is missing.")
     identity = json.loads(romfs_id.read_text(encoding="utf-8"))
@@ -198,70 +211,85 @@ def prepare(args, api=None) -> dict:
             or identity.get("bytes") != prep["romfs_size"]
             or identity.get("sha256") != prep["romfs_sha256"]):
         fail("RomFS identity sidecar does not match the game/version/size/SHA-256.")
+    if len(aoc_files) != 44 or {p.name for p in aoc_files} != expected_aoc:
+        fail(f"Prepared AOC files differ from the NXNative manifest: {len(aoc_files)} files, expected {len(expected_aoc)} names.")
 
     request_id = str(uuid.uuid4())
-    output_id = create_folder(api, f"Mugiwara4iOS_{request_id[:8]}", args.drive_folder_id)
+    # Every persistent build output/checkpoint is inside the user's existing Drive/mugi folder.
+    output_id = create_folder(api, f"Mugiwara4iOS_{request_id[:8]}", source["source_folder_id"])
     pipeline_id = create_folder(api, "pipeline", output_id)
     games_id = create_folder(api, "games", output_id)
     game_id = create_folder(api, TITLE_ID.lower(), games_id)
-    print("[Mugiwara4iOS] Uploading external RomFS separately from the build workspace...", flush=True)
+    aoc_id = create_folder(api, "aoc", game_id)
+    print("[Mugiwara4iOS] Uploading external RomFS and all 44 DLC AOC images under Drive/mugi/Mugiwara4iOS_*/games/...", flush=True)
     romfs_record = upload_drive_file(api, romfs, game_id, "romfs.img")
+    aoc_records = [upload_drive_file(api, image, aoc_id, image.name) for image in aoc_files]
+    for record in aoc_records:
+        record["role"] = "aoc"
+
     archive = ROOT / "mugiwara4ios-work.tar.zst"
-    print("[Mugiwara4iOS] Archiving rewritten ExeFS, ARM64 rewrite audits, generated profile and survey; excluding source NSP/XCI, prod.keys and RomFS.", flush=True)
+    print("[Mugiwara4iOS] Archiving the build workspace only; excluding all 46 source NSPs, prod.keys, RomFS.img and 44 AOC images.", flush=True)
     build_work_archive(work, archive)
     archive_record = upload_drive_file(api, archive, pipeline_id, "mugiwara4ios-work.tar.zst")
 
     handoff = {
-        "format": 1,
-        "project": PROJECT,
-        "branch": BRANCH,
-        "request_id": request_id,
-        "title_id": TITLE_ID,
-        "package_version": prep["package_version"],
-        "nx2apple_tag": NX2APPLE_TAG,
-        "engine_pin": ENGINE_PIN,
+        "format": 2, "project": PROJECT, "branch": BRANCH, "request_id": request_id,
+        "title_id": TITLE_ID, "package_version": prep["package_version"],
+        "nx2apple_tag": NX2APPLE_TAG, "engine_pin": ENGINE_PIN,
+        "drive_source_folder_id": source["source_folder_id"],
+        "drive_source_folder_name": source["source_folder_name"],
         "drive_output_folder_id": output_id,
         "drive_output_folder_url": f"https://drive.google.com/drive/folders/{output_id}",
         "work_archive": archive_record,
         "source": {
-            "package_count": 2,
-            "base": {k: source["base"][k] for k in ("name", "type", "size", "sha256", "url_sha256")},
-            "update": {k: source["update"][k] for k in ("name", "type", "size", "sha256", "url_sha256")},
-            "input_nsp_count": source["input_nsp_count"],
-            "input_xci_count": source["input_xci_count"],
+            "folder_name": source["source_folder_name"],
+            "package_count": 46, "base_type": "NSP", "base_extension": ".nsp",
+            "base_file_name": source["base_file_name"],
+            "update_file_name": source["update_file_name"],
+            "input_nsp_count": 46, "input_xci_count": 0,
+            "update_nsp_count": 1, "dlc_nsp_count": 44,
+            "base": {k: source["base"][k] for k in ("name", "drive_name", "size", "sha256", "source", "url_sha256")},
+            "update": {k: source["update"][k] for k in ("name", "drive_name", "size", "sha256", "source", "url_sha256")},
+            "dlc_files": source["dlc_files"],
         },
         "game_data": {
             "folder_id": game_id,
             "folder_url": f"https://drive.google.com/drive/folders/{game_id}",
-            "romfs": romfs_record,
+            "romfs": romfs_record, "aoc": aoc_records,
             "romfs_relative_path": prep["romfs_relative_path"],
             "romfs_id_relative_path": prep["romfs_id_relative_path"],
+            "aoc_relative_dir": prep["aoc_relative_dir"],
         },
         "prepared": prep,
         "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
     handoff_path = ROOT / "handoff.json"
-    handoff_path.write_text(json.dumps(handoff, indent=2) + "\n", encoding="utf-8")
+    handoff_path.write_text(json.dumps(handoff, indent=2) + "\\n", encoding="utf-8")
     handoff_record = upload_drive_file(api, handoff_path, output_id, "handoff.json")
-    print("\n[Mugiwara4iOS] Linux preparation and Drive checkpoints completed.", flush=True)
+    print("\\n[Mugiwara4iOS] Colab/Linux preparation and Drive checkpoints completed.", flush=True)
     print("Request:", request_id)
-    print("Drive:", handoff["drive_output_folder_url"])
-    print("Base:", source["base"]["type"], f"{source['base']['size']:,} bytes; SHA-256 {source['base']['sha256']}")
-    print("Update:", source["update"]["type"], f"{source['update']['size']:,} bytes; SHA-256 {source['update']['sha256']}")
-    print("RomFS:", f"{romfs_record['size']:,} bytes; SHA-256 {romfs_record['sha256']}")
-    print("Workspace:", f"{archive_record['size']:,} bytes; SHA-256 {archive_record['sha256']}")
+    print("Drive/mugi checkpoint:", handoff["drive_output_folder_url"])
+    print("Base:", source["base"]["size"], "bytes; SHA-256", source["base"]["sha256"])
+    print("Update:", source["update"]["size"], "bytes; SHA-256", source["update"]["sha256"])
+    print("DLC NSPs:", source["dlc_nsp_count"], "· AOC images:", len(aoc_records))
+    print("RomFS:", f'{romfs_record["size"]:,} bytes; SHA-256 {romfs_record["sha256"]}')
+    print("Workspace:", f'{archive_record["size"]:,} bytes; SHA-256 {archive_record["sha256"]}')
     print("Handoff Drive ID:", handoff_record["id"])
-    print("Dispatch is a separate, explicit notebook cell. It writes handoff.json to Mugiwara4iOS only.")
+    print("Dispatch remains a separate, explicit last notebook cell; no Actions run was started here.")
     return handoff
 
 def recover(args, api=None) -> dict | None:
     api = api or drive_api()
-    folders = [x for x in list_children(api, args.drive_folder_id)
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from source_mugiwara import source_folder
+    mugi_folder, _ = source_folder(api, args.drive_folder_id)
+    folders = [x for x in list_children(api, mugi_folder["id"])
                if x.get("mimeType") == FOLDER_MIME and x.get("name", "").startswith("Mugiwara4iOS_")]
     folders.sort(key=lambda x: x.get("modifiedTime", ""), reverse=True)
+    ROOT.mkdir(parents=True, exist_ok=True)
     for folder in folders:
         manifest = next((x for x in list_children(api, folder["id"])
-                         if x.get("mimeType") != FOLDER_MIME and x.get("name", "").lower() == "handoff.json"), None)
+                         if x.get("mimeType") != FOLDER_MIME and x.get("name", "").casefold() == "handoff.json"), None)
         if not manifest:
             continue
         local = ROOT / "handoff.json"
@@ -269,28 +297,35 @@ def recover(args, api=None) -> dict | None:
             download_drive_file(api, manifest, local)
             handoff = json.loads(local.read_text(encoding="utf-8"))
         except Exception as exc:
-            print(f"[Mugiwara4iOS] Skipping incomplete Drive run {folder['name']}: {exc}", flush=True)
+            print(f"[Mugiwara4iOS] Skipping incomplete Drive/mugi run {folder['name']}: {exc}", flush=True)
             continue
         prepared = handoff.get("prepared") or {}
-        if (handoff.get("project") == PROJECT and handoff.get("branch") == BRANCH
-                and handoff.get("title_id") == TITLE_ID
-                and handoff.get("nx2apple_tag") == NX2APPLE_TAG
-                and handoff.get("engine_pin") == ENGINE_PIN
+        source = handoff.get("source") or {}
+        aoc = (handoff.get("game_data") or {}).get("aoc") or []
+        if (handoff.get("format") == 2 and handoff.get("project") == PROJECT
+                and handoff.get("branch") == BRANCH and handoff.get("title_id") == TITLE_ID
+                and handoff.get("nx2apple_tag") == NX2APPLE_TAG and handoff.get("engine_pin") == ENGINE_PIN
                 and handoff.get("package_version") == prepared.get("package_version")
+                and handoff.get("drive_source_folder_id") == mugi_folder["id"]
                 and handoff.get("work_archive", {}).get("id")
-                and handoff.get("game_data", {}).get("romfs", {}).get("id")
-                and prepared.get("format") == 2
-                and isinstance(prepared.get("jit_required"), bool)
-                and prepared.get("profile_type") == "provisional"
-                and prepared.get("graphics_api") == "nvn"):
-            print("[Mugiwara4iOS] Verified handoff recovered from Drive; package download, extraction and rewrite need not be repeated.")
+                and (handoff.get("game_data") or {}).get("romfs", {}).get("id")
+                and prepared.get("format") == 3 and isinstance(prepared.get("jit_required"), bool)
+                and prepared.get("profile_type") == "provisional" and prepared.get("graphics_api") == "nvn"
+                and source.get("package_count") == 46 and source.get("dlc_nsp_count") == 44
+                and prepared.get("input_package_count") == 46 and prepared.get("input_dlc_nsp_count") == 44
+                and prepared.get("aoc_count") == 44 and len(prepared.get("aoc_images", [])) == 44
+                and len(aoc) == 44
+                and {x.get("name") for x in aoc} == {x.get("name") for x in prepared.get("aoc_images", [])}):
+            print("[Mugiwara4iOS] Valid 46-package/44-DLC handoff recovered from Drive/mugi; no NSP download, extraction or rewrite repeated.")
             print("Request:", handoff["request_id"])
             print("Drive:", handoff.get("drive_output_folder_url"))
             print("Package:", handoff["package_version"])
+            print("DLC NSPs / AOC images:", source["dlc_nsp_count"], "/", len(aoc))
             print("nn::jit static AOT required:", prepared["jit_required"])
             print("Local manifest:", local)
             return handoff
-    print("[Mugiwara4iOS] No completed Mugiwara4iOS handoff was found in Drive.")
+        local.unlink(missing_ok=True)
+    print("[Mugiwara4iOS] No completed Mugiwara4iOS handoff found inside Drive/mugi.")
     return None
 
 def dispatch(args) -> None:
@@ -305,9 +340,16 @@ def dispatch(args) -> None:
             or handoff.get("engine_pin") != ENGINE_PIN):
         fail("Refusing to dispatch a handoff that does not belong to Mugiwara4iOS/One Piece: Pirate Warriors 4.")
     prepared = handoff.get("prepared") or {}
-    if (prepared.get("format") != 2 or not isinstance(prepared.get("jit_required"), bool)
-            or prepared.get("profile_type") != "provisional" or prepared.get("graphics_api") != "nvn"):
-        fail("Refusing dispatch: expected the One Piece: Pirate Warriors 4 provisional NVN profile.")
+    source = handoff.get("source") or {}
+    aoc = (handoff.get("game_data") or {}).get("aoc") or []
+    if (handoff.get("format") != 2 or prepared.get("format") != 3
+            or not isinstance(prepared.get("jit_required"), bool)
+            or prepared.get("profile_type") != "provisional" or prepared.get("graphics_api") != "nvn"
+            or source.get("package_count") != 46 or source.get("dlc_nsp_count") != 44
+            or prepared.get("input_package_count") != 46 or prepared.get("input_dlc_nsp_count") != 44
+            or prepared.get("aoc_count") != 44 or len(aoc) != 44
+            or {x.get("name") for x in aoc} != {x.get("name") for x in prepared.get("aoc_images", [])}):
+        fail("Refusing dispatch: expected 1 base + 1 update + 44 DLCs, 44 AOC images and the generated provisional NVN profile.")
     token = getpass.getpass("Fine-grained GitHub token (KintTany repository, Contents: Read and write): ").strip()
     if not token:
         fail("GitHub token is empty.")
@@ -345,8 +387,8 @@ def main() -> None:
     p.add_argument("--drive-folder-id", required=True)
     p.add_argument("--base-url", default=os.environ.get("MUGIWARA4IOS_BASE_URL", ""))
     p.add_argument("--update-url", default=os.environ.get("MUGIWARA4IOS_UPDATE_URL", ""))
-    p.add_argument("--base-filename", default=os.environ.get("MUGIWARA4IOS_BASE_FILENAME", "base.nsp"))
-    p.add_argument("--update-filename", default=os.environ.get("MUGIWARA4IOS_UPDATE_FILENAME", "update.nsp"))
+    p.add_argument("--base-filename", default=os.environ.get("MUGIWARA4IOS_BASE_FILENAME", "Mugiwara4iOS_BASE_v0.nsp"))
+    p.add_argument("--update-filename", default=os.environ.get("MUGIWARA4IOS_UPDATE_FILENAME", "Mugiwara4iOS_UPDATE_v1.8.7.nsp"))
     p.set_defaults(func=prepare)
     p = sub.add_parser("recover", help="recover the latest valid Mugiwara4iOS handoff from Drive")
     p.add_argument("--drive-folder-id", required=True)
