@@ -364,7 +364,7 @@ def prepare_source(api, drive_root_id: str, runtime_root: Path,
         "update_nsp_count": 1, "dlc_nsp_count": 44,
         "base": base_record, "update": update_record,
         "dlc_files": dlc_records, "packages": packages,
-        "keys_drive_id": keys_item["id"], "keys_sha256": keys_record["sha256"],
+        "keys_drive_id": key_items[0]["id"], "keys_sha256": keys_record["sha256"],
         "total_package_bytes": total_bytes,
     }
     source_path = root / "source-manifest.json"
