@@ -18,12 +18,28 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 
 
 PROCESS_WORKERS = r'''
+BUILD_STARTED = time.monotonic()
+LAST_RATE_LOG = 0.0
+
+
 def finished(*_):
-    """Count a completed shader in the parent process and refresh the build progress."""
+    """Count completed shaders, report the measured rate, and refresh build progress."""
+    global LAST_RATE_LOG
     with _prog['lock']:
         DONE['n'] += 1
         n = DONE['n']
+        now = time.monotonic()
+        emit_rate = bool(PROGRESS and now - LAST_RATE_LOG >= 60)
+        if emit_rate:
+            LAST_RATE_LOG = now
     progress('compiling', n, len(keys), cached=len(cache_hits), misses=NMISS)
+    if emit_rate:
+        elapsed = max(now - BUILD_STARTED, 0.001)
+        print(
+            f"[Mugiwara4iOS] Metal throughput: {n / elapsed:.2f} shader/s "
+            f"({n}/{len(keys)} finished, {PROCS} process workers).",
+            flush=True,
+        )
 
 
 # The worker processes finish the MSL rewrite/reflection/Metal part without the GIL.
@@ -97,6 +113,20 @@ if px:
     if IOSOUT:
         dmsh_pch.header(ios_metal.METAL + ios_metal.DEPTH)
     px.submit(int).result()
+    active_workers = sorted(
+        process.pid for process in px._processes.values() if process.is_alive()
+    )
+    if len(active_workers) != PROCS:
+        sys.exit(
+            f"[RED] expected {PROCS} live Metal finish workers, "
+            f"but only {len(active_workers)} started: {active_workers}"
+        )
+    print(
+        f"[Mugiwara4iOS] Metal process pool ACTIVE: {len(active_workers)} workers "
+        f"(PIDs {active_workers}); target={','.join(sorted(TARGETS))}, "
+        f"J={NJ}, batch={BATCH}.",
+        flush=True,
+    )
 
 
 '''
@@ -114,11 +144,26 @@ batches = [
 res, busy = [], []
 
 
+RATE_GUARD_SECONDS = float(os.environ.get("DMSH_RATE_GUARD_SECONDS", "300"))
+MIN_SHADERS_PER_SEC = float(os.environ.get("DMSH_MIN_SHADERS_PER_SEC", "1.2"))
+
+
 def collect(left):
     while len(busy) > left:
         wb, futures = busy.pop(0)
         res.extend(results(futures))
         shutil.rmtree(wb, ignore_errors=True)
+        elapsed = time.monotonic() - BUILD_STARTED
+        if elapsed >= RATE_GUARD_SECONDS:
+            completed = DONE["n"]
+            rate = completed / max(elapsed, 0.001)
+            if rate < MIN_SHADERS_PER_SEC:
+                sys.exit(
+                    f"[RED] Mugiwara4iOS shader throughput guard stopped the build: "
+                    f"{rate:.2f} shader/s after {elapsed:.0f}s "
+                    f"({completed}/{len(keys)}); minimum is {MIN_SHADERS_PER_SEC:.2f}. "
+                    "The run will not consume the six-hour runner budget at this rate."
+                )
 
 
 try:
