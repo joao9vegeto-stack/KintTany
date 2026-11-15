@@ -122,7 +122,8 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
     prep = json.loads(prep_path.read_text(encoding="utf-8"))
     if prep.get("format") != 3 or not isinstance(prep.get("jit_required"), bool):
         fail("Colab prep manifest is outdated or missing the 44-DLC/AOC and NXNative nn::jit/AOT contract; rerun Colab preparation.")
-    for key in ("format", "project", "title_id", "package_version", "nx2apple_tag", "engine_pin",
+    for key in ("format", "project", "title_id", "package_version", "display_version",
+                "base_content_version", "update_content_version", "nx2apple_tag", "engine_pin",
                 "profile_type", "profile_source", "profile_relative_dir",
                 "modules", "main_build_id", "main_sha256", "rewrite_audit",
                 "graphics_api", "jit_required", "shader_source_flags", "shader_source_reasons", "shader_source_audit", "shader_chain",
@@ -132,6 +133,9 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
                 "input_update_nsp_count", "input_dlc_nsp_count", "input_packages"):
         if prepared.get(key) != prep.get(key):
             fail(f"Actions input and Colab workspace disagree on {key}.")
+    if (prep.get("display_version") != "1.8.7" or prep.get("base_content_version") != 0
+            or int(prep.get("update_content_version", 0)) <= 0):
+        fail("Route C expects base content v0 and the update NACP display version 1.8.7.")
     if prep.get("profile_type") != "provisional":
         fail("Route C expects the One Piece: Pirate Warriors 4 profile generated from the actual NSP/XCI content.")
     if (prep.get("input_package_count") != 46 or prep.get("input_nsp_count") != 46
@@ -396,7 +400,9 @@ def main() -> None:
 
         control = builder.languages_control(version_dir)
         display_name = nacp.name(control) or profile.get("name") or "ONE PIECE: PIRATE WARRIORS 4"
-        display_version = nacp.version(version_dir / "control.nacp") or "1.0.0"
+        display_version = nacp.version(version_dir / "control.nacp")
+        if display_version != prep["display_version"] or display_version != "1.8.7":
+            fail(f"Mac NACP version changed after Colab preparation: expected {prep['display_version']}, got {display_version!r}.")
         language = builder.game_language("en-US", False, nacp.languages(control))
         framework_root = output / "frameworks"
         shutil.rmtree(framework_root, ignore_errors=True)
