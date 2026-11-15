@@ -1,0 +1,149 @@
+name: Mugiwara4iOS · Pirate Warriors 4 Route C
+
+on:
+  push:
+    branches:
+      - Mugiwara4iOS
+    paths:
+      - handoff.json
+
+concurrency:
+  group: mugiwara4ios-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate-handoff:
+    if: github.ref == 'refs/heads/Mugiwara4iOS' && github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Queue Mugiwara4iOS build ')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Mugiwara4iOS only
+        uses: actions/checkout@v4
+        with:
+          ref: Mugiwara4iOS
+          persist-credentials: false
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate branch, Title ID and prepared package handoff
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/Mugiwara4iOS"
+          python -m json.tool handoff.json >/dev/null
+          python - <<'PY'
+          import json, re
+          from pathlib import Path
+          h = json.loads(Path("handoff.json").read_text(encoding="utf-8"))
+          p = h.get("prepared") or {}
+          assert h.get("project") == "Mugiwara4iOS"
+          assert h.get("branch") == "Mugiwara4iOS"
+          assert h.get("title_id") == "01008FE00E2F6000"
+          assert h.get("nx2apple_tag") == "v1.3.1-rc2"
+          assert h.get("engine_pin") == "81906931262fb25d774cce8bca2db8926439e5a2"
+          assert h.get("package_version") == p.get("package_version") and p.get("package_version") != "v0"
+          assert p.get("profile_type") == "provisional"
+          assert p.get("graphics_api") == "nvn"
+          assert p.get("input_package_count") == 2
+          assert len(p.get("input_packages", [])) == 2
+          for item in p["input_packages"]:
+              assert item.get("type") in ("NSP", "XCI")
+              assert int(item.get("size", 0)) > 0
+              assert re.fullmatch(r"[0-9a-f]{64}", item.get("sha256", ""))
+          assert isinstance(p.get("unreal_shader_sources"), dict)
+          assert isinstance(p.get("shader_source_reasons"), dict)
+          assert isinstance(p.get("shader_source_audit"), dict)
+          assert h.get("work_archive", {}).get("sha256")
+          assert h.get("game_data", {}).get("romfs", {}).get("sha256")
+          print("Mugiwara4iOS / Pirate Warriors 4 handoff: OK")
+          PY
+          python -m py_compile \
+            colab/source_mugiwara.py \
+            colab/prepare_mugiwara.py \
+            colab/run_mugiwara.py \
+            scripts/prepare_mugiwara_actions.py \
+            scripts/build_mugiwara_shared.py
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          n = json.loads(Path("colab/Mugiwara4iOS.ipynb").read_text(encoding="utf-8"))
+          assert n["nbformat"] == 4 and len(n["cells"]) == 6
+          joined = "\\n".join("".join(c.get("source", [])) for c in n["cells"])
+          assert "Mugiwara4iOS" in joined and "01008FE00E2F6000" in joined
+          assert "DISPATCH_TO_GITHUB = False" in joined
+          assert "KaKaRoTiOS" not in joined and "SpkIOSzero" in joined
+          print("Colab notebook JSON/branch guard: OK")
+          PY
+
+  build-pirate-warriors-4:
+    needs: validate-handoff
+    if: github.ref == 'refs/heads/Mugiwara4iOS' && github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Queue Mugiwara4iOS build ')
+    runs-on: xcode-27
+    timeout-minutes: 360
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+    steps:
+      - name: Checkout Mugiwara4iOS only
+        uses: actions/checkout@v4
+        with:
+          ref: Mugiwara4iOS
+          persist-credentials: false
+      - name: Assert branch and Xcode 27 / iOS SDK on Apple Silicon
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/Mugiwara4iOS"
+          test -d "$DEVELOPER_DIR" || { echo "::error::Xcode 27.2 is missing from xcode-27"; exit 1; }
+          test "$(uname -m)" = "arm64"
+          xcode-select -p
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphoneos metal --version
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install build tools and Python dependencies (no cache)
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install xcodegen zstd glslang cmake ninja pkg-config
+          brew list --cask dotnet-sdk >/dev/null 2>&1 || brew install --cask dotnet-sdk
+          python -m pip install --upgrade pip
+          python -m pip install lz4 'capstone>=5,<6' fonttools zbic backports.zstd google-api-python-client google-auth PyYAML pycryptodome requests
+      - name: Clone and pin NX2Apple / NXNative
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v1.3.1-rc2 https://github.com/LNPANDY/NX2Apple.git NX2Apple
+          python NX2Apple/tools/engine.py sync
+          test "$(cat NX2Apple/.upstream-ref)" = "81906931262fb25d774cce8bca2db8926439e5a2"
+      - name: Restore workspace and external RomFS from Drive (size + SHA-256)
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/prepare_mugiwara_actions.py \
+            --handoff handoff.json \
+            --destination "$RUNNER_TEMP/mugiwara-actions"
+      - name: Oodle when detected, GLSLC capture, NVN shader split, Metal and Route C IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/build_mugiwara_shared.py \
+            --nx2apple-root NX2Apple \
+            --prepared-json "$RUNNER_TEMP/mugiwara-actions/actions-input.json" \
+            --output "$RUNNER_TEMP/mugiwara-output"
+      - name: Upload Mugiwara4iOS IPA and build report
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mugiwara4iOS-Pirate-Warriors-4-IPA
+          path: |
+            ${{ runner.temp }}/mugiwara-output/Mugiwara4iOS.ipa
+            ${{ runner.temp }}/mugiwara-output/build-report.json
+          if-no-files-found: error
+          retention-days: 14
