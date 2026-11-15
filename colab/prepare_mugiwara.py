@@ -302,7 +302,7 @@ def run_preparation(args) -> dict:
         "modules": modules, "main_build_id": build_id, "main_sha256": main_sha,
         "rewrite_audit": rewrite_audit,
         "graphics_api": graphics, "graphics_reason": facts["graphics"][1],
-        "unreal_shader_sources": shader_flags, "shader_source_reasons": shader_reasons,
+        "shader_source_flags": shader_flags, "shader_source_reasons": shader_reasons,
 "shader_source_audit": audit, "shader_chain": chain,
         "romfs_relative_path": f"extract/{package_version}/RomFS.img",
         "romfs_id_relative_path": f"extract/{package_version}/RomFS.img.id",

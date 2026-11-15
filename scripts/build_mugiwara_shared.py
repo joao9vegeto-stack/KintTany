@@ -123,7 +123,7 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
     for key in ("project", "title_id", "package_version", "nx2apple_tag", "engine_pin",
                 "profile_type", "profile_source", "profile_relative_dir",
                 "modules", "main_build_id", "main_sha256", "rewrite_audit",
-                "graphics_api", "unreal_shader_sources", "shader_source_reasons", "shader_source_audit", "shader_chain",
+                "graphics_api", "shader_source_flags", "shader_source_reasons", "shader_source_audit", "shader_chain",
                 "romfs_relative_path", "romfs_id_relative_path",
                 "romfs_size", "romfs_sha256", "survey_relative_path", "survey_size",
         "survey_sha256", "input_package_count", "input_packages"):
@@ -291,11 +291,11 @@ def main() -> None:
         actual_flags = {key: bool(facts.get(key, (False, ""))[0])
                         for key in ("ue_decode", "oodle_packs", "ue_legacy",
                                     "glslc_capture", "vk_capture", "gl_capture")}
-        if actual_flags != prep["unreal_shader_sources"]:
-            fail(f"Shader source classification differs between Colab and macOS: {actual_flags} != {prep['unreal_shader_sources']}.")
+        if actual_flags != prep["shader_source_flags"]:
+            fail(f"Shader source classification differs between Colab and macOS: {actual_flags} != {prep['shader_source_flags']}.")
         # Mac re-check of the Colab shader-source decision.
-        if actual_flags != prep["unreal_shader_sources"]:
-            fail(f"Shader-source flags differ between Colab and macOS: {actual_flags} != {prep['unreal_shader_sources']}.")
+        if actual_flags != prep["shader_source_flags"]:
+            fail(f"Shader-source flags differ between Colab and macOS: {actual_flags} != {prep['shader_source_flags']}.")
         actual_reasons = {key: str(facts[key][1]) for key in actual_flags if key in facts}
         if actual_reasons != prep["shader_source_reasons"]:
             fail("Shader-source evidence/reasons differ between Colab and macOS.")
@@ -469,7 +469,7 @@ def main() -> None:
             "main_build_id": prep["main_build_id"], "main_sha256": prep["main_sha256"],
             "modules": modules, "rewrite_audit": prep["rewrite_audit"],
             "graphics_api": prep["graphics_api"],
-            "unreal_shader_sources": actual_flags, "shader_source_audit": prep["shader_source_audit"],
+            "shader_source_flags": actual_flags, "shader_source_audit": prep["shader_source_audit"],
             "shader_chain": actual_chain, "shader_package_key": package_key,
             "metal_validation": table_stamp,
             "framework": framework_name, "ipa": ipa.name, "ipa_size_bytes": ipa.stat().st_size,
