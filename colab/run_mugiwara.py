@@ -88,6 +88,7 @@ def upload_drive_file(api, path: Path, parent_id: str, name: str) -> dict:
 
 def download_drive_file(api, item: dict, destination: Path) -> None:
     from googleapiclient.http import MediaIoBaseDownload
+    from http.client import IncompleteRead
     destination.parent.mkdir(parents=True, exist_ok=True)
     part = destination.with_suffix(destination.suffix + ".part")
     request = api.files().get_media(fileId=item["id"], supportsAllDrives=True)
@@ -98,7 +99,7 @@ def download_drive_file(api, item: dict, destination: Path) -> None:
             try:
                 status, done = downloader.next_chunk()
                 retries = 0
-            except (TimeoutError, ConnectionError, OSError) as exc:
+            except (IncompleteRead, TimeoutError, ConnectionError, OSError) as exc:
                 retries += 1
                 if retries > 10:
                     raise RuntimeError(f"Drive download failed after {retries-1} retries: {exc}") from exc
@@ -109,14 +110,27 @@ def download_drive_file(api, item: dict, destination: Path) -> None:
             if status:
                 print(f"[Mugiwara4iOS] Drive {item.get('name', item['id'])}: {status.progress()*100:.1f}%", flush=True)
     size = part.stat().st_size
-    if size != int(item.get("size", -1)):
+    expected_size = int(item.get("size", -1))
+    if size <= 0 or size != expected_size:
         part.unlink(missing_ok=True)
-        fail(f"Drive size mismatch for {item.get('name')}: received {size}, expected {item.get('size')}.")
-    digest = sha256_file(part)
-    if digest.lower() != str(item.get("sha256", "")).lower():
-        part.unlink(missing_ok=True)
-        fail(f"Drive SHA-256 mismatch for {item.get('name')}.")
+        fail(f"Drive size mismatch for {item.get('name')}: received {size}, expected {expected_size}.")
+    expected_sha = str(item.get("sha256", "")).lower()
+    if expected_sha:
+        digest = sha256_file(part)
+        if digest.lower() != expected_sha:
+            part.unlink(missing_ok=True)
+            fail(f"Drive SHA-256 mismatch for {item.get('name')}.")
+    expected_md5 = str(item.get("md5Checksum", "")).lower()
+    if expected_md5:
+        md5 = hashlib.md5()
+        with part.open("rb") as stream:
+            for block in iter(lambda: stream.read(16 * 1024 * 1024), b""):
+                md5.update(block)
+        if md5.hexdigest().lower() != expected_md5:
+            part.unlink(missing_ok=True)
+            fail(f"Drive MD5 mismatch for {item.get('name')}.")
     part.replace(destination)
+
 
 def build_work_archive(work: Path, destination: Path) -> None:
     """Archive only reproducible workspace outputs; RomFS is stored as a separate Drive object."""
