@@ -129,7 +129,7 @@ def main() -> None:
     prepared_handoff = handoff.get("prepared") or {}
     source_handoff = handoff.get("source") or {}
     game_data = handoff.get("game_data") or {}
-    romfs_record = game_data.get("romfs") or []
+    romfs_record = game_data.get("romfs") or {}
     aoc_records = game_data.get("aoc") or []
 
     if (
