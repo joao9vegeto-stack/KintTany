@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One Piece: Pirate Warriors 4 package acquisition for Colab. Base and update may independently be NSP or XCI."""
+"""One Piece: Pirate Warriors 4 acquisition: one base NSP, one update NSP and 44 named DLC NSPs from Drive/mugi."""
 from __future__ import annotations
 import hashlib
 import json
