@@ -261,34 +261,81 @@ def prepare(args, api=None) -> dict:
     )
     input_dir, keys = Path(source["package_dir"]), Path(source["keys_path"])
     base_path, update_path = Path(source["base_path"]), Path(source["update_path"])
-    # Stage existing DLC packages from Drive/kakarot (root, DLC/, or AOC/) separately.
+    # The 20 DLC files are direct children of Drive/<configured root>/kakarot.
+    # Keep each original filename; do not depend on artificial dlc1/dlc2 names.
     kakarot_id = source["drive_kakarot_folder_id"]
-    dlc_candidates = []
-    for item in list_children(api, kakarot_id):
-        if item.get("mimeType") == FOLDER_MIME and item.get("name", "").lower() in ("dlc", "aoc"):
-            dlc_candidates.extend(list_children(api, item["id"]))
-        elif item.get("mimeType") != FOLDER_MIME:
-            dlc_candidates.append(item)
-    excluded_names = {base_path.name.lower(), update_path.name.lower()}
-    dlc_items = [x for x in dlc_candidates if x.get("mimeType") != FOLDER_MIME
-                 and Path(x.get("name", "")).suffix.lower() in (".nsp", ".xci")
-                 and x.get("name", "").lower() not in excluded_names]
-    seen = set()
-    staged = 0
+    dlc_items = sorted(
+        (x for x in list_children(api, kakarot_id)
+         if x.get("mimeType") != FOLDER_MIME
+         and Path(x.get("name", "")).suffix.lower() in (".nsp", ".xci")
+         and x.get("name", "").lower() not in {
+             base_path.name.lower(), update_path.name.lower(),
+             "base.nsp", "base.xci", "update.nsp", "update.xci",
+         }),
+        key=lambda x: str(x.get("name", "")).casefold(),
+    )
+    if len(dlc_items) != 20:
+        inventory = "; ".join(
+            f"{x.get('name')} ({int(x.get('size') or 0):,} bytes)"
+            for x in dlc_items
+        )
+        fail(f"Expected exactly 20 named DLC packages directly inside Drive/kakarot; found {len(dlc_items)}. Found: {inventory or '(none)'}")
+
+    large_group, small_group, other_sizes = [], [], []
     for item in dlc_items:
-        if item["id"] in seen:
-            continue
-        seen.add(item["id"])
-        dest = input_dir / ("dlc_" + Path(item["name"]).name)
+        size_bytes = int(item.get("size") or 0)
+        size_kib = round(size_bytes / 1024)
+        if 118 <= size_kib <= 128:
+            large_group.append(item)
+        elif 100 <= size_kib <= 112:
+            small_group.append(item)
+        else:
+            other_sizes.append(item)
+    if len(large_group) != 17 or len(small_group) != 3 or other_sizes:
+        inventory = "; ".join(
+            f"{x.get('name')} ({int(x.get('size') or 0):,} bytes; {int(round(int(x.get('size') or 0)/1024))} KiB)"
+            for x in dlc_items
+        )
+        fail("The 20 DLC file sizes do not match the stated inventory (17 around 124 KB and 3 around 106 KB). Drive inventory: " + inventory)
+    duplicate_names = sorted({
+        str(x.get("name", "")).casefold() for x in dlc_items
+        if sum(1 for y in dlc_items if str(y.get("name", "")).casefold() == str(x.get("name", "")).casefold()) > 1
+    })
+    if duplicate_names:
+        fail("Duplicate DLC filenames in Drive/kakarot would collide during staging: " + ", ".join(duplicate_names))
+
+    staged_items = []
+    for item in dlc_items:
+        original_name = Path(item["name"]).name
+        dest = input_dir / ("dlc_" + original_name)
         download_drive_file(api, item, dest)
         with dest.open("rb") as stream:
             header = stream.read(0x104)
-        if header[:4] != b"PFS0" and header[0x100:0x104] != b"HEAD":
+        suffix = Path(original_name).suffix.lower()
+        valid_header = (
+            header[:4] == b"PFS0" if suffix == ".nsp"
+            else len(header) >= 0x104 and header[0x100:0x104] == b"HEAD"
+        )
+        if not valid_header:
             dest.unlink(missing_ok=True)
-            fail("Existing DLC file " + str(item.get("name")) + " is not a valid NSP/XCI package.")
-        staged += 1
-    source["dlc_drive_items"] = [{"id": x["id"], "name": x["name"]} for x in dlc_items]
-    print(f"[KaKaRoTiOS] Existing DLC packages staged from Drive/kakarot: {staged}.", flush=True)
+            fail("Existing DLC file " + original_name + " has an invalid header for its " + suffix + " extension.")
+        staged_items.append({
+            "id": item["id"], "name": item["name"],
+            "size": int(item.get("size") or dest.stat().st_size),
+            "local_name": dest.name,
+        })
+    source["dlc_drive_items"] = staged_items
+    source["dlc_inventory"] = {
+        "total": len(staged_items),
+        "approximately_124_kb": len(large_group),
+        "approximately_106_kb": len(small_group),
+    }
+    print(
+        "[KaKaRoTiOS] DLC inventory verified: "
+        f"{len(staged_items)} named packages; 17 around 124 KB and 3 around 106 KB. "
+        "Original names preserved with only the internal dlc_ scanner prefix.",
+        flush=True,
+    )
     print(
         f"[KaKaRoTiOS] Reconstructed source pair: base {source['base']['type']} "
         f"({source['base']['size']:,} bytes) + update {source['update']['type']} "
@@ -457,7 +504,13 @@ def prepare(args, api=None) -> dict:
 
 def recover(args, api=None) -> dict | None:
     api = api or drive_api()
-    folders = [x for x in list_children(api, args.drive_folder_id)
+    configured_root_items = list_children(api, args.drive_folder_id)
+    kakarot_folders = [x for x in configured_root_items
+                       if x.get("mimeType") == FOLDER_MIME
+                       and x.get("name", "").lower() == "kakarot"]
+    if len(kakarot_folders) != 1:
+        fail(f"Expected exactly one 'kakarot' folder under the configured Drive root during recovery; found {len(kakarot_folders)}.")
+    folders = [x for x in list_children(api, kakarot_folders[0]["id"])
                if x.get("mimeType") == FOLDER_MIME and x.get("name", "").startswith("KaKaRoTiOS_")]
     folders.sort(key=lambda x: x.get("modifiedTime", ""), reverse=True)
     for folder in folders:
