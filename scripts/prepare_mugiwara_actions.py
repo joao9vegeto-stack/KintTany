@@ -414,7 +414,7 @@ def main() -> None:
             fail(f"Restored source/rewrite artifact missing: {path.relative_to(work)}")
 
     prepared = {
-        "format": 3,
+        "format": 4,
         "project": PROJECT, "branch": BRANCH, "title_id": TITLE_ID,
         "package_version": prep["package_version"], "display_version": prep["display_version"],
         "base_content_version": prep["base_content_version"],
