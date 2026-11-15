@@ -111,7 +111,7 @@ def valid_aoc_manifest(prep: dict, drive_records: list[dict] | None = None) -> b
                         or record.get("sha256") != image.get("sha256")):
                     return False
         return True
-    except (KeyError, TypeError, ValueError, OverflowError):
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
         return False
 
 
