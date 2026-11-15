@@ -354,7 +354,7 @@ def main() -> None:
         print("[Mugiwara4iOS] c1_full.tsv, cb_extent.tsv and Metal chain input stamp all verified.", flush=True)
 
         control = builder.languages_control(version_dir)
-        display_name = nacp.name(control) or profile.get("name") or "DRAGON BALL Z: PIRATE WARRIORS 4"
+        display_name = nacp.name(control) or profile.get("name") or "ONE PIECE: PIRATE WARRIORS 4"
         display_version = nacp.version(version_dir / "control.nacp") or "1.0.0"
         language = builder.game_language("en-US", False, nacp.languages(control))
         framework_root = output / "frameworks"
@@ -407,7 +407,7 @@ def main() -> None:
         shell_env.update({
             "SHELL_DIR": str(shell_dir), "DM_SHELL_FRAMEWORKS": str(framework),
             "DM_SHELL_PACKAGE": str(nx / "frontend-ios"), "DM_SHELL_NAME": display_name,
-            "DM_BUNDLE_ID": "org.nxnative.mugiwara4iosios",
+            "DM_BUNDLE_ID": "org.nxnative.mugiwara4ios",
             "DM_APP_VERSION": display_version, "DM_TEAM_ID": "0000000000",
             "DM_XCODE_DERIVED_DATA": str(shell_dd), "FONT_PY": py,
             "STD_FONT": "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
