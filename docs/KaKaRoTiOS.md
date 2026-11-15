@@ -44,7 +44,7 @@ The workspace archive excludes source packages, `prod.keys`, external `RomFS.img
 
 Uploads are recorded with size, SHA-256 and Drive's server-side MD5 checksum. Before deleting the six RAR volumes, Colab writes a small `pipeline/source-manifest.json` checkpoint containing the six URL fingerprints, all six volume hashes, the reconstructed package hashes and the Drive file IDs. If the Colab runtime resets after the package uploads, a new runtime can match the same six link fingerprints and recover base/update from Drive instead of downloading the RAR volumes again. The six downloaded RAR volumes and their extraction scratch are deleted from Colab **only after both reconstructed package uploads have passed verification**. The original packages remain in Drive.
 
-Existing DLC `.nsp`/`.xci` packages are discovered in `Drive/kakarot/` and its immediate `DLC/` or `AOC/` subfolder, validated by package header, and staged as separate `dlc_` inputs alongside base and update for NXNative. The `prod.keys` file is read only from `Drive/kakarot/prod.keys`. The NXNative `extract_aoc` stage produces AOC images only when those supplied DLC packages are recognized; no DLC data is fabricated.
+Exactly 20 DLC `.nsp`/`.xci` packages are discovered as direct children of `Drive/<configured-root>/kakarot/`. Their original filenames are retained; there is no `dlc1.nsp`/`dlc2.nsp` naming requirement. The inventory is checked against the supplied size profile (17 around 124 KB and 3 around 106 KB), and each file is header-validated before being staged independently for NXNative. The `prod.keys` file may be in the already-configured Drive root or in its `kakarot/` child, matching the Link2iOS/SpkIOSzero convention. The NXNative `extract_aoc` stage produces AOC images only when those supplied DLC packages are recognized; no DLC data is fabricated.
 
 ## Colab / NXNative preparation
 
@@ -71,7 +71,7 @@ AOC stays external to the thin IPA and is listed in the build report/Drive hando
 
 Set:
 
-- `DRIVE_FOLDER_ID` — the existing configured Drive root. It must contain one `kakarot/` folder with `prod.keys` and the existing DLC packages.
+- `DRIVE_FOLDER_ID` — the existing configured Drive root reused from Link2iOS/SpkIOSzero. It must contain one `kakarot/` folder with the 20 named DLC packages; `prod.keys` may be in the root or inside `kakarot/`.
 - `BASE_PART_URLS` — the three direct URLs in volume order.
 - `UPDATE_PART_URLS` — the three direct URLs in volume order.
 - `BASE_PART_NAMES` / `UPDATE_PART_NAMES` — optional exact source names when the download host does not expose them.
