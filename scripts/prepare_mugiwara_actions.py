@@ -225,7 +225,7 @@ def main() -> None:
         fail("Handoff is not for Mugiwara4iOS/One Piece: Pirate Warriors 4 or uses a different pinned engine.")
     if handoff.get("package_version") != prepared_handoff.get("package_version"):
         fail("Handoff and preparation package versions disagree.")
-    if prepared_handoff.get("format") != 3 or not isinstance(prepared_handoff.get("jit_required"), bool):
+    if prepared_handoff.get("format") != 4 or not isinstance(prepared_handoff.get("jit_required"), bool):
         fail("Preparation manifest is outdated or missing the 44-DLC/AOT contract; rerun Colab preparation.")
     if prepared_handoff.get("profile_type") != "provisional" or prepared_handoff.get("graphics_api") != "nvn":
         fail("Expected the generated One Piece: Pirate Warriors 4 provisional NVN profile.")
@@ -233,23 +233,18 @@ def main() -> None:
         source_handoff.get("package_count") != EXPECTED_PACKAGES
         or source_handoff.get("base_type") != "NSP"
         or source_handoff.get("update_nsp_count") != 1
-        or source_handoff.get("dlc_nsp_count") != EXPECTED_DLC
+        or source_handoff.get("dlc_nsp_count") != EXPECTED_DLC_NSPS
         or prepared_handoff.get("input_package_count") != EXPECTED_PACKAGES
         or prepared_handoff.get("input_nsp_count") != EXPECTED_PACKAGES
         or prepared_handoff.get("input_xci_count") != 0
         or prepared_handoff.get("input_update_nsp_count") != 1
-        or prepared_handoff.get("input_dlc_nsp_count") != EXPECTED_DLC
+        or prepared_handoff.get("input_dlc_nsp_count") != EXPECTED_DLC_NSPS
         or len(prepared_handoff.get("input_packages", [])) != EXPECTED_PACKAGES
     ):
         fail("Handoff does not describe exactly 1 base NSP + 1 update NSP + 44 DLC NSPs.")
     prep_aoc = prepared_handoff.get("aoc_images") or []
-    if (
-        prepared_handoff.get("aoc_count") != EXPECTED_DLC
-        or len(prep_aoc) != EXPECTED_DLC
-        or len(aoc_records) != EXPECTED_DLC
-        or {x.get("name") for x in prep_aoc} != {x.get("name") for x in aoc_records}
-    ):
-        fail("Handoff and preparation manifest must contain the same 44 external AOC images.")
+    if not valid_aoc_manifest(prepared_handoff, aoc_records):
+        fail("Handoff AOC records do not match the unique DLC Title IDs and NXNative's highest-version selection.")
     for record in aoc_records:
         if (
             not record.get("id") or not record.get("sha256")
@@ -300,10 +295,10 @@ def main() -> None:
     if not prep_path.is_file():
         fail("mugiwara4ios-linux-prep.json is missing from the restored workspace.")
     prep = json.loads(prep_path.read_text(encoding="utf-8"))
-    if (prep.get("format") != 3 or prep.get("display_version") != "1.8.7"
+    if (prep.get("format") != 4 or prep.get("display_version") != "1.8.7"
             or prep.get("base_content_version") != 0 or int(prep.get("update_content_version", 0)) <= 0
             or not isinstance(prep.get("jit_required"), bool)):
-        fail("Restored Colab prep manifest is outdated or missing the format-3 44-DLC/AOT contract.")
+        fail("Restored Colab prep manifest is outdated or missing the format-4 unique-title-ID AOC/AOT contract.")
 
     compare_keys = (
         "format", "project", "title_id", "package_version", "display_version",
@@ -312,7 +307,8 @@ def main() -> None:
         "main_build_id", "main_sha256", "rewrite_audit", "graphics_api", "jit_required",
         "shader_source_flags", "shader_source_reasons", "shader_source_audit", "shader_chain",
         "romfs_relative_path", "romfs_id_relative_path", "romfs_size", "romfs_sha256",
-        "aoc_relative_dir", "aoc_count", "aoc_images",
+        "aoc_relative_dir", "aoc_count", "aoc_title_ids", "aoc_contents", "aoc_images",
+        "dlc_content_meta_count", "dlc_content_meta",
         "survey_relative_path", "survey_size", "survey_sha256",
         "input_package_count", "input_nsp_count", "input_xci_count",
         "input_update_nsp_count", "input_dlc_nsp_count", "input_packages",
@@ -351,7 +347,7 @@ def main() -> None:
     if romfs_sha != prep["romfs_sha256"] or romfs_sha != romfs_record["sha256"]:
         fail("Restored RomFS SHA-256 differs from Colab and/or Drive.")
 
-    print("[Mugiwara4iOS] Restoring the 44 external DLC AOC images and verifying every SHA-256...", flush=True)
+    print(f"[Mugiwara4iOS] Restoring {prep['aoc_count']} unique-title-ID AOC images and verifying every SHA-256...", flush=True)
     aoc_dir.mkdir(parents=True, exist_ok=True)
     expected_aoc = {item["name"]: item for item in prep_aoc}
     for record in aoc_records:
@@ -366,7 +362,7 @@ def main() -> None:
             fail(f"Restored AOC SHA-256 differs from Colab and/or Drive: {record['name']}.")
     restored_aoc = sorted(item.name for item in aoc_dir.glob("*.img") if item.is_file())
     if restored_aoc != sorted(expected_aoc):
-        fail(f"Restored AOC filename set differs from the 44 prepared DLCs: {restored_aoc}.")
+        fail(f"Restored AOC filename set differs from the {prep['aoc_count']} unique DLC Title IDs: {restored_aoc}.")
 
     survey_rel = safe_relative(prep["survey_relative_path"], "survey")
     survey = work.joinpath(*survey_rel.parts)
@@ -428,7 +424,10 @@ def main() -> None:
         "work_dir": str(work),
         "romfs_path": str(romfs), "romfs_id_path": str(identity),
         "aoc_dir": str(aoc_dir), "aoc_relative_dir": prep["aoc_relative_dir"],
-        "aoc_count": len(restored_aoc), "aoc_images": prep["aoc_images"],
+        "aoc_count": len(restored_aoc), "aoc_title_ids": prep["aoc_title_ids"],
+        "aoc_contents": prep["aoc_contents"], "aoc_images": prep["aoc_images"],
+        "dlc_content_meta_count": prep["dlc_content_meta_count"],
+        "dlc_content_meta": prep["dlc_content_meta"],
         "aoc_restored_names": restored_aoc,
         "survey_path": str(survey), "survey_sha256": prep["survey_sha256"],
         "profile_dir": str(profile_dir), "exefs_dir": str(exefs), "patched_dir": str(patched),
@@ -449,7 +448,7 @@ def main() -> None:
     output_path = root / "actions-input.json"
     output_path.write_text(json.dumps(prepared, indent=2) + "\n", encoding="utf-8")
     print("[Mugiwara4iOS] Actions input validated:", output_path)
-    print("[Mugiwara4iOS] Restored and verified external RomFS + all 44 AOC images.")
+    print(f"[Mugiwara4iOS] Restored and verified external RomFS + {len(restored_aoc)} unique-title-ID AOC images from 44 DLC NSPs.")
     print("[Mugiwara4iOS] Original 46 NSPs and prod.keys were not restored to Actions.")
 
 if __name__ == "__main__":
