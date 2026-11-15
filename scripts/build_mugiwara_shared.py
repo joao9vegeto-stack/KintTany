@@ -407,6 +407,16 @@ def main() -> None:
         if not (framework / "msl" / f"b-{actual_chain}.img").is_file():
             if not (framework / "msl" / f"b-{actual_chain}").is_dir():
                 fail("Framework does not contain the iOS Metal library for the verified chain.")
+        jit_embedded = False
+        if prep["jit_required"]:
+            executable = framework / executable_name
+            sections = subprocess.run(["otool", "-l", str(executable)],
+                capture_output=True, text=True, check=False)
+            if sections.returncode != 0:
+                fail(f"Could not inspect the built framework Mach-O for its static nn::jit image: {sections.stderr[-1000:]}")
+            jit_embedded = "sectname __dm_jit" in sections.stdout
+            if not jit_embedded:
+                fail("NXNative detected nn::jit and captured its AOT image, but the DmGame.framework executable does not contain __TEXT,__dm_jit.")
         if any(framework.rglob("*.mtl4a")):
             fail("Framework unexpectedly contains an unsupported .mtl4a PSO archive.")
         if (framework / "pso").exists() and any((framework / "pso").iterdir()):
@@ -484,7 +494,7 @@ def main() -> None:
             "modules": modules, "rewrite_audit": prep["rewrite_audit"],
             "graphics_api": prep["graphics_api"],
             "jit_required": prep["jit_required"],
-            "jit_image_embedded": bool(prep["jit_required"]),
+            "jit_image_embedded": jit_embedded,
             "runtime_jit": False,
             "shader_source_flags": actual_flags, "shader_source_audit": prep["shader_source_audit"],
             "shader_chain": actual_chain, "shader_package_key": package_key,
