@@ -358,7 +358,7 @@ def prepare_source(api, drive_root_id: str, runtime_root: Path,
         "total_package_bytes": total_bytes,
     }
     source_path = root / "source-manifest.json"
-    source_path.write_text(json.dumps(source, indent=2) + "\\n", encoding="utf-8")
+    source_path.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
     source["manifest_path"] = str(source_path)
     print("[Mugiwara4iOS] Source verified exclusively in Drive/mugi:", flush=True)
     print("  Base NSP:", base_record["size"], "bytes; SHA-256", base_record["sha256"], flush=True)
