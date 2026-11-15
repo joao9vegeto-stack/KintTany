@@ -143,7 +143,7 @@ jobs:
               assert int(item.get("size", 0)) > 0
               assert re.fullmatch(r"[0-9a-f]{64}", item.get("sha256", ""))
           aoc = h.get("game_data", {}).get("aoc", [])
-          assert valid_aoc_manifest(p, aoc), "AOC set does not match unique DLC Title IDs and NXNative's highest-version selection"
+          assert colab_aoc_valid(p, aoc), "AOC set does not match unique DLC Title IDs and NXNative's highest-version selection"
           assert h.get("game_data", {}).get("aoc_count") == p.get("aoc_count")
           for item in aoc:
               assert item.get("name", "").endswith(".img")
