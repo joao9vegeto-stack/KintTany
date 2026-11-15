@@ -259,8 +259,8 @@ def prepare(args, api=None) -> dict:
     from .source_kakarot import cleanup_rar_parts, prepare_source
     source = prepare_source(
         api, args.drive_folder_id, ROOT,
-        args.base_part_urls, args.update_part_urls,
-        args.base_part_names, args.update_part_names,
+        args.base_part_urls, args.update_package_url,
+        args.base_part_names,
     )
     input_dir, keys = Path(source["package_dir"]), Path(source["keys_path"])
     base_path, update_path = Path(source["base_path"]), Path(source["update_path"])
@@ -476,6 +476,8 @@ def prepare(args, api=None) -> dict:
             "base_drive": base_record,
             "update_drive": update_record,
             "rar_parts_deleted_after_upload": True,
+            "base_rar_volume_count": source.get("base_rar_volume_count"),
+            "update_download_kind": source.get("update_download_kind"),
             "dlc_package_count": len(source.get("dlc_drive_items", [])),
             "dlc_packages": source.get("dlc_drive_items", []),
             "dlc_inventory": source.get("dlc_inventory", {}),
@@ -500,12 +502,12 @@ def prepare(args, api=None) -> dict:
     handoff_path = ROOT / "handoff.json"
     handoff_path.write_text(json.dumps(handoff, indent=2) + "\n", encoding="utf-8")
     handoff_record = upsert_drive_file(api, handoff_path, output_id, "handoff.json")
-    print("\n[KaKaRoTiOS] Six-volume reconstruction, package uploads and Colab preparation completed.", flush=True)
+    print("\n[KaKaRoTiOS] Three-volume BASE reconstruction + direct UPDATE NSP download, Drive uploads and Colab preparation completed.", flush=True)
     print("Request:", request_id)
     print("Drive:", handoff["drive_output_folder_url"])
     print("Base package:", base_record["name"], f"{base_record['size']:,} bytes; SHA-256 {base_record['sha256']}")
     print("Update package:", update_record["name"], f"{update_record['size']:,} bytes; SHA-256 {update_record['sha256']}")
-    print("RAR parts: deleted after both reconstructed packages were verified on Drive.")
+    print("BASE RAR parts: deleted after both package uploads were verified on Drive; UPDATE was one direct NSP.")
     print("RomFS:", f"{romfs_record['size']:,} bytes; SHA-256 {romfs_record['sha256']}")
     print("AOC images:", len(aoc_records), "(zero is expected unless DLC content was supplied)")
     print("Workspace:", f"{archive_record['size']:,} bytes; SHA-256 {archive_record['sha256']}")
@@ -553,6 +555,11 @@ def recover(args, api=None) -> dict | None:
                 and handoff.get("game_data", {}).get("aoc_folder_id")
                 and int(handoff.get("game_data", {}).get("aoc_count", -1)) == len(handoff.get("game_data", {}).get("aoc", []))
                 and source.get("package_count") == 2
+                and source.get("base", {}).get("archive", {}).get("source_kind") == "three_volume_rar"
+                and len(source.get("base", {}).get("archive", {}).get("rar_volumes", [])) == 3
+                and source.get("update_download_kind") == "direct_nsp"
+                and source.get("update", {}).get("type") == "NSP"
+                and source.get("update", {}).get("archive", {}).get("source_kind") == "direct_nsp_download"
                 and source.get("dlc_package_count") == 20 and len(source_dlcs) == 20
                 and prepared.get("input_package_count") == 22 and len(scanned) == 22
                 and prepared.get("input_dlc_package_count") == 20 and len(scanned_dlcs) == 20
@@ -585,6 +592,11 @@ def dispatch(args) -> None:
     source_dlcs = source.get("dlc_packages", [])
     if (prepared.get("profile_type") != "provisional" or prepared.get("graphics_api") != "nvn"
             or source.get("package_count") != 2
+            or source.get("base", {}).get("archive", {}).get("source_kind") != "three_volume_rar"
+            or len(source.get("base", {}).get("archive", {}).get("rar_volumes", [])) != 3
+            or source.get("update_download_kind") != "direct_nsp"
+            or source.get("update", {}).get("type") != "NSP"
+            or source.get("update", {}).get("archive", {}).get("source_kind") != "direct_nsp_download"
             or source.get("dlc_package_count") != 20 or len(source_dlcs) != 20
             or prepared.get("input_package_count") != 22 or len(scanned) != 22
             or prepared.get("input_dlc_package_count") != 20 or len(scanned_dlcs) != 20):
@@ -622,12 +634,11 @@ def dispatch(args) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Kakarot isolated Colab RAR multipart pipeline")
     sub = parser.add_subparsers(dest="command", required=True)
-    p = sub.add_parser("prepare", help="download 3+3 RAR volumes, extract base/update, upload packages + RomFS + AOC + workspace")
+    p = sub.add_parser("prepare", help="download three BASE RAR volumes plus one direct UPDATE NSP")
     p.add_argument("--drive-folder-id", required=True)
     p.add_argument("--base-part-urls", nargs=3, required=True)
-    p.add_argument("--update-part-urls", nargs=3, required=True)
+    p.add_argument("--update-package-url", required=True)
     p.add_argument("--base-part-names", nargs=3, default=["", "", ""])
-    p.add_argument("--update-part-names", nargs=3, default=["", "", ""])
     p.set_defaults(func=prepare)
     p = sub.add_parser("recover", help="recover the latest valid KaKaRoTiOS handoff from Drive")
     p.add_argument("--drive-folder-id", required=True)

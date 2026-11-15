@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download six RAR volumes, reconstruct Kakarot base/update NSP/XCI, and stage Drive keys."""
+"""Download three BASE RAR volumes and one direct UPDATE NSP for Kakarot."""
 from __future__ import annotations
 import hashlib
 import json
@@ -11,7 +11,7 @@ import time
 from email.message import Message
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
-from urllib.parse import unquote, urlparse, urljoin
+from urllib.parse import unquote, urlparse, urljoin, parse_qs
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
 PACKAGE_SUFFIXES = {".nsp", ".xci"}
@@ -165,6 +165,53 @@ class AkiraBoxDownloadPageParser(HTMLParser):
 
 
 _AKIRABOX_METADATA_CACHE: dict[str, dict] = {}
+
+
+def validate_megadl_url(url: str, label: str, *, title_id: str, version: str,
+                         part_number: int | None = None) -> dict:
+    """Validate a supplied MegaDL URL without printing or persisting its signed token."""
+    parsed = urlparse(str(url).strip())
+    host = (parsed.hostname or "").lower()
+    path = unquote(parsed.path or "")
+    tokens = parse_qs(parsed.query, keep_blank_values=True).get("download_token", [])
+    if parsed.scheme != "https" or host != "megadl.boats":
+        fail(f"{label}: expected an HTTPS MegaDL direct-download URL.")
+    if len(tokens) != 1 or not tokens[0].strip():
+        fail(f"{label}: signed download_token parameter is missing or duplicated.")
+    lower = path.lower()
+    if f"[{title_id.lower()}]" not in lower or f"[{version.lower()}]" not in lower:
+        fail(f"{label}: filename does not contain the expected Title ID/version.")
+    if part_number is not None:
+        if not lower.endswith(f".part{part_number}.rar"):
+            fail(f"{label}: expected BASE volume part{part_number}.rar.")
+        kind = "rar_volume"
+    else:
+        if not lower.endswith(".nsp") or ".part" in lower:
+            fail(f"{label}: UPDATE must be one direct .nsp file, not a RAR volume.")
+        if "[upd1.70]" not in lower:
+            fail(f"{label}: expected the single UPDATE 1.70 NSP.")
+        kind = "nsp"
+    return {
+        "host": host, "path_name": Path(path).name, "kind": kind,
+        "url_sha256": hashlib.sha256(str(url).strip().encode("utf-8")).hexdigest(),
+    }
+
+
+def preflight_megadl_sources(base_part_urls: list[str], update_package_url: str) -> dict:
+    """Validate exactly three BASE RAR volumes plus one direct UPDATE NSP."""
+    if len(base_part_urls) != 3 or len({str(x).strip() for x in base_part_urls}) != 3:
+        fail("BASE must contain exactly three distinct direct RAR URLs.")
+    base = [
+        validate_megadl_url(url, f"BASE part{index}",
+            title_id="010051C0134F8000", version="v0", part_number=index)
+        for index, url in enumerate(base_part_urls, 1)
+    ]
+    update = validate_megadl_url(update_package_url, "UPDATE",
+        title_id="010051C0134F8800", version="v1048576")
+    validate_volume_sequence([x["path_name"] for x in base], "BASE")
+    print("[KaKaRoTiOS] MegaDL input preflight: 3 ordered BASE RAR volumes + 1 direct UPDATE NSP.")
+    print("[KaKaRoTiOS] Signed tokens remain in memory; only SHA-256 fingerprints are persisted.")
+    return {"base": base, "update": update}
 
 
 def _akirabox_file_code(url: str) -> str | None:
@@ -429,13 +476,13 @@ def download_blob(url: str, destination: Path, retries: int = 10) -> dict:
                 "url_sha256": fingerprint,
             }
         except Exception as exc:
-            last_error = exc
+            status = response.status_code if response is not None else None
+            last_error = f"{type(exc).__name__}" + (f" (HTTP {status})" if status else "")
             current = part.stat().st_size if part.exists() else 0
             print(
-                f"[KaKaRoTiOS] RAR download interrupted at {current:,} bytes: "
-                f"{type(exc).__name__}: {exc}", flush=True
+                f"[KaKaRoTiOS] RAR download interrupted at {current:,} bytes: {last_error}.",
+                flush=True,
             )
-            status = response.status_code if response is not None else None
             if status in (400, 401, 403, 404, 410, 429):
                 break
             if isinstance(exc, RuntimeError) and any(
@@ -446,7 +493,109 @@ def download_blob(url: str, destination: Path, retries: int = 10) -> dict:
                 delay = min(2 ** min(attempt, 5), 30)
                 print(f"[KaKaRoTiOS] Retrying after {delay}s.", flush=True)
                 time.sleep(delay)
-    raise RuntimeError(f"Could not download {destination.name}; last result: {last_error}") from last_error
+    raise RuntimeError(f"Could not download {destination.name}; last result: {last_error}")
+
+def download_package_blob(url: str, destination: Path, retries: int = 8) -> dict:
+    """Resumable direct NSP/XCI download with signature validation and no URL/token logging."""
+    import requests
+    if not str(url).startswith("https://"):
+        fail(f"No valid HTTPS package URL supplied for {destination.name}.")
+    fingerprint = hashlib.sha256(str(url).encode("utf-8")).hexdigest()
+    part = destination.with_suffix(destination.suffix + ".part")
+    source_path = destination.with_suffix(destination.suffix + ".source.json")
+    marker = part.with_suffix(part.suffix + ".urlsha256")
+    if destination.is_file() and source_path.is_file():
+        try:
+            old = json.loads(source_path.read_text(encoding="utf-8"))
+            if (old.get("url_sha256") == fingerprint
+                    and int(old.get("size", -1)) == destination.stat().st_size
+                    and old.get("sha256") == sha256_file(destination)
+                    and validate_package(destination) in ("NSP", "XCI")):
+                return {"path": str(destination), "remote_name": old.get("remote_name", ""),
+                        "size": destination.stat().st_size, "sha256": old["sha256"],
+                        "url_sha256": fingerprint}
+        except (OSError, ValueError, KeyError, TypeError, SystemExit):
+            pass
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if part.exists():
+        previous = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
+        if previous != fingerprint:
+            part.unlink(missing_ok=True)
+    marker.write_text(fingerprint + "\n", encoding="utf-8")
+
+    session = requests.Session()
+    base_headers = {"User-Agent": "Mozilla/5.0", "Accept-Encoding": "identity"}
+    last_error = "no response"
+    for attempt in range(1, retries + 1):
+        offset = part.stat().st_size if part.exists() else 0
+        headers = dict(base_headers)
+        if offset:
+            headers["Range"] = f"bytes={offset}-"
+        response = None
+        try:
+            print(f"[KaKaRoTiOS] UPDATE NSP download attempt {attempt}/{retries}; resume={offset:,} bytes.", flush=True)
+            with session.get(url, headers=headers, stream=True, allow_redirects=True, timeout=(30, 300)) as response:
+                if response.status_code == 206:
+                    content_range = response.headers.get("Content-Range", "")
+                    if not content_range.startswith(f"bytes {offset}-"):
+                        fail("UPDATE NSP server returned an inconsistent Content-Range.")
+                    mode = "ab"
+                elif response.status_code == 200:
+                    mode, offset = "wb", 0
+                else:
+                    status = response.status_code
+                    if status in (400, 401, 403, 404, 410, 429):
+                        fail(f"UPDATE NSP server rejected the signed link (HTTP {status}); obtain a fresh URL.")
+                    response.raise_for_status()
+                    fail(f"Unexpected UPDATE NSP HTTP status {status}.")
+                if "text/html" in response.headers.get("Content-Type", "").lower():
+                    part.unlink(missing_ok=True)
+                    marker.unlink(missing_ok=True)
+                    fail("MegaDL returned HTML rather than package bytes; the signed link may be expired or browser-gated.")
+                length = response.headers.get("Content-Length")
+                total = offset + int(length) if length and length.isdigit() else 0
+                if not total:
+                    match = re.match(r"bytes\s+\d+-\d+/(\d+|\*)", response.headers.get("Content-Range", ""))
+                    total = int(match.group(1)) if match and match.group(1) != "*" else 0
+                written = offset
+                with part.open(mode) as output:
+                    for block in response.iter_content(chunk_size=16 * 1024 * 1024):
+                        if block:
+                            output.write(block)
+                            written += len(block)
+                if total and written != total:
+                    raise RuntimeError(f"short transfer: expected {total:,} bytes, received {written:,}")
+            try:
+                package_kind = validate_package(part, destination.suffix)
+            except SystemExit:
+                part.unlink(missing_ok=True)
+                marker.unlink(missing_ok=True)
+                fail("UPDATE direct download does not contain a valid NSP package header (PFS0).")
+            destination.unlink(missing_ok=True)
+            part.replace(destination)
+            marker.unlink(missing_ok=True)
+            record = {"url_sha256": fingerprint, "remote_name": destination.name,
+                "name": destination.name, "size": destination.stat().st_size,
+                "sha256": sha256_file(destination), "package_type": package_kind}
+            source_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+            print(f"[KaKaRoTiOS] UPDATE package verified: {package_kind}; {record['size']:,} bytes; SHA-256 {record['sha256']}.", flush=True)
+            return {"path": str(destination), "remote_name": destination.name,
+                "size": record["size"], "sha256": record["sha256"], "url_sha256": fingerprint}
+        except SystemExit:
+            raise
+        except Exception as exc:
+            status = response.status_code if response is not None else None
+            last_error = f"{type(exc).__name__}" + (f" (HTTP {status})" if status else "")
+            current = part.stat().st_size if part.exists() else 0
+            print(f"[KaKaRoTiOS] UPDATE NSP transfer interrupted at {current:,} bytes: {last_error}.", flush=True)
+            if status in (400, 401, 403, 404, 410, 429):
+                break
+            if attempt < retries:
+                delay = min(2 ** min(attempt, 5), 30)
+                print(f"[KaKaRoTiOS] Retrying UPDATE NSP after {delay}s.", flush=True)
+                time.sleep(delay)
+    raise RuntimeError(f"Could not complete UPDATE NSP download after {retries} attempts ({last_error}). A partial file is reusable only with the same signed URL fingerprint.")
+
 
 def resolve_volume_names(records: list[dict], overrides: list[str] | None, label: str) -> list[str]:
     if overrides:
@@ -634,7 +783,7 @@ def recover_uploaded_packages(api, drive_root_id: str, runtime_root: Path,
             saved["rar_parts_deleted_after_drive_upload"] = True
             (runtime_root / "source-manifest.json").write_text(
                 json.dumps(saved, indent=2) + "\n", encoding="utf-8")
-            print(f"[KaKaRoTiOS] Recovered base + update from the previous Drive run {folder['name']}; the six RAR volumes will not be downloaded again.", flush=True)
+            print(f"[KaKaRoTiOS] Recovered BASE + direct UPDATE NSP from Drive run {folder['name']}; source downloads will not be repeated.", flush=True)
             return saved
         except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
             print(f"[KaKaRoTiOS] Skipping incomplete Drive source checkpoint {folder['name']}: {exc}", flush=True)
@@ -642,31 +791,35 @@ def recover_uploaded_packages(api, drive_root_id: str, runtime_root: Path,
     return None
 
 def prepare_source(api, drive_root_id: str, runtime_root: Path,
-                   base_part_urls: list[str], update_part_urls: list[str],
-                   base_part_names: list[str] | None = None,
-                   update_part_names: list[str] | None = None) -> dict:
-    """Fetch and extract two independent three-volume RAR sets; prod.keys stays in Colab."""
-    for label, urls in (("BASE", base_part_urls), ("UPDATE", update_part_urls)):
-        if len(urls) != VOLUME_COUNT or any(not str(x).strip() for x in urls):
-            fail(f"{label}_PART_URLS must contain exactly three non-empty direct-download URLs.")
+                   base_part_urls: list[str], update_package_url: str,
+                   base_part_names: list[str] | None = None) -> dict:
+    """Download/extract three BASE RAR volumes and one direct UPDATE NSP."""
+    if len(base_part_urls) != VOLUME_COUNT or any(not str(x).strip() for x in base_part_urls):
+        fail("BASE_PART_URLS must contain exactly three non-empty direct RAR URLs.")
+    if not str(update_package_url).strip():
+        fail("UPDATE_PACKAGE_URL must contain the single direct UPDATE NSP URL.")
+    preflight = preflight_megadl_sources(base_part_urls, update_package_url)
+    if base_part_names is None:
+        base_part_names = [item["path_name"] for item in preflight["base"]]
+    if len(base_part_names) != VOLUME_COUNT or any(not str(x).strip() for x in base_part_names):
+        fail("BASE_PART_NAMES must contain the three original volume names.")
+    base_names = [safe_volume_name(x, "BASE") for x in base_part_names]
+    validate_volume_sequence(base_names, "BASE")
+    for index, (name, item) in enumerate(zip(base_names, preflight["base"]), 1):
+        if name.casefold() != item["path_name"].casefold():
+            fail(f"BASE part{index}: configured filename differs from its direct URL path.")
+
     configured_root_id = drive_root_id
     configured_root_items = list_children(api, configured_root_id)
     kakarot_folders = [x for x in configured_root_items
                        if x.get("mimeType") == FOLDER_MIME
                        and x.get("name", "").lower() == "kakarot"]
     if len(kakarot_folders) != 1:
-        fail(f"Expected exactly one 'kakarot' folder under the already-configured Drive root; found {len(kakarot_folders)}.")
+        fail(f"Expected exactly one 'kakarot' folder under the configured Drive root; found {len(kakarot_folders)}.")
     kakarot_folder_id = kakarot_folders[0]["id"]
     kakarot_items = list_children(api, kakarot_folder_id)
-
-    # Match the existing Link2iOS/SpkIOSzero convention: prod.keys may be
-    # in the configured shared root or inside the game-specific subfolder.
-    root_keys = [x for x in configured_root_items
-                 if x.get("name", "").lower() == "prod.keys"
-                 and x.get("mimeType") != FOLDER_MIME]
-    kakarot_keys = [x for x in kakarot_items
-                    if x.get("name", "").lower() == "prod.keys"
-                    and x.get("mimeType") != FOLDER_MIME]
+    root_keys = [x for x in configured_root_items if x.get("name", "").lower() == "prod.keys" and x.get("mimeType") != FOLDER_MIME]
+    kakarot_keys = [x for x in kakarot_items if x.get("name", "").lower() == "prod.keys" and x.get("mimeType") != FOLDER_MIME]
     if len(root_keys) > 1 or len(kakarot_keys) > 1 or not (root_keys or kakarot_keys):
         fail("Expected at most one prod.keys in the configured Drive root and at most one in Drive/kakarot, with at least one available.")
     keys_item = (kakarot_keys or root_keys)[0]
@@ -681,7 +834,7 @@ def prepare_source(api, drive_root_id: str, runtime_root: Path,
 
     url_fingerprints = {
         "base": [hashlib.sha256(str(x).strip().encode("utf-8")).hexdigest() for x in base_part_urls],
-        "update": [hashlib.sha256(str(x).strip().encode("utf-8")).hexdigest() for x in update_part_urls],
+        "update_package": hashlib.sha256(str(update_package_url).strip().encode("utf-8")).hexdigest(),
     }
     source_manifest = runtime_root / "source-manifest.json"
     if source_manifest.is_file():
@@ -693,112 +846,103 @@ def prepare_source(api, drive_root_id: str, runtime_root: Path,
                 path = Path(cached[f"{label}_path"])
                 reusable = reusable and path.is_file()
                 if reusable:
-                    reusable = (path.stat().st_size == int(item["size"])
-                                and sha256_file(path) == item["sha256"]
-                                and package_type(path) == item["type"])
+                    reusable = path.stat().st_size == int(item["size"]) and sha256_file(path) == item["sha256"] and package_type(path) == item["type"]
             if reusable:
                 cached["keys_path"] = str(keys_path)
                 cached["drive_kakarot_folder_id"] = drive_root_id
                 cached["drive_configured_root_id"] = configured_root_id
                 cached["archive_dir"] = str(runtime_root / "rar-volumes")
-                cached["rar_parts_cleanup_pending"] = (runtime_root / "rar-volumes").exists()
-                print("[KaKaRoTiOS] Reusing the already reconstructed and SHA-256-verified base/update packages; RAR redownload is not needed.", flush=True)
+                cached["rar_parts_cleanup_pending"] = (runtime_root / "rar-volumes" / "base").exists()
+                print("[KaKaRoTiOS] Reusing locally verified BASE/UPDATE package files.", flush=True)
                 return cached
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError, SystemExit):
             pass
 
-    recovered = recover_uploaded_packages(api, drive_root_id, runtime_root,
-                                          url_fingerprints, keys_path)
+    recovered = recover_uploaded_packages(api, drive_root_id, runtime_root, url_fingerprints, keys_path)
     if recovered is not None:
         recovered["drive_kakarot_folder_id"] = drive_root_id
         recovered["drive_configured_root_id"] = configured_root_id
         return recovered
 
     unrar = install_unrar()
-    # Keep completed volumes and partial .part downloads across notebook retries.
-    # Each partial is bound to its URL fingerprint, so a changed URL is restarted.
     rar_root = runtime_root / "rar-volumes"
     rar_root.mkdir(parents=True, exist_ok=True)
     package_dir = runtime_root / "input-packages"
     shutil.rmtree(package_dir, ignore_errors=True)
     package_dir.mkdir(parents=True, exist_ok=True)
-    outputs = {}
-    for label, urls, overrides in (
-        ("BASE", base_part_urls, base_part_names),
-        ("UPDATE", update_part_urls, update_part_names),
-    ):
-        lower = label.lower()
-        volume_dir = rar_root / lower
-        volume_dir.mkdir(parents=True, exist_ok=True)
-        downloaded = []
-        for index, url in enumerate(urls, 1):
-            slot = volume_dir / f"volume-{index}.download"
-            record = download_blob(str(url).strip(), slot)
-            downloaded.append(record)
-        names = resolve_volume_names(downloaded, overrides, label)
-        name_info = validate_volume_sequence(names, label)
-        rar_group_bytes = sum(int(item["size"]) for item in downloaded)
-        free_bytes = shutil.disk_usage(runtime_root).free
-        minimum_free = int(rar_group_bytes * 2.0 + 3 * 1024**3)
-        if free_bytes < minimum_free:
-            fail(f"{label}: not enough Colab disk space to extract this three-volume set safely. "
-                 f"{free_bytes / 2**30:.1f} GiB free; require at least {minimum_free / 2**30:.1f} GiB "
-                 "(twice the downloaded RAR bytes plus 3 GiB). The downloaded volumes are retained for retry.")
-        print(f"[KaKaRoTiOS] {label} disk preflight: {free_bytes / 2**30:.1f} GiB free; "
-              f"{minimum_free / 2**30:.1f} GiB extraction budget.", flush=True)
-        final_paths = []
-        for record, name in zip(downloaded, names):
-            destination = volume_dir / name
-            source = Path(record["path"])
-            if source.resolve() != destination.resolve():
-                if destination.exists():
-                    destination.unlink()
-                source.replace(destination)
-            final_paths.append(destination)
-        # Verify there are exactly three volumes and each belongs to the expected set/order.
-        for path in final_paths:
-            if not is_rar_volume(path):
-                fail(f"{label}: {path.name} is not a RAR volume.")
-        extract_dir = rar_root / f"{lower}-extracted"
-        extracted, audit = extract_rar_set(unrar, final_paths, names, extract_dir, label)
-        suffix = ".xci" if audit["package_type"] == "XCI" else ".nsp"
-        normalized = package_dir / f"{lower}{suffix}"
-        shutil.copy2(extracted, normalized)
-        if sha256_file(normalized) != audit["package_sha256"] or package_type(normalized) != audit["package_type"]:
-            fail(f"{label}: normalized package copy failed its SHA-256/header check.")
-        outputs[lower] = {
-            "path": str(normalized),
-            "name": normalized.name,
-            "type": audit["package_type"],
-            "size": normalized.stat().st_size,
-            "sha256": sha256_file(normalized),
-            "md5": md5_file(normalized),
-            "archive": audit,
-            "volume_scheme": name_info["scheme"],
-        }
+
+    # BASE: three ordered direct RAR downloads.
+    base_dir = rar_root / "base"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    downloaded = []
+    for index, url in enumerate(base_part_urls, 1):
+        downloaded.append(download_blob(str(url).strip(), base_dir / f"volume-{index}.download"))
+    names = resolve_volume_names(downloaded, base_names, "BASE")
+    volume_scheme = validate_volume_sequence(names, "BASE")
+    rar_bytes = sum(int(item["size"]) for item in downloaded)
+    free_bytes = shutil.disk_usage(runtime_root).free
+    minimum_free = int(rar_bytes * 2.0 + 3 * 1024**3)
+    if free_bytes < minimum_free:
+        fail(f"BASE extraction needs more Colab space: {free_bytes / 2**30:.1f} GiB free; at least {minimum_free / 2**30:.1f} GiB required (2x RAR bytes + 3 GiB).")
+    print(f"[KaKaRoTiOS] BASE RAR disk preflight: {free_bytes / 2**30:.1f} GiB free; {minimum_free / 2**30:.1f} GiB required.", flush=True)
+    volume_paths = []
+    for record, name in zip(downloaded, names):
+        destination = base_dir / name
+        source_path = Path(record["path"])
+        if source_path.resolve() != destination.resolve():
+            destination.unlink(missing_ok=True)
+            source_path.replace(destination)
+        if not is_rar_volume(destination):
+            fail(f"BASE volume {destination.name} has an invalid RAR signature.")
+        volume_paths.append(destination)
+    extracted, base_audit = extract_rar_set(unrar, volume_paths, names, rar_root / "base-extracted", "BASE")
+    base_audit["source_kind"] = "three_volume_rar"
+    base_suffix = ".xci" if base_audit["package_type"] == "XCI" else ".nsp"
+    base_path = package_dir / f"base{base_suffix}"
+    shutil.copy2(extracted, base_path)
+    if sha256_file(base_path) != base_audit["package_sha256"] or package_type(base_path) != base_audit["package_type"]:
+        fail("BASE normalized package failed SHA-256/header verification.")
+    base_output = {
+        "path": str(base_path), "name": base_path.name, "type": base_audit["package_type"],
+        "size": base_path.stat().st_size, "sha256": sha256_file(base_path),
+        "md5": md5_file(base_path), "archive": base_audit, "volume_scheme": volume_scheme["scheme"],
+    }
+
+    # UPDATE: one direct NSP; it has no RAR volumes.
+    update_path = package_dir / "update.nsp"
+    update_record = download_package_blob(str(update_package_url).strip(), update_path)
+    update_type = validate_package(update_path, ".nsp")
+    update_archive = {
+        "source_kind": "direct_nsp_download", "package_type": update_type,
+        "source_url_sha256": update_record["url_sha256"],
+        "download_size": update_record["size"], "download_sha256": update_record["sha256"],
+        "rar_volumes": [],
+    }
+    update_output = {
+        "path": str(update_path), "name": update_path.name, "type": update_type,
+        "size": update_path.stat().st_size, "sha256": sha256_file(update_path),
+        "md5": md5_file(update_path), "archive": update_archive, "volume_scheme": None,
+    }
+    outputs = {"base": base_output, "update": update_output}
     if outputs["base"]["sha256"] == outputs["update"]["sha256"]:
-        fail("Base and update packages have identical SHA-256; check that the six URLs are grouped correctly.")
+        fail("BASE and UPDATE have identical SHA-256; verify the supplied source URLs.")
+
     source = {
-        "package_dir": str(package_dir),
-        "keys_path": str(keys_path),
-        "archive_dir": str(rar_root),
-        "rar_parts_cleanup_pending": True,
-        "input_url_fingerprints": url_fingerprints,
-        "package_count": 2,
+        "package_dir": str(package_dir), "keys_path": str(keys_path), "archive_dir": str(rar_root),
+        "rar_parts_cleanup_pending": True, "input_url_fingerprints": url_fingerprints,
+        "package_count": 2, "base_rar_volume_count": 3, "update_download_kind": "direct_nsp",
         "base": {k: v for k, v in outputs["base"].items() if k != "path"},
         "update": {k: v for k, v in outputs["update"].items() if k != "path"},
-        "base_path": outputs["base"]["path"],
-        "update_path": outputs["update"]["path"],
-        "keys_drive_id": keys_item["id"],
-        "drive_kakarot_folder_id": drive_root_id,
+        "base_path": outputs["base"]["path"], "update_path": outputs["update"]["path"],
+        "keys_drive_id": keys_item["id"], "drive_kakarot_folder_id": drive_root_id,
         "drive_configured_root_id": configured_root_id,
         "input_nsp_count": int(outputs["base"]["type"] == "NSP") + int(outputs["update"]["type"] == "NSP"),
         "input_xci_count": int(outputs["base"]["type"] == "XCI") + int(outputs["update"]["type"] == "XCI"),
     }
     source_manifest.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
-    total_rar = sum(x["size"] for label in ("base", "update") for x in source[label]["archive"]["rar_volumes"])
-    print(f"[KaKaRoTiOS] Two RAR sets reconstructed: base {source['base']['type']} {source['base']['size']:,} bytes; update {source['update']['type']} {source['update']['size']:,} bytes.", flush=True)
-    print(f"[KaKaRoTiOS] Downloaded RAR volumes total: {total_rar:,} bytes. Volumes are retained until both package files are verified on Google Drive.", flush=True)
+    total_rar = sum(item["size"] for item in base_audit["rar_volumes"])
+    print(f"[KaKaRoTiOS] Source pair ready: BASE {source['base']['type']} via 3 RAR parts ({source['base']['size']:,} bytes) + UPDATE direct NSP ({source['update']['size']:,} bytes).", flush=True)
+    print(f"[KaKaRoTiOS] BASE RAR volume bytes: {total_rar:,}; volumes retained until Drive package verification.", flush=True)
     print("[KaKaRoTiOS] prod.keys remains local to Colab and is excluded from Drive build data.", flush=True)
     return source
 
@@ -812,4 +956,4 @@ def cleanup_rar_parts(source: dict) -> None:
     manifest = Path(source["package_dir"]).parent / "source-manifest.json"
     if manifest.is_file():
         manifest.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
-    print("[KaKaRoTiOS] All six downloaded RAR volumes and extraction scratch were deleted after Drive upload verification.", flush=True)
+    print("[KaKaRoTiOS] The three BASE RAR volumes and extraction scratch were deleted after Drive upload verification; UPDATE was one direct NSP.", flush=True)

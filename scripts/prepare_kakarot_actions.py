@@ -177,7 +177,23 @@ def main() -> None:
         if int(package_from_scan.get("size", -1)) != int(source_item.get("size", -2)) or package_from_scan.get("sha256") != source_item.get("sha256"):
             fail(f"NXNative scanned {label} package size/SHA-256 differs from the RAR extraction result.")
     if source_record.get("rar_parts_deleted_after_upload") is not True:
-        fail("RAR volume cleanup was not recorded after the base/update Drive uploads.")
+        fail("BASE RAR volume cleanup was not recorded after the base/update Drive uploads.")
+    base_source = source_record.get("base") or {}
+    update_source = source_record.get("update") or {}
+    base_archive = base_source.get("archive") or {}
+    update_archive = update_source.get("archive") or {}
+    if (source_record.get("base_rar_volume_count") != 3
+            or base_archive.get("source_kind") != "three_volume_rar"
+            or len(base_archive.get("rar_volumes", [])) != 3):
+        fail("Kakarot BASE source must be one validated three-volume RAR set.")
+    if (source_record.get("update_download_kind") != "direct_nsp"
+            or update_source.get("type") != "NSP"
+            or update_archive.get("source_kind") != "direct_nsp_download"
+            or update_archive.get("package_type") != "NSP"
+            or update_archive.get("rar_volumes") != []
+            or len(update_archive.get("source_url_sha256", "")) != 64
+            or update_archive.get("download_sha256") != update_source.get("sha256")):
+        fail("Kakarot UPDATE source must be one direct, SHA-256-verified NSP with no RAR volumes.")
     for label, item, expected_type in (
         ("base", base_record, "NSP" if str(base_record.get("name", "")).lower().endswith(".nsp") else "XCI"),
         ("update", update_record, "NSP" if str(update_record.get("name", "")).lower().endswith(".nsp") else "XCI"),

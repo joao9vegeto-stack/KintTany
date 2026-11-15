@@ -522,7 +522,7 @@ def main() -> None:
             "metal_validation": table_stamp,
             "framework": framework_name, "ipa": ipa.name, "ipa_size_bytes": ipa.stat().st_size,
             "pipeline": [
-                "Colab six-volume RAR download, ordered-set verification, CRC extraction and NSP/XCI header/hash validation",
+                "Colab three-volume BASE RAR verification/CRC extraction + direct UPDATE NSP transfer and package-header/SHA-256 validation",
                 "Drive base/update package checkpoints and RAR cleanup after MD5/SHA-256 verification",
                 "NXNative metadata scan and Kakarot provisional profile",
                 "NXNative ARM64 rewrite and fixup audit",
