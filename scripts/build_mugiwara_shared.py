@@ -18,6 +18,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 from mugiwara_contract import PREPARED_MANIFEST_KEYS, prepared_manifest_mismatches
+from mugiwara_shader_checkpoint import ShaderCacheCheckpoint
 
 TITLE_ID = "01008FE00E2F6000"
 PROJECT = "Mugiwara4iOS"
@@ -386,9 +387,10 @@ def main() -> None:
             f"NXNative shader compilation requires at least 3 Apple Silicon CPUs; "
             f"this runner exposes only {runner_cpus} logical CPUs."
         )
-    # J=1 uses one CPU for translation; the remaining CPUs finish shaders in
-    # independent processes. This prevents overcommitting a standard 3-CPU runner.
-    dmsh_procs = min(4, runner_cpus - 1)
+    # Match the proven HookLink2iOS configuration exactly: three visible CPUs,
+    # one serial translator (J=1), and two independent Metal-finishing processes.
+    # Do not scale this to four: the xcode-27 runtime exposed only three logical CPUs.
+    dmsh_procs = 2
     memory_bytes = int(subprocess.run(
         ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, check=True
     ).stdout.strip())
@@ -406,7 +408,7 @@ def main() -> None:
     print(
         f"[Mugiwara4iOS] Metal worker backport verified in own_compilers.py; "
         f"J={env['J']}, DMSH_PROCS={env['DMSH_PROCS']}, "
-        f"fail-fast floor=1.6 shader/s after 300s, "
+        f"HookLink2iOS process configuration; fail-fast floor=1.6 shader/s after 300s, "
         f"runner={runner_cpus} CPUs/{memory_bytes / 1024**3:.1f} GiB RAM.",
         flush=True,
     )
@@ -502,9 +504,35 @@ def main() -> None:
         gpu_selection = builder.ios_gpus("none", profile)
         pull = builder.ios_wants_pulling(profile, gpu_selection, False, env)
         print(f"[Mugiwara4iOS] Compiling iOS Metal libraries; pulling libraries: {'yes' if pull else 'no'}...", flush=True)
-        ios_msl = builder.build_shaders(
-            py, engine, work / "shader", xlate, env, logs, profile,
-            pkg_key=package_key, mac=False, seen=None, pull=pull)
+
+        # HookLink2iOS checkpoints NXNative's SQLite CAS every 15 minutes. Reuse the
+        # exact mechanism so a runner timeout never throws away already-finished shaders.
+        checkpoint = ShaderCacheCheckpoint.from_environment(
+            prepared,
+            work,
+            engine_pin=ENGINE_PIN,
+            title_id=TITLE_ID,
+            shader_chain=actual_chain,
+            shader_package_key=package_key,
+        )
+        restored_bytes = checkpoint.restore()
+        print(
+            f"[Mugiwara4iOS] Resumable Metal cache ready: "
+            f"{restored_bytes:,} bytes restored; J=1, DMSH_PROCS=2.",
+            flush=True,
+        )
+        checkpoint.start()
+        try:
+            ios_msl = builder.build_shaders(
+                py, engine, work / "shader", xlate, env, logs, profile,
+                pkg_key=package_key, mac=False, seen=None, pull=pull)
+        except BaseException:
+            checkpoint.stop(force=True)
+            raise
+        else:
+            checkpoint.stop(force=False)
+            # Persist the completed cache as well, so a later Route C retry can reuse it.
+            checkpoint.checkpoint()
         chain_lib = ios_msl / f"b-{actual_chain}"
         chain_img = Path(str(chain_lib) + ".img")
         if not (chain_lib.is_dir() or chain_img.is_file()):
