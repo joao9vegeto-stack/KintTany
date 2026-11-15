@@ -279,12 +279,15 @@ def recover(args, api=None) -> dict | None:
                 and handoff.get("package_version") == prepared.get("package_version")
                 and handoff.get("work_archive", {}).get("id")
                 and handoff.get("game_data", {}).get("romfs", {}).get("id")
+                and prepared.get("format") == 2
+                and isinstance(prepared.get("jit_required"), bool)
                 and prepared.get("profile_type") == "provisional"
                 and prepared.get("graphics_api") == "nvn"):
             print("[Mugiwara4iOS] Verified handoff recovered from Drive; package download, extraction and rewrite need not be repeated.")
             print("Request:", handoff["request_id"])
             print("Drive:", handoff.get("drive_output_folder_url"))
             print("Package:", handoff["package_version"])
+    print("nn::jit static AOT required:", prepared["jit_required"])
             print("Local manifest:", local)
             return handoff
     print("[Mugiwara4iOS] No completed Mugiwara4iOS handoff was found in Drive.")
@@ -302,7 +305,8 @@ def dispatch(args) -> None:
             or handoff.get("engine_pin") != ENGINE_PIN):
         fail("Refusing to dispatch a handoff that does not belong to Mugiwara4iOS/One Piece: Pirate Warriors 4.")
     prepared = handoff.get("prepared") or {}
-    if prepared.get("profile_type") != "provisional" or prepared.get("graphics_api") != "nvn":
+    if (prepared.get("format") != 2 or not isinstance(prepared.get("jit_required"), bool)
+            or prepared.get("profile_type") != "provisional" or prepared.get("graphics_api") != "nvn"):
         fail("Refusing dispatch: expected the One Piece: Pirate Warriors 4 provisional NVN profile.")
     token = getpass.getpass("Fine-grained GitHub token (KintTany repository, Contents: Read and write): ").strip()
     if not token:
