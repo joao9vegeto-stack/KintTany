@@ -429,8 +429,8 @@ def main() -> None:
         "import contextlib, hashlib, json, os, re, shutil, sqlite3, tarfile, threading, time\n"
     )
     cache_import_new = (
-        "import contextlib, hashlib, json, multiprocessing, os, re, shutil, sqlite3, "
-        "tarfile, threading, time\n"
+        "import contextlib, hashlib, json, os, re, shutil, sqlite3, tarfile, threading, time\n"
+        "import multiprocessing\n"
     )
     cache_source = replace_once(cache_source, cache_import, cache_import_new, "cache multiprocessing import")
     if "class Served:" not in cache_source and "class Remote:" not in cache_source:
