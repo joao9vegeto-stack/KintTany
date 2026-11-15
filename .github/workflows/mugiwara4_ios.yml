@@ -47,6 +47,9 @@ jobs:
           assert h.get("package_version") == p.get("package_version") and p.get("package_version") != "v0"
           assert h.get("format") == 2
           assert p.get("format") == 3
+          assert p.get("display_version") == "1.8.7"
+          assert p.get("base_content_version") == 0
+          assert int(p.get("update_content_version", 0)) > 0
           assert isinstance(p.get("jit_required"), bool)
           assert p.get("profile_type") == "provisional"
           assert p.get("graphics_api") == "nvn"
