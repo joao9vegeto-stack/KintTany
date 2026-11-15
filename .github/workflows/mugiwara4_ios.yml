@@ -5,7 +5,7 @@ on:
     branches:
       - Mugiwara4iOS
     paths:
-      - handoff.json
+      - .mugiwara4ios-workflow-disabled
 
 concurrency:
   group: mugiwara4ios-${{ github.ref }}
