@@ -32,6 +32,20 @@ def safe_relative(value: str, label: str) -> PurePosixPath:
         fail(f"Unsafe {label} path in handoff: {value}")
     return path
 
+def verify_drive_metadata(api, item: dict, label: str) -> None:
+    record = api.files().get(fileId=item["id"],
+        fields="id,name,size,md5Checksum,trashed", supportsAllDrives=True).execute()
+    if record.get("trashed") or record.get("name") != item.get("name"):
+        fail(f"Drive {label} is missing, trashed, or has the wrong filename.")
+    if int(record.get("size", -1)) != int(item.get("size", -2)):
+        fail(f"Drive {label} size differs from the upload manifest.")
+    expected_md5 = str(item.get("md5", "")).lower()
+    if expected_md5 and str(record.get("md5Checksum", "")).lower() != expected_md5:
+        fail(f"Drive {label} md5Checksum differs from the Colab upload record.")
+    if not item.get("sha256"):
+        fail(f"Drive {label} has no local SHA-256 in the Colab manifest.")
+    print(f"[KaKaRoTiOS] Drive {label} metadata verified: {record['size']} bytes; MD5 matches.", flush=True)
+
 def download_drive_file(api, item: dict, destination: Path) -> None:
     from googleapiclient.http import MediaIoBaseDownload
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -123,6 +137,50 @@ def main() -> None:
     if not handoff.get("request_id") or not handoff.get("work_archive", {}).get("id"):
         fail("Handoff request ID or workspace archive Drive record is missing.")
     game_data = handoff.get("game_data") or {}
+    base_record = game_data.get("base_package") or {}
+    update_record = game_data.get("update_package") or {}
+    source_record = handoff.get("source") or {}
+    if not base_record.get("id") or not update_record.get("id"):
+        fail("Both reconstructed base and update package records are required in Drive.")
+    for label, drive_item in (("base", base_record), ("update", update_record)):
+        source_item = source_record.get(label) or {}
+        package_type = source_item.get("type")
+        expected_name = f"{label}.nsp" if package_type == "NSP" else f"{label}.xci" if package_type == "XCI" else ""
+        if not expected_name or drive_item.get("name") != expected_name:
+            fail(f"Drive {label} filename/format differs from the reconstructed package manifest.")
+        if (int(drive_item.get("size", -1)) != int(source_item.get("size", -2))
+                or drive_item.get("sha256") != source_item.get("sha256")):
+            fail(f"Drive {label} package size/SHA-256 differs from the local reconstructed package.")
+        if source_item.get("archive", {}).get("package_type") != package_type:
+            fail(f"RAR extraction and NSP/XCI header audit disagree for {label}.")
+        package_from_scan = next((x for x in prep_handoff.get("input_packages", [])
+                                  if x.get("name") == expected_name), None)
+        if not package_from_scan or package_from_scan.get("type") != package_type:
+            fail(f"NXNative package scan does not contain the reconstructed {label} package.")
+        if int(package_from_scan.get("size", -1)) != int(source_item.get("size", -2)) or package_from_scan.get("sha256") != source_item.get("sha256"):
+            fail(f"NXNative scanned {label} package size/SHA-256 differs from the RAR extraction result.")
+    if source_record.get("rar_parts_deleted_after_upload") is not True:
+        fail("RAR volume cleanup was not recorded after the base/update Drive uploads.")
+    for label, item, expected_type in (
+        ("base", base_record, "NSP" if str(base_record.get("name", "")).lower().endswith(".nsp") else "XCI"),
+        ("update", update_record, "NSP" if str(update_record.get("name", "")).lower().endswith(".nsp") else "XCI"),
+    ):
+        if int(item.get("size", 0)) <= 0 or not item.get("sha256") or not item.get("md5"):
+            fail(f"Drive {label} package manifest is incomplete.")
+        if not item["name"].lower().endswith((".nsp", ".xci")):
+            fail(f"Drive {label} package has an unsupported extension.")
+    aoc_records = game_data.get("aoc") or []
+    if int(game_data.get("aoc_count", -1)) != len(aoc_records):
+        fail("Drive AOC count differs from its image records.")
+    if not game_data.get("aoc_folder_id"):
+        fail("Drive AOC folder ID is missing.")
+    if len(aoc_records) != int(prep_handoff.get("aoc_count", -1)):
+        fail("Drive AOC count differs from the NXNative preparation manifest.")
+    prep_aoc = prep_handoff.get("aoc_images", [])
+    if {x.get("name"): (x.get("size"), x.get("sha256")) for x in aoc_records} != {
+        x.get("name"): (x.get("size"), x.get("sha256")) for x in prep_aoc
+    }:
+        fail("Drive AOC image names/sizes/SHA-256 differ from the NXNative preparation manifest.")
     romfs_record = game_data.get("romfs") or {}
     if not romfs_record.get("id") or not romfs_record.get("sha256") or int(romfs_record.get("size", 0)) <= 0:
         fail("External RomFS Drive record is incomplete.")
@@ -138,6 +196,16 @@ def main() -> None:
     credentials = service_account.Credentials.from_service_account_info(
         json.loads(raw), scopes=["https://www.googleapis.com/auth/drive.readonly"])
     api = build("drive", "v3", credentials=credentials, cache_discovery=False)
+    verify_drive_metadata(api, base_record, "base package")
+    verify_drive_metadata(api, update_record, "update package")
+    verify_drive_metadata(api, handoff["work_archive"], "workspace archive")
+    verify_drive_metadata(api, romfs_record, "RomFS")
+    for item in aoc_records:
+        if not item.get("id") or not item.get("sha256") or not item.get("md5") or int(item.get("size", 0)) <= 0:
+            fail(f"AOC Drive record is incomplete: {item.get('name')}")
+        if not str(item.get("name", "")).lower().endswith(".img"):
+            fail(f"Unsupported AOC filename: {item.get('name')}")
+        verify_drive_metadata(api, item, f"AOC image {item['name']}")
 
     root = args.destination.resolve()
     shutil.rmtree(root, ignore_errors=True)
@@ -160,8 +228,9 @@ def main() -> None:
         "modules", "main_build_id", "main_sha256", "rewrite_audit",
         "graphics_api", "unreal_shader_sources", "pak_audit", "shader_chain",
         "romfs_relative_path", "romfs_id_relative_path",
-        "romfs_size", "romfs_sha256", "survey_relative_path", "survey_size",
-        "survey_sha256", "input_package_count", "input_packages",
+        "romfs_size", "romfs_sha256", "aoc_relative_dir", "aoc_count", "aoc_images",
+        "survey_relative_path", "survey_size", "survey_sha256",
+        "input_package_count", "input_packages",
     )
     for key in compare_keys:
         if prep.get(key) != prep_handoff.get(key):
@@ -177,8 +246,30 @@ def main() -> None:
 
     romfs_rel = safe_relative(prep["romfs_relative_path"], "RomFS")
     identity_rel = safe_relative(prep["romfs_id_relative_path"], "RomFS identity")
+    aoc_rel = safe_relative(prep.get("aoc_relative_dir", "aoc"), "AOC")
+    if str(game_data.get("aoc_relative_dir", "aoc")) != str(aoc_rel):
+        fail("Drive handoff AOC relative path differs from Colab.")
     romfs = work.joinpath(*romfs_rel.parts)
     identity = work.joinpath(*identity_rel.parts)
+    aoc_dir = work.joinpath(*aoc_rel.parts)
+    # AOC is stored separately on Drive, never inside the compressed workspace.
+    bundled_aoc = [p for p in aoc_dir.rglob("*") if p.is_file()] if aoc_dir.exists() else []
+    if bundled_aoc:
+        fail("Workspace archive unexpectedly contains AOC images; AOC must be restored from its separate Drive folder.")
+    aoc_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[KaKaRoTiOS] Restoring {len(aoc_records)} AOC image(s) separately from Drive...", flush=True)
+    for item in aoc_records:
+        name = Path(item["name"]).name
+        if name != item["name"]:
+            fail(f"Unsafe AOC filename: {item['name']}")
+        download_drive_file(api, item, aoc_dir / name)
+    restored_aoc = sorted(p for p in aoc_dir.glob("*.img") if p.is_file() and not p.is_symlink())
+    if {p.name for p in restored_aoc} != {x["name"] for x in aoc_records}:
+        fail("Restored AOC image filenames differ from the Drive handoff.")
+    for path in restored_aoc:
+        record = next(x for x in aoc_records if x["name"] == path.name)
+        if path.stat().st_size != int(record["size"]) or sha256_file(path) != record["sha256"]:
+            fail(f"Restored AOC image size/SHA-256 mismatch: {path.name}")
     print("[KaKaRoTiOS] Restoring external RomFS as a separate Drive object...", flush=True)
     download_drive_file(api, romfs_record, romfs)
     if romfs.stat().st_size != int(prep["romfs_size"]):
@@ -255,12 +346,17 @@ def main() -> None:
         "pak_audit": prep["pak_audit"],
         "shader_chain": prep["shader_chain"],
         "input_packages": prep["input_packages"],
+        "aoc_dir": str(aoc_dir),
+        "aoc_images": [str(p) for p in restored_aoc],
+        "aoc_count": len(restored_aoc),
+        "base_package": base_record,
+        "update_package": update_record,
         "game_data": game_data,
     }
     output_path = root / "actions-input.json"
     output_path.write_text(json.dumps(prepared, indent=2) + "\n", encoding="utf-8")
     print("[KaKaRoTiOS] Actions input validated:", output_path)
-    print("[KaKaRoTiOS] Verified Drive workspace and RomFS size/SHA-256. No NSP/XCI or prod.keys were restored.")
+    print(f"[KaKaRoTiOS] Verified Drive base/update packages, workspace, RomFS and {len(restored_aoc)} AOC image(s). No base/update package or prod.keys was downloaded again onto the runner.")
 
 if __name__ == "__main__":
     main()

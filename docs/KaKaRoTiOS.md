@@ -2,44 +2,92 @@
 
 Title ID: `010051C0134F8000`
 
-This branch is an isolated Kakarot pipeline based on the architecture of `SpkIOSzero` and `Link2iOS`. It does not modify or dispatch workflows from either branch.
+This isolated branch is based on the architecture of `SpkIOSzero` and `Link2iOS`. It does not modify or dispatch workflows from either branch.
 
-## Pipeline
+## Input: six RAR volume URLs
 
-1. **Colab source acquisition** — download one base package and one update package from user-supplied direct URLs. Each package may independently be `.nsp` or `.xci`. The content header is validated before continuing. `prod.keys` is read from the configured Drive root or its `kakarot/` folder and stays in the Colab runtime.
-2. **NXNative survey and extraction** — use the pinned `scripts/build_ipa_from_nsp.py` content-meta scanner and extractor. The Title ID is selected from the package metadata, not inferred from filenames. The tool extracts the merged update version, writes the RomFS image and sidecar, surveys ExeFS/SDK/graphics/engine markers, and generates a provisional `game.tsv` when no Kakarot profile exists.
-3. **ARM64 rewrite** — the NXNative rewriter translates the actual Kakarot modules and records build IDs, fixups, cuts and observations. No Sparking! ZERO Build ID, allocator offset, vtable, module list or memory layout is copied. Those facts must be discovered from the actual Kakarot package and verified on the Mac.
-4. **Drive checkpoint** — the workspace archive contains the copied NXNative survey report; `RomFS.img` is uploaded as a separate Drive object. Every uploaded payload is recorded with byte size and SHA-256. The workspace excludes the original NSP/XCI files, `prod.keys`, and the external RomFS image.
-5. **GitHub Actions / macOS ARM64** — only the `KaKaRoTiOS` workflow restores the workspace and external RomFS, verifies size and SHA-256, and checks the provisional profile and rewritten modules against the Colab manifest.
-6. **Unreal shader path** — the pinned NXNative reader explicitly supports Unreal PAK version 8 (UE 4.22–4.25), the format documented for Kakarot. The pipeline re-audits PAK versions, index encryption and compression methods on Colab and macOS. PAK v8 Zlib/Stored inline shader data is read by `uepak.py`; a game-owned Oodle host is built only when the actual package audit/classifier proves an Oodle-backed path is present. The Mac stage performs any required game-owned Oodle decode and then the shader split.
-7. **Metal and Route C** — build the iOS Metal libraries for the generated profile, then verify the `b-<chain>` library stamp, `c1_full.tsv`, and `cb_extent.tsv` all name the same chain and profile-input digest. Build `DmGame.framework`, the NX2Apple Shared Shell, ad-hoc sign it with the increased-memory entitlement, and package a thin IPA without RomFS, packages, or keys.
+The Colab notebook `colab/KaKaRoTiOS.ipynb` accepts exactly:
 
-## Kakarot-specific constraints
+- Base game: RAR volumes 1, 2, 3.
+- Update: RAR volumes 1, 2, 3.
 
-- The first run generates a **provisional** profile from the exact supplied base/update files. It is expected to require bring-up and corrections after the first Mac build.
-- No Sparking! ZERO allocator patch is transplanted. Unreal allocator layout, call sites, memory region and heap settings are game/build-specific; they must be measured before adding a Kakarot-specific patch.
-- The base and update are mandatory. No DLC contract is imposed. DLC support can be added later after the base + update path is stable and the package metadata is inspected.
-- The shader source decision is data-driven. PAK v8 is a strong prior from upstream's Kakarot-specific reader support, not permission to skip the package audit.
-- An iPhone IPA build is not the same as gameplay validation. Device runtime, memory pressure, rendering, input and frame pacing still need to be tested on the target iPhone after the artifact exists.
+The two groups are downloaded into different directories. The source filename is taken from HTTP `Content-Disposition` or the URL. When a host hides the original filename, fill `BASE_PART_NAMES` or `UPDATE_PART_NAMES` with the exact original volume names.
 
-## Running the Colab notebook
+Supported multi-volume layouts:
 
-Open `colab/KaKaRoTiOS.ipynb`. Fill in:
+- Modern: `name.part1.rar`, `name.part2.rar`, `name.part3.rar` (zero-padded numbering is also accepted when consistent).
+- Legacy: `name.rar`, `name.r00`, `name.r01`.
 
-- `DRIVE_FOLDER_ID` — the configured Drive root containing `prod.keys` (or a `kakarot/` child with the key file).
-- `BASE_URL` and `UPDATE_URL` — direct download URLs for the user's own packages.
-- `BASE_FILENAME` and `UPDATE_FILENAME` — use `.nsp` or `.xci` to match each package's real format.
+The three names must prove they belong to one ordered set. Each group is extracted once by starting UnRAR with its first volume; the extractor follows the other volumes and verifies the archive's file CRC. The script does not concatenate RAR volumes manually. A group must yield exactly one complete `.nsp` or `.xci`; the package is then checked by its actual header (`PFS0` for NSP, `HEAD` at offset `0x100` for XCI), not just its filename.
 
-The last notebook cell is deliberately opt-in. It defaults to `DISPATCH_TO_GITHUB = False`. Dispatch writes `handoff.json` to `KaKaRoTiOS` only. The workflow has no manual dispatch trigger: it runs only when that explicit cell creates a `Queue KaKaRoTiOS build …` commit changing `handoff.json`. Ordinary code commits do not start the build. Do not dispatch until the URLs and source packages are ready.
+The source package copies are normalized as `input-packages/base.nsp|xci` and `input-packages/update.nsp|xci`. Their size, SHA-256 and MD5 are recorded.
+
+## Google Drive layout
+
+Each prepared run creates:
+
+```text
+KaKaRoTiOS_<request>/
+├── games/
+│   └── 010051c0134f8000/
+│       ├── base.nsp|xci
+│       ├── update.nsp|xci
+│       ├── romfs.img
+│       └── aoc/
+│           └── <DLC-index>.img   (only when DLC exists)
+└── pipeline/
+    ├── source-manifest.json
+    └── kakarot-work.tar.zst
+```
+
+The workspace archive excludes source packages, `prod.keys`, external `RomFS.img`, and AOC images. RomFS and AOC are uploaded separately. Base and update are also uploaded as complete package files—not as RAR volumes.
+
+Uploads are recorded with size, SHA-256 and Drive's server-side MD5 checksum. Before deleting the six RAR volumes, Colab writes a small `pipeline/source-manifest.json` checkpoint containing the six URL fingerprints, all six volume hashes, the reconstructed package hashes and the Drive file IDs. If the Colab runtime resets after the package uploads, a new runtime can match the same six link fingerprints and recover base/update from Drive instead of downloading the RAR volumes again. The six downloaded RAR volumes and their extraction scratch are deleted from Colab **only after both reconstructed package uploads have passed verification**. The original packages remain in Drive.
+
+The NXNative `extract_aoc` stage only produces AOC images when DLC packages are present in the scanned input set. This notebook currently asks for base + update only; therefore `aoc_count=0` is valid and an empty Drive `aoc/` folder is retained. It does not fabricate DLC data. Actual DLC AOC images can only be produced when the matching DLC packages are supplied and recognized.
+
+## Colab / NXNative preparation
+
+1. Download all six RAR URLs, with HTTP Range resume and per-volume SHA-256.
+2. Prove each three-volume naming sequence and extract base/update independently using RARLAB UnRAR.
+3. Identify the complete NSP/XCI by file header and create normalized base/update package files.
+4. Upload base and update to Drive, verify size + server MD5 + local SHA-256, then delete all six RAR volumes.
+5. Pass only the reconstructed base and update to the pinned NXNative `scripts/build_ipa_from_nsp.py` scanner/extractor.
+6. Extract the selected update version, externalize RomFS, generate the provisional Kakarot profile, rewrite actual ARM64 modules, and retain the survey, Build IDs and fixup/cut/observation audits.
+7. If NXNative extracts AOC data, audit and upload each `.img` separately. Otherwise record zero AOC images.
+8. Upload RomFS and the separated workspace, then produce a handoff manifest.
+
+The base and update package files remain local in `/content/kakarot-ios/input-packages` for NXNative. The RAR volumes are removed after Drive package upload, not before.
+
+## Actions / Route C
+
+The `KaKaRoTiOS` workflow restores the workspace and external RomFS, verifies their SHA-256, and re-downloads AOC images (if any) with SHA-256 checks. It checks the stored base/update Drive file metadata (name, size and Drive MD5) without downloading those large source packages again.
+
+The pinned NXNative code then completes the provisional-profile Mac bring-up checks, conditional game-owned Oodle handling, Unreal shader split (including AOC roots when present), iOS Metal compile, chain/table stamp checks, `DmGame.framework`, the Shared Shell, ad-hoc signing and thin IPA packaging.
+
+AOC stays external to the thin IPA and is listed in the build report/Drive handoff for later transfer to the device's `Documents/aoc` when applicable. The RomFS also remains external.
+
+## Running the notebook
+
+Set:
+
+- `DRIVE_FOLDER_ID` — the existing configured Drive root containing `prod.keys` at the root, under `kakarot/`, or under the existing `spk/` folder.
+- `BASE_PART_URLS` — the three direct URLs in volume order.
+- `UPDATE_PART_URLS` — the three direct URLs in volume order.
+- `BASE_PART_NAMES` / `UPDATE_PART_NAMES` — optional exact source names when the download host does not expose them.
+
+The source URLs themselves are not written into the Drive handoff; only their SHA-256 fingerprints and the volume/package integrity records are retained.
+
+The last notebook cell is deliberately opt-in. `DISPATCH_TO_GITHUB` defaults to `False`. The workflow has no manual dispatch trigger: it runs only after the explicit cell creates a `Queue KaKaRoTiOS build …` commit that changes `handoff.json` on the `KaKaRoTiOS` branch. Ordinary code commits do not start the build.
 
 ## Branch and workflow isolation
 
-- Branch base: the exact `SpkIOSzero` commit `70807ac56c6b6ea73fa674dec2fbdf384ec122c3`.
+- Branch base: exact `SpkIOSzero` commit `70807ac56c6b6ea73fa674dec2fbdf384ec122c3`.
 - Workflow: `.github/workflows/kakarot_ios.yml`.
-- Push trigger: `handoff.json` changes on `KaKaRoTiOS` only.
-- Every job checks `refs/heads/KaKaRoTiOS`; build runner: `xcode-27`.
-- No workflow is run by the code-only branch commit. The workflow is not manually dispatched during setup.
+- Trigger: `handoff.json` change on `KaKaRoTiOS` with the explicit queue commit message.
+- Every job verifies `refs/heads/KaKaRoTiOS`; build runner: `xcode-27`.
+- No workflow is triggered while editing the code-only branch.
 
 ## Current validation boundary
 
-The scripts and notebook are prepared for the user-supplied packages. Until the base/update URLs are supplied and the Colab preparation is run, the real Kakarot Build ID, exact update version, module set, PAK inventory, shader count, memory behavior, and device performance remain unmeasured. No successful IPA or iPhone gameplay result is claimed at this stage.
+The six URLs have not yet been supplied or downloaded. Therefore, the actual remote RAR naming scheme, package output extensions/sizes, Kakarot Build ID, update version, module set, PAK inventory, shader count, AOC inventory and device behavior are not yet measured. No successful IPA or iPhone gameplay result is claimed until the real packages pass the Colab survey and the Mac build.

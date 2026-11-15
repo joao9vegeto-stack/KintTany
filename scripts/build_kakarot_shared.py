@@ -155,8 +155,9 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
                 "modules", "main_build_id", "main_sha256", "rewrite_audit",
                 "graphics_api", "unreal_shader_sources", "pak_audit", "shader_chain",
                 "romfs_relative_path", "romfs_id_relative_path",
-                "romfs_size", "romfs_sha256", "survey_relative_path", "survey_size",
-        "survey_sha256", "input_package_count", "input_packages"):
+                "romfs_size", "romfs_sha256", "aoc_relative_dir", "aoc_count", "aoc_images",
+                "survey_relative_path", "survey_size", "survey_sha256",
+                "input_package_count", "input_packages"):
         if prepared.get(key) != prep.get(key):
             fail(f"Actions input and Colab workspace disagree on {key}.")
     if prep.get("profile_type") != "provisional":
@@ -167,6 +168,8 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
         fail(f"Kakarot graphics API is not NVN: {prep.get('graphics_api')}.")
     if builder.chain_of(nx / "engine") != prepared.get("shader_chain"):
         fail("Shader-chain drift: Colab and the pinned macOS engine do not agree.")
+    if prepared.get("aoc_count") != prep.get("aoc_count"):
+        fail("Actions and Colab AOC counts disagree.")
 
     profile_rel = safe_relative(prep["profile_relative_dir"], "profile")
     profile_dir = work.joinpath(*profile_rel.parts)
@@ -197,6 +200,23 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
         fail("Restored NXNative Kakarot survey SHA-256 differs from Colab.")
     if prepared.get("survey_path") != str(survey):
         fail("Actions input survey path does not point to the restored Kakarot survey.")
+    aoc_rel = safe_relative(prep.get("aoc_relative_dir", "aoc"), "AOC")
+    aoc_dir = work.joinpath(*aoc_rel.parts)
+    if prepared.get("aoc_dir") != str(aoc_dir):
+        fail("Actions input AOC path does not point to the restored Drive AOC directory.")
+    aoc_dir.mkdir(parents=True, exist_ok=True)
+    aoc_images = sorted(p for p in aoc_dir.glob("*.img") if p.is_file() and not p.is_symlink())
+    if {p.name for p in aoc_images} != {x["name"] for x in prep.get("aoc_images", [])}:
+        fail("Restored AOC image names differ from the Colab preparation manifest.")
+    for path in aoc_images:
+        item = next(x for x in prep["aoc_images"] if x["name"] == path.name)
+        if path.stat().st_size != int(item["size"]) or sha256_file(path) != item["sha256"]:
+            fail(f"Restored AOC image size/SHA-256 mismatch: {path.name}")
+    if len(aoc_images) != int(prep.get("aoc_count", -1)):
+        fail("Restored AOC image count differs from the preparation manifest.")
+    if prepared.get("aoc_images") != [str(p) for p in aoc_images]:
+        fail("Actions AOC image path list differs from the restored AOC data.")
+
     patched = work / f"patched_{prep['package_version']}"
     for path, label in (
         (exefs / "main", "extracted main"),
@@ -242,7 +262,7 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
             fail(f"Rewritten ARM64 module SHA-256 mismatch: {name}.patched.bin")
         if sha256_file(patched / f"{name}.fixups.tsv") != item["fixups_sha256"]:
             fail(f"Rewrite fixup audit SHA-256 mismatch: {name}.fixups.tsv")
-    return profile, version_dir, romfs, identity, patched, prep, modules
+    return profile, version_dir, romfs, identity, patched, prep, modules, aoc_dir, aoc_images
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -266,7 +286,7 @@ def main() -> None:
     # The provisional profile must be first in all engine-side lookups.
     profile_parent = work / "profile"
     os.environ.update({"DM_GAMES_DIR": str(profile_parent), "DM_GAMES_FIRST": "1", "DM_GAME": TITLE_ID})
-    profile, version_dir, romfs, romfs_id, patched, prep, modules = validate_workspace(
+    profile, version_dir, romfs, romfs_id, patched, prep, modules, aoc_dir, aoc_images = validate_workspace(
         prepared, work, nx, builder, game_profiles)
 
     logs = work / "logs"
@@ -357,7 +377,7 @@ def main() -> None:
         shader_package = work / "shader" / "pkg"
         package_key = builder.split_shaders(
             py, engine, [romfs_source], [version_dir / "ExeFS" / "main"],
-            shader_package, env, logs, profile, provisional=True, oodle=oodle, dlc_roms=())
+            shader_package, env, logs, profile, provisional=True, oodle=oodle, dlc_roms=aoc_images)
         if not isinstance(package_key, str) or not re.fullmatch(r"[0-9a-f]{64}", package_key):
             fail("NXNative shader split did not return a valid SHA-256 package key.")
         if builder.package_key(shader_package) != package_key:
@@ -499,10 +519,11 @@ def main() -> None:
             "metal_validation": table_stamp,
             "framework": framework_name, "ipa": ipa.name, "ipa_size_bytes": ipa.stat().st_size,
             "pipeline": [
-                "Colab URL download and NSP/XCI validation",
+                "Colab six-volume RAR download, ordered-set verification, CRC extraction and NSP/XCI header/hash validation",
+                "Drive base/update package checkpoints and RAR cleanup after MD5/SHA-256 verification",
                 "NXNative metadata scan and Kakarot provisional profile",
                 "NXNative ARM64 rewrite and fixup audit",
-                "Drive workspace/RomFS split with SHA-256 validation",
+                "Drive workspace/RomFS/AOC split with SHA-256 validation",
                 "GitHub Actions macOS ARM64 conditional Oodle processing",
                 "Unreal shader split and profile shader table generation",
                 "iOS Metal compile, c1_full/cb_extent and chain/input stamp validation",
@@ -511,12 +532,19 @@ def main() -> None:
             ],
             "external_game_data": {
                 "drive_folder_url": (prepared.get("game_data") or {}).get("folder_url"),
+                "base_package": prepared.get("base_package"),
+                "update_package": prepared.get("update_package"),
                 "romfs_size_bytes": romfs.stat().st_size,
                 "romfs_sha256": sha256_file(romfs),
-                "layout": f"games/{TITLE_ID.lower()}/romfs.img",
+                "aoc_folder_url": (prepared.get("game_data") or {}).get("aoc_folder_url"),
+                "aoc_count": len(aoc_images),
+                "aoc_images": [{"name": p.name, "size": p.stat().st_size, "sha256": sha256_file(p)} for p in aoc_images],
+                "layout": f"games/{TITLE_ID.lower()}/base.<nsp|xci> + update.<nsp|xci> + romfs.img + aoc/",
             },
-            "ipa_contains_romfs": False, "ipa_contains_nsp": False,
-            "ipa_contains_xci": False, "ipa_contains_prod_keys": False,
+            "ipa_contains_base_package": False, "ipa_contains_update_package": False,
+            "ipa_contains_romfs": False, "ipa_contains_aoc": False,
+            "ipa_contains_nsp": False, "ipa_contains_xci": False,
+            "ipa_contains_prod_keys": False,
             "pipeline_archive": {"included": False, "gpu": "none",
                 "reason": "No offline MTL4 PSO archive is embedded; device-side pipeline creation remains available."},
             "signature": "ad-hoc; sideloading re-sign may be required",

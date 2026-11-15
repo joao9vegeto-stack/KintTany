@@ -197,6 +197,11 @@ def run_preparation(args) -> dict:
     require(free_bytes >= required_free,
             f"Insufficient Colab disk space before extraction: {free_bytes / 2**30:.1f} GiB free; estimated requirement is {required_free / 2**30:.1f} GiB (twice base+update bytes plus 10 GiB).")
     print(f"[KaKaRoTiOS] Colab disk preflight: {free_bytes / 2**30:.1f} GiB free; {required_free / 2**30:.1f} GiB estimated requirement.", flush=True)
+    required_free = sum(path.stat().st_size for path in package_files) * 2 + 10 * 1024**3
+    free_bytes = shutil.disk_usage(work.parent).free
+    require(free_bytes >= required_free,
+            f"Insufficient Colab disk space before NXNative extraction: {free_bytes / 2**30:.1f} GiB free; estimated requirement is {required_free / 2**30:.1f} GiB (two package copies plus 10 GiB).")
+    print(f"[KaKaRoTiOS] Extraction disk preflight: {free_bytes / 2**30:.1f} GiB free; estimated requirement {required_free / 2**30:.1f} GiB.", flush=True)
     work.mkdir(parents=True, exist_ok=True)
     install_linux_dependencies(work.parent)
     module = load_builder(nx / "engine")
@@ -324,6 +329,14 @@ def run_preparation(args) -> dict:
 
     chain = module.chain_of(nx / "engine")
     require(bool(chain), "NXNative shader-chain version is missing after Linux preparation.")
+    # NXNative extracts DLC NSPs (when supplied) to work/aoc/<index>.img.
+    # No DLC package means an empty AOC directory; never synthesize DLC data.
+    aoc_dir = work / "aoc"
+    aoc_dir.mkdir(parents=True, exist_ok=True)
+    aoc_images = sorted(p for p in aoc_dir.glob("*.img") if p.is_file() and not p.is_symlink())
+    aoc_records = [{"name": p.name, "size": p.stat().st_size, "sha256": sha256_file(p)}
+                   for p in aoc_images]
+    require(all(item["size"] > 0 for item in aoc_records), "NXNative produced an empty AOC image.")
     romfs_size = romfs.stat().st_size
     romfs_sha = sha256_file(romfs)
     try:
@@ -351,6 +364,9 @@ def run_preparation(args) -> dict:
         "romfs_relative_path": f"extract/{package_version}/RomFS.img",
         "romfs_id_relative_path": f"extract/{package_version}/RomFS.img.id",
         "romfs_size": romfs_size, "romfs_sha256": romfs_sha,
+        "aoc_relative_dir": "aoc",
+        "aoc_count": len(aoc_records),
+        "aoc_images": aoc_records,
         "survey_relative_path": "survey/survey.md",
         "survey_size": survey_copy.stat().st_size,
         "survey_sha256": sha256_file(survey_copy),

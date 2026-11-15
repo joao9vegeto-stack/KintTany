@@ -56,24 +56,115 @@ def create_folder(api, name: str, parent_id: str) -> str:
         body={"name": name, "mimeType": FOLDER_MIME, "parents": [parent_id]},
         fields="id,name", supportsAllDrives=True).execute()["id"]
 
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
+def get_or_create_folder(api, name: str, parent_id: str) -> str:
+    matches = [x for x in list_children(api, parent_id)
+               if x.get("mimeType") == FOLDER_MIME and x.get("name", "").lower() == name.lower()]
+    if len(matches) > 1:
+        fail(f"More than one Drive/{name} folder exists under the same parent.")
+    return matches[0]["id"] if matches else create_folder(api, name, parent_id)
+
+def verify_drive_folder(api, folder_id: str, expected_prefix: str | None = None) -> dict:
+    item = api.files().get(fileId=folder_id, fields="id,name,mimeType,trashed,parents",
+                           supportsAllDrives=True).execute()
+    if item.get("trashed") or item.get("mimeType") != FOLDER_MIME:
+        fail(f"Saved Drive folder {folder_id} is missing, trashed or is not a folder.")
+    if expected_prefix and not str(item.get("name", "")).startswith(expected_prefix):
+        fail(f"Saved Drive folder {folder_id} does not have the expected {expected_prefix!r} name.")
+    return item
+
+def persist_source_manifest(source: dict) -> None:
+    path = Path(source["package_dir"]).parent / "source-manifest.json"
+    path.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
+
+def file_hashes(path: Path) -> dict:
+    sha, md5 = hashlib.sha256(), hashlib.md5()
     with path.open("rb") as stream:
         for block in iter(lambda: stream.read(16 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+            sha.update(block)
+            md5.update(block)
+    return {"sha256": sha.hexdigest(), "md5": md5.hexdigest()}
+
+def sha256_file(path: Path) -> str:
+    return file_hashes(path)["sha256"]
+
+def verify_drive_record(api, record: dict) -> None:
+    item = api.files().get(fileId=record["id"], fields="id,name,size,md5Checksum,trashed",
+                           supportsAllDrives=True).execute()
+    if item.get("trashed"):
+        fail(f"Drive file {record.get('name')} is trashed.")
+    if item.get("name") != record.get("name") or int(item.get("size", -1)) != int(record.get("size", -2)):
+        fail(f"Drive metadata mismatch for {record.get('name')}.")
+    expected_md5 = str(record.get("md5", "")).lower()
+    if expected_md5 and str(item.get("md5Checksum", "")).lower() != expected_md5:
+        fail(f"Google Drive md5Checksum mismatch for {record.get('name')}.")
+    print(f"[KaKaRoTiOS] Drive metadata verified: {record['name']} ({record['size']:,} bytes; MD5 matches).", flush=True)
+
+def upsert_drive_file(api, path: Path, parent_id: str, name: str) -> dict:
+    """Create or replace one same-name checkpoint in place; never create ambiguous duplicates."""
+    from googleapiclient.http import MediaFileUpload
+    size = path.stat().st_size
+    if size <= 0:
+        fail(f"Refusing to upsert empty file {name}.")
+    hashes = file_hashes(path)
+    existing = [x for x in list_children(api, parent_id)
+                if x.get("mimeType") != FOLDER_MIME and x.get("name") == name]
+    if len(existing) > 1:
+        fail(f"Drive contains duplicate files named {name}; refusing an ambiguous checkpoint.")
+    if not existing:
+        return upload_drive_file(api, path, parent_id, name)
+    item = existing[0]
+    if (int(item.get("size", -1)) == size
+            and str(item.get("md5Checksum", "")).lower() == hashes["md5"]):
+        record = {"id": item["id"], "name": item["name"], "size": size,
+                  "sha256": hashes["sha256"], "md5": hashes["md5"]}
+        verify_drive_record(api, record)
+        return record
+    print(f"[KaKaRoTiOS] Updating Drive checkpoint {name} in place...", flush=True)
+    media = MediaFileUpload(str(path), mimetype="application/octet-stream",
+                            chunksize=CHUNK, resumable=True)
+    request = api.files().update(fileId=item["id"], media_body=media,
+        fields="id,name,size,md5Checksum", supportsAllDrives=True)
+    updated = None
+    while updated is None:
+        status, updated = request.next_chunk()
+        if status:
+            print(f"[KaKaRoTiOS] Drive update {name}: {status.progress()*100:.1f}%", flush=True)
+    if int(updated.get("size", -1)) != size:
+        fail(f"Drive checkpoint update size mismatch for {name}.")
+    if updated.get("md5Checksum") and updated["md5Checksum"].lower() != hashes["md5"]:
+        fail(f"Drive checkpoint update MD5 mismatch for {name}.")
+    record = {"id": updated["id"], "name": updated["name"], "size": size,
+              "sha256": hashes["sha256"], "md5": hashes["md5"]}
+    verify_drive_record(api, record)
+    return record
 
 def upload_drive_file(api, path: Path, parent_id: str, name: str) -> dict:
     from googleapiclient.http import MediaFileUpload
     size = path.stat().st_size
     if size <= 0:
         fail(f"Refusing to upload empty file {name}.")
+    hashes = file_hashes(path)
+    existing = [x for x in list_children(api, parent_id)
+                if x.get("mimeType") != FOLDER_MIME and x.get("name") == name]
+    if len(existing) > 1:
+        fail(f"Drive contains duplicate files named {name}; refusing an ambiguous resume.")
+    if existing:
+        item = existing[0]
+        if (int(item.get("size", -1)) != size
+                or str(item.get("md5Checksum", "")).lower() != hashes["md5"]):
+            fail(f"Drive already contains {name}, but its size/MD5 differs from the local source. "
+                 "The existing file is preserved; use a fresh KaKaRoTiOS run folder.")
+        record = {"id": item["id"], "name": item["name"], "size": size,
+                  "sha256": hashes["sha256"], "md5": hashes["md5"]}
+        verify_drive_record(api, record)
+        print(f"[KaKaRoTiOS] Reusing already verified Drive file {name}; no duplicate upload.", flush=True)
+        return record
     print(f"[KaKaRoTiOS] Uploading {name}: {size:,} bytes ({size/2**30:.2f} GiB)...", flush=True)
     media = MediaFileUpload(str(path), mimetype="application/octet-stream",
                             chunksize=CHUNK, resumable=True)
     request = api.files().create(
         body={"name": name, "parents": [parent_id]}, media_body=media,
-        fields="id,name,size", supportsAllDrives=True)
+        fields="id,name,size,md5Checksum", supportsAllDrives=True)
     item = None
     while item is None:
         status, item = request.next_chunk()
@@ -81,9 +172,12 @@ def upload_drive_file(api, path: Path, parent_id: str, name: str) -> dict:
             print(f"[KaKaRoTiOS] Drive upload {name}: {status.progress()*100:.1f}%", flush=True)
     if int(item.get("size", -1)) != size:
         fail(f"Drive upload size mismatch for {name}.")
-    digest = sha256_file(path)
-    record = {"id": item["id"], "name": item["name"], "size": size, "sha256": digest}
-    print(f"[KaKaRoTiOS] Upload verified: {name}; SHA-256 {digest}.", flush=True)
+    if item.get("md5Checksum") and item["md5Checksum"].lower() != hashes["md5"]:
+        fail(f"Google Drive md5Checksum differs from the local file for {name}.")
+    record = {"id": item["id"], "name": item["name"], "size": size,
+              "sha256": hashes["sha256"], "md5": hashes["md5"]}
+    verify_drive_record(api, record)
+    print(f"[KaKaRoTiOS] Upload verified: {name}; size + Google Drive MD5 + local SHA-256 {hashes['sha256']}.", flush=True)
     return record
 
 def download_drive_file(api, item: dict, destination: Path) -> None:
@@ -126,6 +220,7 @@ def build_work_archive(work: Path, destination: Path) -> None:
         "--exclude=./tools", "--exclude=./tmp",
         "--exclude=./extract/*/RomFS.img", "--exclude=*/RomFS.img",
         "--exclude=./extract/*/RomFS.img.part",
+        "--exclude=./aoc", "--exclude=aoc",
         "-cf", "-", ".",
     ]
     tar = subprocess.Popen(command, stdout=subprocess.PIPE)
@@ -158,14 +253,65 @@ def prepare(args, api=None) -> dict:
     api = api or drive_api()
     ROOT.mkdir(parents=True, exist_ok=True)
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from source_kakarot import prepare_source
-    source = prepare_source(api, args.drive_folder_id, ROOT,
-        args.base_url, args.update_url, args.base_filename, args.update_filename)
+    from source_kakarot import cleanup_rar_parts, prepare_source
+    source = prepare_source(
+        api, args.drive_folder_id, ROOT,
+        args.base_part_urls, args.update_part_urls,
+        args.base_part_names, args.update_part_names,
+    )
     input_dir, keys = Path(source["package_dir"]), Path(source["keys_path"])
+    base_path, update_path = Path(source["base_path"]), Path(source["update_path"])
     print(
-        f"[KaKaRoTiOS] Source verified: base {source['base']['type']} ({source['base']['name']}) "
-        f"+ update {source['update']['type']} ({source['update']['name']}).",
+        f"[KaKaRoTiOS] Reconstructed source pair: base {source['base']['type']} "
+        f"({source['base']['size']:,} bytes) + update {source['update']['type']} "
+        f"({source['update']['size']:,} bytes).",
         flush=True)
+
+    # Persist the request and Drive folder IDs before large uploads. If Colab
+    # stops midway, a retry reuses this same folder and idempotently verifies files.
+    request_id = source.get("request_id") or str(uuid.uuid4())
+    output_id = source.get("drive_output_folder_id")
+    if output_id:
+        verify_drive_folder(api, output_id, "KaKaRoTiOS_")
+    else:
+        output_id = create_folder(api, f"KaKaRoTiOS_{request_id[:8]}", args.drive_folder_id)
+        source["request_id"] = request_id
+        source["drive_output_folder_id"] = output_id
+        persist_source_manifest(source)
+    pipeline_id = source.get("drive_pipeline_folder_id") or get_or_create_folder(api, "pipeline", output_id)
+    games_id = source.get("drive_games_folder_id") or get_or_create_folder(api, "games", output_id)
+    game_id = source.get("drive_game_folder_id") or get_or_create_folder(api, TITLE_ID.lower(), games_id)
+    aoc_id = source.get("drive_aoc_folder_id") or get_or_create_folder(api, "aoc", game_id)
+    verify_drive_folder(api, pipeline_id)
+    verify_drive_folder(api, games_id)
+    verify_drive_folder(api, game_id)
+    verify_drive_folder(api, aoc_id)
+    source.update({
+        "request_id": request_id,
+        "drive_output_folder_id": output_id,
+        "drive_pipeline_folder_id": pipeline_id,
+        "drive_games_folder_id": games_id,
+        "drive_game_folder_id": game_id,
+        "drive_aoc_folder_id": aoc_id,
+    })
+    persist_source_manifest(source)
+
+    base_record = upload_drive_file(api, base_path, game_id, f"base{base_path.suffix.lower()}")
+    update_record = upload_drive_file(api, update_path, game_id, f"update{update_path.suffix.lower()}")
+    source["drive_base_package"] = base_record
+    source["drive_update_package"] = update_record
+    source["rar_parts_cleanup_pending"] = Path(source["archive_dir"]).exists()
+    persist_source_manifest(source)
+    # Publish a recovery checkpoint before deleting the six RAR parts. A fresh
+    # Colab runtime can use these Drive package IDs if the survey is interrupted.
+    source_checkpoint = upsert_drive_file(
+        api, ROOT / "source-manifest.json", pipeline_id, "source-manifest.json")
+    print(f"[KaKaRoTiOS] Drive source checkpoint saved ({source_checkpoint['id']}); now removing local RAR volumes...", flush=True)
+    cleanup_rar_parts(source)
+    # Keep the checkpoint in sync with the confirmed cleanup state.
+    source_checkpoint = upsert_drive_file(
+        api, ROOT / "source-manifest.json", pipeline_id, "source-manifest.json")
+
     nx = install_nx2apple(ROOT)
     work = ROOT / "work"
     if work.exists():
@@ -179,7 +325,7 @@ def prepare(args, api=None) -> dict:
     if prep.get("nx2apple_tag") != NX2APPLE_TAG or prep.get("engine_pin") != ENGINE_PIN:
         fail("Preparation manifest uses another NX2Apple/NXNative pin.")
     if prep.get("package_version") == "v0":
-        print("[KaKaRoTiOS] NOTE: selected package is base v0; confirm update content metadata was recognized.", flush=True)
+        fail("NXNative selected the base-only v0 extraction; refusing to continue without the supplied update.")
 
     romfs_rel = Path(prep["romfs_relative_path"])
     if romfs_rel.is_absolute() or ".." in romfs_rel.parts:
@@ -199,20 +345,37 @@ def prepare(args, api=None) -> dict:
             or identity.get("sha256") != prep["romfs_sha256"]):
         fail("RomFS identity sidecar does not match the game/version/size/SHA-256.")
 
-    request_id = str(uuid.uuid4())
-    output_id = create_folder(api, f"KaKaRoTiOS_{request_id[:8]}", args.drive_folder_id)
-    pipeline_id = create_folder(api, "pipeline", output_id)
-    games_id = create_folder(api, "games", output_id)
-    game_id = create_folder(api, TITLE_ID.lower(), games_id)
-    print("[KaKaRoTiOS] Uploading external RomFS separately from the build workspace...", flush=True)
+    # AOC exists only when NXNative actually finds DLC packages. With base+update
+    # only, the folder remains empty; no DLC image is fabricated.
+    aoc_dir = work / "aoc"
+    aoc_dir.mkdir(parents=True, exist_ok=True)
+    local_aoc = sorted(p for p in aoc_dir.glob("*.img") if p.is_file() and not p.is_symlink())
+    expected_aoc = prep.get("aoc_images", [])
+    if len(local_aoc) != int(prep.get("aoc_count", -1)):
+        fail("NXNative AOC count differs from the preparation manifest.")
+    aoc_records = []
+    for item in expected_aoc:
+        path = aoc_dir / item["name"]
+        if not path.is_file() or path.stat().st_size != int(item["size"]):
+            fail(f"NXNative AOC image is missing or has the wrong size: {item['name']}")
+        digest = sha256_file(path)
+        if digest != item["sha256"]:
+            fail(f"NXNative AOC image SHA-256 mismatch: {item['name']}")
+        drive_item = upload_drive_file(api, path, aoc_id, item["name"])
+        if drive_item["sha256"] != digest:
+            fail(f"AOC SHA-256 changed during upload: {item['name']}")
+        aoc_records.append(drive_item)
+    print(f"[KaKaRoTiOS] AOC images found and uploaded: {len(aoc_records)}.", flush=True)
+
+    print("[KaKaRoTiOS] Uploading RomFS.img as a separate Drive object...", flush=True)
     romfs_record = upload_drive_file(api, romfs, game_id, "romfs.img")
     archive = ROOT / "kakarot-work.tar.zst"
-    print("[KaKaRoTiOS] Archiving rewritten ExeFS, ARM64 rewrite audits, generated profile and survey; excluding source NSP/XCI, prod.keys and RomFS.", flush=True)
+    print("[KaKaRoTiOS] Archiving rewritten ExeFS, provisional profile, survey and audits; excluding source packages, prod.keys, RomFS and AOC.", flush=True)
     build_work_archive(work, archive)
     archive_record = upload_drive_file(api, archive, pipeline_id, "kakarot-work.tar.zst")
 
     handoff = {
-        "format": 1,
+        "format": 2,
         "project": PROJECT,
         "branch": BRANCH,
         "request_id": request_id,
@@ -225,17 +388,25 @@ def prepare(args, api=None) -> dict:
         "work_archive": archive_record,
         "source": {
             "package_count": 2,
-            "base": {k: source["base"][k] for k in ("name", "type", "size", "sha256", "url_sha256")},
-            "update": {k: source["update"][k] for k in ("name", "type", "size", "sha256", "url_sha256")},
-            "input_nsp_count": source["input_nsp_count"],
-            "input_xci_count": source["input_xci_count"],
+            "base": source["base"],
+            "update": source["update"],
+            "base_drive": base_record,
+            "update_drive": update_record,
+            "rar_parts_deleted_after_upload": True,
         },
         "game_data": {
             "folder_id": game_id,
             "folder_url": f"https://drive.google.com/drive/folders/{game_id}",
+            "base_package": base_record,
+            "update_package": update_record,
             "romfs": romfs_record,
             "romfs_relative_path": prep["romfs_relative_path"],
             "romfs_id_relative_path": prep["romfs_id_relative_path"],
+            "aoc_folder_id": aoc_id,
+            "aoc_folder_url": f"https://drive.google.com/drive/folders/{aoc_id}",
+            "aoc_count": len(aoc_records),
+            "aoc": aoc_records,
+            "aoc_relative_dir": prep.get("aoc_relative_dir", "aoc"),
         },
         "prepared": prep,
         "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -243,15 +414,17 @@ def prepare(args, api=None) -> dict:
     handoff_path = ROOT / "handoff.json"
     handoff_path.write_text(json.dumps(handoff, indent=2) + "\n", encoding="utf-8")
     handoff_record = upload_drive_file(api, handoff_path, output_id, "handoff.json")
-    print("\n[KaKaRoTiOS] Linux preparation and Drive checkpoints completed.", flush=True)
+    print("\n[KaKaRoTiOS] Six-volume reconstruction, package uploads and Colab preparation completed.", flush=True)
     print("Request:", request_id)
     print("Drive:", handoff["drive_output_folder_url"])
-    print("Base:", source["base"]["type"], f"{source['base']['size']:,} bytes; SHA-256 {source['base']['sha256']}")
-    print("Update:", source["update"]["type"], f"{source['update']['size']:,} bytes; SHA-256 {source['update']['sha256']}")
+    print("Base package:", base_record["name"], f"{base_record['size']:,} bytes; SHA-256 {base_record['sha256']}")
+    print("Update package:", update_record["name"], f"{update_record['size']:,} bytes; SHA-256 {update_record['sha256']}")
+    print("RAR parts: deleted after both reconstructed packages were verified on Drive.")
     print("RomFS:", f"{romfs_record['size']:,} bytes; SHA-256 {romfs_record['sha256']}")
+    print("AOC images:", len(aoc_records), "(zero is expected unless DLC content was supplied)")
     print("Workspace:", f"{archive_record['size']:,} bytes; SHA-256 {archive_record['sha256']}")
     print("Handoff Drive ID:", handoff_record["id"])
-    print("Dispatch is a separate, explicit notebook cell. It writes handoff.json to KaKaRoTiOS only.")
+    print("Dispatch remains a separate, explicit notebook cell targeting KaKaRoTiOS only.")
     return handoff
 
 def recover(args, api=None) -> dict | None:
@@ -278,7 +451,11 @@ def recover(args, api=None) -> dict | None:
                 and handoff.get("engine_pin") == ENGINE_PIN
                 and handoff.get("package_version") == prepared.get("package_version")
                 and handoff.get("work_archive", {}).get("id")
+                and handoff.get("game_data", {}).get("base_package", {}).get("id")
+                and handoff.get("game_data", {}).get("update_package", {}).get("id")
                 and handoff.get("game_data", {}).get("romfs", {}).get("id")
+                and handoff.get("game_data", {}).get("aoc_folder_id")
+                and int(handoff.get("game_data", {}).get("aoc_count", -1)) == len(handoff.get("game_data", {}).get("aoc", []))
                 and prepared.get("profile_type") == "provisional"
                 and prepared.get("graphics_api") == "nvn"):
             print("[KaKaRoTiOS] Verified handoff recovered from Drive; package download, extraction and rewrite need not be repeated.")
@@ -335,19 +512,19 @@ def dispatch(args) -> None:
     print("The token was used in memory only; it was not written to Drive or the repository.")
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Kakarot isolated Colab pipeline")
+    parser = argparse.ArgumentParser(description="Kakarot isolated Colab RAR multipart pipeline")
     sub = parser.add_subparsers(dest="command", required=True)
-    p = sub.add_parser("prepare", help="download base/update, generate Kakarot profile/rewrite, upload separate RomFS + workspace")
+    p = sub.add_parser("prepare", help="download 3+3 RAR volumes, extract base/update, upload packages + RomFS + AOC + workspace")
     p.add_argument("--drive-folder-id", required=True)
-    p.add_argument("--base-url", default=os.environ.get("KAKAROT_BASE_URL", ""))
-    p.add_argument("--update-url", default=os.environ.get("KAKAROT_UPDATE_URL", ""))
-    p.add_argument("--base-filename", default=os.environ.get("KAKAROT_BASE_FILENAME", "base.nsp"))
-    p.add_argument("--update-filename", default=os.environ.get("KAKAROT_UPDATE_FILENAME", "update.nsp"))
+    p.add_argument("--base-part-urls", nargs=3, required=True)
+    p.add_argument("--update-part-urls", nargs=3, required=True)
+    p.add_argument("--base-part-names", nargs=3, default=["", "", ""])
+    p.add_argument("--update-part-names", nargs=3, default=["", "", ""])
     p.set_defaults(func=prepare)
     p = sub.add_parser("recover", help="recover the latest valid KaKaRoTiOS handoff from Drive")
     p.add_argument("--drive-folder-id", required=True)
     p.set_defaults(func=recover)
-    p = sub.add_parser("dispatch", help="commit the handoff to KaKaRoTiOS and thereby queue only its branch workflow")
+    p = sub.add_parser("dispatch", help="commit the handoff to KaKaRoTiOS and queue only its branch workflow")
     p.add_argument("--handoff", type=Path, default=ROOT / "handoff.json")
     p.set_defaults(func=dispatch)
     args = parser.parse_args()

@@ -52,9 +52,27 @@ jobs:
           assert p.get("input_package_count") == 2
           assert len(p.get("input_packages", [])) == 2
           assert all(x.get("type") in ("NSP", "XCI") for x in p["input_packages"])
+          src = h.get("source") or {}
+          assert src.get("package_count") == 2
+          assert src.get("rar_parts_deleted_after_upload") is True
+          for label in ("base", "update"):
+              item = src.get(label) or {}
+              drive = src.get(label + "_drive") or {}
+              assert item.get("type") in ("NSP", "XCI") and item.get("archive", {}).get("package_type") == item.get("type")
+              assert item.get("size", 0) > 0 and len(item.get("sha256", "")) == 64
+              assert len(item.get("archive", {}).get("rar_volumes", [])) == 3
+              assert all(len(v.get("sha256", "")) == 64 and v.get("size", 0) > 0 for v in item["archive"]["rar_volumes"])
+              assert drive.get("id") and drive.get("size") == item["size"]
+              assert len(drive.get("sha256", "")) == 64 and drive.get("md5")
+          gd = h.get("game_data") or {}
+          assert gd.get("base_package", {}).get("id")
+          assert gd.get("update_package", {}).get("id")
+          assert gd.get("romfs", {}).get("sha256")
+          assert gd.get("aoc_folder_id")
+          assert gd.get("aoc_count") == len(gd.get("aoc", [])) == p.get("aoc_count")
+          assert {x.get("name"): x.get("sha256") for x in gd.get("aoc", [])} == {x.get("name"): x.get("sha256") for x in p.get("aoc_images", [])}
           assert h.get("work_archive", {}).get("sha256")
-          assert h.get("game_data", {}).get("romfs", {}).get("sha256")
-          print("KaKaRoTiOS/Kakarot handoff contract: OK")
+          print("KaKaRoTiOS RAR/base/update/Drive/RomFS/AOC handoff contract: OK")
           PY
           python -m py_compile colab/source_kakarot.py colab/prepare_kakarot.py colab/run_kakarot.py scripts/prepare_kakarot_actions.py scripts/build_kakarot_shared.py
           python - <<'PY'
@@ -78,7 +96,29 @@ jobs:
                   pass
               else:
                   raise AssertionError("NSP mislabeled as XCI was accepted")
-          print("NSP/XCI header and extension contract: OK")
+          assert source_kakarot.validate_volume_sequence(
+              ["base.part1.rar", "base.part2.rar", "base.part3.rar"], "BASE"
+          )["scheme"] == "modern"
+          assert source_kakarot.validate_volume_sequence(
+              ["update.rar", "update.r00", "update.r01"], "UPDATE"
+          )["scheme"] == "legacy"
+          try:
+              source_kakarot.validate_volume_sequence(
+                  ["base.part1.rar", "base.part3.rar", "base.part2.rar"], "BASE"
+              )
+          except SystemExit:
+              pass
+          else:
+              raise AssertionError("Out-of-order RAR volumes were accepted")
+          try:
+              source_kakarot.validate_volume_sequence(
+                  ["base.part1.rar", "base.part2.rar", "other.part3.rar"], "BASE"
+              )
+          except SystemExit:
+              pass
+          else:
+              raise AssertionError("Mixed RAR archive sets were accepted")
+          print("NSP/XCI header and modern/legacy multipart RAR sequence contract: OK")
           PY
 
   build-kakarot:
