@@ -291,8 +291,6 @@ def main() -> None:
         actual_flags = {key: bool(facts.get(key, (False, ""))[0])
                         for key in ("ue_decode", "oodle_packs", "ue_legacy",
                                     "glslc_capture", "vk_capture", "gl_capture")}
-        if actual_flags != prep["shader_source_flags"]:
-            fail(f"Shader source classification differs between Colab and macOS: {actual_flags} != {prep['shader_source_flags']}.")
         # Mac re-check of the Colab shader-source decision.
         if actual_flags != prep["shader_source_flags"]:
             fail(f"Shader-source flags differ between Colab and macOS: {actual_flags} != {prep['shader_source_flags']}.")

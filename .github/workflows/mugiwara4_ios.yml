@@ -60,6 +60,7 @@ jobs:
           assert h.get("game_data", {}).get("romfs", {}).get("sha256")
           print("Mugiwara4iOS / Pirate Warriors 4 handoff: OK")
           PY
+          python -m pip install --quiet PyYAML
           python -m py_compile \
             colab/source_mugiwara.py \
             colab/prepare_mugiwara.py \
@@ -67,8 +68,9 @@ jobs:
             scripts/prepare_mugiwara_actions.py \
             scripts/build_mugiwara_shared.py
           python - <<'PY'
-          import ast, json
+          import ast, json, sys, tempfile, yaml
           from pathlib import Path
+          import source_mugiwara
           n = json.loads(Path("colab/Mugiwara4iOS.ipynb").read_text(encoding="utf-8"))
           assert n["nbformat"] == 4 and len(n["cells"]) == 6
           joined = "\\n".join("".join(c.get("source", [])) for c in n["cells"])
@@ -76,9 +78,31 @@ jobs:
           assert "DISPATCH_TO_GITHUB = False" in joined
           assert "KaKaRoTiOS" not in joined and "SpkIOSzero" in joined
           for index, cell in enumerate(n["cells"]):
-              if cell.get("cell_type") == "code":
-                  ast.parse("".join(cell.get("source", [])), filename=f"Mugiwara4iOS.ipynb:cell-{index}")
-          print("Colab notebook JSON, Python cells and branch guard: OK")
+              if cell.get("cell_type") != "code":
+                  continue
+              parts = cell.get("source", [])
+              assert isinstance(parts, list)
+              assert all(part.endswith("\\n") for part in parts[:-1]), f"cell {index}: missing source-fragment newline"
+              source = "".join(parts)
+              normalized = "\\n".join(
+                  "pass" if line.lstrip().startswith(("%", "!")) else line
+                  for line in source.splitlines()
+              )
+              ast.parse(normalized, filename=f"Mugiwara4iOS.ipynb:cell-{index}")
+          with tempfile.TemporaryDirectory(prefix="mugiwara-package-contract-") as tmp:
+              root = Path(tmp)
+              nsp = root / "base.nsp"
+              nsp.write_bytes(b"PFS0" + bytes(4096))
+              xci = root / "update.xci"
+              header = bytearray(0x104)
+              header[0x100:0x104] = b"HEAD"
+              xci.write_bytes(header)
+              assert source_mugiwara.validate_package(nsp) == "NSP"
+              assert source_mugiwara.validate_package(xci) == "XCI"
+          workflow = yaml.safe_load(Path(".github/workflows/mugiwara4_ios.yml").read_text(encoding="utf-8"))
+          assert workflow.get("jobs", {}).get("validate-handoff")
+          assert workflow.get("jobs", {}).get("build-pirate-warriors-4")
+          print("Mugiwara Python, notebook cells, NSP/XCI contract and workflow YAML: OK")
           PY
 
   build-pirate-warriors-4:

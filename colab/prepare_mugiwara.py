@@ -66,6 +66,7 @@ def install_linux_dependencies(root: Path) -> None:
         ("lz4.block", "lz4"), ("capstone", "capstone>=5,<6"),
         ("fontTools", "fonttools"), ("zbic", "zbic"),
         ("backports.zstd", "backports.zstd"), ("requests", "requests"),
+        ("Crypto.Cipher", "pycryptodome"),
     )
     missing_pip = []
     for module_name, package_name in python_packages:
@@ -124,6 +125,29 @@ def load_builder(engine: Path):
     spec.loader.exec_module(module)
     return module
 
+def install_linux_aes_compat() -> None:
+    """Give NXNative's generic PAK scanner AES-256-ECB on Linux.
+    
+    profile_guess.build_sources() inspects Unreal PAK metadata even when the game
+    is not an Unreal title. The upstream reader uses macOS CommonCrypto by default;
+    this compatibility shim makes encrypted-index inspection work in Colab/Linux
+    if such containers are present. It does not force an Unreal shader path.
+    """
+    require(sys.platform.startswith("linux"), "Linux AES compatibility is only used during Colab preparation.")
+    from Crypto.Cipher import AES
+    key = bytes(range(32))
+    plaintext = bytes.fromhex("00112233445566778899aabbccddeeff")
+    ciphertext = bytes.fromhex("8ea2b7ca516745bfeafc49904b496089")
+    require(AES.new(key, AES.MODE_ECB).decrypt(ciphertext) == plaintext,
+            "PyCryptodome AES-256-ECB self-test failed.")
+    import uepak
+    def aes_decrypt(key_bytes: bytes, data: bytes) -> bytes:
+        if len(key_bytes) != 32 or not data or len(data) % 16:
+            raise ValueError("Unreal PAK AES-256-ECB requires a 32-byte key and 16-byte-aligned data.")
+        return AES.new(key_bytes, AES.MODE_ECB).decrypt(data)
+    uepak.aes_decrypt = aes_decrypt
+    print("[Mugiwara4iOS] Generic Linux AES compatibility enabled for NXNative PAK metadata inspection.", flush=True)
+
 def shader_source_audit(facts: dict, flags: dict, reasons: dict) -> dict:
     """Persist NXNative profile_guess evidence; do not assume KTGL uses Unreal PAKs."""
     return {"graphics_api": str(facts["graphics"][0]), "flags": dict(flags), "reasons": dict(reasons)}
@@ -156,6 +180,7 @@ def run_preparation(args) -> dict:
     work.mkdir(parents=True, exist_ok=True)
     install_linux_dependencies(work.parent)
     module = load_builder(nx / "engine")
+    install_linux_aes_compat()
     for key in ("DM_GAMES_DIR", "DM_GAMES_FIRST"):
         os.environ.pop(key, None)
     os.environ["DM_GAME"] = TITLE_ID
