@@ -15,7 +15,7 @@ from pathlib import Path, PurePosixPath
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
-from mugiwara_contract import copy_prepared_manifest, prepared_manifest_mismatches
+from mugiwara_contract import PREPARED_MANIFEST_KEYS, copy_prepared_manifest, prepared_manifest_mismatches
 
 PROJECT = "Mugiwara4iOS"
 BRANCH = "Mugiwara4iOS"
