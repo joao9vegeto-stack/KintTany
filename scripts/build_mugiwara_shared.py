@@ -155,6 +155,108 @@ def validate_shader_map(profile) -> Path:
         fail(f"Shader split did not produce a non-empty map: {shader_map}")
     return shader_map
 
+
+def benchmark_shader_parallelism(py: str, engine: Path, shader_package: Path, shader_map: Path,
+                                 profile, xlate: Path, env: dict, work: Path, pull: bool) -> int:
+    """Benchmark the pinned NXNative partial-key path before risking a multi-hour full Metal build."""
+    import time
+
+    keys = []
+    with shader_map.open("r", encoding="utf-8", errors="replace") as stream:
+        for line in stream:
+            columns = line.rstrip("\n").split("\t")
+            if len(columns) > 4 and columns[0].endswith(".bin"):
+                keys.append(columns[3])
+    keys = sorted(set(keys))
+    if len(keys) < 128:
+        fail(f"Shader-map benchmark needs at least 128 distinct keys; found {len(keys)}.")
+    sample_count = min(192, len(keys))
+    sample = [keys[(i * len(keys)) // sample_count] for i in range(sample_count)]
+
+    benchmark_root = work / "shader-parallelism-benchmark"
+    shutil.rmtree(benchmark_root, ignore_errors=True)
+    benchmark_root.mkdir(parents=True)
+    results = {}
+    common_total = common_ok = None
+    own_compilers = engine / "dm/gfx/tools/own_compilers.py"
+    if not own_compilers.is_file():
+        fail(f"Pinned NXNative compiler wrapper is missing: {own_compilers}.")
+
+    print(f"[Mugiwara4iOS] Benchmarking NXNative Metal concurrency on {sample_count} evenly sampled shader keys; "
+          f"candidate J values: 8, 12, 16, 24. This is a bounded partial build, not the full compile.", flush=True)
+    print(f"[Mugiwara4iOS] Runner logical CPUs: {os.cpu_count()}; profile: {profile.dir}", flush=True)
+
+    for jobs in (8, 12, 16, 24):
+        root = benchmark_root / f"J{jobs}"
+        cache_dir, ios_dir, tmp_dir = root / "cache", root / "ios", root / "tmp"
+        for directory in (cache_dir, ios_dir, tmp_dir):
+            directory.mkdir(parents=True, exist_ok=True)
+        log_path = root / "benchmark.log"
+        bench_env = dict(env)
+        bench_env.update({
+            "J": str(jobs),
+            "DM_GAME": TITLE_ID,
+            "DM_GAMES_DIR": str(profile.dir.parent),
+            "DM_GAMES_FIRST": "1",
+            "DM_ROOT": str(work),
+            "WORK": str(tmp_dir),
+            "XLATE": str(xlate),
+            "IOSOUT": str(ios_dir),
+            "DMSH_TARGETS": "ios",
+            "DMSH_CAS": str(cache_dir / "cas.db"),
+        })
+        if not pull:
+            bench_env["DMSH_IOS_PULL"] = "0"
+        else:
+            bench_env.pop("DMSH_IOS_PULL", None)
+
+        started = time.monotonic()
+        with log_path.open("w", encoding="utf-8") as log_stream:
+            result = subprocess.run(
+                [py, str(own_compilers), str(shader_package), str(cache_dir), *sample],
+                cwd=engine, env=bench_env, stdout=log_stream,
+                stderr=subprocess.STDOUT, check=False,
+            )
+        elapsed = time.monotonic() - started
+        log_text = log_path.read_text(encoding="utf-8", errors="replace")
+        match = re.search(r"^shaders (\d+): ok (\d+)(?:,|$)", log_text, re.MULTILINE)
+        if result.returncode != 0 or not match:
+            print(f"[Mugiwara4iOS] J={jobs} benchmark unavailable: exit={result.returncode}; "
+                  f"log={log_path}.", flush=True)
+            if jobs == 8:
+                fail(f"Baseline J=8 shader benchmark failed; refusing the full compile. Inspect {log_path}.")
+            continue
+
+        total, ok = int(match.group(1)), int(match.group(2))
+        if common_total is None:
+            common_total, common_ok = total, ok
+        elif (total, ok) != (common_total, common_ok):
+            fail(f"J={jobs} benchmark processed a different shader set: {(total, ok)} != "
+                 f"{(common_total, common_ok)}; concurrency comparison is invalid.")
+        results[jobs] = elapsed
+        print(f"[Mugiwara4iOS] J={jobs}: {ok}/{total} shader keys in {elapsed/60:.2f} min "
+              f"({total/elapsed:.2f} keys/s).", flush=True)
+        shutil.rmtree(root, ignore_errors=True)
+
+    if 8 not in results or len(results) < 2:
+        fail("Could not complete at least two comparable Metal concurrency benchmarks; refusing the full compile.")
+    best_jobs = min(results, key=results.get)
+    speedup = results[8] / results[best_jobs]
+    print(f"[Mugiwara4iOS] Best measured concurrency: J={best_jobs}; speedup over J=8: {speedup:.2f}x.", flush=True)
+    shutil.rmtree(benchmark_root, ignore_errors=True)
+
+    # The previous full run projected about 7h35 for shaders alone. Require >=1.45x
+    # measured improvement before starting another six-hour-limited Actions job.
+    if speedup < 1.45:
+        fail(f"Measured shader speedup {speedup:.2f}x is below the 1.45x safety threshold. "
+             "The full compile was deliberately not started; implement resumable chunked compilation instead.")
+    env["J"] = str(best_jobs)
+    env["DMSH_CAS"] = str(work / "shader" / "cache" / "cas.db")
+    print(f"[Mugiwara4iOS] Full shader build will use J={best_jobs} and explicit persistent-in-workspace CAS "
+          f"{env['DMSH_CAS']}.", flush=True)
+    return best_jobs
+
+
 def validate_table_stamp(profile, ios_msl: Path, chain: str) -> dict:
     import shader_lib
     library = ios_msl / f"b-{chain}"
@@ -447,6 +549,11 @@ def main() -> None:
             fail("Shader package content key does not match the split result.")
         shader_map = validate_shader_map(profile)
         print(f"[Mugiwara4iOS] Shader map generated: {shader_map} ({shader_map.stat().st_size:,} bytes).", flush=True)
+
+        benchmark_shader_parallelism(
+            py, engine, shader_package, shader_map, profile, xlate, env, work,
+            builder.ios_wants_pulling(profile, builder.ios_gpus("none", profile), False, env),
+        )
 
         gpu_selection = builder.ios_gpus("none", profile)
         pull = builder.ios_wants_pulling(profile, gpu_selection, False, env)
