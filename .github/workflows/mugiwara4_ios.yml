@@ -35,7 +35,7 @@ jobs:
           test "$GITHUB_REF" = "refs/heads/Mugiwara4iOS"
           python -m json.tool handoff.json >/dev/null
           python - <<'PY'
-          import json, os, re, sys
+          import json, os, re, sys, tempfile
           from pathlib import Path
           sys.path.insert(0, "colab")
           sys.path.insert(0, "scripts")
