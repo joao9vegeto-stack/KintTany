@@ -66,7 +66,7 @@ jobs:
           build_src = Path("scripts/build_mugiwara_shared.py").read_text()
           assert "ProcessPoolExecutor" in worker_src and "STORE.forked()" in worker_src
           assert "DMSH_PROCS\": \"4\"" in build_src
-          assert "DMSH_RATE_GUARD_SECONDS" in build_src
+          assert "DMSH_RATE_GUARD_SECONDS" in build_src and "DMSH_MIN_SHADERS_PER_SEC\": \"1.6\"" in build_src
           print("Drive range planner, positional writes, four-worker shader dispatch and throughput guard: OK")
 
           # Regression fixture: 44 source DLC NSPs, but two versions of 20 DLC IDs,
