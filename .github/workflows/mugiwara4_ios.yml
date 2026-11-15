@@ -38,6 +38,8 @@ jobs:
           import json, re, sys
           from pathlib import Path
           sys.path.insert(0, "colab")
+          sys.path.insert(0, "scripts")
+          from mugiwara_contract import PREPARED_MANIFEST_KEYS, copy_prepared_manifest, prepared_manifest_mismatches
           from run_mugiwara import valid_aoc_manifest as colab_aoc_valid
           import importlib.util
           def load_module(name, path):
@@ -116,15 +118,15 @@ jobs:
 
           h = json.loads(Path("handoff.json").read_text(encoding="utf-8"))
           p = h.get("prepared") or {}
-          canonical = actions_module.copy_prepared_manifest(p)
-          assert canonical == {key: p[key] for key in actions_module.PREPARED_MANIFEST_KEYS}
-          assert not actions_module.prepared_manifest_mismatches(canonical, p)
-          for field in actions_module.PREPARED_MANIFEST_KEYS:
-              reduced = dict(canonical)
-              reduced.pop(field)
-              missing = actions_module.prepared_manifest_mismatches(reduced, p)
-              assert any(issue.startswith(field + " (missing from left manifest)") for issue in missing), (
-                  f"Manifest projection regression: omission of {field} was not detected"
+          canonical = copy_prepared_manifest(p)
+          assert canonical == {key: p[key] for key in PREPARED_MANIFEST_KEYS}
+          assert not prepared_manifest_mismatches(canonical, p)
+          for field in PREPARED_MANIFEST_KEYS:
+              assert field in canonical and field in p, f"Canonical field missing before projection test: {field}"
+              reduced = {key: value for key, value in canonical.items() if key != field}
+              missing = prepared_manifest_mismatches(reduced, p)
+              assert (field + " (missing from left manifest)") in missing, (
+                  f"Manifest projection regression: omission of {field} was not detected; got {missing}"
               )
           assert h.get("project") == "Mugiwara4iOS"
           assert h.get("branch") == "Mugiwara4iOS"
