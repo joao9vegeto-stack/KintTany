@@ -4,14 +4,16 @@ Title ID: `010051C0134F8000`
 
 This isolated branch is based on the architecture of `SpkIOSzero` and `Link2iOS`. It does not modify or dispatch workflows from either branch.
 
-## Input: six RAR volume URLs
+## Input: six AkiraBox share links
 
 The Colab notebook `colab/KaKaRoTiOS.ipynb` accepts exactly:
 
-- Base game: RAR volumes 1, 2, 3.
-- Update: RAR volumes 1, 2, 3.
+- Base game: three AkiraBox share pages, in part 1, 2, 3 order.
+- Update: three AkiraBox share pages, in part 1, 2, 3 order.
 
-The two groups are downloaded into different directories. The source filename is taken from HTTP `Content-Disposition` or the URL. When a host hides the original filename, fill `BASE_PART_NAMES` or `UPDATE_PART_NAMES` with the exact original volume names.
+Before downloading any RAR bytes, Colab calls AkiraBox's documented `GET /api/files?url=...` status endpoint for all six links. It checks that all six IDs are distinct and that each returned filename exactly matches the configured RAR name, Title ID, package version and expected part number. The base and update groups are never mixed.
+
+For each link, the downloader then opens the share page in a normal HTTP session and reads the standard `#download-button` URL. It does not automate or bypass CAPTCHA, Cloudflare or other human-verification steps. If AkiraBox requires a browser session or human verification, the notebook stops with an explicit message rather than retrying the same forbidden request ten times. The file status API preflight is not itself proof that the RAR payload can be downloaded; the actual download is verified by its RAR signature, size and SHA-256.
 
 Supported multi-volume layouts:
 
@@ -48,7 +50,7 @@ Exactly 20 DLC `.nsp`/`.xci` packages are discovered as direct children of `Driv
 
 ## Colab / NXNative preparation
 
-1. Download all six RAR URLs, with HTTP Range resume and per-volume SHA-256.
+1. Validate all six AkiraBox share links against the official status API; resolve the ordinary download button and download each RAR with HTTP Range resume and per-volume SHA-256.
 2. Prove each three-volume naming sequence and extract base/update independently using RARLAB UnRAR.
 3. Identify the complete NSP/XCI by file header and create normalized base/update package files.
 4. Upload base and update to Drive, verify size + server MD5 + local SHA-256, then delete all six RAR volumes.
@@ -72,9 +74,9 @@ AOC stays external to the thin IPA and is listed in the build report/Drive hando
 Set:
 
 - `DRIVE_FOLDER_ID` — the existing configured Drive root reused from Link2iOS/SpkIOSzero. It must contain one `kakarot/` folder with the 20 named DLC packages; `prod.keys` may be in the root or inside `kakarot/`.
-- `BASE_PART_URLS` — the three direct URLs in volume order.
-- `UPDATE_PART_URLS` — the three direct URLs in volume order.
-- `BASE_PART_NAMES` / `UPDATE_PART_NAMES` — optional exact source names when the download host does not expose them.
+- `BASE_PART_URLS` — the three AkiraBox share-page URLs in volume order.
+- `UPDATE_PART_URLS` — the three AkiraBox share-page URLs in volume order.
+- `BASE_PART_NAMES` / `UPDATE_PART_NAMES` — expected original RAR filenames, used to reject a wrong/misordered file before extraction.
 
 The source URLs themselves are not written into the Drive handoff; only their SHA-256 fingerprints and the volume/package integrity records are retained.
 
@@ -90,4 +92,4 @@ The last notebook cell is deliberately opt-in. `DISPATCH_TO_GITHUB` defaults to 
 
 ## Current validation boundary
 
-The six URLs are registered in the notebook, but this Colab preparation has not yet downloaded or extracted them. Therefore, the actual remote RAR naming scheme, base/update package output extensions and sizes, Kakarot Build ID, update version, module set, PAK inventory, shader count, AOC inventory and device behavior are not yet measured. No successful IPA or iPhone gameplay result is claimed until the real packages pass the Colab survey and the Mac build.
+The six AkiraBox share URLs are now registered in the notebook, and the official API/name/order preflight is implemented. This repository edit did not execute Colab or query the six live share links, so their current availability and exact metadata are not yet confirmed here. When the notebook runs, all six must pass the API check and filename/order validation before any RAR transfer begins. The actual RAR download, extraction, base/update package output extensions and sizes, Kakarot Build ID, update version, module set, PAK inventory, shader count, AOC inventory and device behavior remain unmeasured until that run completes. No successful IPA or iPhone gameplay result is claimed until the real packages pass the Colab survey and the Mac build.
