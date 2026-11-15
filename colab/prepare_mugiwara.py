@@ -335,7 +335,7 @@ def run_preparation(args) -> dict:
             "base_update_content_meta_scan", "base_update_NSP_XCI_extraction",
             "NXNative_survey_and_provisional_game_profile",
             "ARM64_NS0_rewrite_and_fixup_audit", "RomFS_externalization",
-            "NVN_and_Unreal_PAK_shader_source_classification",
+            "engine_shader_source_classification_from_profile_guess",
         ],
         "deferred_stages": [
             "conditional_game_owned_Oodle_decode_on_macOS_ARM64",
