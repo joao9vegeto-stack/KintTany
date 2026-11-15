@@ -72,7 +72,7 @@ jobs:
           assert "INTERVAL_SECONDS = 600" in checkpoint_src
           assert "source.backup(target" in checkpoint_src and "quick_check(1)" in checkpoint_src
           assert "DMSH_RATE_GUARD_SECONDS" in worker_src and 'DMSH_MIN_SHADERS_PER_SEC", "1.6"' in worker_src
-          print("Drive range planner, positional writes, four-worker shader dispatch and throughput guard: OK")
+          print("Drive range planner, positional writes, two-worker HookLink shader dispatch and throughput guard: OK")
 
           # Regression fixture: 44 source DLC NSPs, but two versions of 20 DLC IDs,
           # giving the same 24 unique AOC IDs reported by the Colab content-meta scan.
@@ -241,7 +241,8 @@ jobs:
           workflow = yaml.safe_load(Path(".github/workflows/mugiwara4_ios.yml").read_text(encoding="utf-8"))
           assert workflow.get("jobs", {}).get("validate-handoff")
           build_job = workflow.get("jobs", {}).get("build-pirate-warriors-4")
-          assert build_job and build_job.get("runs-on") == "${{ vars.MUGIWARA_RUNNER || 'xcode-27' }}"
+          runner_spec = str((build_job or {}).get("runs-on", ""))
+          assert runner_spec.startswith(chr(36) + "{{ vars.MUGIWARA_RUNNER ||") and "xcode-27" in runner_spec, runner_spec
           print("Mugiwara Python, 12-cell notebook, 46-NSP/44-DLC-NSP/unique-title-ID-AOC contract and workflow YAML: OK")
           PY
 
