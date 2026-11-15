@@ -152,85 +152,217 @@ def get_or_create_folder(api, name: str, parent_id: str) -> dict:
         fields="id,name", supportsAllDrives=True).execute()
     return result
 
-def download_drive_file(api, item: dict, destination: Path) -> None:
+def download_drive_file(api, item: dict, destination: Path) -> dict:
+    """Download a Drive object to the mugi workspace and verify its size/MD5 when Drive supplies it."""
     from googleapiclient.http import MediaIoBaseDownload
     destination.parent.mkdir(parents=True, exist_ok=True)
+    expected_size = int(item.get("size") or 0)
+    expected_md5 = str(item.get("md5Checksum") or "").lower()
+    if destination.is_file() and expected_size and destination.stat().st_size == expected_size:
+        if not expected_md5:
+            digest = sha256_file(destination)
+            return {"id": item["id"], "name": item["name"], "size": expected_size, "sha256": digest}
+        md5 = hashlib.md5()
+        with destination.open("rb") as stream:
+            for block in iter(lambda: stream.read(16 * 1024 * 1024), b""):
+                md5.update(block)
+        if md5.hexdigest().lower() == expected_md5:
+            return {"id": item["id"], "name": item["name"], "size": expected_size,
+                    "sha256": sha256_file(destination)}
     part = destination.with_suffix(destination.suffix + ".part")
     request = api.files().get_media(fileId=item["id"], supportsAllDrives=True)
+    digest = hashlib.sha256()
+    total = 0
+    from http.client import IncompleteRead
     with part.open("wb") as stream:
         downloader = MediaIoBaseDownload(stream, request, chunksize=8 * 1024 * 1024)
-        done = False
+        done, retries = False, 0
         while not done:
-            status, done = downloader.next_chunk()
+            try:
+                status, done = downloader.next_chunk()
+                retries = 0
+            except (IncompleteRead, TimeoutError, ConnectionError, OSError) as exc:
+                retries += 1
+                if retries > 10:
+                    raise RuntimeError(f"Drive download failed after {retries-1} retries at {downloader._progress}: {exc}") from exc
+                delay = min(2 ** min(retries, 5), 30)
+                print(f"[Mugiwara4iOS] Drive transfer interrupted at {downloader._progress}; retry {retries}/10 in {delay}s.", flush=True)
+                time.sleep(delay)
             if status:
                 print(f"[Mugiwara4iOS] Drive {item.get('name', item['id'])}: {status.progress()*100:.1f}%", flush=True)
-    size = part.stat().st_size
-    if size <= 0:
+    with part.open("rb") as stream:
+        for block in iter(lambda: stream.read(16 * 1024 * 1024), b""):
+            digest.update(block); total += len(block)
+    if not total or (expected_size and total != expected_size):
         part.unlink(missing_ok=True)
-        fail(f"Drive returned an empty {item.get('name', 'file')}.")
-    expected_size = int(item.get("size", size))
-    if size != expected_size:
-        part.unlink(missing_ok=True)
-        fail(f"Drive size mismatch for {item.get('name')}: expected {expected_size}, received {size}.")
+        fail(f"Drive size mismatch for {item.get('name')}: expected {expected_size}, received {total}.")
+    if expected_md5:
+        md5 = hashlib.md5()
+        with part.open("rb") as stream:
+            for block in iter(lambda: stream.read(16 * 1024 * 1024), b""):
+                md5.update(block)
+        if md5.hexdigest().lower() != expected_md5:
+            part.unlink(missing_ok=True)
+            fail(f"Drive MD5 mismatch for {item.get('name')}.")
     part.replace(destination)
+    return {"id": item["id"], "name": item["name"], "size": total, "sha256": digest.hexdigest()}
+
+def upload_drive_file(api, path: Path, parent_id: str, drive_name: str) -> dict:
+    from googleapiclient.http import MediaFileUpload
+    size = path.stat().st_size
+    if size <= 0:
+        fail(f"Refusing to upload an empty package: {path.name}.")
+    media = MediaFileUpload(str(path), mimetype="application/octet-stream", chunksize=CHUNK, resumable=True)
+    request = api.files().create(
+        body={"name": drive_name, "parents": [parent_id]}, media_body=media,
+        fields="id,name,size", supportsAllDrives=True)
+    item = None
+    while item is None:
+        status, item = request.next_chunk()
+        if status:
+            print(f"[Mugiwara4iOS] Uploading {drive_name}: {status.progress()*100:.1f}%", flush=True)
+    if int(item.get("size", -1)) != size:
+        fail(f"Drive upload size mismatch for {drive_name}: {item.get('size')} != {size}.")
+    record = {"id": item["id"], "name": item["name"], "size": size, "sha256": sha256_file(path)}
+    print(f"[Mugiwara4iOS] Persisted {drive_name} inside Drive/mugi ({size:,} bytes; SHA-256 {record['sha256']}).", flush=True)
+    return record
+
+def safe_name(name: str) -> str:
+    value = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(name).name).strip("._")
+    return value or "dlc.nsp"
+
+def exact_files(items: list[dict], name: str) -> list[dict]:
+    return [item for item in items if item.get("mimeType") != FOLDER_MIME
+            and item.get("name", "").casefold() == name.casefold()]
+
+def source_folder(api, drive_root_id: str) -> tuple[dict, list[dict]]:
+    root_items = list_children(api, drive_root_id)
+    folders = [item for item in root_items if item.get("mimeType") == FOLDER_MIME
+               and item.get("name", "").casefold() == "mugi"]
+    if len(folders) != 1:
+        fail(f"Expected exactly one Drive/{'mugi'} folder in the configured parent; found {len(folders)}.")
+    folder = folders[0]
+    return folder, list_children(api, folder["id"])
 
 def prepare_source(api, drive_root_id: str, runtime_root: Path,
                    base_url: str, update_url: str,
-                   base_filename: str = "base.nsp",
-                   update_filename: str = "update.nsp") -> dict:
-    """Download the two user-supplied URLs and obtain prod.keys from Drive root or Drive/mugiwara4ios."""
-    if base_filename.lower() == update_filename.lower():
-        fail("Base and update must use different filenames to avoid overwriting one another.")
-    for label, filename in (("base", base_filename), ("update", update_filename)):
-        if Path(filename).name != filename or Path(filename).suffix.lower() not in PACKAGE_SUFFIXES:
-            fail(f"{label}_filename must be a simple filename ending in .nsp or .xci.")
-    folder = get_or_create_folder(api, "mugiwara4ios", drive_root_id)
-    root_items = list_children(api, drive_root_id)
-    game_items = list_children(api, folder["id"])
-    spk_folders = [x for x in root_items if x.get("mimeType") == FOLDER_MIME
-                   and x.get("name", "").lower() == "spk"]
-    if len(spk_folders) > 1:
-        fail("More than one Drive/spk folder exists; cannot choose an unambiguous prod.keys source.")
-    spk_folder = spk_folders[0] if spk_folders else None
-    spk_items = list_children(api, spk_folder["id"]) if spk_folder else []
-    key_locations = [
-        ("root", [x for x in root_items if x.get("name", "").lower() == "prod.keys" and x.get("mimeType") != FOLDER_MIME]),
-        ("mugiwara4ios", [x for x in game_items if x.get("name", "").lower() == "prod.keys" and x.get("mimeType") != FOLDER_MIME]),
-        ("spk", [x for x in spk_items if x.get("name", "").lower() == "prod.keys" and x.get("mimeType") != FOLDER_MIME]),
-    ]
-    matches = [(where, found[0]) for where, found in key_locations for _ in found]
-    if any(len(found) > 1 for _, found in key_locations) or len(matches) != 1:
-        summary = ", ".join(f"{where}={len(found)}" for where, found in key_locations)
-        fail(f"Expected exactly one prod.keys in Drive root, Drive/mugiwara4ios, or the existing Drive/spk folder; found {summary}.")
-    keys_location, keys_item = matches[0]
+                   base_filename: str = "Mugiwara4iOS_BASE_v0.nsp",
+                   update_filename: str = "Mugiwara4iOS_UPDATE_v1.8.7.nsp") -> dict:
+    """Use only Drive/<configured parent>/mugi: prod.keys + 44 arbitrarily named DLC NSPs.
 
-    input_dir = runtime_root / "input-packages"
-    keys_path = runtime_root / "keys" / "prod.keys"
+    The two signed base/update links are downloaded once and persisted back into mugi
+    under stable, versioned names, so a resumed Colab session does not depend on an
+    expiring URL. Existing canonical files are reused after header/hash validation.
+    """
+    if base_filename.casefold() == update_filename.casefold():
+        fail("The reserved base and update filenames must be different.")
+    for label, filename in (("base", base_filename), ("update", update_filename)):
+        if Path(filename).name != filename or Path(filename).suffix.lower() != ".nsp":
+            fail(f"The {label} must use a simple .nsp filename: {filename!r}.")
+
+    folder, items = source_folder(api, drive_root_id)
+    root = runtime_root.resolve()
+    input_dir = root / "input-packages"
+    keys_path = root / "keys" / "prod.keys"
     input_dir.mkdir(parents=True, exist_ok=True)
     keys_path.parent.mkdir(parents=True, exist_ok=True)
-    download_drive_file(api, keys_item, keys_path)
+
+    key_items = exact_files(items, "prod.keys")
+    if len(key_items) != 1:
+        fail(f"Drive/mugi must contain exactly one prod.keys; found {len(key_items)}.")
+    keys_record = download_drive_file(api, key_items[0], keys_path)
     if keys_path.stat().st_size < 1024:
-        fail("prod.keys is unexpectedly small; check that the correct key file is stored in Drive.")
-    base_record = download_url(base_url, input_dir / base_filename)
-    update_record = download_url(update_url, input_dir / update_filename)
-    if base_record["type"] not in ("NSP", "XCI") or update_record["type"] not in ("NSP", "XCI"):
-        fail("Both packages must be standard NSP or XCI files.")
+        fail("Drive/mugi/prod.keys is unexpectedly small; refusing to proceed.")
+
+    base_drive = exact_files(items, base_filename)
+    update_drive = exact_files(items, update_filename)
+    if len(base_drive) > 1 or len(update_drive) > 1:
+        fail("Drive/mugi contains duplicate reserved base/update filenames; remove the duplicate before proceeding.")
+
+    def obtain_linked(label: str, url: str, drive_records: list[dict], drive_name: str, local_name: str) -> dict:
+        target = input_dir / local_name
+        if drive_records:
+            rec = download_drive_file(api, drive_records[0], target)
+            kind = validate_package(target, ".nsp")
+            print(f"[Mugiwara4iOS] Reusing persisted {label} from Drive/mugi/{drive_name}; signed URL not needed.", flush=True)
+            return {**rec, "name": target.name, "drive_name": drive_name, "type": kind,
+                    "source": "drive-cache", "url_sha256": ""}
+        if not url or not url.startswith(("https://", "http://")):
+            fail(f"The signed {label} NSP URL is missing and Drive/mugi has no persisted {drive_name}.")
+        rec = download_url(url, target)
+        kind = validate_package(target, ".nsp")
+        uploaded = upload_drive_file(api, target, folder["id"], drive_name)
+        # Refresh the file inventory only after the upload succeeded; its stable name is now cached in mugi.
+        return {**uploaded, "name": target.name, "drive_name": drive_name, "type": kind,
+                "source": "signed-url", "url_sha256": rec.get("url_sha256", "")}
+
+    base_record = obtain_linked("base", base_url, base_drive, base_filename, "000_base.nsp")
+    update_record = obtain_linked("update", update_url, update_drive, update_filename, "001_update.nsp")
     if base_record["sha256"] == update_record["sha256"]:
-        fail("Base and update downloads have identical SHA-256; check the two URLs.")
+        fail("Base and update have identical SHA-256; the two supplied links appear to point to the same package.")
+
+    reserved_names = {base_filename.casefold(), update_filename.casefold()}
+    dlc_items = sorted(
+        (item for item in items if item.get("mimeType") != FOLDER_MIME
+         and Path(item.get("name", "")).suffix.lower() == ".nsp"
+         and item.get("name", "").casefold() not in reserved_names
+         and item.get("name", "").casefold() != "prod.keys"),
+        key=lambda item: (item.get("name", "").casefold(), item.get("id", "")),
+    )
+    xci_items = [item for item in items if item.get("mimeType") != FOLDER_MIME
+                 and Path(item.get("name", "")).suffix.lower() == ".xci"]
+    if xci_items:
+        fail("Drive/mugi must contain the 44 DLCs as .nsp files; unexpected XCI files: "
+             + ", ".join(x.get("name", "(unnamed)") for x in xci_items[:10]))
+    if len(dlc_items) != 44:
+        fail(f"Expected exactly 44 DLC NSP files in Drive/mugi (any filenames are accepted); found {len(dlc_items)}: "
+             + ", ".join(x.get("name", "(unnamed)") for x in dlc_items[:12]))
+    names = [str(item.get("name", "")) for item in dlc_items]
+    if len({name.casefold() for name in names}) != len(names):
+        fail("Drive/mugi has duplicate DLC filenames; rename the duplicates so every source file is unambiguous.")
+
+    # Keep stable local ordering for the NSP reader; source filenames are retained in the manifest.
+    packages = [{"role": "base", "drive_name": base_filename, "local_name": "000_base.nsp", **base_record},
+                {"role": "update", "drive_name": update_filename, "local_name": "001_update.nsp", **update_record}]
+    dlc_records = []
+    for index, item in enumerate(dlc_items, start=2):
+        local_name = f"{index:03d}_{safe_name(item['name'])}"
+        target = input_dir / local_name
+        record = download_drive_file(api, item, target)
+        validate_package(target, ".nsp")
+        row = {"role": "dlc", "drive_name": item["name"], "local_name": local_name,
+               "type": "NSP", "size": record["size"], "sha256": record["sha256"],
+               "drive_id": item["id"]}
+        dlc_records.append(row)
+        packages.append(row)
+
+    # Delete stale package files left by an interrupted/older preparation, never unrelated files in mugi.
+    expected_local = {item["local_name"] for item in packages}
+    for old in input_dir.iterdir():
+        if old.is_file() and old.suffix.lower() in PACKAGE_SUFFIXES and old.name not in expected_local:
+            old.unlink()
+    if len(packages) != 46 or len(dlc_records) != 44:
+        fail(f"Internal package inventory error: expected 46 packages/44 DLCs, found {len(packages)}/{len(dlc_records)}.")
+    total_bytes = sum(int(item["size"]) for item in packages)
     source = {
-        "package_dir": str(input_dir),
-        "keys_path": str(keys_path),
-        "source_folder_id": folder["id"],
-        "source_folder_name": folder["name"],
-        "package_count": 2,
-        "base": base_record,
-        "update": update_record,
-        "input_nsp_count": int(base_record["type"] == "NSP") + int(update_record["type"] == "NSP"),
-        "input_xci_count": int(base_record["type"] == "XCI") + int(update_record["type"] == "XCI"),
-        "keys_drive_id": keys_item["id"],
+        "package_dir": str(input_dir), "keys_path": str(keys_path),
+        "source_folder_id": folder["id"], "source_folder_name": folder["name"],
+        "package_count": 46, "base_type": "NSP", "base_extension": ".nsp",
+        "base_file_name": "000_base.nsp", "update_file_name": "001_update.nsp",
+        "input_nsp_count": 46, "input_xci_count": 0,
+        "update_nsp_count": 1, "dlc_nsp_count": 44,
+        "base": base_record, "update": update_record,
+        "dlc_files": dlc_records, "packages": packages,
+        "keys_drive_id": keys_item["id"], "keys_sha256": keys_record["sha256"],
+        "total_package_bytes": total_bytes,
     }
-    source_path = runtime_root / "source-manifest.json"
-    source_path.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
-    print(f"[Mugiwara4iOS] Input set: base {base_record['type']} + update {update_record['type']}; source package bytes {base_record['size'] + update_record['size']:,}.", flush=True)
-    print("[Mugiwara4iOS] prod.keys stays in Colab and is excluded from the workspace archive.", flush=True)
+    source_path = root / "source-manifest.json"
+    source_path.write_text(json.dumps(source, indent=2) + "\\n", encoding="utf-8")
+    source["manifest_path"] = str(source_path)
+    print("[Mugiwara4iOS] Source verified exclusively in Drive/mugi:", flush=True)
+    print("  Base NSP:", base_record["size"], "bytes; SHA-256", base_record["sha256"], flush=True)
+    print("  Update NSP v1.8.7 input:", update_record["size"], "bytes; SHA-256", update_record["sha256"], flush=True)
+    print("  DLC NSPs:", len(dlc_records), "(filenames are not assumed to be dlc1..dlc44)", flush=True)
+    print("  Total source packages:", len(packages), f"({total_bytes/2**30:.2f} GiB)", flush=True)
+    print("  prod.keys: kept locally for this preparation and excluded from the Drive workspace archive.", flush=True)
     return source
