@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Restore and verify the Mugiwara4iOS workspace, external RomFS and all 44 DLC AOC images."""
+"""Restore the Mugiwara4iOS workspace, external RomFS and unique-title-ID AOC images."""
 from __future__ import annotations
 import argparse
 import hashlib
@@ -109,7 +109,7 @@ def valid_aoc_manifest(prep: dict, drive_records: list[dict]) -> bool:
                     or drive.get("sha256") != digest):
                 return False
         return True
-    except (KeyError, TypeError, ValueError, OverflowError):
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
         return False
 
 def safe_relative(value: str, label: str) -> PurePosixPath:
