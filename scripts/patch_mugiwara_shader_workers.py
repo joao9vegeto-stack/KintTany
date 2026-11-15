@@ -145,7 +145,7 @@ res, busy = [], []
 
 
 RATE_GUARD_SECONDS = float(os.environ.get("DMSH_RATE_GUARD_SECONDS", "300"))
-MIN_SHADERS_PER_SEC = float(os.environ.get("DMSH_MIN_SHADERS_PER_SEC", "1.2"))
+MIN_SHADERS_PER_SEC = float(os.environ.get("DMSH_MIN_SHADERS_PER_SEC", "1.6"))
 
 
 def collect(left):
