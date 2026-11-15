@@ -345,8 +345,24 @@ def main() -> None:
     sys.path.insert(0, str(repo_scripts))
     builder, game_profiles, nacp, pg = load_builder(engine)
     worker_sidecar = engine / "dm/gfx/tools/dmsh_build_workers.py"
-    if not worker_sidecar.is_file():
+    worker_wrapper = engine / "dm/gfx/tools/own_compilers.py"
+    if not worker_sidecar.is_file() or not worker_wrapper.is_file():
         fail("HookLink2iOS DMSH_PROCS worker backport is missing; refusing a slow thread-only Metal build.")
+    worker_source = worker_sidecar.read_text(encoding="utf-8")
+    wrapper_source = worker_wrapper.read_text(encoding="utf-8")
+    required_worker_markers = (
+        "Mugiwara4iOS DMSH_PROCS worker backport",
+        "ProcessPoolExecutor",
+        "STORE.forked()",
+        "def fin_worker(",
+        "def submit(",
+    )
+    missing_worker_markers = [marker for marker in required_worker_markers if marker not in worker_source]
+    if missing_worker_markers or "dmsh_build_workers.py" not in wrapper_source:
+        fail(
+            "The actual own_compilers.py invocation is not wired to the verified process-worker sidecar; "
+            f"missing markers: {missing_worker_markers}."
+        )
     # The provisional profile must be first in all engine-side lookups.
     profile_parent = work / "profile"
     os.environ.update({"DM_GAMES_DIR": str(profile_parent), "DM_GAMES_FIRST": "1", "DM_GAME": TITLE_ID})
@@ -363,8 +379,16 @@ def main() -> None:
     env.update({"DM_GAME": TITLE_ID, "DM_GAMES_DIR": str(profile_parent),
                 "DM_GAMES_FIRST": "1", "DM_ROOT": str(work),
                 "WORK": str(work / "tmp"), "IOS_PULL": "1",
-                "J": "1", "DMSH_PROCS": "2"})
-    print("[Mugiwara4iOS] Metal strategy cloned from HookLink2iOS: J=1, DMSH_PROCS=2 (two independent shader-finishing workers).", flush=True)
+                "J": "1", "DMSH_PROCS": "4",
+                "DMSH_RATE_GUARD_SECONDS": "300",
+                "DMSH_MIN_SHADERS_PER_SEC": "1.2"})
+    print(
+        f"[Mugiwara4iOS] Metal worker backport verified in own_compilers.py; "
+        f"J={env['J']}, DMSH_PROCS={env['DMSH_PROCS']}, "
+        f"fail-fast floor=1.2 shader/s after 300s, "
+        f"runner logical CPUs={os.cpu_count()}.",
+        flush=True,
+    )
     builder.configure_dotnet(env)
     xlate = engine / "dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate"
     builder.PROG.mode = "lines"
@@ -597,6 +621,9 @@ def main() -> None:
                 fail("Thin IPA unexpectedly embeds external game data, original packages, keys or unsupported PSO: "
                      + ", ".join(prohibited[:20]))
 
+        # Reuse the SHA-256 values already verified during Drive restore.
+        # Do not reread the 14 GiB RomFS and all AOC images just to write the report.
+        aoc_manifest_sha = {item["name"]: item["sha256"] for item in prep["aoc_images"]}
         report = {
             "project": PROJECT, "branch": BRANCH, "game": display_name,
             "title_id": TITLE_ID, "display_version": display_version,
@@ -628,10 +655,10 @@ def main() -> None:
             "external_game_data": {
                 "drive_folder_url": (prepared.get("game_data") or {}).get("folder_url"),
                 "romfs_size_bytes": romfs.stat().st_size,
-                "romfs_sha256": sha256_file(romfs),
+                "romfs_sha256": prep["romfs_sha256"],
                 "aoc_count": len(aoc_images),
                 "aoc_images": [{"name": image.name, "size_bytes": image.stat().st_size,
-                                "sha256": sha256_file(image)} for image in aoc_images],
+                                "sha256": aoc_manifest_sha[image.name]} for image in aoc_images],
                 "layout": f"games/{TITLE_ID.lower()}/romfs.img + games/{TITLE_ID.lower()}/aoc/",
             },
             "ipa_contains_romfs": False, "ipa_contains_aoc": False, "ipa_contains_nsp": False,
