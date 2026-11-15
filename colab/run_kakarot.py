@@ -261,6 +261,34 @@ def prepare(args, api=None) -> dict:
     )
     input_dir, keys = Path(source["package_dir"]), Path(source["keys_path"])
     base_path, update_path = Path(source["base_path"]), Path(source["update_path"])
+    # Stage existing DLC packages from Drive/kakarot (root, DLC/, or AOC/) separately.
+    kakarot_id = source["drive_kakarot_folder_id"]
+    dlc_candidates = []
+    for item in list_children(api, kakarot_id):
+        if item.get("mimeType") == FOLDER_MIME and item.get("name", "").lower() in ("dlc", "aoc"):
+            dlc_candidates.extend(list_children(api, item["id"]))
+        elif item.get("mimeType") != FOLDER_MIME:
+            dlc_candidates.append(item)
+    excluded_names = {base_path.name.lower(), update_path.name.lower()}
+    dlc_items = [x for x in dlc_candidates if x.get("mimeType") != FOLDER_MIME
+                 and Path(x.get("name", "")).suffix.lower() in (".nsp", ".xci")
+                 and x.get("name", "").lower() not in excluded_names]
+    seen = set()
+    staged = 0
+    for item in dlc_items:
+        if item["id"] in seen:
+            continue
+        seen.add(item["id"])
+        dest = input_dir / ("dlc_" + Path(item["name"]).name)
+        download_drive_file(api, item, dest)
+        with dest.open("rb") as stream:
+            header = stream.read(0x104)
+        if header[:4] != b"PFS0" and header[0x100:0x104] != b"HEAD":
+            dest.unlink(missing_ok=True)
+            fail(f"Existing DLC file {item[\"name\"]} is not a valid NSP/XCI package.")
+        staged += 1
+    source["dlc_drive_items"] = [{"id": x["id"], "name": x["name"]} for x in dlc_items]
+    print(f"[KaKaRoTiOS] Existing DLC packages staged from Drive/kakarot: {staged}.", flush=True)
     print(
         f"[KaKaRoTiOS] Reconstructed source pair: base {source['base']['type']} "
         f"({source['base']['size']:,} bytes) + update {source['update']['type']} "
