@@ -2,6 +2,7 @@
 """Restore the Mugiwara4iOS workspace, external RomFS and unique-title-ID AOC images."""
 from __future__ import annotations
 import argparse
+import concurrent.futures as cf
 import hashlib
 import json
 import os
@@ -9,7 +10,9 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import threading
 import time
+from urllib.parse import quote
 from pathlib import Path, PurePosixPath
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -124,50 +127,254 @@ def safe_relative(value: str, label: str) -> PurePosixPath:
         fail(f"Unsafe {label} path in handoff: {value}")
     return path
 
-def download_drive_file(api, item: dict, destination: Path) -> None:
+class DriveRangeNotSupported(RuntimeError):
+    pass
+
+
+def _drive_pwrite_all(fd: int, data: bytes, offset: int) -> None:
+    """Write a range at an exact offset; os.pwrite avoids shared-file-pointer races."""
+    view = memoryview(data)
+    while view:
+        written = os.pwrite(fd, view, offset)
+        if written <= 0:
+            raise OSError("short positional write while restoring Drive data")
+        offset += written
+        view = view[written:]
+
+
+def _drive_ranges(size: int, chunk_size: int) -> list[tuple[int, int]]:
+    """Inclusive HTTP byte ranges covering [0, size) exactly once."""
+    return [
+        (start, min(start + chunk_size, size) - 1)
+        for start in range(0, size, chunk_size)
+    ]
+
+
+def download_drive_file(
+    api,
+    credentials,
+    item: dict,
+    destination: Path,
+    parallel_workers: int = 6,
+) -> str:
+    """Download, verify once, then atomically promote. Large Drive blobs use parallel HTTP ranges."""
     from googleapiclient.http import MediaIoBaseDownload
     from http.client import IncompleteRead
+
+    expected_size = int(item.get("size", -1))
+    expected_sha = str(item.get("sha256", "")).lower()
+    if expected_size <= 0 or len(expected_sha) != 64 or any(
+        char not in "0123456789abcdef" for char in expected_sha
+    ):
+        fail(f"Incomplete Drive size/SHA-256 metadata for {item.get('name')!r}.")
+
     destination.parent.mkdir(parents=True, exist_ok=True)
     part = destination.with_suffix(destination.suffix + ".part")
-    request = api.files().get_media(fileId=item["id"], supportsAllDrives=True)
-    with part.open("wb") as stream:
-        downloader = MediaIoBaseDownload(stream, request, chunksize=8 * 1024 * 1024)
-        done, retries = False, 0
-        while not done:
+    part.unlink(missing_ok=True)
+    transfer_started = time.monotonic()
+    range_bytes = 64 * 1024 * 1024
+    stream_bytes = 8 * 1024 * 1024
+    use_ranges = expected_size >= range_bytes
+    range_supported = False
+
+    if use_ranges:
+        from google.auth.transport.requests import AuthorizedSession
+
+        local = threading.local()
+        url = f"https://www.googleapis.com/drive/v3/files/{quote(str(item['id']), safe='')}"
+        params = {"alt": "media", "supportsAllDrives": "true"}
+
+        def session_for_thread():
+            session = getattr(local, "session", None)
+            if session is None:
+                session = AuthorizedSession(credentials)
+                local.session = session
+            return session
+
+        # Probe the exact endpoint before allocating workers. If Drive/proxy ignores
+        # Range, use the proven sequential client rather than corrupting a sparse file.
+        with session_for_thread().get(
+            url,
+            params=params,
+            headers={"Range": "bytes=0-0", "Accept-Encoding": "identity"},
+            stream=True,
+            timeout=(30, 180),
+        ) as response:
+            if response.status_code == 206:
+                wanted = f"bytes 0-0/{expected_size}"
+                if response.headers.get("Content-Range", "").strip() != wanted:
+                    fail(
+                        f"Drive returned an invalid range probe for {item.get('name')}: "
+                        f"{response.headers.get('Content-Range')!r}, expected {wanted!r}."
+                    )
+                probe = next(response.iter_content(chunk_size=1), b"")
+                if len(probe) != 1:
+                    fail(f"Drive returned an empty range probe for {item.get('name')}.")
+                range_supported = True
+            elif response.status_code == 200:
+                range_supported = False
+            else:
+                response.raise_for_status()
+                fail(
+                    f"Unexpected Drive range-probe status for {item.get('name')}: "
+                    f"{response.status_code}."
+                )
+
+        if range_supported:
+            ranges = _drive_ranges(expected_size, range_bytes)
+            workers = max(1, min(int(parallel_workers), len(ranges)))
+            fd = os.open(part, os.O_CREAT | os.O_RDWR | os.O_TRUNC, 0o644)
             try:
-                status, done = downloader.next_chunk()
-                retries = 0
-            except (IncompleteRead, TimeoutError, ConnectionError, OSError) as exc:
-                retries += 1
-                if retries > 10:
-                    raise RuntimeError(
-                        f"Drive download failed after {retries-1} retries at "
-                        f"{downloader._progress}: {exc}"
-                    ) from exc
-                delay = min(2 ** min(retries, 5), 30)
-                print(
-                    f"[Mugiwara4iOS] Drive transfer interrupted at {downloader._progress}; "
-                    f"retry {retries}/10 in {delay}s ({type(exc).__name__}).",
-                    flush=True,
-                )
-                time.sleep(delay)
-                continue
-            if status:
-                print(
-                    f"[Mugiwara4iOS] Drive {item.get('name', item['id'])}: "
-                    f"{status.progress()*100:.1f}%",
-                    flush=True,
-                )
-    size = part.stat().st_size
-    expected_size = int(item.get("size", -1))
-    if size <= 0 or size != expected_size:
+                os.ftruncate(fd, expected_size)
+
+                def fetch_range(start: int, end: int) -> int:
+                    expected_length = end - start + 1
+                    for attempt in range(1, 6):
+                        try:
+                            with session_for_thread().get(
+                                url,
+                                params=params,
+                                headers={
+                                    "Range": f"bytes={start}-{end}",
+                                    "Accept-Encoding": "identity",
+                                },
+                                stream=True,
+                                timeout=(30, 180),
+                            ) as response:
+                                if response.status_code == 200:
+                                    raise DriveRangeNotSupported(
+                                        "Drive stopped honoring byte ranges mid-transfer."
+                                    )
+                                if response.status_code != 206:
+                                    response.raise_for_status()
+                                    raise RuntimeError(
+                                        f"Drive range {start}-{end} returned HTTP {response.status_code}."
+                                    )
+                                wanted = f"bytes {start}-{end}/{expected_size}"
+                                actual = response.headers.get("Content-Range", "").strip()
+                                if actual != wanted:
+                                    raise RuntimeError(
+                                        f"Drive Content-Range mismatch: {actual!r}, expected {wanted!r}."
+                                    )
+                                written = 0
+                                for block in response.iter_content(chunk_size=stream_bytes):
+                                    if not block:
+                                        continue
+                                    if written + len(block) > expected_length:
+                                        raise RuntimeError(
+                                            f"Drive range {start}-{end} exceeded its declared length."
+                                        )
+                                    _drive_pwrite_all(fd, block, start + written)
+                                    written += len(block)
+                                if written != expected_length:
+                                    raise IncompleteRead(
+                                        f"Drive range {start}-{end}: received {written}/{expected_length} bytes."
+                                    )
+                                return written
+                        except DriveRangeNotSupported:
+                            raise
+                        except Exception as exc:
+                            if attempt >= 5:
+                                raise RuntimeError(
+                                    f"Drive range {start}-{end} failed after {attempt} attempts: {exc}"
+                                ) from exc
+                            delay = min(2 ** (attempt - 1), 16)
+                            print(
+                                f"[Mugiwara4iOS] Drive range {start}-{end} interrupted; "
+                                f"retry {attempt}/5 in {delay}s ({type(exc).__name__}).",
+                                flush=True,
+                            )
+                            time.sleep(delay)
+                    raise RuntimeError(f"Drive range {start}-{end} exhausted its retry budget.")
+
+                completed = 0
+                next_report = max(256 * 1024 * 1024, int(expected_size * 0.02))
+                report_at = next_report
+                try:
+                    with cf.ThreadPoolExecutor(max_workers=workers) as pool:
+                        futures = [
+                            pool.submit(fetch_range, start, end)
+                            for start, end in ranges
+                        ]
+                        for future in cf.as_completed(futures):
+                            completed += future.result()
+                            if completed >= report_at or completed == expected_size:
+                                elapsed = max(time.monotonic() - transfer_started, 0.001)
+                                rate = completed / elapsed / (1024 * 1024)
+                                print(
+                                    f"[Mugiwara4iOS] Drive {item.get('name', item['id'])}: "
+                                    f"{completed / expected_size:.1%} "
+                                    f"({completed / 1024**3:.2f}/{expected_size / 1024**3:.2f} GiB), "
+                                    f"{rate:.1f} MiB/s, {workers} range workers.",
+                                    flush=True,
+                                )
+                                report_at += next_report
+                except DriveRangeNotSupported:
+                    range_supported = False
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+
+    if not range_supported:
+        if use_ranges:
+            print(
+                f"[Mugiwara4iOS] Drive does not honor byte ranges for {item.get('name')}; "
+                "falling back to the verified sequential downloader.",
+                flush=True,
+            )
         part.unlink(missing_ok=True)
-        fail(f"Drive size mismatch for {item.get('name')}: {size} != {expected_size}.")
-    digest = sha256_file(part)
-    if digest.lower() != str(item.get("sha256", "")).lower():
+        request = api.files().get_media(fileId=item["id"], supportsAllDrives=True)
+        with part.open("wb") as stream:
+            downloader = MediaIoBaseDownload(stream, request, chunksize=32 * 1024 * 1024)
+            done, retries = False, 0
+            while not done:
+                try:
+                    status, done = downloader.next_chunk()
+                    retries = 0
+                except (IncompleteRead, TimeoutError, ConnectionError, OSError) as exc:
+                    retries += 1
+                    if retries > 10:
+                        raise RuntimeError(
+                            f"Drive download failed after {retries-1} retries at "
+                            f"{downloader._progress}: {exc}"
+                        ) from exc
+                    delay = min(2 ** min(retries, 5), 30)
+                    print(
+                        f"[Mugiwara4iOS] Drive transfer interrupted at {downloader._progress}; "
+                        f"retry {retries}/10 in {delay}s ({type(exc).__name__}).",
+                        flush=True,
+                    )
+                    time.sleep(delay)
+                if status:
+                    elapsed = max(time.monotonic() - transfer_started, 0.001)
+                    rate = downloader._progress / elapsed / (1024 * 1024)
+                    print(
+                        f"[Mugiwara4iOS] Drive {item.get('name', item['id'])}: "
+                        f"{status.progress()*100:.1f}%, {rate:.1f} MiB/s.",
+                        flush=True,
+                    )
+
+    actual_size = part.stat().st_size
+    if actual_size != expected_size:
+        part.unlink(missing_ok=True)
+        fail(
+            f"Drive size mismatch for {item.get('name')}: "
+            f"{actual_size} != {expected_size}."
+        )
+    # One full-file SHA pass only. Callers compare the manifest digests before
+    # transfer and reuse this verified digest instead of rereading 14 GiB.
+    digest = sha256_file(part).lower()
+    if digest != expected_sha:
         part.unlink(missing_ok=True)
         fail(f"Drive SHA-256 mismatch for {item.get('name')}.")
     part.replace(destination)
+    elapsed = max(time.monotonic() - transfer_started, 0.001)
+    print(
+        f"[Mugiwara4iOS] Drive verified {item.get('name', item['id'])}: "
+        f"{actual_size:,} bytes, SHA-256 OK, average {actual_size / elapsed / (1024 * 1024):.1f} MiB/s.",
+        flush=True,
+    )
+    return digest
 
 def extract_verified_archive(archive: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
@@ -291,7 +498,7 @@ def main() -> None:
     root.mkdir(parents=True)
     archive = root / "mugiwara4ios-work.tar.zst"
     print("[Mugiwara4iOS] Downloading Colab workspace archive and verifying SHA-256...", flush=True)
-    download_drive_file(api, handoff["work_archive"], archive)
+    download_drive_file(api, credentials, handoff["work_archive"], archive, parallel_workers=2)
     work = root / "work"
     print("[Mugiwara4iOS] Restoring the build-only workspace...", flush=True)
     extract_verified_archive(archive, work)
@@ -336,27 +543,48 @@ def main() -> None:
     romfs = work.joinpath(*romfs_rel.parts)
     identity = work.joinpath(*identity_rel.parts)
     aoc_dir = work.joinpath(*aoc_rel.parts)
-    print("[Mugiwara4iOS] Restoring external RomFS from Drive and verifying SHA-256...", flush=True)
-    download_drive_file(api, romfs_record, romfs)
-    if romfs.stat().st_size != int(prep["romfs_size"]):
-        fail("Restored RomFS size differs from Colab.")
-    romfs_sha = sha256_file(romfs)
-    if romfs_sha != prep["romfs_sha256"] or romfs_sha != romfs_record["sha256"]:
-        fail("Restored RomFS SHA-256 differs from Colab and/or Drive.")
+    if (
+        int(romfs_record.get("size", -1)) != int(prep["romfs_size"])
+        or str(romfs_record.get("sha256", "")).lower() != str(prep["romfs_sha256"]).lower()
+    ):
+        fail("RomFS Drive record differs from the Colab size/SHA-256 manifest.")
+    print(
+        f"[Mugiwara4iOS] Restoring external RomFS ({int(romfs_record['size']) / 1024**3:.2f} GiB) "
+        "with parallel Drive ranges and one SHA-256 verification...",
+        flush=True,
+    )
+    romfs_sha = download_drive_file(
+        api, credentials, romfs_record, romfs, parallel_workers=6
+    )
+    if romfs_sha != str(prep["romfs_sha256"]).lower():
+        fail("Restored RomFS SHA-256 differs from the Colab manifest.")
 
-    print(f"[Mugiwara4iOS] Restoring {prep['aoc_count']} unique-title-ID AOC images and verifying every SHA-256...", flush=True)
+    print(f"[Mugiwara4iOS] Restoring {prep['aoc_count']} unique-title-ID AOC images in parallel...", flush=True)
     aoc_dir.mkdir(parents=True, exist_ok=True)
     expected_aoc = {item["name"]: item for item in prep_aoc}
     for record in aoc_records:
         expected = expected_aoc.get(record["name"])
-        if not expected or int(expected.get("size", -1)) != int(record["size"]):
+        if (
+            not expected
+            or int(expected.get("size", -1)) != int(record["size"])
+            or str(expected.get("sha256", "")).lower() != str(record.get("sha256", "")).lower()
+        ):
             fail(f"Drive AOC record differs from the NXNative preparation manifest: {record['name']}.")
+
+    def restore_aoc(record):
         destination = aoc_dir / record["name"]
-        download_drive_file(api, record, destination)
-        if destination.stat().st_size != int(expected["size"]):
-            fail(f"Restored AOC size differs from Colab: {record['name']}.")
-        if sha256_file(destination) != expected["sha256"] or expected["sha256"] != record["sha256"]:
-            fail(f"Restored AOC SHA-256 differs from Colab and/or Drive: {record['name']}.")
+        digest = download_drive_file(
+            api, credentials, record, destination, parallel_workers=2
+        )
+        expected = expected_aoc[record["name"]]
+        if digest != str(expected["sha256"]).lower():
+            fail(f"Restored AOC SHA-256 differs from Colab: {record['name']}.")
+        return record["name"]
+
+    with cf.ThreadPoolExecutor(max_workers=min(4, len(aoc_records))) as pool:
+        futures = [pool.submit(restore_aoc, record) for record in aoc_records]
+        for future in cf.as_completed(futures):
+            print(f"[Mugiwara4iOS] AOC restored and verified: {future.result()}", flush=True)
     restored_aoc = sorted(item.name for item in aoc_dir.glob("*.img") if item.is_file())
     if restored_aoc != sorted(expected_aoc):
         fail(f"Restored AOC filename set differs from the {prep['aoc_count']} unique DLC Title IDs: {restored_aoc}.")
