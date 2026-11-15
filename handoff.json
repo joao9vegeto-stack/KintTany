@@ -1835,7 +1835,7 @@
       "ue_legacy": "0 Unreal pak(s) with the shaders inline in the cooked packages (legacy, version 4, UE 4.18: DRAGON QUEST XI S, LZ5, decoded by the game's own decoder in the Mac host, dm/host/hle_oodle.c DM_OODLE_SERVE; version 11 without shader code archives, UE 4.27: OCTOPATH TRAVELER II, Zlib, or with the cooked packages in an IoStore container beside it: Mario & Luigi: Brothership, Oodle): the shader split reads them file by file",
       "glslc_capture": "main holds 0 GLSL sources and calls glslcCompile in no module it loads: shaders compiled at run time (Fire Emblem: Three Houses), captured by booting it on the Mac",
       "vk_capture": "no SPIR-V file in the RomFS: the game generates its shaders at run time (Super Mario Galaxy), captured by booting it on the Mac",
-      "gl_capture": "no GLSL source in the RomFS or main: the game puts its shaders together at run time (L\u00d6VE: Balatro), captured by booting it on the Mac"
+      "gl_capture": "no GLSL source in the RomFS or main: the game puts its shaders together at run time (LÖVE: Balatro), captured by booting it on the Mac"
     },
     "shader_source_audit": {
       "graphics_api": "nvn",
@@ -1853,7 +1853,7 @@
         "ue_legacy": "0 Unreal pak(s) with the shaders inline in the cooked packages (legacy, version 4, UE 4.18: DRAGON QUEST XI S, LZ5, decoded by the game's own decoder in the Mac host, dm/host/hle_oodle.c DM_OODLE_SERVE; version 11 without shader code archives, UE 4.27: OCTOPATH TRAVELER II, Zlib, or with the cooked packages in an IoStore container beside it: Mario & Luigi: Brothership, Oodle): the shader split reads them file by file",
         "glslc_capture": "main holds 0 GLSL sources and calls glslcCompile in no module it loads: shaders compiled at run time (Fire Emblem: Three Houses), captured by booting it on the Mac",
         "vk_capture": "no SPIR-V file in the RomFS: the game generates its shaders at run time (Super Mario Galaxy), captured by booting it on the Mac",
-        "gl_capture": "no GLSL source in the RomFS or main: the game puts its shaders together at run time (L\u00d6VE: Balatro), captured by booting it on the Mac"
+        "gl_capture": "no GLSL source in the RomFS or main: the game puts its shaders together at run time (LÖVE: Balatro), captured by booting it on the Mac"
       }
     },
     "shader_chain": "0c434f1b68df",
@@ -1882,5 +1882,6 @@
     ],
     "shader_boundary": "shader_split"
   },
-  "created_utc": "2026-11-15T05:28:12.192126+00:00"
+  "created_utc": "2026-11-15T05:28:12.192126+00:00",
+  "manual_dispatch_nonce": "retry-a7ed8a65-after-validator-fix-e2a9c925"
 }
