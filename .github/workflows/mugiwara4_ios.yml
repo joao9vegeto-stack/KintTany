@@ -35,7 +35,7 @@ jobs:
           test "$GITHUB_REF" = "refs/heads/Mugiwara4iOS"
           python -m json.tool handoff.json >/dev/null
           python - <<'PY'
-          import json, re, sys
+          import json, os, re, sys
           from pathlib import Path
           sys.path.insert(0, "colab")
           sys.path.insert(0, "scripts")
@@ -49,6 +49,25 @@ jobs:
               return module
           actions_module = load_module("mugiwara_actions_validation", "scripts/prepare_mugiwara_actions.py")
           build_module = load_module("mugiwara_build_validation", "scripts/build_mugiwara_shared.py")
+
+          # Drive range planner must cover the 14+ GiB RomFS exactly once, with no gaps or overlaps.
+          romfs_bytes = 15082435598
+          ranges = actions_module._drive_ranges(romfs_bytes, 64 * 1024 * 1024)
+          assert ranges[0][0] == 0 and ranges[-1][1] == romfs_bytes - 1
+          assert all(left[1] + 1 == right[0] for left, right in zip(ranges, ranges[1:]))
+          assert sum(end - start + 1 for start, end in ranges) == romfs_bytes
+          assert len(ranges) == 225, f"Unexpected RomFS range count: {len(ranges)}"
+          with tempfile.TemporaryFile() as stream:
+              fd = stream.fileno()
+              os.ftruncate(fd, 16)
+              actions_module._drive_pwrite_all(fd, b"RANGE", 5)
+              assert os.pread(fd, 5, 5) == b"RANGE"
+          worker_src = Path("scripts/patch_mugiwara_shader_workers.py").read_text()
+          build_src = Path("scripts/build_mugiwara_shared.py").read_text()
+          assert "ProcessPoolExecutor" in worker_src and "STORE.forked()" in worker_src
+          assert "DMSH_PROCS\": \"4\"" in build_src
+          assert "DMSH_RATE_GUARD_SECONDS" in build_src
+          print("Drive range planner, positional writes, four-worker shader dispatch and throughput guard: OK")
 
           # Regression fixture: 44 source DLC NSPs, but two versions of 20 DLC IDs,
           # giving the same 24 unique AOC IDs reported by the Colab content-meta scan.
@@ -267,7 +286,7 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/patch_mugiwara_shader_workers.py --engine-root NX2Apple/engine
-      - name: Restore workspace, external RomFS and unique-title-ID AOC images from Drive (SHA-256)
+      - name: Restore workspace, parallel-range RomFS and concurrent unique-title-ID AOC images from Drive (SHA-256)
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         shell: bash
