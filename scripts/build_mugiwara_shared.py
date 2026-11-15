@@ -277,8 +277,13 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
         fail("Extracted main SHA-256 differs from Colab.")
     if int(romfs.stat().st_size) != int(prep["romfs_size"]):
         fail("Restored RomFS size differs from Colab.")
-    if sha256_file(romfs) != prep["romfs_sha256"]:
-        fail("Restored RomFS SHA-256 differs from Colab.")
+    # The Actions restore has already streamed and SHA-256-verified this 14 GiB
+    # file against both Drive and the Colab manifest. Recheck the manifest identity
+    # here without scanning the whole RomFS a second time.
+    drive_romfs = ((prepared.get("game_data") or {}).get("romfs") or {})
+    if (drive_romfs.get("sha256") != prep["romfs_sha256"]
+            or int(drive_romfs.get("size", -1)) != int(prep["romfs_size"])):
+        fail("Restored RomFS Drive/Colab size and SHA-256 records disagree.")
     try:
         identity_json = json.loads(identity.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -301,11 +306,10 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
         drive_meta = next((item for item in handoff_aoc if item.get("name") == image.name), None)
         if (not drive_meta or image.stat().st_size != int(meta["size"])
                 or image.stat().st_size != int(drive_meta.get("size", -1))
-                or sha256_file(image) != meta["sha256"]
                 or meta["sha256"] != drive_meta.get("sha256")
                 or drive_meta.get("title_id") != meta.get("title_id")
                 or drive_meta.get("aoc_index") != meta.get("aoc_index")):
-            fail(f"DLC AOC SHA-256/size/Title-ID mismatch: {image.name}.")
+            fail(f"DLC AOC manifest/size/Title-ID mismatch: {image.name}.")
     if prepared.get("aoc_dir") != str(aoc_dir) or prepared.get("aoc_count") != prep["aoc_count"]:
         fail("Actions input does not point to the restored Drive AOC directory with the derived image count.")
 
