@@ -75,8 +75,8 @@ jobs:
           assert "shader_cache.Served(STORE, PROCS)" in patch_src
           assert "STORE = MTL.store = SERVED.worker()" in patch_src
           assert "SERVED.start()" in patch_src
-          assert "STORE.forked()" not in patch_src
-          assert "DMSH_RATE_GUARD_SECONDS" not in patch_src
+          assert "class Served:" in patch_src and "class Remote:" in patch_src
+          assert "DMSH_RATE_GUARD_SECONDS" not in build_src
           assert "BrokenProcessPool" in patch_src
           assert "patch_mugiwara_shader_workers.py" in workflow_src
           assert ("dmsh_build_" + "workers.py") not in build_src
