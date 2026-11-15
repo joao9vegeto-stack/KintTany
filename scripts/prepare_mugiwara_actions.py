@@ -345,6 +345,7 @@ def download_drive_file(
                         flush=True,
                     )
                     time.sleep(delay)
+                    continue
                 if status:
                     elapsed = max(time.monotonic() - transfer_started, 0.001)
                     rate = downloader._progress / elapsed / (1024 * 1024)
