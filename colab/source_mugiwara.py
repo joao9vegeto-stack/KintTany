@@ -104,11 +104,18 @@ def download_url(url: str, destination: Path, retries: int = 10) -> dict:
                     match = re.match(r"bytes\s+\d+-\d+/(\d+|\*)", response.headers.get("Content-Range", ""))
                     total = int(match.group(1)) if match and match.group(1) != "*" else 0
                 written = offset
+                report_at = written
+                report_time = time.monotonic()
                 with part.open(mode) as output:
                     for block in response.iter_content(chunk_size=16 * 1024 * 1024):
                         if block:
                             output.write(block)
                             written += len(block)
+                            now = time.monotonic()
+                            if written == total or written - report_at >= 512 * 1024 * 1024 or now - report_time >= 15:
+                                progress = f"{written / total * 100:.1f}%" if total else f"{written / 2**30:.2f} GiB"
+                                print(f"[Mugiwara4iOS] {destination.name}: {progress} ({written:,} bytes).", flush=True)
+                                report_at, report_time = written, now
                 if total and written != total:
                     raise RuntimeError(f"short transfer: expected {total:,} bytes, received {written:,}")
             kind = validate_package(part, destination.suffix)
