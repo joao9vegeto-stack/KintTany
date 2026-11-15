@@ -52,7 +52,7 @@ Exactly 20 DLC `.nsp`/`.xci` packages are discovered as direct children of `Driv
 2. Prove each three-volume naming sequence and extract base/update independently using RARLAB UnRAR.
 3. Identify the complete NSP/XCI by file header and create normalized base/update package files.
 4. Upload base and update to Drive, verify size + server MD5 + local SHA-256, then delete all six RAR volumes.
-5. Pass only the reconstructed base and update to the pinned NXNative `scripts/build_ipa_from_nsp.py` scanner/extractor.
+5. Pass the reconstructed base/update and all 20 separately staged, header-verified DLC packages to the pinned NXNative `scripts/build_ipa_from_nsp.py` scanner/extractor.
 6. Extract the selected update version, externalize RomFS, generate the provisional Kakarot profile, rewrite actual ARM64 modules, and retain the survey, Build IDs and fixup/cut/observation audits.
 7. If NXNative extracts AOC data, audit and upload each `.img` separately. Otherwise record zero AOC images.
 8. Upload RomFS and the separated workspace, then produce a handoff manifest.
@@ -90,4 +90,4 @@ The last notebook cell is deliberately opt-in. `DISPATCH_TO_GITHUB` defaults to 
 
 ## Current validation boundary
 
-The six URLs have not yet been supplied or downloaded. Therefore, the actual remote RAR naming scheme, package output extensions/sizes, Kakarot Build ID, update version, module set, PAK inventory, shader count, AOC inventory and device behavior are not yet measured. No successful IPA or iPhone gameplay result is claimed until the real packages pass the Colab survey and the Mac build.
+The six URLs are registered in the notebook, but this Colab preparation has not yet downloaded or extracted them. Therefore, the actual remote RAR naming scheme, base/update package output extensions and sizes, Kakarot Build ID, update version, module set, PAK inventory, shader count, AOC inventory and device behavior are not yet measured. No successful IPA or iPhone gameplay result is claimed until the real packages pass the Colab survey and the Mac build.
