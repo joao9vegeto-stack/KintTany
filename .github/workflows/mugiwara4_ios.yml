@@ -65,8 +65,13 @@ jobs:
           worker_src = Path("scripts/patch_mugiwara_shader_workers.py").read_text()
           build_src = Path("scripts/build_mugiwara_shared.py").read_text()
           assert "ProcessPoolExecutor" in worker_src and "STORE.forked()" in worker_src
-          assert "DMSH_PROCS\": \"4\"" in build_src
-          assert "DMSH_RATE_GUARD_SECONDS" in build_src and "DMSH_MIN_SHADERS_PER_SEC\": \"1.6\"" in build_src
+          assert 'dmsh_procs = 2' in build_src
+          assert '"DMSH_PROCS": str(dmsh_procs)' in build_src
+          assert "ShaderCacheCheckpoint.from_environment" in build_src
+          checkpoint_src = Path("scripts/mugiwara_shader_checkpoint.py").read_text()
+          assert "INTERVAL_SECONDS = 600" in checkpoint_src
+          assert "source.backup(target" in checkpoint_src and "quick_check(1)" in checkpoint_src
+          assert "DMSH_RATE_GUARD_SECONDS" in worker_src and 'DMSH_MIN_SHADERS_PER_SEC", "1.6"' in worker_src
           print("Drive range planner, positional writes, four-worker shader dispatch and throughput guard: OK")
 
           # Regression fixture: 44 source DLC NSPs, but two versions of 20 DLC IDs,
@@ -195,7 +200,8 @@ jobs:
             scripts/prepare_mugiwara_actions.py \
             scripts/build_mugiwara_shared.py \
             scripts/patch_mugiwara_shader_workers.py \
-            scripts/mugiwara_contract.py
+            scripts/mugiwara_contract.py \
+            scripts/mugiwara_shader_checkpoint.py
           python - <<'PY'
           import ast, json, sys, tempfile, yaml
           from pathlib import Path
@@ -302,6 +308,8 @@ jobs:
             --handoff handoff.json \
             --destination "$RUNNER_TEMP/mugiwara-actions"
       - name: Oodle/GLSLC when detected, NVN shader split with all unique-title-ID AOC images, Metal and Route C IPA
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         shell: bash
         run: |
           set -euo pipefail
@@ -309,6 +317,17 @@ jobs:
             --nx2apple-root NX2Apple \
             --prepared-json "$RUNNER_TEMP/mugiwara-actions/actions-input.json" \
             --output "$RUNNER_TEMP/mugiwara-output"
+      - name: Upload shader diagnostics and resumable cache status on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mugiwara4iOS-diagnostics-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/mugiwara-actions/work/logs/**
+            ${{ runner.temp }}/mugiwara-actions/work/shader/progress.json
+            ${{ runner.temp }}/mugiwara-actions/actions-input.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Upload Mugiwara4iOS IPA and build report
         uses: actions/upload-artifact@v4
         with:
