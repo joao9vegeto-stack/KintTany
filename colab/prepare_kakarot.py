@@ -185,7 +185,13 @@ def run_preparation(args) -> dict:
     require(pin == ENGINE_PIN, f"Wrong NXNative pin {pin}; expected {ENGINE_PIN}.")
     package_files = sorted(p for p in packages.iterdir() if p.is_file()
                            and p.suffix.lower() in (".nsp", ".xci"))
-    require(len(package_files) == 2, f"Expected exactly base + update (.nsp/.xci); found {len(package_files)} package files.")
+    base_package = packages / ("base.nsp" if (packages / "base.nsp").is_file() else "base.xci")
+    update_package = packages / ("update.nsp" if (packages / "update.nsp").is_file() else "update.xci")
+    require(base_package.is_file() and update_package.is_file(),
+            "The package input directory must contain the reconstructed base and update separately.")
+    dlc_packages = [p for p in package_files if p.name.startswith("dlc_")]
+    require(len(package_files) == 2 + len(dlc_packages),
+            "Unexpected NSP/XCI in input directory; only base, update and staged DLC packages are allowed.")
     for path in package_files:
         with path.open("rb") as stream:
             header = stream.read(0x104)
