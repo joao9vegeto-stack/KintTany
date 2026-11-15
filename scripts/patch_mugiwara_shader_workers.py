@@ -291,7 +291,8 @@ def main() -> None:
         raise SystemExit("[Mugiwara4iOS] Worker backport verification failed after writing files.")
 
     print(
-        "[Mugiwara4iOS] HookLink2iOS Metal workers applied: J=1 + DMSH_PROCS=2; "
+        "[Mugiwara4iOS] HookLink2iOS process-worker backport applied; "
+        "runtime J/DMSH_PROCS are selected and capacity-checked by build_mugiwara_shared.py; "
         "pinned dmsh_build.py/chain hash preserved; NX2Apple engine patches retained.",
         flush=True,
     )
