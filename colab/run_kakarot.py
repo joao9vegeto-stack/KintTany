@@ -274,7 +274,7 @@ def prepare(args, api=None) -> dict:
     if output_id:
         verify_drive_folder(api, output_id, "KaKaRoTiOS_")
     else:
-        output_id = create_folder(api, f"KaKaRoTiOS_{request_id[:8]}", args.drive_folder_id)
+        output_id = create_folder(api, f"KaKaRoTiOS_{request_id[:8]}", source["drive_kakarot_folder_id"])
         source["request_id"] = request_id
         source["drive_output_folder_id"] = output_id
         persist_source_manifest(source)
