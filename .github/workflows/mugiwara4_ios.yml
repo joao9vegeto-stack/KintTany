@@ -65,14 +65,17 @@ jobs:
           worker_src = Path("scripts/patch_mugiwara_shader_workers.py").read_text()
           build_src = Path("scripts/build_mugiwara_shared.py").read_text()
           assert "ProcessPoolExecutor" in worker_src and "STORE.forked()" in worker_src
-          assert 'dmsh_procs = 2' in build_src
+          assert "shader_threads = 8" in build_src
+          assert "dmsh_procs = 0" in build_src
+          assert '"J": str(shader_threads)' in build_src
           assert '"DMSH_PROCS": str(dmsh_procs)' in build_src
           assert "ShaderCacheCheckpoint.from_environment" in build_src
           checkpoint_src = Path("scripts/mugiwara_shader_checkpoint.py").read_text()
           assert "INTERVAL_SECONDS = 600" in checkpoint_src
           assert "source.backup(target" in checkpoint_src and "quick_check(1)" in checkpoint_src
+          assert "storageQuotaExceeded" in checkpoint_src
           assert "DMSH_RATE_GUARD_SECONDS" in worker_src and 'DMSH_MIN_SHADERS_PER_SEC", "1.6"' in worker_src
-          print("Drive range planner, positional writes, two-worker HookLink shader dispatch and throughput guard: OK")
+          print("Drive range planner, positional writes, SpkIOSzero-proven J=8 thread scheduler and throughput guard: OK")
 
           # Regression fixture: 44 source DLC NSPs, but two versions of 20 DLC IDs,
           # giving the same 24 unique AOC IDs reported by the Colab content-meta scan.
