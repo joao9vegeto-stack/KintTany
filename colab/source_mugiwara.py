@@ -188,6 +188,7 @@ def download_drive_file(api, item: dict, destination: Path) -> dict:
                 delay = min(2 ** min(retries, 5), 30)
                 print(f"[Mugiwara4iOS] Drive transfer interrupted at {downloader._progress}; retry {retries}/10 in {delay}s.", flush=True)
                 time.sleep(delay)
+                continue
             if status:
                 print(f"[Mugiwara4iOS] Drive {item.get('name', item['id'])}: {status.progress()*100:.1f}%", flush=True)
     with part.open("rb") as stream:
