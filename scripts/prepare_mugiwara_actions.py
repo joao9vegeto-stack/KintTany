@@ -217,11 +217,14 @@ def main() -> None:
     if not prep_path.is_file():
         fail("mugiwara4ios-linux-prep.json is missing from the restored workspace.")
     prep = json.loads(prep_path.read_text(encoding="utf-8"))
-    if prep.get("format") != 3 or not isinstance(prep.get("jit_required"), bool):
+    if (prep.get("format") != 3 or prep.get("display_version") != "1.8.7"
+            or prep.get("base_content_version") != 0 or int(prep.get("update_content_version", 0)) <= 0
+            or not isinstance(prep.get("jit_required"), bool)):
         fail("Restored Colab prep manifest is outdated or missing the format-3 44-DLC/AOT contract.")
 
     compare_keys = (
-        "format", "project", "title_id", "package_version", "nx2apple_tag", "engine_pin",
+        "format", "project", "title_id", "package_version", "display_version",
+        "base_content_version", "update_content_version", "nx2apple_tag", "engine_pin",
         "profile_type", "profile_source", "profile_relative_dir", "modules",
         "main_build_id", "main_sha256", "rewrite_audit", "graphics_api", "jit_required",
         "shader_source_flags", "shader_source_reasons", "shader_source_audit", "shader_chain",
@@ -334,7 +337,9 @@ def main() -> None:
     prepared = {
         "format": 3,
         "project": PROJECT, "branch": BRANCH, "title_id": TITLE_ID,
-        "package_version": prep["package_version"],
+        "package_version": prep["package_version"], "display_version": prep["display_version"],
+        "base_content_version": prep["base_content_version"],
+        "update_content_version": prep["update_content_version"],
         "nx2apple_tag": NX2APPLE_TAG, "engine_pin": ENGINE_PIN,
         "request_id": handoff["request_id"],
         "work_dir": str(work),
