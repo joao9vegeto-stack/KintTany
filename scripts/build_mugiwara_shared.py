@@ -344,6 +344,9 @@ def main() -> None:
     repo_scripts = Path(__file__).resolve().parent
     sys.path.insert(0, str(repo_scripts))
     builder, game_profiles, nacp, pg = load_builder(engine)
+    worker_sidecar = engine / "dm/gfx/tools/dmsh_build_workers.py"
+    if not worker_sidecar.is_file():
+        fail("HookLink2iOS DMSH_PROCS worker backport is missing; refusing a slow thread-only Metal build.")
     # The provisional profile must be first in all engine-side lookups.
     profile_parent = work / "profile"
     os.environ.update({"DM_GAMES_DIR": str(profile_parent), "DM_GAMES_FIRST": "1", "DM_GAME": TITLE_ID})
@@ -359,7 +362,9 @@ def main() -> None:
     env.setdefault("USER", os.environ.get("USER") or "runner")
     env.update({"DM_GAME": TITLE_ID, "DM_GAMES_DIR": str(profile_parent),
                 "DM_GAMES_FIRST": "1", "DM_ROOT": str(work),
-                "WORK": str(work / "tmp"), "IOS_PULL": "1"})
+                "WORK": str(work / "tmp"), "IOS_PULL": "1",
+                "J": "1", "DMSH_PROCS": "2"})
+    print("[Mugiwara4iOS] Metal strategy cloned from HookLink2iOS: J=1, DMSH_PROCS=2 (two independent shader-finishing workers).", flush=True)
     builder.configure_dotnet(env)
     xlate = engine / "dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate"
     builder.PROG.mode = "lines"
