@@ -152,7 +152,9 @@ def main() -> None:
     args = parser.parse_args()
 
     engine = args.engine_root.resolve()
-    pin_file = engine / ".upstream-ref"
+    # NX2Apple's engine.py stores the upstream stamp at the NX2Apple repo root,
+    # one directory above engine/ (the workflow validates the same location).
+    pin_file = engine.parent / ".upstream-ref"
     pin = pin_file.read_text(encoding="utf-8").strip() if pin_file.is_file() else ""
     if pin != ENGINE_PIN:
         raise SystemExit(
