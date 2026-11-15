@@ -120,21 +120,26 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
     if not prep_path.is_file():
         fail("Colab Linux preparation manifest is missing.")
     prep = json.loads(prep_path.read_text(encoding="utf-8"))
-    if prep.get("format") != 2 or not isinstance(prep.get("jit_required"), bool):
-        fail("Colab prep manifest is outdated or missing the NXNative nn::jit/AOT decision; rerun Colab preparation.")
+    if prep.get("format") != 3 or not isinstance(prep.get("jit_required"), bool):
+        fail("Colab prep manifest is outdated or missing the 44-DLC/AOC and NXNative nn::jit/AOT contract; rerun Colab preparation.")
     for key in ("project", "title_id", "package_version", "nx2apple_tag", "engine_pin",
                 "profile_type", "profile_source", "profile_relative_dir",
                 "modules", "main_build_id", "main_sha256", "rewrite_audit",
                 "graphics_api", "jit_required", "shader_source_flags", "shader_source_reasons", "shader_source_audit", "shader_chain",
-                "romfs_relative_path", "romfs_id_relative_path",
-                "romfs_size", "romfs_sha256", "survey_relative_path", "survey_size",
-        "survey_sha256", "input_package_count", "input_packages"):
+                "romfs_relative_path", "romfs_id_relative_path", "romfs_size", "romfs_sha256",
+                "aoc_relative_dir", "aoc_count", "aoc_images", "survey_relative_path", "survey_size",
+                "survey_sha256", "input_package_count", "input_nsp_count", "input_xci_count",
+                "input_update_nsp_count", "input_dlc_nsp_count", "input_packages"):
         if prepared.get(key) != prep.get(key):
             fail(f"Actions input and Colab workspace disagree on {key}.")
     if prep.get("profile_type") != "provisional":
         fail("Route C expects the One Piece: Pirate Warriors 4 profile generated from the actual NSP/XCI content.")
-    if prep.get("input_package_count") != 2 or len(prep.get("input_packages", [])) != 2:
-        fail("Route C expects exactly a base and update package.")
+    if (prep.get("input_package_count") != 46 or prep.get("input_nsp_count") != 46
+            or prep.get("input_xci_count") != 0 or prep.get("input_update_nsp_count") != 1
+            or prep.get("input_dlc_nsp_count") != 44 or len(prep.get("input_packages", [])) != 46):
+        fail("Route C expects exactly 1 base NSP + 1 update NSP + 44 DLC NSPs.")
+    if prep.get("aoc_count") != 44 or len(prep.get("aoc_images", [])) != 44:
+        fail("Route C expects all 44 DLCs to have been extracted into separate AOC images.")
     if prep.get("graphics_api") != "nvn":
         fail(f"One Piece: Pirate Warriors 4 graphics API is not NVN: {prep.get('graphics_api')}.")
     if builder.chain_of(nx / "engine") != prepared.get("shader_chain"):
@@ -164,6 +169,8 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
     identity_rel = safe_relative(prep["romfs_id_relative_path"], "RomFS identity")
     romfs = work.joinpath(*romfs_rel.parts)
     identity = work.joinpath(*identity_rel.parts)
+    aoc_rel = safe_relative(prep["aoc_relative_dir"], "AOC")
+    aoc_dir = work.joinpath(*aoc_rel.parts)
     survey_rel = safe_relative(prep["survey_relative_path"], "survey")
     survey = work.joinpath(*survey_rel.parts)
     if not survey.is_file() or survey.stat().st_size != int(prep["survey_size"]):
@@ -182,6 +189,7 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
         (patched / "main.obs.tsv", "main observation audit"),
         (romfs, "external RomFS"),
         (identity, "RomFS identity sidecar"),
+        (aoc_dir, "external DLC AOC directory"),
     ):
         if not path.is_file():
             fail(f"{label} is missing: {path}")
@@ -203,6 +211,24 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
             or identity_json.get("sha256") != prep["romfs_sha256"]):
         fail("RomFS identity sidecar does not match title/version/size/SHA-256.")
 
+    aoc_images = sorted(path for path in aoc_dir.glob("*.img") if path.is_file())
+    prepared_aoc = {item["name"]: item for item in prep["aoc_images"]}
+    if len(aoc_images) != 44 or {path.name for path in aoc_images} != set(prepared_aoc):
+        fail("Restored AOC directory does not contain the same 44 DLC images as the Colab manifest.")
+    handoff_aoc = ((prepared.get("game_data") or {}).get("aoc") or [])
+    if len(handoff_aoc) != 44 or {item.get("name") for item in handoff_aoc} != set(prepared_aoc):
+        fail("Drive handoff AOC records do not match the 44 Colab AOC images.")
+    for image in aoc_images:
+        meta = prepared_aoc[image.name]
+        drive_meta = next((item for item in handoff_aoc if item.get("name") == image.name), None)
+        if (not drive_meta or image.stat().st_size != int(meta["size"])
+                or image.stat().st_size != int(drive_meta.get("size", -1))
+                or sha256_file(image) != meta["sha256"]
+                or meta["sha256"] != drive_meta.get("sha256")):
+            fail(f"DLC AOC SHA-256/size mismatch: {image.name}.")
+    if prepared.get("aoc_dir") != str(aoc_dir) or prepared.get("aoc_count") != 44:
+        fail("Actions input does not point to the restored Drive AOC directory with 44 images.")
+
     modules = profile.modules_in(exefs)
     if sorted(modules) != sorted(prep["modules"]):
         fail(f"Loaded profile modules differ from Colab: {modules} != {prep['modules']}.")
@@ -217,7 +243,7 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
             fail(f"Rewritten ARM64 module SHA-256 mismatch: {name}.patched.bin")
         if sha256_file(patched / f"{name}.fixups.tsv") != item["fixups_sha256"]:
             fail(f"Rewrite fixup audit SHA-256 mismatch: {name}.fixups.tsv")
-    return profile, version_dir, romfs, identity, patched, prep, modules
+    return profile, version_dir, romfs, identity, aoc_dir, aoc_images, patched, prep, modules
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -241,7 +267,7 @@ def main() -> None:
     # The provisional profile must be first in all engine-side lookups.
     profile_parent = work / "profile"
     os.environ.update({"DM_GAMES_DIR": str(profile_parent), "DM_GAMES_FIRST": "1", "DM_GAME": TITLE_ID})
-    profile, version_dir, romfs, romfs_id, patched, prep, modules = validate_workspace(
+    profile, version_dir, romfs, romfs_id, aoc_dir, aoc_images, patched, prep, modules = validate_workspace(
         prepared, work, nx, builder, game_profiles)
 
     logs = work / "logs"
@@ -333,7 +359,7 @@ def main() -> None:
         shader_package = work / "shader" / "pkg"
         package_key = builder.split_shaders(
             py, engine, [romfs_source], [version_dir / "ExeFS" / "main"],
-            shader_package, env, logs, profile, provisional=True, oodle=oodle, dlc_roms=())
+            shader_package, env, logs, profile, provisional=True, oodle=oodle, dlc_roms=aoc_images)
         if observed_glslc is not None:
             builder.check_glslc_coverage(observed_glslc, profile)
         if not isinstance(package_key, str) or not re.fullmatch(r"[0-9a-f]{64}", package_key):
@@ -504,7 +530,7 @@ def main() -> None:
                 "Colab URL download and NSP/XCI validation",
                 "NXNative metadata scan and One Piece: Pirate Warriors 4 provisional profile",
                 "NXNative ARM64 rewrite and fixup audit",
-                "Drive workspace/RomFS split with SHA-256 validation",
+                "Drive workspace/RomFS split and all 44 external DLC AOC SHA-256 validations",
                 "GitHub Actions macOS ARM64 conditional GLSLC/UE/Oodle processing",
                 "engine-detected shader split and profile shader table generation",
                 "iOS Metal compile, c1_full/cb_extent and chain/input stamp validation",
@@ -516,9 +542,12 @@ def main() -> None:
                 "drive_folder_url": (prepared.get("game_data") or {}).get("folder_url"),
                 "romfs_size_bytes": romfs.stat().st_size,
                 "romfs_sha256": sha256_file(romfs),
-                "layout": f"games/{TITLE_ID.lower()}/romfs.img",
+                "aoc_count": len(aoc_images),
+                "aoc_images": [{"name": image.name, "size_bytes": image.stat().st_size,
+                                "sha256": sha256_file(image)} for image in aoc_images],
+                "layout": f"games/{TITLE_ID.lower()}/romfs.img + games/{TITLE_ID.lower()}/aoc/",
             },
-            "ipa_contains_romfs": False, "ipa_contains_nsp": False,
+            "ipa_contains_romfs": False, "ipa_contains_aoc": False, "ipa_contains_nsp": False,
             "ipa_contains_xci": False, "ipa_contains_prod_keys": False,
             "pipeline_archive": {"included": False, "gpu": "none",
                 "reason": "No offline MTL4 PSO archive is embedded; device-side pipeline creation remains available."},
