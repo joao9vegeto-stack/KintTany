@@ -411,9 +411,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: KaKaRoTiOS-Kakarot-IPA
-          path: \${{ runner.temp }}/kakarot-metal-seed
-          github-token: \${{ github.token }}
-          repository: \${{ github.repository }}
+          path: ${{ runner.temp }}/kakarot-metal-seed
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
           run-id: 43864761674
 
       - name: Build repaired framework and thin IPA using cached Metal (no shader rebuild)

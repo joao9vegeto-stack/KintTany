@@ -759,7 +759,7 @@
   },
   "created_utc": "2026-11-16T02:55:09.450345+00:00",
   "dispatch_attempt": {
-    "id": "reuse-build6-metal-20261116-06",
-    "reason": "Rebuild the repaired Kakarot main/allocator and Shared Shell while restoring the verified Build #6 Metal library; explicitly skip Oodle decode, shader split and iOS Metal recompilation."
+    "id": "reuse-build6-metal-interpolation-20261116-07",
+    "reason": "Retry the cached-Metal-only Kakarot IPA build after correcting GitHub Actions expression interpolation; do not execute Oodle decode, shader split or Metal compilation."
   }
 }
