@@ -155,11 +155,13 @@ def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profi
                 "modules", "main_build_id", "main_sha256", "rewrite_audit",
                 "graphics_api", "unreal_shader_sources", "pak_audit", "shader_chain",
                 "romfs_relative_path", "romfs_id_relative_path",
-                "romfs_size", "romfs_sha256", "aoc_relative_dir", "aoc_count", "aoc_images",
+                "romfs_size", "romfs_sha256", "aoc_relative_dir", "aoc_count",
                 "survey_relative_path", "survey_size", "survey_sha256",
                 "input_package_count", "input_dlc_package_count", "input_packages"):
         if prepared.get(key) != prep.get(key):
             fail(f"Actions input and Colab workspace disagree on {key}.")
+    if prepared.get("aoc_image_manifest") != prep.get("aoc_images"):
+        fail("Actions AOC metadata manifest differs from the Colab preparation manifest.")
     if prep.get("profile_type") != "provisional":
         fail("Route C expects the Kakarot profile generated from the actual NSP/XCI content.")
     input_packages = prep.get("input_packages", [])
