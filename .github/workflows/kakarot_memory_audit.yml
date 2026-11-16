@@ -90,18 +90,18 @@ jobs:
           with tempfile.TemporaryDirectory(prefix="kakarot-profile-contract-") as temp:
               profile = Path(temp) / "game.tsv"
               profile.write_text(
-                  "mem_reserve\\t0x1028000000\\n"
-                  "mem_alias\\t0x1000000000\\n"
-                  "mem_stack\\t0x10000000\\n"
-                  "app_pool\\t0xCD500000\\n"
-                  "sys_resource\\t0x1000000\\n",
+                  "mem_reserve\t0x1028000000\n"
+                  "mem_alias\t0x1000000000\n"
+                  "mem_stack\t0x10000000\n"
+                  "app_pool\t0xCD500000\n"
+                  "sys_resource\t0x1000000\n",
                   encoding="utf-8",
               )
               build.update_profile_values(profile, build.KAKAROT_IPHONE_MEMORY)
               rows = profile.read_text(encoding="utf-8").splitlines()
               for key, value in build.KAKAROT_IPHONE_MEMORY.items():
-                  assert rows.count(f"{key}\\t{value}") == 1
-              assert "sys_resource\\t0x1000000" in rows
+                  assert rows.count(f"{key}\t{value}") == 1
+              assert "sys_resource\t0x1000000" in rows
           print("KaKaRoTiOS production memory-fix integration contract: OK")
           PY
 
