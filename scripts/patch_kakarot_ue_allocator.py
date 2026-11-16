@@ -58,7 +58,7 @@ def patch_host_layout(path: Path) -> None:
             fail("hle_uemalloc.c enum does not match the exact pinned context")
         source = source.replace(OLD_ENUM, NEW_ENUM, 1)
         changed = True
-    if LEGACY_ROW.strip() not in source:
+    if LEGACY_ROW in source:
         if UE5_ROW not in source:
             fail("hle_uemalloc.c UE5 layout row is missing; refusing a fuzzy insertion")
         source = source.replace(UE5_ROW, LEGACY_ROW + UE5_ROW, 1)
