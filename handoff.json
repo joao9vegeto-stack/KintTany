@@ -759,7 +759,7 @@
   },
   "created_utc": "2026-11-16T02:55:09.450345+00:00",
   "dispatch_attempt": {
-    "id": "exact-build6-shader-input-reuse-20261116-08",
-    "reason": "Restore the complete runtime NVN shader table set from successful Build #6, verify the current dmsh_chain.py --inputs digest equals the cached Metal stamp, and rebuild only the patched Kakarot framework plus Shared Shell/IPA. Never run Oodle decode, shader split or Metal compilation."
+    "id": "reproduce-build6-metadata-no-metal-recompile-20261116-09",
+    "reason": "Regenerate only NXNative NVN shader source metadata using exact Kakarot RomFS/main/AOC and decoder host, require the original Build #6 shader package key and input digest, then reuse its cached Metal library to rebuild only the patched game framework, Shared Shell and thin IPA. Do not call dmsh_build.py or the iOS Metal shader compiler."
   }
 }

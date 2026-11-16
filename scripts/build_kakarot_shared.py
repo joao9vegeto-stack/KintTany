@@ -817,6 +817,57 @@ def main() -> None:
         if actual_paks["readable_pak_count"] == 0:
             fail("No readable Kakarot Unreal PAKs are present on macOS.")
 
+        # Recreate the deterministic NVN source metadata tables from the exact Kakarot
+        # RomFS/main/AOC inputs. This is shader extraction/splitting only: it does not
+        # translate shaders, call dmsh_build.py, or invoke Apple's Metal compiler.
+        # Build #6's Metal library is accepted only if the resulting package key and
+        # dmsh_chain.py profile-input digest both match the original compiled build.
+        shader_workspace = work / "shader"
+        shader_workspace.mkdir(parents=True, exist_ok=True)
+        split_disk_free_gib = require_disk_headroom(
+            work, "before NVN metadata-only shader split", minimum_gib=20
+        )
+        oodle_for_split = None
+        if needs_oodle_host(actual_flags, actual_paks):
+            oodle_for_split = lambda: {
+                "DM_OODLE_HOST": str(builder.build_mac_host(
+                    engine, work / "tools" / "dmhost", env, logs, profile
+                )),
+                "DM_OODLE_MODULES": str(patched),
+            }
+        print(
+            "[KaKaRoTiOS] Rebuilding only NVN source metadata (shader_map/facts/pairs); "
+            "Metal translation and compilation remain disabled.",
+            flush=True,
+        )
+        split_package_key = builder.split_shaders(
+            py,
+            engine,
+            [romfs_source],
+            [version_dir / "ExeFS" / "main"],
+            shader_workspace / "pkg",
+            env,
+            logs,
+            profile,
+            provisional=True,
+            oodle=oodle_for_split,
+            dlc_roms=aoc_images,
+        )
+        if split_package_key != PREVIOUS_METAL_PACKAGE_KEY:
+            fail(
+                "The metadata-only shader split does not reproduce Build #6's exact "
+                f"shader package: got {split_package_key!r}, expected "
+                f"{PREVIOUS_METAL_PACKAGE_KEY}. Cached Metal will not be used."
+            )
+        profile = game_profiles.load(TITLE_ID)
+        if profile.dir.resolve() != (work / "profile" / TITLE_ID).resolve():
+            fail("Metadata-only shader split changed the selected Kakarot profile directory.")
+        print(
+            "[KaKaRoTiOS] Source shader package reproduced exactly: "
+            f"{split_package_key}; no Metal shader compilation was executed.",
+            flush=True,
+        )
+
         # Build #6 already compiled this exact Kakarot shader package.
         # Restore the verified Metal image/tables. No shader/Oodle rebuild fallback exists.
         metal_start_free_gib = require_disk_headroom(
