@@ -26,6 +26,22 @@ _GCONST_COND = r'\d+u? < ' + _GSIZE + r'\)'
 _GCONST_CHOICE = _gchoice(_GCONST_COND, _GCONST_READ)
 _GLEFT = re.compile(r'%s\) \?' % _GSIZE)
 
+def guard_match_counts(msl: str) -> tuple[int, int]:
+    if 'spvDescriptorSet0' not in msl: return 0, 0
+    bools = set(_GBOOL.findall(msl))
+    dynamic = 0
+    for match in _GROW.finditer(msl):
+        n = '1' if match.group('q1') else '2'
+        cond = match.group('q' + n)
+        if cond in bools and match.group('i' + n) == cond:
+            dynamic += 1
+    fixed = sum(1 for _ in _GCONST_CHOICE.finditer(msl))
+    return dynamic, fixed
+
+def select_guards_with_stats(msl: str) -> tuple[str, int, int]:
+    dynamic, fixed = guard_match_counts(msl)
+    return select_guards(msl), dynamic, fixed
+
 def select_guards(msl: str) -> str:
     if 'spvDescriptorSet0' not in msl: return msl
     bools = set(_GBOOL.findall(msl))
@@ -36,7 +52,14 @@ def select_guards(msl: str) -> str:
     if bools: msl = _GROW.sub(lambda m: select(m, bools), msl)
     def select_fixed(m):
         n = '1' if m.group('q1') else '2'
-        return 'select(%s, %s, %s)' % (m.group('z' + n), m.group('r' + n), m.group('q' + n))
+        cond = m.group('q' + n)
+        read = m.group('r' + n)
+        index = re.search(r'(?<=_m0\\[)\\d+(?=\\])', read)
+        if not index:
+            raise ValueError('fixed uniform guard has no constant word index')
+        safe_index = '(%s) ? %s : 0' % (cond, index.group(0))
+        safe_read = read[:index.start()] + safe_index + read[index.end():]
+        return 'select(%s, %s, %s)' % (m.group('z' + n), safe_read, cond)
     msl = _GCONST_CHOICE.sub(select_fixed, msl)
     left = _GLEFT.search(msl) or next((m for m in re.finditer(r'(?<!\[)\b(_\d+) \?', msl) if m.group(1) in bools), None)
     if left:
@@ -96,7 +119,7 @@ def self_test():
         'float _150 = abs((68u < %s) ? (*spvDescriptorSet0.fp_c3)._m0[17].x : 0.0);\n'
     ) % size
     fixed_float_out = select_guards(fixed_float)
-    assert 'select(0.0, (*spvDescriptorSet0.fp_c3)._m0[17].x, 68u < %s)' % size in fixed_float_out, fixed_float_out
+    assert 'select(0.0, (*spvDescriptorSet0.fp_c3)._m0[(68u < %s) ? 17 : 0].x, 68u < %s)' % (size, size) in fixed_float_out, fixed_float_out
     assert select_guards(fixed_float_out) == fixed_float_out
 
     fixed_uint = (
@@ -104,7 +127,7 @@ def self_test():
         'bool _58 = as_type<uint>((2u < %s) ? (*spvDescriptorSet0.cp_c3)._m0[0].x : 0u) >= as_type<uint>(_54);\n'
     ) % size
     fixed_uint_out = select_guards(fixed_uint)
-    assert 'select(0u, (*spvDescriptorSet0.cp_c3)._m0[0].x, 2u < %s)' % size in fixed_uint_out, fixed_uint_out
+    assert 'select(0u, (*spvDescriptorSet0.cp_c3)._m0[(2u < %s) ? 0 : 0].x, 2u < %s)' % (size, size) in fixed_uint_out, fixed_uint_out
 
     source = ('using namespace metal;\n'
               'bool a = as_type<int>(%s.w) != 100;\n'
