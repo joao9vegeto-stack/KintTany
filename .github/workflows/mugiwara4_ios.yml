@@ -40,7 +40,10 @@ jobs:
           sys.path.insert(0, "colab")
           sys.path.insert(0, "scripts")
           from mugiwara_contract import PREPARED_MANIFEST_KEYS, copy_prepared_manifest, prepared_manifest_mismatches
+          from mugiwara_uniform_rewrite import self_test as mugiwara_uniform_self_test
           from run_mugiwara import valid_aoc_manifest as colab_aoc_valid
+          mugiwara_uniform_self_test()
+          print("NXNative uniform-tests workaround synthetic regression: OK")
           import importlib.util
           def load_module(name, path):
               spec = importlib.util.spec_from_file_location(name, path)
@@ -63,25 +66,25 @@ jobs:
               actions_module._drive_pwrite_all(fd, b"RANGE", 5)
               assert os.pread(fd, 5, 5) == b"RANGE"
           build_src = Path("scripts/build_mugiwara_shared.py").read_text()
-          patch_src = Path("scripts/patch_mugiwara_shader_workers.py").read_text()
+          diagnostic_src = Path("scripts/mugiwara_shader_diagnostic.py").read_text()
+          rewrite_src = Path("scripts/mugiwara_uniform_rewrite.py").read_text()
           workflow_src = Path(".github/workflows/mugiwara4_ios.yml").read_text()
           assert "shader_threads = 8" in build_src
-          assert "dmsh_procs = shader_threads" in build_src
           assert '"J": str(shader_threads)' in build_src
-          assert '"DMSH_PROCS": str(dmsh_procs)' in build_src
+          assert '"DMSH_PROCS":' not in build_src
+          assert 'env.pop("DMSH_PROCS", None)' in build_src
+          assert 'MUGIWARA_SHADER_DIAGNOSTIC' in build_src
           assert "DMSH_RATE_GUARD_SECONDS" not in build_src
           assert "DMSH_MIN_SHADERS_PER_SEC" not in build_src
-          assert "ProcessPoolExecutor" in patch_src
-          assert "shader_cache.Served(STORE, PROCS)" in patch_src
-          assert "STORE = MTL.store = SERVED.worker()" in patch_src
-          assert "SERVED.start()" in patch_src
-          assert "class Served:" in patch_src and "class Remote:" in patch_src
-          assert "DMSH_RATE_GUARD_SECONDS" not in build_src
-          assert "BrokenProcessPool" in patch_src
-          assert "patch_mugiwara_shader_workers.py" in workflow_src
-          assert ("dmsh_build_" + "workers.py") not in build_src
+          assert "mugiwara_uniform_rewrite_diag.uniform_tests(src)" in diagnostic_src
+          assert "MUGIWARA_METAL_TIME" in diagnostic_src
+          assert "SAMPLE_SECONDS = 150" in diagnostic_src
+          assert "_UTEST_READ = r'as_type<(u?int)>" in rewrite_src
+          assert "volatile constant T" in rewrite_src
+          assert "mugiwara_uniform_rewrite.py" in workflow_src
+          assert "MUGIWARA_SHADER_DIAGNOSTIC" in workflow_src
           assert "ShaderCacheCheckpoint" not in build_src
-          print("Drive ranges/AOC contract, J=8 + 8 GIL-free finish workers, upstream Served cache broker, telemetry-only rate reporting: OK")
+          print("Drive ranges/AOC contract, stock J=8 scheduler, official uniform-tests backport and bounded 150s-per-case A/B: OK")
 
           # Regression fixture: 44 source DLC NSPs, but two versions of 20 DLC IDs,
           # giving the same 24 unique AOC IDs reported by the Colab content-meta scan.
@@ -208,7 +211,8 @@ jobs:
             colab/run_mugiwara.py \
             scripts/prepare_mugiwara_actions.py \
             scripts/build_mugiwara_shared.py \
-            scripts/patch_mugiwara_shader_workers.py \
+            scripts/mugiwara_shader_diagnostic.py \
+            scripts/mugiwara_uniform_rewrite.py \
             scripts/mugiwara_contract.py
           python - <<'PY'
           import ast, json, sys, tempfile, yaml
@@ -302,11 +306,32 @@ jobs:
           git clone --depth 1 --branch v1.3.1-rc2 https://github.com/LNPANDY/NX2Apple.git NX2Apple
           python NX2Apple/tools/engine.py sync
           test "$(cat NX2Apple/.upstream-ref)" = "81906931262fb25d774cce8bca2db8926439e5a2"
-      - name: Apply GIL-free NXNative workers and fork-safe SQLite cache broker
+      - name: Validate bounded shader diagnostic against pinned NXNative before Drive restore
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/patch_mugiwara_shader_workers.py --engine-root NX2Apple/engine
+          python - <<'PY'
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, "scripts")
+          import mugiwara_shader_diagnostic as diagnostic
+          tool_dir = Path("NX2Apple/engine/dm/gfx/tools")
+          generated = []
+          try:
+              for uniform_fix in (False, True):
+                  generated = diagnostic.write_diagnostic_sources(tool_dir, uniform_fix)
+                  for path in generated:
+                      compile(path.read_text(encoding="utf-8"), str(path), "exec")
+          finally:
+              for name in (
+                  "dmsh_build_mugiwara_diag.py",
+                  "own_compilers_mugiwara_diag.py",
+                  "dmsh_mtlcache_diag.py",
+                  "mugiwara_uniform_rewrite_diag.py",
+              ):
+                  (tool_dir / name).unlink(missing_ok=True)
+          print("Pinned NXNative sidecar compile: baseline OFF and official uniform-tests ON: OK")
+          PY
       - name: Restore workspace, parallel-range RomFS and concurrent unique-title-ID AOC images from Drive (SHA-256)
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
@@ -319,6 +344,7 @@ jobs:
       - name: Oodle/GLSLC when detected, NVN shader split with all unique-title-ID AOC images, Metal and Route C IPA
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          MUGIWARA_SHADER_DIAGNOSTIC: ${{ contains(github.event.head_commit.message, 'shader diagnostic') && '1' || '0' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -326,18 +352,21 @@ jobs:
             --nx2apple-root NX2Apple \
             --prepared-json "$RUNNER_TEMP/mugiwara-actions/actions-input.json" \
             --output "$RUNNER_TEMP/mugiwara-output"
-      - name: Upload shader diagnostics and throughput report on failure
-        if: failure()
+      - name: Upload bounded shader A/B diagnostic or failure logs
+        if: always() && (contains(github.event.head_commit.message, 'shader diagnostic') || failure())
         uses: actions/upload-artifact@v4
         with:
           name: Mugiwara4iOS-diagnostics-${{ github.run_number }}
           path: |
             ${{ runner.temp }}/mugiwara-actions/work/logs/**
             ${{ runner.temp }}/mugiwara-actions/work/shader/progress.json
+            ${{ runner.temp }}/mugiwara-actions/work/shader-diagnostic/**
             ${{ runner.temp }}/mugiwara-actions/actions-input.json
+            ${{ runner.temp }}/mugiwara-output/Mugiwara4iOS-shader-diagnostic.json
           if-no-files-found: ignore
           retention-days: 7
       - name: Upload Mugiwara4iOS IPA and build report
+        if: success() && !contains(github.event.head_commit.message, 'shader diagnostic')
         uses: actions/upload-artifact@v4
         with:
           name: Mugiwara4iOS-Pirate-Warriors-4-IPA

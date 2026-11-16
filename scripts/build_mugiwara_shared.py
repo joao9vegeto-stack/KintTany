@@ -370,10 +370,9 @@ def main() -> None:
             f"NXNative shader compilation requires at least 3 Apple Silicon CPUs; "
             f"this runner exposes only {runner_cpus} logical CPUs."
         )
-    # Match the current NXNative scheduler: DMSH_PROCS defaults to J. Do not
-    # cap finish workers to hw.ncpu; SPKIOSzero's successful cold build used J=8.
+    # Match Kakarot's successful reference path: pinned NXNative stock scheduler,
+    # J=8 threads and no DMSH_PROCS process backport on this 3-CPU runner.
     shader_threads = 8
-    dmsh_procs = shader_threads
     memory_bytes = int(subprocess.run(
         ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, check=True
     ).stdout.strip())
@@ -385,11 +384,11 @@ def main() -> None:
     env.update({"DM_GAME": TITLE_ID, "DM_GAMES_DIR": str(profile_parent),
                 "DM_GAMES_FIRST": "1", "DM_ROOT": str(work),
                 "WORK": str(work / "tmp"), "IOS_PULL": "1",
-                "J": str(shader_threads), "DMSH_PROCS": str(dmsh_procs)})
+                "J": str(shader_threads)})
+    env.pop("DMSH_PROCS", None)
     print(
-        f"[Mugiwara4iOS] NXNative GIL-free Metal finish workers; "
-        f"J={env['J']}, DMSH_PROCS={env['DMSH_PROCS']} (same as upstream default J); "
-        f"8 translator lanes, batch=32; no fixed-rate abort; "
+        f"[Mugiwara4iOS] NXNative stock Metal scheduler; "
+        f"J={env['J']}, DMSH_PROCS=unset; "
         f"runner={runner_cpus} CPUs/{memory_bytes / 1024**3:.1f} GiB RAM.",
         flush=True,
     )
@@ -481,6 +480,23 @@ def main() -> None:
             fail("Shader package content key does not match the split result.")
         shader_map = validate_shader_map(profile)
         print(f"[Mugiwara4iOS] Shader map generated: {shader_map} ({shader_map.stat().st_size:,} bytes).", flush=True)
+
+        if os.environ.get("MUGIWARA_SHADER_DIAGNOSTIC") == "1":
+            print("[Mugiwara4iOS] Diagnostic-only run: bounded pixel/vertex/compute A/B; full IPA build is skipped.", flush=True)
+            diagnostic_report = output / "Mugiwara4iOS-shader-diagnostic.json"
+            run([
+                py, str(repo_scripts / "mugiwara_shader_diagnostic.py"),
+                "--engine-root", engine,
+                "--shader-package", shader_package,
+                "--shader-map", shader_map,
+                "--profile-root", profile_parent,
+                "--work-root", work / "shader-diagnostic",
+                "--report", diagnostic_report,
+            ], cwd=engine, env=env)
+            if not diagnostic_report.is_file():
+                fail(f"Shader diagnostic did not produce its A/B report: {diagnostic_report}")
+            print(f"[Mugiwara4iOS] Diagnostic report ready: {diagnostic_report}", flush=True)
+            return
 
         gpu_selection = builder.ios_gpus("none", profile)
         pull = builder.ios_wants_pulling(profile, gpu_selection, False, env)
