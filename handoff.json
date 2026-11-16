@@ -759,7 +759,7 @@
   },
   "created_utc": "2026-11-16T02:55:09.450345+00:00",
   "dispatch_attempt": {
-    "id": "parallel-drive-ranges-preflight-b6160637",
-    "reason": "six-worker-range-download-and-builder-manifest-preflight"
+    "id": "dotnet10-arm64-translator-preflight-778bdcca",
+    "reason": "pin-dotnet10-arm64-and-validate-dmsh-translator-before-romfs"
   }
 }
