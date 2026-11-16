@@ -104,7 +104,28 @@ jobs:
           import sys, tempfile
           from pathlib import Path
           sys.path.insert(0, "colab")
+          sys.path.insert(0, "scripts")
           import source_kakarot
+          import build_kakarot_shared as kakarot_build
+          # Regression: UE legacy + Pak v8/Zlib must still build the game-owned Oodle/LZ5 host.
+          assert kakarot_build.needs_oodle_host(
+              {"oodle_packs": False, "ue_legacy": True},
+              {"oodle_host_required": False, "compression_methods": ["zlib"]},
+          )
+          assert kakarot_build.needs_oodle_host(
+              {"oodle_packs": False, "ue_legacy": False},
+              {"oodle_host_required": True, "compression_methods": ["oodle"]},
+          )
+          assert not kakarot_build.needs_oodle_host(
+              {"oodle_packs": False, "ue_legacy": False},
+              {"oodle_host_required": False, "compression_methods": ["zlib"]},
+          )
+          assert kakarot_build.unreadable_shader_file_count(
+              "[RED] 670 file(s) could not be read, their shaders are left out"
+          ) == 670
+          assert kakarot_build.unreadable_shader_file_count(
+              "[OK] 0 file(s) could not be read"
+          ) == 0
           page = source_kakarot.AkiraBoxDownloadPageParser()
           page.feed('<div id="download-button" class="download-file-link"><a id="download" class="download-ready" href="/download/abcdefgh1234/signedtoken">Download</a></div>')
           assert page.download_href == "/download/abcdefgh1234/signedtoken"

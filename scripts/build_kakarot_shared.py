@@ -99,6 +99,21 @@ def pak_audit(romfs_source) -> dict:
         "records": records,
     }
 
+def needs_oodle_host(actual_flags: dict, actual_paks: dict) -> bool:
+    """UE legacy assets may require the game-owned Oodle/LZ5 decoder even when Pak v8 says Zlib."""
+    return bool(
+        actual_paks.get("oodle_host_required")
+        or actual_flags.get("oodle_packs")
+        or actual_flags.get("ue_legacy")
+    )
+
+
+def unreadable_shader_file_count(log_text: str) -> int:
+    """Count cooked files omitted by NXNative shader split."""
+    counts = re.findall(r"(\d+)\s+file\(s\)\s+could not be read\b", str(log_text), flags=re.IGNORECASE)
+    return max((int(value) for value in counts), default=0)
+
+
 def validate_shader_map(profile) -> Path:
     shader_map = Path(profile.table("shader_map.tsv"))
     if not shader_map.is_file() or shader_map.stat().st_size == 0:
@@ -365,24 +380,46 @@ def main() -> None:
         else:
             print("[KaKaRoTiOS] This build has no separate Oodle shader-code archive; shader data is inline in Unreal cooked packages.", flush=True)
 
-        # Kakarot's PAK v8 Zlib path is decoded by uepak.py itself. Build a game Oodle host only
-        # when the actual PAK audit or profile classifier proves a game-owned decoder is needed.
-        need_oodle_host = bool(actual_paks["oodle_host_required"] or actual_flags["oodle_packs"])
+        # Match Mugiwara4iOS: UE legacy is itself a reason to expose the game-owned
+        # Oodle/LZ5 decoder. Pak v8 can report Zlib for its index while individual
+        # legacy cooked assets still use Oodle/LZ5, so the PAK method list alone
+        # is not a sufficient detector for Kakarot.
+        need_oodle_host = needs_oodle_host(actual_flags, actual_paks)
         oodle = None
         if need_oodle_host:
-            print("[KaKaRoTiOS] Building the macOS ARM64 host to serve the game's own Oodle decoder during shader splitting...", flush=True)
+            print(
+                "[KaKaRoTiOS] Oodle/LZ5 decoder required ("
+                f"oodle_packs={actual_flags['oodle_packs']}, "
+                f"ue_legacy={actual_flags['ue_legacy']}, "
+                f"pak_audit={actual_paks['oodle_host_required']}); "
+                "building the macOS ARM64 helper host...",
+                flush=True,
+            )
             oodle = lambda: {
                 "DM_OODLE_HOST": str(builder.build_mac_host(engine, work / "tools" / "dmhost", env, logs, profile)),
                 "DM_OODLE_MODULES": str(patched),
             }
-        elif actual_flags["ue_legacy"]:
-            print("[KaKaRoTiOS] Confirmed inline UE PAK path uses only the audited non-Oodle codecs; no unnecessary Oodle host is built.", flush=True)
+        else:
+            print("[KaKaRoTiOS] PAK audit and profile classification confirm no game-owned Oodle/LZ5 decoder is required.", flush=True)
 
         print("[KaKaRoTiOS] Splitting Kakarot shaders on macOS using the exact rewritten main, RomFS and generated profile...", flush=True)
         shader_package = work / "shader" / "pkg"
         package_key = builder.split_shaders(
             py, engine, [romfs_source], [version_dir / "ExeFS" / "main"],
             shader_package, env, logs, profile, provisional=True, oodle=oodle, dlc_roms=aoc_images)
+        split_log = logs / "shader_split.log"
+        if not split_log.is_file():
+            fail(f"Shader split log is missing; cannot verify cooked-file readability: {split_log}")
+        unreadable_files = unreadable_shader_file_count(
+            split_log.read_text(encoding="utf-8", errors="replace")
+        )
+        if unreadable_files:
+            fail(
+                f"Shader split left {unreadable_files} cooked file(s) unreadable; "
+                "refusing to compile an incomplete Metal library/IPA. "
+                f"Inspect {split_log}."
+            )
+        print("[KaKaRoTiOS] Shader split readability gate: 0 cooked files omitted.", flush=True)
         if not isinstance(package_key, str) or not re.fullmatch(r"[0-9a-f]{64}", package_key):
             fail("NXNative shader split did not return a valid SHA-256 package key.")
         if builder.package_key(shader_package) != package_key:
