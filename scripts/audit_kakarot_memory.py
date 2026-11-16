@@ -161,7 +161,7 @@ def main() -> None:
                     image[pointer:min(pointer + 0x60, module.text_end)], pointer))
                 print(" | ".join(
                     f"{ins.address:#x}: {ins.mnemonic} {ins.op_str}".rstrip()
-                    for ins in decoded[:8]), flush=True)
+                    for ins in decoded[:36]), flush=True)
             else:
                 print("(not a code pointer in main text)", flush=True)
 
