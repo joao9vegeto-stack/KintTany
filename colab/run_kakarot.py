@@ -276,6 +276,51 @@ def prepare(args, api=None) -> dict:
     )
     input_dir, keys = Path(source["package_dir"]), Path(source["keys_path"])
     base_path, update_path = Path(source["base_path"]), Path(source["update_path"])
+    # Persist the request and Drive folder IDs before large uploads. If Colab
+    # stops midway, a retry reuses this same folder and idempotently verifies files.
+    request_id = source.get("request_id") or str(uuid.uuid4())
+    output_id = source.get("drive_output_folder_id")
+    if output_id:
+        verify_drive_folder(api, output_id, "KaKaRoTiOS_")
+    else:
+        output_id = create_folder(api, f"KaKaRoTiOS_{request_id[:8]}", source["drive_kakarot_folder_id"])
+        source["request_id"] = request_id
+        source["drive_output_folder_id"] = output_id
+        persist_source_manifest(source)
+    pipeline_id = source.get("drive_pipeline_folder_id") or get_or_create_folder(api, "pipeline", output_id)
+    games_id = source.get("drive_games_folder_id") or get_or_create_folder(api, "games", output_id)
+    game_id = source.get("drive_game_folder_id") or get_or_create_folder(api, TITLE_ID.lower(), games_id)
+    aoc_id = source.get("drive_aoc_folder_id") or get_or_create_folder(api, "aoc", game_id)
+    verify_drive_folder(api, pipeline_id)
+    verify_drive_folder(api, games_id)
+    verify_drive_folder(api, game_id)
+    verify_drive_folder(api, aoc_id)
+    source.update({
+        "request_id": request_id,
+        "drive_output_folder_id": output_id,
+        "drive_pipeline_folder_id": pipeline_id,
+        "drive_games_folder_id": games_id,
+        "drive_game_folder_id": game_id,
+        "drive_aoc_folder_id": aoc_id,
+    })
+    persist_source_manifest(source)
+
+    base_record = upload_drive_file(api, base_path, game_id, f"base{base_path.suffix.lower()}")
+    update_record = upload_drive_file(api, update_path, game_id, f"update{update_path.suffix.lower()}")
+    source["drive_base_package"] = base_record
+    source["drive_update_package"] = update_record
+    source["rar_parts_cleanup_pending"] = Path(source["archive_dir"]).exists()
+    persist_source_manifest(source)
+    # Publish a recovery checkpoint before deleting the three BASE RAR parts.
+    # The direct UPDATE NSP remains a separate verified package in Drive.
+    source_checkpoint = upsert_drive_file(
+        api, ROOT / "source-manifest.json", pipeline_id, "source-manifest.json")
+    print(f"[KaKaRoTiOS] Drive source checkpoint saved ({source_checkpoint['id']}); now removing local RAR volumes...", flush=True)
+    cleanup_rar_parts(source)
+    # Keep the checkpoint in sync with the confirmed cleanup state.
+    source_checkpoint = upsert_drive_file(
+        api, ROOT / "source-manifest.json", pipeline_id, "source-manifest.json")
+
     # The 20 DLC files are direct children of Drive/<configured root>/kakarot.
     # Keep each original filename; do not depend on artificial dlc1/dlc2 names.
     kakarot_id = source["drive_kakarot_folder_id"]
@@ -356,51 +401,6 @@ def prepare(args, api=None) -> dict:
         f"({source['base']['size']:,} bytes) + update {source['update']['type']} "
         f"({source['update']['size']:,} bytes).",
         flush=True)
-
-    # Persist the request and Drive folder IDs before large uploads. If Colab
-    # stops midway, a retry reuses this same folder and idempotently verifies files.
-    request_id = source.get("request_id") or str(uuid.uuid4())
-    output_id = source.get("drive_output_folder_id")
-    if output_id:
-        verify_drive_folder(api, output_id, "KaKaRoTiOS_")
-    else:
-        output_id = create_folder(api, f"KaKaRoTiOS_{request_id[:8]}", source["drive_kakarot_folder_id"])
-        source["request_id"] = request_id
-        source["drive_output_folder_id"] = output_id
-        persist_source_manifest(source)
-    pipeline_id = source.get("drive_pipeline_folder_id") or get_or_create_folder(api, "pipeline", output_id)
-    games_id = source.get("drive_games_folder_id") or get_or_create_folder(api, "games", output_id)
-    game_id = source.get("drive_game_folder_id") or get_or_create_folder(api, TITLE_ID.lower(), games_id)
-    aoc_id = source.get("drive_aoc_folder_id") or get_or_create_folder(api, "aoc", game_id)
-    verify_drive_folder(api, pipeline_id)
-    verify_drive_folder(api, games_id)
-    verify_drive_folder(api, game_id)
-    verify_drive_folder(api, aoc_id)
-    source.update({
-        "request_id": request_id,
-        "drive_output_folder_id": output_id,
-        "drive_pipeline_folder_id": pipeline_id,
-        "drive_games_folder_id": games_id,
-        "drive_game_folder_id": game_id,
-        "drive_aoc_folder_id": aoc_id,
-    })
-    persist_source_manifest(source)
-
-    base_record = upload_drive_file(api, base_path, game_id, f"base{base_path.suffix.lower()}")
-    update_record = upload_drive_file(api, update_path, game_id, f"update{update_path.suffix.lower()}")
-    source["drive_base_package"] = base_record
-    source["drive_update_package"] = update_record
-    source["rar_parts_cleanup_pending"] = Path(source["archive_dir"]).exists()
-    persist_source_manifest(source)
-    # Publish a recovery checkpoint before deleting the three BASE RAR parts.
-    # The direct UPDATE NSP remains a separate verified package in Drive.
-    source_checkpoint = upsert_drive_file(
-        api, ROOT / "source-manifest.json", pipeline_id, "source-manifest.json")
-    print(f"[KaKaRoTiOS] Drive source checkpoint saved ({source_checkpoint['id']}); now removing local RAR volumes...", flush=True)
-    cleanup_rar_parts(source)
-    # Keep the checkpoint in sync with the confirmed cleanup state.
-    source_checkpoint = upsert_drive_file(
-        api, ROOT / "source-manifest.json", pipeline_id, "source-manifest.json")
 
     nx = install_nx2apple(ROOT)
     work = ROOT / "work"
