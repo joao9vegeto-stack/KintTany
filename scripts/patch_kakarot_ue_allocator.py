@@ -94,7 +94,7 @@ def main() -> None:
     sys.path.insert(0, str(engine / "dm/tools"))
     import nso
     module = nso.read(str(main_nso))
-    build_id = module.build_id.hex()
+    build_id = bytes(module.build_id[:16]).hex()
     if build_id != MAIN_BUILD_ID:
         fail(f"Kakarot main Build ID mismatch: {build_id}")
 
