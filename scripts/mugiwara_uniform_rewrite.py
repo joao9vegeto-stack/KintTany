@@ -23,7 +23,10 @@ _GBOOL = re.compile(r'\bbool (_\d+) = [^;\n]* < %s;' % _GSIZE)
 _GROW = _gchoice(r'_\d+', r'\(\*spvDescriptorSet0\.[a-z]+_c\d+\)\._m0\[(?P<i%s>_\d+) \? [^\]\n]+ : 0\](?:\[[^\]\n]+\]|\.[xyzw])')
 _GCONST_READ = r'\(\*spvDescriptorSet0\.[a-z]+_c(?:[3-9]|\d{2,})\)\._m0\[\d+\]\.[xyzw]'
 _GCONST_COND = r'\d+u? < ' + _GSIZE
-_GCONST_CHOICE = _gchoice(_GCONST_COND, _GCONST_READ)
+_GCONST_CHOICE = re.compile(
+    r'(?<![\w>])\((?P<q1>' + _GCONST_COND + r')\) \? (?P<r1>' + _GCONST_READ + r') : (?P<z1>' + _GZERO + r')(?![\w.])'
+    r'|(?P<q2>' + _GCONST_COND + r') \? (?P<r2>' + _GCONST_READ + r') : (?P<z2>' + _GZERO + r')(?![\w.])'
+)
 _GLEFT = re.compile(r'%s\) \?' % _GSIZE)
 
 def guard_match_counts(msl: str) -> tuple[int, int]:
