@@ -1,4 +1,4 @@
-name: KaKaRoTiOS · audit existing Unreal memory hooks
+name: KaKaRoTiOS · validate repaired Unreal memory hooks
 
 on:
   push:
@@ -6,6 +6,8 @@ on:
       - KaKaRoTiOS
     paths:
       - scripts/audit_kakarot_memory.py
+      - scripts/patch_kakarot_ue_allocator.py
+      - scripts/validate_kakarot_memory_fix.py
       - .github/workflows/kakarot_memory_audit.yml
 
 permissions:
@@ -32,7 +34,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install read-only audit dependencies
+      - name: Install memory-rewrite validation dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -50,13 +52,13 @@ jobs:
           python tools/engine.py sync
           test "$(cat .upstream-ref)" = "81906931262fb25d774cce8bca2db8926439e5a2"
 
-      - name: Audit the existing Kakarot workspace (no NSP, RomFS, AOC or shader downloads)
+      - name: Patch and rewrite Kakarot main; validate both Unreal hooks
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/audit_kakarot_memory.py \
+          python scripts/validate_kakarot_memory_fix.py \
             --engine-root "$RUNNER_TEMP/NX2Apple/engine" \
             --handoff "$GITHUB_WORKSPACE/handoff.json" \
             --destination "$RUNNER_TEMP/kakarot-memory-audit"
