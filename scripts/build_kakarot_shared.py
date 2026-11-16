@@ -316,9 +316,29 @@ def main() -> None:
     py = sys.executable
     env = builder.tool_env()
     env.setdefault("USER", os.environ.get("USER") or "runner")
+    runner_cpus = os.cpu_count() or 0
+    if runner_cpus < 3:
+        fail(f"NXNative shader compilation requires at least 3 Apple Silicon CPUs; this runner exposes {runner_cpus}.")
+    shader_threads = 8
+    dmsh_procs = shader_threads
+    memory_bytes = int(subprocess.run(
+        ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, check=True
+    ).stdout.strip())
+    if memory_bytes < 6 * 1024**3:
+        fail(
+            f"NXNative shader compilation requires at least 6 GiB RAM; this runner exposes "
+            f"{memory_bytes / 1024**3:.1f} GiB."
+        )
     env.update({"DM_GAME": TITLE_ID, "DM_GAMES_DIR": str(profile_parent),
                 "DM_GAMES_FIRST": "1", "DM_ROOT": str(work),
-                "WORK": str(work / "tmp"), "IOS_PULL": "1"})
+                "WORK": str(work / "tmp"), "IOS_PULL": "1",
+                "J": str(shader_threads), "DMSH_PROCS": str(dmsh_procs)})
+    print(
+        f"[KaKaRoTiOS] NXNative GIL-free Metal finish workers; J={env['J']}, "
+        f"DMSH_PROCS={env['DMSH_PROCS']}, batch={4 * shader_threads}; "
+        f"runner={runner_cpus} CPUs/{memory_bytes / 1024**3:.1f} GiB RAM.",
+        flush=True,
+    )
     builder.configure_dotnet(env)
     xlate = engine / "dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate"
     builder.PROG.mode = "lines"

@@ -99,7 +99,7 @@ jobs:
           assert h.get("work_archive", {}).get("sha256")
           print("KaKaRoTiOS RAR/base/update/Drive/RomFS/AOC handoff contract: OK")
           PY
-          python -m py_compile colab/source_kakarot.py colab/prepare_kakarot.py colab/run_kakarot.py scripts/prepare_kakarot_actions.py scripts/build_kakarot_shared.py
+          python -m py_compile colab/source_kakarot.py colab/prepare_kakarot.py colab/run_kakarot.py scripts/prepare_kakarot_actions.py scripts/build_kakarot_shared.py scripts/patch_kakarot_shader_workers.py
           python - <<'PY'
           import sys, tempfile
           from pathlib import Path
@@ -299,6 +299,12 @@ jobs:
           git clone --depth 1 --branch v1.3.1-rc2 https://github.com/LNPANDY/NX2Apple.git NX2Apple
           python NX2Apple/tools/engine.py sync
           test "$(cat NX2Apple/.upstream-ref)" = "81906931262fb25d774cce8bca2db8926439e5a2"
+      - name: Apply GIL-free Metal workers and fork-safe shader cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/patch_kakarot_shader_workers.py --engine-root NX2Apple/engine
+
 
       - name: Preflight .NET 10 shader translator before Drive restore
         shell: bash
