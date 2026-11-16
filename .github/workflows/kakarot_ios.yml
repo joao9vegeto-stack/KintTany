@@ -166,6 +166,48 @@ jobs:
           else:
               raise AssertionError("Mixed RAR archive sets were accepted")
           print("NSP/XCI header and modern/legacy multipart RAR sequence contract: OK")
+
+          # Kakarot restore must use the same tested parallel Drive range planner as Mugiwara4iOS.
+          import os
+          sys.path.insert(0, "scripts")
+          import prepare_kakarot_actions as restore
+          romfs_size = 24296032714
+          spans = restore._drive_ranges(romfs_size, 64 * 1024 * 1024)
+          assert spans[0][0] == 0 and spans[-1][1] == romfs_size - 1
+          assert all(a[1] + 1 == b[0] for a, b in zip(spans, spans[1:]))
+          assert sum(end - start + 1 for start, end in spans) == romfs_size
+          assert len(spans) == 363, f"Unexpected Kakarot RomFS range count: {len(spans)}"
+          with tempfile.TemporaryFile() as stream:
+              fd = stream.fileno()
+              os.ftruncate(fd, 32)
+              restore._drive_pwrite_all(fd, b"RANGE", 11)
+              assert os.pread(fd, 5, 11) == b"RANGE"
+
+          # Regression test: builder metadata keys are retained before the large RomFS transfer.
+          fixture = {key: f"fixture:{key}" for key in restore.BUILDER_PREP_COMPARE_KEYS}
+          fixture.update({
+              "project": "KaKaRoTiOS",
+              "title_id": "010051C0134F8000",
+              "package_version": "v1048576",
+              "nx2apple_tag": "v1.3.1-rc2",
+              "engine_pin": "81906931262fb25d774cce8bca2db8926439e5a2",
+              "profile_relative_dir": "profile/010051C0134F8000",
+              "romfs_relative_path": "extract/v1048576/RomFS.img",
+              "romfs_id_relative_path": "extract/v1048576/RomFS.img.id",
+              "survey_relative_path": "survey/survey.md",
+              "aoc_relative_dir": "aoc",
+              "aoc_count": 1,
+              "aoc_images": [{"name": "1.img", "size": 1, "sha256": "0" * 64}],
+          })
+          fixture_root = Path("/tmp/kakarot-actions-contract")
+          projected = restore.build_actions_input_manifest(
+              fixture, {"request_id": "fixture-request"}, fixture_root, {}, {}, {}
+          )
+          restore.validate_actions_input_projection(projected, fixture)
+          assert projected["profile_relative_dir"] == fixture["profile_relative_dir"]
+          assert projected["aoc_image_manifest"] == fixture["aoc_images"]
+          assert projected["aoc_images"] == [str(fixture_root / "aoc" / "1.img")]
+          print("Kakarot parallel Drive ranges + builder manifest projection contract: OK")
           PY
 
   build-kakarot:
