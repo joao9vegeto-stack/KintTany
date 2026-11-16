@@ -78,6 +78,16 @@ def diagnostic_build_source(original: str, uniform_fix: bool) -> str:
     src = src.replace(import_anchor, "import mugiwara_uniform_rewrite_diag, dmsh_geometry,", 1)
 
     helper = "_MUGIWARA_UNIFORM_FIX = " + ("True" if uniform_fix else "False") + "\n"
+    precise_anchor = "    src = precise(src)   # min / max / clamp with Maxwell's NaN results (see precise)\n"
+    guard_call = (
+        precise_anchor
+        + "    if _MUGIWARA_UNIFORM_FIX:\n"
+        + "        try: src = mugiwara_uniform_rewrite_diag.select_guards(src)\n"
+        + "        except ValueError as e: return 'uniform guard rewrite failed', str(e)[:160], None\n"
+    )
+    if precise_anchor not in src:
+        fail("Pinned dmsh_build precise() anchor changed; refusing diagnostic patch.")
+    src = src.replace(precise_anchor, guard_call, 1)
     marker = "\ndef finish(key, w, j, c1):\n"
     if marker not in src:
         fail("Pinned dmsh_build finish() anchor changed; refusing diagnostic patch.")
@@ -86,9 +96,13 @@ def diagnostic_build_source(original: str, uniform_fix: bool) -> str:
     old_call = "    if j['stage'] == 'ps': src = frag_z_snap(src)[0]   # gl_FragCoord.z against a depth of its own surface (see frag_z_snap)\n"
     new_call = (
         old_call
-        + "    _ut_words, _ut_sites = mugiwara_uniform_rewrite_diag.uniform_stats(src)\n"
+        + "    _ut_probe = src\n"
+        + "    if not _MUGIWARA_UNIFORM_FIX:\n"
+        + "        try: _ut_probe = mugiwara_uniform_rewrite_diag.select_guards(src)\n"
+        + "        except ValueError: pass\n"
+        + "    _ut_words, _ut_sites = mugiwara_uniform_rewrite_diag.uniform_stats(_ut_probe)\n"
         + "    _ut_mode = 'on' if _MUGIWARA_UNIFORM_FIX else 'off'\n"
-        + "    print('[MUGIWARA_UNIFORM_DIAG] key=%s stage=%s repeated_words=%d equality_tests=%d rewrite=%s' % (key, j.get('stage', '?'), _ut_words, _ut_sites, _ut_mode), flush=True)\n"
+        + "    print('[MUGIWARA_UNIFORM_DIAG] key=%s stage=%s repeated_words=%d equality_tests=%d select_guards=%s uniform_pipeline=%s' % (key, j.get('stage', '?'), _ut_words, _ut_sites, _ut_mode, _ut_mode), flush=True)\n"
         + "    if _MUGIWARA_UNIFORM_FIX:\n"
         + "        try: src = mugiwara_uniform_rewrite_diag.uniform_tests(src)\n"
         + "        except ValueError as e: return 'uniform tests rewrite failed', str(e)[:160], None\n"
@@ -200,7 +214,7 @@ def run_case(label: str, uniform_fix: bool, tool_dir: Path, engine: Path, packag
     timed_out = False
     returncode = None
     with logs.open("w", encoding="utf-8") as stream:
-        stream.write(f"[MUGIWARA_DIAG] case={label} uniform_tests={'on' if uniform_fix else 'off'} J=8 DMSH_PROCS=unset keys={len(keys)}\n")
+        stream.write(f"[MUGIWARA_DIAG] case={label} uniform_pipeline={'on' if uniform_fix else 'off'} J=8 DMSH_PROCS=unset keys={len(keys)}\n")
         stream.flush()
         process = subprocess.Popen(
             cmd, cwd=engine, env=env, stdout=stream, stderr=subprocess.STDOUT,
@@ -226,7 +240,7 @@ def run_case(label: str, uniform_fix: bool, tool_dir: Path, engine: Path, packag
     text = logs.read_text(encoding="utf-8", errors="replace")
     return {
         "label": label,
-        "uniform_tests": uniform_fix,
+        "uniform_pipeline": uniform_fix,
         "keys": len(keys),
         "elapsed_seconds": round(time.perf_counter() - started, 3),
         "timed_out": timed_out,
@@ -274,18 +288,18 @@ def main() -> None:
     }
     try:
         report["baseline"] = run_case("baseline", False, tool_dir, engine, package, root, keys, base_env)
-        report["uniform_tests"] = run_case("uniform_tests", True, tool_dir, engine, package, root, keys, base_env)
+        report["uniform_pipeline"] = run_case("uniform_pipeline", True, tool_dir, engine, package, root, keys, base_env)
     finally:
         for name in ("dmsh_build_mugiwara_diag.py", "own_compilers_mugiwara_diag.py", "dmsh_mtlcache_diag.py", "mugiwara_uniform_rewrite_diag.py"):
             (tool_dir / name).unlink(missing_ok=True)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(f"[Mugiwara4iOS shader diagnostic] A/B report: {args.report}", flush=True)
-    print(json.dumps({k: report[k] for k in ("map_stage_counts", "sample_stage_counts", "baseline", "uniform_tests")}, indent=2), flush=True)
+    print(json.dumps({k: report[k] for k in ("map_stage_counts", "sample_stage_counts", "baseline", "uniform_pipeline")}, indent=2), flush=True)
     if report["baseline"]["returncode"] not in (0, 124):
         fail(f"Baseline diagnostic failed with exit code {report['baseline']['returncode']}; see {report['baseline']['log']}.")
-    if report["uniform_tests"]["returncode"] not in (0, 124):
-        fail(f"Uniform-tests diagnostic failed with exit code {report['uniform_tests']['returncode']}; see {report['uniform_tests']['log']}.")
+    if report["uniform_pipeline"]["returncode"] not in (0, 124):
+        fail(f"Uniform-tests diagnostic failed with exit code {report['uniform_pipeline']['returncode']}; see {report['uniform_pipeline']['log']}.")
     print("[Mugiwara4iOS shader diagnostic] Bounded A/B completed; no IPA or full shader map was built.", flush=True)
 
 
