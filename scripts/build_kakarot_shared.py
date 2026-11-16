@@ -56,6 +56,214 @@ def sha256_file(path: Path) -> str:
             digest.update(block)
     return digest.hexdigest()
 
+
+KAKAROT_IPHONE_MEMORY = {
+    # Exact iPhone-sized allocator split from NXNative's registered Sparking! ZERO profile.
+    # Kakarot keeps its own NPDM system resource (0x1000000); this does not copy that field.
+    "mem_reserve": "0xF0000000",
+    "mem_alias": "0xC8000000",
+    "mem_stack": "0x10000000",
+    "app_pool": "0xCD500000",
+}
+KAKAROT_EXPECTED_SYS_RESOURCE = 0x1000000
+KAKAROT_ALLOCATOR_CALL = 0x24B37B8
+KAKAROT_REGION_SIZE_STORE = 0x24B3190
+KAKAROT_ALLOCATOR_VTABLE = 0x8A181E8
+KAKAROT_ALLOCATOR_SLOT = 17
+
+
+def update_profile_values(path: Path, updates: dict[str, str]) -> None:
+    """Update a small set of profile keys without disturbing comments or unrelated rows."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for key, value in updates.items():
+        hits = [i for i, line in enumerate(lines) if line.partition("\t")[0] == key]
+        if len(hits) > 1:
+            fail(f"{path}: duplicate profile row {key}")
+        row = f"{key}\t{value}"
+        if hits:
+            lines[hits[0]] = row
+        else:
+            lines.append(row)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    checked = path.read_text(encoding="utf-8").splitlines()
+    for key, value in updates.items():
+        if checked.count(f"{key}\t{value}") != 1:
+            fail(f"{path}: expected exactly one {key}={value} after update")
+
+
+def table_rows(path: Path) -> list[str]:
+    if not path.is_file():
+        fail(f"rewrite audit table is missing: {path}")
+    return [line for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")]
+
+
+def apply_kakarot_unreal_memory_fix(
+    py: str,
+    repo_scripts: Path,
+    engine: Path,
+    profile,
+    profile_parent: Path,
+    version_dir: Path,
+    patched: Path,
+    prep: dict,
+    env: dict[str, str],
+    game_profiles,
+) -> tuple[object, dict]:
+    """Patch slot-17 FMallocBinned3 in the host, size the guest pool, and rewrite only main.
+
+    This runs before NXNative's Mac heap/region checks and before any host is compiled.
+    It intentionally reuses the exact original main NSO and leaves subsdk0/sdk untouched.
+    """
+    main_nso = version_dir / "ExeFS" / "main"
+    profile_path = profile.dir / "game.tsv"
+    if not main_nso.is_file() or not profile_path.is_file():
+        fail("Kakarot's original main NSO or provisional game.tsv is missing.")
+
+    # Kakarot's NPDM declares its own 16 MiB system resource. Keep it unchanged.
+    system_resource = profile.get("sys_resource", "")
+    try:
+        system_resource_bytes = int(str(system_resource), 0)
+    except (TypeError, ValueError):
+        fail(f"Kakarot sys_resource is missing or invalid: {system_resource!r}")
+    if system_resource_bytes != KAKAROT_EXPECTED_SYS_RESOURCE:
+        fail(
+            f"Kakarot NPDM/profile system resource mismatch: expected 0x{KAKAROT_EXPECTED_SYS_RESOURCE:x}, "
+            f"got {system_resource!r}; refusing to copy another game's value."
+        )
+
+    # Match the proven 3.2 GiB iPhone alias split from the registered NXNative SPK profile.
+    update_profile_values(profile_path, KAKAROT_IPHONE_MEMORY)
+    profile = game_profiles.load(TITLE_ID)
+    if profile.dir.resolve() != (profile_parent / TITLE_ID).resolve():
+        fail("Memory-fix profile reload selected a profile outside the restored Kakarot workspace.")
+    for key, expected in KAKAROT_IPHONE_MEMORY.items():
+        if profile.get(key) != expected:
+            fail(f"Kakarot iPhone profile does not retain {key}={expected}.")
+    if int(profile.get("sys_resource", "0"), 0) != KAKAROT_EXPECTED_SYS_RESOURCE:
+        fail("Kakarot's original 16 MiB sys_resource was changed during the profile update.")
+
+    # Add exactly the measured legacy UE4 slot-17 layout to the pinned engine, with
+    # source-binary SHA/Build-ID checks inside the patcher.
+    patcher = repo_scripts / "patch_kakarot_ue_allocator.py"
+    if not patcher.is_file():
+        fail(f"Kakarot slot-17 patcher is missing: {patcher}")
+    run([py, patcher, "--engine-root", engine, "--main-nso", main_nso], cwd=engine, env=env)
+
+    # Rebuild only main's rewrite outputs. The SDK's five address-region cuts were
+    # already produced by NXNative in Colab and are verified below; subsdk0/sdk remain byte-for-byte.
+    for suffix in ("patched.bin", "fixups.tsv", "gates.tsv", "cuts.tsv", "obs.tsv",
+                   "changed.tsv", "sites.tsv"):
+        (patched / f"main.{suffix}").unlink(missing_ok=True)
+    (patched.with_name(patched.name + ".key")).unlink(missing_ok=True)
+    rewrite_env = dict(env)
+    rewrite_env.update({
+        "DM_GAME": TITLE_ID,
+        "GAME": TITLE_ID,
+        "DM_GAMES_DIR": str(profile_parent),
+        "DM_GAMES_FIRST": "1",
+    })
+    run([
+        py, engine / "dm/tools/patch_nso.py",
+        main_nso, patched, "main",
+    ], cwd=engine, env=rewrite_env)
+
+    cuts = table_rows(patched / "main.cuts.tsv")
+    observations = table_rows(patched / "main.obs.tsv")
+    fixups_path = patched / "main.fixups.tsv"
+    fixups = fixups_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    allocator_cut = [
+        row for row in cuts
+        if row.split("\t", 1)[0].lower() == f"{KAKAROT_ALLOCATOR_CALL:#x}"
+        and "FMallocBinned3" in row
+    ]
+    allocator_obs = [
+        row for row in observations
+        if row.split("\t", 1)[0].lower() == f"{KAKAROT_ALLOCATOR_CALL:#x}"
+        and "FMallocBinned3 constructor call (cut)" in row
+    ]
+    region_obs = [
+        row for row in observations
+        if row.split("\t", 1)[0].lower() == f"{KAKAROT_REGION_SIZE_STORE:#x}"
+        and "Unreal's engine region" in row
+    ]
+    if len(allocator_cut) != 1 or len(allocator_obs) != 1:
+        fail(
+            "Kakarot rewrite must contain exactly one FMallocBinned3 call cut and OBS_UE_MALLOC gate "
+            f"at {KAKAROT_ALLOCATOR_CALL:#x}; found cuts={len(allocator_cut)}, gates={len(allocator_obs)}."
+        )
+    if len(region_obs) != 1:
+        fail(
+            f"Kakarot's existing OBS_UE_REGION at {KAKAROT_REGION_SIZE_STORE:#x} was not preserved."
+        )
+    if f"# UE_MALLOC_VT\t{KAKAROT_ALLOCATOR_VTABLE:#x}" not in fixups:
+        fail("Kakarot main.fixups.tsv does not identify its measured FMallocBinned3 vtable.")
+    if f"# UE_MALLOC_SLOT\t{KAKAROT_ALLOCATOR_SLOT:#x}" not in fixups:
+        fail("Kakarot main.fixups.tsv does not identify getter slot 17.")
+
+    # The original SDK rewrite already carries both AddressRegionManager node-area
+    # changes and all three large-region alignment changes. Fail before shaders if not.
+    sdk_cuts = table_rows(patched / "sdk.cuts.tsv")
+    sdk_expect = (
+        "AddressRegionManager constructor: node area limit",
+        "length of the node area registered as an occupied region",
+        "alignment of regions from 32 MB to 1 GB",
+        "alignment of regions of 1 GB and more",
+        "alignment of regions from 4 MB to 32 MB",
+    )
+    sdk_rows = {}
+    for label in sdk_expect:
+        found = [row for row in sdk_cuts if label in row]
+        if len(found) != 1:
+            fail(f"Kakarot SDK rewrite must contain exactly one '{label}' cut; found {len(found)}.")
+        sdk_rows[label] = found[0]
+
+    # Refresh the report's per-module checksums so the final build report describes
+    # the post-fix main rewrite, not the superseded Colab provisional rewrite.
+    audit = dict(prep.get("rewrite_audit") or {})
+    artifacts = [dict(item) for item in audit.get("module_artifacts", [])]
+    main_artifact = next((item for item in artifacts if item.get("name") == "main"), None)
+    if main_artifact is None:
+        fail("Kakarot rewrite audit has no main module artifact to refresh.")
+    main_artifact["patched_sha256"] = sha256_file(patched / "main.patched.bin")
+    main_artifact["fixups_sha256"] = sha256_file(fixups_path)
+    audit["module_artifacts"] = artifacts
+    audit["main_cut_rows"] = len(cuts)
+    audit["main_observation_rows"] = len(observations)
+    audit["fixups_sha256"] = sha256_file(fixups_path)
+    prep["rewrite_audit"] = audit
+
+    memory_report = {
+        "allocator": {
+            "implementation": "NXNative host malloc zone (FMallocBinned3 replacement)",
+            "layout": "Unreal Engine 4 legacy",
+            "getter_slot": KAKAROT_ALLOCATOR_SLOT,
+            "vtable": f"{KAKAROT_ALLOCATOR_VTABLE:#x}",
+            "constructor": "0x235c4a0",
+            "constructor_call_site": f"{KAKAROT_ALLOCATOR_CALL:#x}",
+            "cut_verified": True,
+            "OBS_UE_MALLOC_verified": True,
+        },
+        "engine_region": {
+            "size_store": f"{KAKAROT_REGION_SIZE_STORE:#x}",
+            "OBS_UE_REGION_verified": True,
+            "cap_source": "remaining iPhone alias region",
+        },
+        "initial_iphone_profile": dict(KAKAROT_IPHONE_MEMORY),
+        "sys_resource_preserved": f"{system_resource_bytes:#x}",
+        "sdk_region_cuts": sdk_rows,
+        "rewritten_main_sha256": sha256_file(patched / "main.patched.bin"),
+        "main_fixups_sha256": sha256_file(fixups_path),
+    }
+    print("[KaKaRoTiOS] Unreal memory fix verified before Mac heap/region checks:", flush=True)
+    print(json.dumps(memory_report, indent=2), flush=True)
+    return profile, memory_report
+
+
+def current_profile_memory(profile) -> dict:
+    keys = ("mem_reserve", "mem_alias", "mem_stack", "app_pool", "sys_resource", "mem_used", "stdalloc_cap")
+    return {key: profile.get(key, "") for key in keys if profile.get(key, "") != ""}
+
 def safe_relative(value: str, label: str) -> PurePosixPath:
     path = PurePosixPath(str(value))
     if path.is_absolute() or ".." in path.parts or not path.parts:
@@ -350,6 +558,16 @@ def main() -> None:
                 "DM_GAMES_FIRST": "1", "DM_ROOT": str(work),
                 "WORK": str(work / "tmp"), "IOS_PULL": "1",
                 "J": str(shader_threads), "DMSH_PROCS": str(dmsh_procs)})
+
+    # The source Colab rewrite predates the host's UE4 legacy slot-17 support.
+    # Apply the measured host/profile fix and rewrite only main before any Mac
+    # heap/region check compiles or runs the NXNative host.
+    profile, memory_fix = apply_kakarot_unreal_memory_fix(
+        py, repo_scripts, engine, profile, profile_parent, version_dir,
+        patched, prep, env, game_profiles,
+    )
+    memory_fix["final_profile_after_checks"] = None
+
     print(
         f"[KaKaRoTiOS] NXNative GIL-free Metal finish workers; J={env['J']}, "
         f"DMSH_PROCS={env['DMSH_PROCS']}, batch={4 * shader_threads}; "
@@ -596,6 +814,10 @@ def main() -> None:
             "profile_type": prep["profile_type"], "profile_source": prep["profile_source"],
             "main_build_id": prep["main_build_id"], "main_sha256": prep["main_sha256"],
             "modules": modules, "rewrite_audit": prep["rewrite_audit"],
+            "unreal_memory_fix": {
+                **memory_fix,
+                "final_profile_after_checks": current_profile_memory(profile),
+            },
             "graphics_api": prep["graphics_api"],
             "unreal_shader_sources": actual_flags, "pak_audit": actual_paks,
             "shader_chain": actual_chain, "shader_package_key": package_key,
@@ -611,6 +833,8 @@ def main() -> None:
                 "Colab three-volume BASE RAR verification/CRC extraction + direct UPDATE NSP transfer and package-header/SHA-256 validation",
                 "Drive base/update package checkpoints and RAR cleanup after MD5/SHA-256 verification",
                 "NXNative metadata scan and Kakarot provisional profile",
+                "Kakarot UE4 legacy slot-17 FMallocBinned3 host replacement + iPhone guest-memory profile + main-only rewrite",
+                "NXNative Mac heap and virtual-region checks against the repaired Unreal hooks",
                 "NXNative ARM64 rewrite and fixup audit",
                 "Drive workspace/RomFS/AOC split with SHA-256 validation",
                 "GitHub Actions macOS ARM64 conditional Oodle processing",
