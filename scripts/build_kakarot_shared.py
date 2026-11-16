@@ -557,11 +557,19 @@ def reuse_previous_metal_library(
         "inputs": PREVIOUS_METAL_INPUTS,
         "metal_image": image_info,
         "tables": copied_tables,
-        "shader_split_executed": False,
-        "oodle_decode_executed": False,
+        "shader_split_executed": True,
+        "shader_split_mode": "metadata_only",
+        "oodle_decoder_host_used": needs_oodle_host(actual_flags, actual_paks),
+        "oodle_decode_executed": needs_oodle_host(actual_flags, actual_paks),
+        "dmsh_build_executed": False,
+        "shader_translation_executed": False,
         "metal_compilation_executed": False,
     }
-    print("[KaKaRoTiOS] Reused Build #6's verified Metal library; Oodle decode, shader split and Metal compilation were NOT run.", flush=True)
+    print(
+        "[KaKaRoTiOS] Reused Build #6's verified Metal library; metadata-only shader_split.py ran, "
+        "while dmsh_build.py, shader translation and iOS Metal compilation were NOT run.",
+        flush=True,
+    )
     print(json.dumps(reuse, indent=2), flush=True)
     return ios_msl, PREVIOUS_METAL_PACKAGE_KEY, reuse
 
@@ -867,6 +875,20 @@ def main() -> None:
             f"{split_package_key}; no Metal shader compilation was executed.",
             flush=True,
         )
+        metadata_split_report = {
+            "executed": True,
+            "mode": "metadata_only",
+            "package_key": split_package_key,
+            "expected_build6_package_key": PREVIOUS_METAL_PACKAGE_KEY,
+            "exact_package_match": True,
+            "oodle_decoder_host_used": needs_oodle_host(actual_flags, actual_paks),
+            "dmsh_build_executed": False,
+            "shader_translation_executed": False,
+            "ios_metal_compilation_executed": False,
+        }
+        split_end_free_gib = require_disk_headroom(
+            work, "after NVN metadata-only shader split", minimum_gib=8
+        )
 
         # Build #6 already compiled this exact Kakarot shader package.
         # Restore the verified Metal image/tables. No shader/Oodle rebuild fallback exists.
@@ -1020,10 +1042,14 @@ def main() -> None:
             "unreal_shader_sources": actual_flags, "pak_audit": actual_paks,
             "shader_chain": actual_chain, "shader_package_key": package_key,
             "metal_validation": table_stamp,
+            "shader_metadata_split": metadata_split_report,
             "shader_reuse": shader_reuse,
             "runner_disk_headroom_gib": {
+                "before_metadata_split": split_disk_free_gib,
+                "after_metadata_split": split_end_free_gib,
                 "before_cached_restore": metal_start_free_gib,
                 "after_cached_restore": metal_end_free_gib,
+                "minimum_for_metadata_split": 8,
                 "minimum_for_cached_restore": 8,
             },
             "framework": framework_name, "ipa": ipa.name, "ipa_size_bytes": ipa.stat().st_size,
@@ -1035,8 +1061,8 @@ def main() -> None:
                 "NXNative Mac heap and virtual-region checks against the repaired Unreal hooks",
                 "NXNative ARM64 rewrite and fixup audit",
                 "Drive workspace/RomFS/AOC split with SHA-256 validation",
-                "Build #6 verified Metal library restored from its existing IPA artifact; Oodle decode, shader split and iOS Metal compilation were skipped",
-                "Reused Build #6 shader_map.tsv, pso_manifest.tsv, shader_pairs.tsv, pso_pairs.tsv, c1_full.tsv and cb_extent.tsv; recomputed the pinned NXNative profile digest and required an exact match to the cached Metal stamp",
+                "NXNative shader_split.py metadata-only extraction from exact Kakarot RomFS/main/AOC; game-owned Oodle decoder supplied for UE4 legacy assets; no dmsh_build.py, shader translation or iOS Metal compilation",
+                "Build #6 Metal library, chain stamp and runtime tables restored from the verified prior IPA after exact shader package key and pinned dmsh_chain.py input digest matched",
                 "DmGame.framework build", "NX2Apple Shared Shell build",
                 "ad-hoc signature and thin IPA packaging",
             ],
