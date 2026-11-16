@@ -145,9 +145,10 @@ jobs:
           )["scheme"] == "legacy"
           assert source_kakarot.safe_volume_name("update.r00", "UPDATE") == "update.r00"
           assert source_kakarot.safe_volume_name("update.r01", "UPDATE") == "update.r01"
-          rar5 = root / "volume.part1.rar"
-          rar5.write_bytes(b"Rar!\x1a\x07\x01\x00" + bytes(32))
-          assert source_kakarot.is_rar_volume(rar5)
+          with tempfile.TemporaryDirectory(prefix="kakarot-rar-contract-") as rar_tmp:
+              rar5 = Path(rar_tmp) / "volume.part1.rar"
+              rar5.write_bytes(b"Rar!\\x1a\\x07\\x01\\x00" + bytes(32))
+              assert source_kakarot.is_rar_volume(rar5)
           try:
               source_kakarot.validate_volume_sequence(
                   ["base.part1.rar", "base.part3.rar", "base.part2.rar"], "BASE"
