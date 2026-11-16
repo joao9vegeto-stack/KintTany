@@ -345,6 +345,24 @@ def validate_shader_map(profile) -> Path:
         fail(f"Shader split did not produce a non-empty map: {shader_map}")
     return shader_map
 
+def current_shader_input_digest(engine: Path, env: dict[str, str]) -> str:
+    """Ask the pinned NXNative chain tool for the exact current profile-input digest."""
+    check_env = dict(env)
+    check_env.update({
+        "DM_GAME": TITLE_ID,
+        "DM_GAMES_DIR": str(Path(check_env["DM_GAMES_DIR"]).resolve()),
+        "DM_GAMES_FIRST": "1",
+    })
+    result = subprocess.run(
+        [sys.executable, str(engine / "dm/gfx/tools/dmsh_chain.py"), "--inputs"],
+        cwd=engine, env=check_env, capture_output=True, text=True, check=True,
+    )
+    digest = result.stdout.strip()
+    if not re.fullmatch(r"[0-9a-f]{12}", digest):
+        fail(f"NXNative returned an invalid current shader-input digest: {digest!r}.")
+    return digest
+
+
 def validate_table_stamp(profile, ios_msl: Path, chain: str) -> dict:
     import shader_lib
     library = ios_msl / f"b-{chain}"
@@ -381,13 +399,19 @@ PREVIOUS_METAL_PACKAGE_KEY = "01a2622118c296274012da182f06801a66fed4f8aa1e8f1db3
 PREVIOUS_METAL_INPUTS = "c1afd2abe10a"
 
 
-def _copy_ipa_member(archive: zipfile.ZipFile, member: str, destination: Path) -> dict:
+def _copy_ipa_member(
+    archive: zipfile.ZipFile,
+    member: str,
+    destination: Path,
+    *,
+    allow_empty: bool = False,
+) -> dict:
     """Stream one verified ZIP member to disk; reading to EOF also checks its ZIP CRC."""
     try:
         info = archive.getinfo(member)
     except KeyError:
         fail(f"Previous Kakarot IPA is missing required shader component: {member}")
-    if info.file_size <= 0:
+    if info.file_size <= 0 and not allow_empty:
         fail(f"Previous Kakarot IPA contains an empty shader component: {member}")
     destination.parent.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256()
@@ -490,10 +514,30 @@ def reuse_previous_metal_library(
         image_info = _copy_ipa_member(archive, image_member, image_destination)
 
         copied_tables = {}
-        for name in ("shader_map.tsv", "c1_full.tsv", "cb_extent.tsv"):
+        # The Metal input digest includes shader_pairs.tsv and pso_pairs.tsv in
+        # addition to shader_map.tsv.  Build #6's DmGame framework already carries
+        # the exact tables used by that compilation; restore them as a set instead
+        # of mixing its metallib with newer provisional tables from the workspace.
+        required_tables = ("shader_map.tsv", "pso_manifest.tsv", "c1_full.tsv", "cb_extent.tsv")
+        optional_tables = ("shader_pairs.tsv", "pso_pairs.tsv")
+        for name in required_tables:
             member = framework_prefix + "dm/" + name
             destination = Path(profile.table(name))
-            copied_tables[name] = _copy_ipa_member(archive, member, destination)
+            copied_tables[name] = _copy_ipa_member(
+                archive, member, destination, allow_empty=(name == "pso_manifest.tsv")
+            )
+        for name in optional_tables:
+            member = framework_prefix + "dm/" + name
+            destination = Path(profile.table(name))
+            if member in archive.namelist():
+                copied_tables[name] = _copy_ipa_member(
+                    archive, member, destination, allow_empty=True
+                )
+            else:
+                # The source framework omitted this optional table, so do not
+                # accidentally retain a newer workspace copy from another scan.
+                destination.unlink(missing_ok=True)
+                copied_tables[name] = {"present_in_source_ipa": False, "size": 0, "sha256": None}
 
     shader_map = validate_shader_map(profile)
     if shader_map.stat().st_size != copied_tables["shader_map.tsv"]["size"]:
@@ -786,7 +830,21 @@ def main() -> None:
         shader_map = validate_shader_map(profile)
         print(f"[KaKaRoTiOS] Reused shader map: {shader_map} ({shader_map.stat().st_size:,} bytes).", flush=True)
         table_stamp = validate_table_stamp(profile, ios_msl, actual_chain)
-        print("[KaKaRoTiOS] Reused c1_full.tsv, cb_extent.tsv and Metal chain input stamp all verified.", flush=True)
+        current_inputs = current_shader_input_digest(engine, env)
+        if current_inputs != PREVIOUS_METAL_INPUTS or table_stamp.get("inputs") != PREVIOUS_METAL_INPUTS:
+            fail(
+                "The restored shader inputs do not exactly match Build #6's compiled Metal library: "
+                f"current profile={current_inputs}, cached library={table_stamp.get('inputs')}, "
+                f"expected={PREVIOUS_METAL_INPUTS}. Refusing framework assembly."
+            )
+        shader_reuse["current_profile_inputs"] = current_inputs
+        shader_reuse["profile_inputs_verified"] = True
+        print(
+            "[KaKaRoTiOS] Exact cached NVN profile digest verified: "
+            f"{current_inputs}; shader_map, pso_manifest, shader_pairs, pso_pairs, "
+            "c1_full and cb_extent are aligned with Build #6.",
+            flush=True,
+        )
 
         control = builder.languages_control(version_dir)
         display_name = nacp.name(control) or profile.get("name") or "DRAGON BALL Z: KAKAROT"
@@ -927,7 +985,7 @@ def main() -> None:
                 "NXNative ARM64 rewrite and fixup audit",
                 "Drive workspace/RomFS/AOC split with SHA-256 validation",
                 "Build #6 verified Metal library restored from its existing IPA artifact; Oodle decode, shader split and iOS Metal compilation were skipped",
-                "Reused shader_map.tsv, c1_full.tsv, cb_extent.tsv and validated the unchanged chain/input stamp",
+                "Reused Build #6 shader_map.tsv, pso_manifest.tsv, shader_pairs.tsv, pso_pairs.tsv, c1_full.tsv and cb_extent.tsv; recomputed the pinned NXNative profile digest and required an exact match to the cached Metal stamp",
                 "DmGame.framework build", "NX2Apple Shared Shell build",
                 "ad-hoc signature and thin IPA packaging",
             ],
