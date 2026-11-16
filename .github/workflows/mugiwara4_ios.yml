@@ -377,6 +377,63 @@ jobs:
                   (tool_dir / name).unlink(missing_ok=True)
           print("Pinned NXNative sidecar compile: baseline OFF and official uniform pipeline ON; shader-map parser fixture (16-char SHA prefix): OK")
           PY
+      - name: Reclaim unused macOS image storage without touching Xcode 27.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTIVE_APP="$(cd "$DEVELOPER_DIR/../.." && pwd -P)"
+          echo "Required active Xcode: $ACTIVE_APP"
+          xcodebuild -version
+          test "$ACTIVE_APP" = "/Applications/Xcode_27.2.app"
+          echo "=== Simulator runtimes before cleanup ==="
+          xcrun simctl runtime list || true
+          if xcrun simctl help runtime 2>&1 | grep -q "delete"; then
+            xcrun simctl runtime delete all --dry-run || true
+            xcrun simctl runtime delete all || true
+          fi
+          xcrun simctl delete all || true
+          echo "=== Removing unused Xcode 27.0 / 27.1 only ==="
+          for candidate in /Applications/Xcode_27.app /Applications/Xcode_27.1.app; do
+            if [ -d "$candidate" ]; then
+              real="$(cd "$candidate" && pwd -P)"
+              if [ "$real" != "$ACTIVE_APP" ]; then
+                du -sh "$real" || true
+                sudo rm -rf "$real"
+              fi
+            fi
+          done
+          sudo xcode-select --switch "$DEVELOPER_DIR"
+          test "$(xcodebuild -version | head -1)" = "Xcode 27.2"
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphoneos metal --version
+          echo "=== Removing unused Android SDK and package caches ==="
+          for candidate in "$HOME/Library/Android/sdk" "$HOME/.android"; do
+            if [ -d "$candidate" ]; then
+              du -sh "$candidate" || true
+              rm -rf "$candidate"
+            fi
+          done
+          rm -rf "$HOME/Library/Caches/Homebrew" "$HOME/Library/Caches/pip"
+          brew cleanup -s || true
+          df -h "$RUNNER_TEMP"
+
+      - name: Preflight Mugiwara disk budget before restoring 15.1 GB RomFS
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Runner: $(uname -a)"
+          echo "CPU cores: $(sysctl -n hw.ncpu)"
+          echo "RAM bytes: $(sysctl -n hw.memsize)"
+          df -h "$RUNNER_TEMP"
+          AVAILABLE_KB="$(df -Pk "$RUNNER_TEMP" | awk 'END {print $4}')"
+          AVAILABLE_BYTES="$((AVAILABLE_KB * 1024))"
+          REQUIRED_BYTES="$((105 * 1024 * 1024 * 1024))"
+          echo "Available workspace storage before RomFS restore: $((AVAILABLE_BYTES / 1024 / 1024 / 1024)) GiB"
+          if [ "$AVAILABLE_BYTES" -lt "$REQUIRED_BYTES" ]; then
+            echo "::error::At least 105 GiB must be free before restoring the Mugiwara RomFS."
+            exit 1
+          fi
+
       - name: Restore workspace, parallel-range RomFS and concurrent unique-title-ID AOC images from Drive (SHA-256)
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
@@ -386,6 +443,20 @@ jobs:
           python scripts/prepare_mugiwara_actions.py \
             --handoff handoff.json \
             --destination "$RUNNER_TEMP/mugiwara-actions"
+      - name: Verify free disk after RomFS restore and before shader compilation
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h "$RUNNER_TEMP"
+          AVAILABLE_KB="$(df -Pk "$RUNNER_TEMP" | awk 'END {print $4}')"
+          AVAILABLE_BYTES="$((AVAILABLE_KB * 1024))"
+          REQUIRED_BYTES="$((80 * 1024 * 1024 * 1024))"
+          echo "Available workspace storage after RomFS restore: $((AVAILABLE_BYTES / 1024 / 1024 / 1024)) GiB"
+          if [ "$AVAILABLE_BYTES" -lt "$REQUIRED_BYTES" ]; then
+            echo "::error::At least 80 GiB must remain free before the shader/Metal build."
+            exit 1
+          fi
+
       - name: Oodle/GLSLC when detected, NVN shader split with all unique-title-ID AOC images, Metal and Route C IPA
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}

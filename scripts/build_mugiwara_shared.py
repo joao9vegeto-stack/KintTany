@@ -512,7 +512,7 @@ def main() -> None:
             fail(f"NXNative Metal compiler log is missing: {dmsh_log}")
         dmsh_text = dmsh_log.read_text(encoding="utf-8", errors="replace")
         guard_report = re.search(
-            r"^\\[Mugiwara4iOS\\] Guard rewrite totals: shaders=(\\d+) dynamic_index=(\\d+) fixed_index=(\\d+)$",
+            r"^\[Mugiwara4iOS\] Guard rewrite totals: shaders=(\d+) dynamic_index=(\d+) fixed_index=(\d+)$",
             dmsh_text, re.M)
         if not guard_report:
             fail("NXNative compiler did not report its bounds-safe uniform guard rewrite totals.")
