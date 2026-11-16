@@ -64,10 +64,22 @@ def select_guards(msl: str) -> str:
         safe_read = read[:index.start(1)] + safe_index + read[index.end(1):]
         return 'select(%s, %s, %s)' % (m.group('z' + n), safe_read, cond)
     msl = _GCONST_CHOICE.sub(select_fixed, msl)
-    left = _GLEFT.search(msl) or next((m for m in re.finditer(r'(?<!\[)\b(_\d+) \?', msl) if m.group(1) in bools), None)
+    left = _GLEFT.search(msl)
     if left:
-        line = msl[msl.rfind('\n', 0, left.start()) + 1:left.end() + 100].split('\n')[0].strip()[:160]
-        raise ValueError('a bounded uniform read is not written as a select: ' + line)
+        line_start = msl.rfind(chr(10), 0, left.start()) + 1
+        line_end = msl.find(chr(10), left.start())
+        if line_end < 0: line_end = len(msl)
+        line = msl[line_start:line_end]
+        offset = left.start() - line_start
+        select_at = line.rfind('select(', 0, offset)
+        buffer_index_at = line.rfind('_m0[', 0, offset)
+        safe_index_guard = select_at >= 0 and buffer_index_at > select_at
+        if not safe_index_guard:
+            raise ValueError('a bounded uniform read is not written as a select: ' + line.strip()[:160])
+    dynamic_left = next((m for m in re.finditer(r'(?<!\[)\b(_\d+) \?', msl) if m.group(1) in bools), None)
+    if dynamic_left:
+        line = msl[msl.rfind(chr(10), 0, dynamic_left.start()) + 1:dynamic_left.start() + 100].split(chr(10))[0].strip()[:160]
+        raise ValueError('a bounded dynamic uniform index is not written as a select: ' + line)
     return msl
 
 _UTEST_READ = r'as_type<(u?int)>\((\(\*spvDescriptorSet0\.[a-z]+_c(?:[3-9]|\d\d)\)\._m0\[\d+\])\.([xyzw])\)'
