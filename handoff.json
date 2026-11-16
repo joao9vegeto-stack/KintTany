@@ -759,6 +759,7 @@
   },
   "created_utc": "2026-11-16T02:55:09.450345+00:00",
   "dispatch_attempt": {
-    "id": "retry-after-rar-validation-fix-b984b2d8183d14a9"
+    "id": "parallel-drive-ranges-preflight-b6160637",
+    "reason": "six-worker-range-download-and-builder-manifest-preflight"
   }
 }
