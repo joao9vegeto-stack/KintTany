@@ -263,8 +263,8 @@ jobs:
             --install-dir "$DOTNET_ROOT" \
             --no-path
           test -x "$DOTNET_ROOT/dotnet"
-          "$DOTNET_ROOT/dotnet" --list-sdks | grep -E '^10\\.'
-          "$DOTNET_ROOT/dotnet" --list-runtimes | grep -E '^Microsoft\\.NETCore\\.App 10\\.'
+          "$DOTNET_ROOT/dotnet" --list-sdks | grep -E '^10\.'
+          "$DOTNET_ROOT/dotnet" --list-runtimes | grep -E '^Microsoft\.NETCore\.App 10\.'
           "$DOTNET_ROOT/dotnet" --info
           {
             echo "DOTNET_ROOT=$DOTNET_ROOT"
@@ -285,8 +285,8 @@ jobs:
           set -euo pipefail
           test "$(uname -m)" = "arm64"
           test "$DOTNET_ROOT" = "$RUNNER_TEMP/dotnet10-arm64"
-          dotnet --list-sdks | grep -E '^10\\.'
-          dotnet --list-runtimes | grep -E '^Microsoft\\.NETCore\\.App 10\\.'
+          dotnet --list-sdks | grep -E '^10\.'
+          dotnet --list-runtimes | grep -E '^Microsoft\.NETCore\.App 10\.'
           xlate="NX2Apple/engine/dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate"
           test -x "$xlate" || { echo "::error::Pinned shader translator missing or not executable: $xlate"; exit 1; }
           "$xlate" --source-sha | tee "$RUNNER_TEMP/dmsh-xlate-source-sha.txt"
