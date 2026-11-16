@@ -96,7 +96,7 @@ def self_test() -> None:
     )
     patched = patch_worker_source(fixture)
     assert "mugiwara_guard_rewrite.select_guards_with_stats(src)" in patched
-    assert "_MUGIWARA_GUARD_COUNTS)," in patched
+    assert ", _MUGIWARA_GUARD_COUNTS)" in patched
     assert "Guard rewrite totals: shaders=%d" in patched
     assert patch_worker_source(patched) == patched
 
