@@ -366,7 +366,7 @@ jobs:
                   "mugiwara_uniform_rewrite_diag.py",
               ):
                   (tool_dir / name).unlink(missing_ok=True)
-          print("Pinned NXNative sidecar compile: baseline OFF and official uniform pipeline ON; shader-map parser fixture: OK")
+          print("Pinned NXNative sidecar compile: baseline OFF and official uniform pipeline ON; shader-map parser fixture (16-char SHA prefix): OK")
           PY
       - name: Restore workspace, parallel-range RomFS and concurrent unique-title-ID AOC images from Drive (SHA-256)
         env:

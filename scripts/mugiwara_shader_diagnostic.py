@@ -68,8 +68,8 @@ def shader_sample(shader_map: Path) -> tuple[list[str], dict]:
             stage = MAP_STAGE_NAMES.get(stage_name)
             if stage is None:
                 fail(f"Shader map line {line_number} has unknown stage {stage_name!r}.")
-            if not re.fullmatch(r"[0-9a-f]{32}", key):
-                fail(f"Shader map line {line_number} has invalid 16-byte SHA-256 key {key!r}.")
+            if not re.fullmatch(r"[0-9a-f]{16}", key):
+                fail(f"Shader map line {line_number} has invalid 16-hex-character SHA-256 prefix key {key!r}.")
             map_stage_counts[stage_name] += 1
             stages[stage].setdefault(key, source)
             data_rows += 1
@@ -100,12 +100,13 @@ def shader_sample(shader_map: Path) -> tuple[list[str], dict]:
 def shader_map_fixture_test() -> None:
     """Test the exact shader_split.py header, stage names and 16-byte key encoding."""
     lines = ["# test fixture", "\t".join(SHADER_MAP_HEADER)]
-    for i in range(PS_COUNT):
-        lines.append(f"pixel.bin\t{i}\tpixel\t{i:032x}\tfixture#pixel{i}")
+    pixel_keys = [int("5963471f5da5187f", 16), *range(PS_COUNT - 1)]
+    for i, key in enumerate(pixel_keys):
+        lines.append(f"pixel.bin\t{i}\tpixel\t{key:016x}\tfixture#pixel{i}")
     for i in range(VS_COUNT):
-        lines.append(f"vertex.bin\t{i}\tvertex\t{i + 100:032x}\tfixture#vertex{i}")
+        lines.append(f"vertex.bin\t{i}\tvertex\t{i + 100:016x}\tfixture#vertex{i}")
     for i in range(CS_COUNT):
-        lines.append(f"compute.bin\t{i}\tcompute\t{i + 200:032x}\tfixture#compute{i}")
+        lines.append(f"compute.bin\t{i}\tcompute\t{i + 200:016x}\tfixture#compute{i}")
     with tempfile.TemporaryDirectory(prefix="mugiwara-shader-map-test-") as tmp:
         path = Path(tmp) / "shader_map.tsv"
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -113,6 +114,7 @@ def shader_map_fixture_test() -> None:
         assert len(keys) == PS_COUNT + VS_COUNT + CS_COUNT, (len(keys), report)
         assert report["sample_stage_counts"] == {"ps": PS_COUNT, "vs": VS_COUNT, "cs": CS_COUNT}
         assert report["map_stage_counts"] == {"pixel": PS_COUNT, "vertex": VS_COUNT, "compute": CS_COUNT}
+        assert "5963471f5da5187f" in keys, keys
 
 def diagnostic_build_source(original: str, uniform_fix: bool) -> str:
     src = original.replace(
