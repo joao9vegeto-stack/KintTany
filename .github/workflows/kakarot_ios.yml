@@ -99,7 +99,7 @@ jobs:
           assert h.get("work_archive", {}).get("sha256")
           print("KaKaRoTiOS RAR/base/update/Drive/RomFS/AOC handoff contract: OK")
           PY
-          python -m py_compile colab/source_kakarot.py colab/prepare_kakarot.py colab/run_kakarot.py scripts/prepare_kakarot_actions.py scripts/build_kakarot_shared.py scripts/patch_kakarot_shader_workers.py
+          python -m py_compile colab/source_kakarot.py colab/prepare_kakarot.py colab/run_kakarot.py scripts/prepare_kakarot_actions.py scripts/build_kakarot_shared.py scripts/patch_kakarot_shader_workers.py scripts/patch_kakarot_ue_allocator.py scripts/validate_kakarot_memory_fix.py
           python - <<'PY'
           import sys, tempfile
           from pathlib import Path
