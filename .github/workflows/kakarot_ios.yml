@@ -319,6 +319,69 @@ jobs:
           "$xlate" --source-sha | tee "$RUNNER_TEMP/dmsh-xlate-source-sha.txt"
           test -s "$RUNNER_TEMP/dmsh-xlate-source-sha.txt"
 
+      - name: Reclaim unused macOS image storage without touching Xcode 27.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTIVE_APP="$(cd "$DEVELOPER_DIR/../.." && pwd -P)"
+          echo "Required active Xcode: $ACTIVE_APP"
+          xcodebuild -version
+          test "$ACTIVE_APP" = "/Applications/Xcode_27.2.app"
+
+          echo "=== Simulator runtime storage before cleanup ==="
+          xcrun simctl runtime list || true
+          if xcrun simctl help runtime 2>&1 | grep -q "delete"; then
+            xcrun simctl runtime delete all --dry-run || true
+            xcrun simctl runtime delete all || true
+          fi
+          xcrun simctl delete all || true
+
+          echo "=== Removing other preinstalled Xcode versions (27.0 / 27.1) ==="
+          for candidate in /Applications/Xcode_27.app /Applications/Xcode_27.1.app; do
+            if [ -d "$candidate" ]; then
+              real="$(cd "$candidate" && pwd -P)"
+              if [ "$real" != "$ACTIVE_APP" ]; then
+                du -sh "$real" || true
+                sudo rm -rf "$real"
+              fi
+            fi
+          done
+          sudo xcode-select --switch "$DEVELOPER_DIR"
+          test "$(xcodebuild -version | head -1)" = "Xcode 27.2"
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphoneos metal --version
+
+          echo "=== Removing Android SDK (not used by this iOS build) ==="
+          for candidate in "$HOME/Library/Android/sdk" "$HOME/.android"; do
+            if [ -d "$candidate" ]; then
+              du -sh "$candidate" || true
+              rm -rf "$candidate"
+            fi
+          done
+
+          echo "=== Removing package/download caches only ==="
+          rm -rf "$HOME/Library/Caches/Homebrew" "$HOME/Library/Caches/pip"
+          brew cleanup -s || true
+          df -h "$RUNNER_TEMP"
+
+      - name: Preflight Kakarot disk budget before restoring 24.3 GB RomFS
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Runner: $(uname -a)"
+          echo "CPU cores: $(sysctl -n hw.ncpu)"
+          echo "RAM bytes: $(sysctl -n hw.memsize)"
+          df -h "$RUNNER_TEMP"
+          AVAILABLE_KB="$(df -Pk "$RUNNER_TEMP" | awk 'END {print $4}')"
+          AVAILABLE_BYTES="$((AVAILABLE_KB * 1024))"
+          REQUIRED_BYTES="$((105 * 1024 * 1024 * 1024))"
+          echo "Available workspace storage before RomFS restore: $((AVAILABLE_BYTES / 1024 / 1024 / 1024)) GiB"
+          echo "Kakarot minimum before restore: 105 GiB (to retain at least 80 GiB after restoring RomFS)"
+          if [ "$AVAILABLE_BYTES" -lt "$REQUIRED_BYTES" ]; then
+            echo "::error::Insufficient disk for Kakarot Route C. After reclaiming unused Xcode/simulator/Android storage, at least 105 GiB must be free before restoring the 24.3 GB RomFS."
+            exit 1
+          fi
+
       - name: Restore workspace and external RomFS from Drive (size + SHA-256)
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
@@ -327,6 +390,21 @@ jobs:
           python scripts/prepare_kakarot_actions.py \
             --handoff handoff.json \
             --destination "$RUNNER_TEMP/kakarot-actions"
+
+      - name: Verify free disk after restoring RomFS and before shader compilation
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h "$RUNNER_TEMP"
+          AVAILABLE_KB="$(df -Pk "$RUNNER_TEMP" | awk 'END {print $4}')"
+          AVAILABLE_BYTES="$((AVAILABLE_KB * 1024))"
+          REQUIRED_BYTES="$((80 * 1024 * 1024 * 1024))"
+          echo "Available workspace storage after RomFS restore: $((AVAILABLE_BYTES / 1024 / 1024 / 1024)) GiB"
+          echo "Kakarot Metal minimum: 80 GiB free"
+          if [ "$AVAILABLE_BYTES" -lt "$REQUIRED_BYTES" ]; then
+            echo "::error::Insufficient disk after restoring RomFS. Refusing to start the Oodle/shader/Metal build without 80 GiB free."
+            exit 1
+          fi
 
       - name: Build Oodle/shaders, iOS Metal, framework, Shared Shell and thin IPA
         shell: bash

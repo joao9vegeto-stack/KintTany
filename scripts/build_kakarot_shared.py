@@ -27,6 +27,23 @@ def require(condition: bool, message: str) -> None:
     if not condition:
         fail(message)
 
+def require_disk_headroom(path: Path, stage: str, minimum_gib: int) -> float:
+    """Fail before an expensive stage when the runner cannot hold its outputs."""
+    usage = shutil.disk_usage(path)
+    free_gib = usage.free / (1024 ** 3)
+    total_gib = usage.total / (1024 ** 3)
+    print(
+        f"[KaKaRoTiOS] Disk headroom ({stage}): {free_gib:.1f} GiB free "
+        f"of {total_gib:.1f} GiB; minimum {minimum_gib} GiB.",
+        flush=True,
+    )
+    if usage.free < minimum_gib * (1024 ** 3):
+        fail(
+            f"Insufficient disk at {stage}: {free_gib:.1f} GiB free, "
+            f"need at least {minimum_gib} GiB. Refusing to risk a partial Metal library."
+        )
+    return round(free_gib, 1)
+
 def run(command, cwd=None, env=None) -> None:
     cmd = list(map(str, command))
     print("+", " ".join(cmd), flush=True)
@@ -450,9 +467,13 @@ def main() -> None:
         gpu_selection = builder.ios_gpus("none", profile)
         pull = builder.ios_wants_pulling(profile, gpu_selection, False, env)
         print(f"[KaKaRoTiOS] Compiling iOS Metal libraries; pulling libraries: {'yes' if pull else 'no'}...", flush=True)
+        metal_start_free_gib = require_disk_headroom(
+            work, "before iOS Metal compilation", minimum_gib=75)
         ios_msl = builder.build_shaders(
             py, engine, work / "shader", xlate, env, logs, profile,
             pkg_key=package_key, mac=False, seen=None, pull=pull)
+        metal_end_free_gib = require_disk_headroom(
+            work, "after Metal library publication / before framework copy", minimum_gib=12)
         chain_lib = ios_msl / f"b-{actual_chain}"
         chain_img = Path(str(chain_lib) + ".img")
         if not (chain_lib.is_dir() or chain_img.is_file()):
@@ -579,6 +600,12 @@ def main() -> None:
             "unreal_shader_sources": actual_flags, "pak_audit": actual_paks,
             "shader_chain": actual_chain, "shader_package_key": package_key,
             "metal_validation": table_stamp,
+            "runner_disk_headroom_gib": {
+                "before_metal": metal_start_free_gib,
+                "after_metal_publication": metal_end_free_gib,
+                "minimum_before_metal": 75,
+                "minimum_before_framework_copy": 12,
+            },
             "framework": framework_name, "ipa": ipa.name, "ipa_size_bytes": ipa.stat().st_size,
             "pipeline": [
                 "Colab three-volume BASE RAR verification/CRC extraction + direct UPDATE NSP transfer and package-header/SHA-256 validation",
