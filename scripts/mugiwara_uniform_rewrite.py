@@ -22,7 +22,7 @@ def _gchoice(cond, read):
 _GBOOL = re.compile(r'\bbool (_\d+) = [^;\n]* < %s;' % _GSIZE)
 _GROW = _gchoice(r'_\d+', r'\(\*spvDescriptorSet0\.[a-z]+_c\d+\)\._m0\[(?P<i%s>_\d+) \? [^\]\n]+ : 0\](?:\[[^\]\n]+\]|\.[xyzw])')
 _GCONST_READ = r'\(\*spvDescriptorSet0\.[a-z]+_c(?:[3-9]|\d{2,})\)\._m0\[\d+\]\.[xyzw]'
-_GCONST_COND = r'\d+u? < ' + _GSIZE + r'\)'
+_GCONST_COND = r'\d+u? < ' + _GSIZE
 _GCONST_CHOICE = _gchoice(_GCONST_COND, _GCONST_READ)
 _GLEFT = re.compile(r'%s\) \?' % _GSIZE)
 
