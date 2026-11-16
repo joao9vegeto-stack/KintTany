@@ -759,7 +759,7 @@
   },
   "created_utc": "2026-11-16T02:55:09.450345+00:00",
   "dispatch_attempt": {
-    "id": "reproduce-build6-metadata-no-metal-recompile-20261116-09",
-    "reason": "Regenerate only NXNative NVN shader source metadata using exact Kakarot RomFS/main/AOC and decoder host, require the original Build #6 shader package key and input digest, then reuse its cached Metal library to rebuild only the patched game framework, Shared Shell and thin IPA. Do not call dmsh_build.py or the iOS Metal shader compiler."
+    "id": "reproduce-build6-metadata-no-metal-recompile-20261116-10",
+    "reason": "Trigger the KaKaRoTiOS build with the required commit-title prefix. Regenerate only NXNative NVN shader source metadata using exact Kakarot RomFS/main/AOC and decoder host, require the original Build #6 shader package key and input digest, then reuse cached Metal to rebuild only the patched game framework, Shared Shell and thin IPA. Do not call dmsh_build.py or the iOS Metal shader compiler."
   }
 }
