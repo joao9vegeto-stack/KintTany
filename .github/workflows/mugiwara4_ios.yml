@@ -224,7 +224,7 @@ jobs:
             scripts/build_mugiwara_shared.py \
             scripts/mugiwara_shader_diagnostic.py \
             scripts/mugiwara_uniform_rewrite.py \
-            scripts/patch_mugiwara_shader_guards.py \\
+            scripts/patch_mugiwara_shader_guards.py \
             scripts/mugiwara_contract.py
           python - <<'PY'
           import ast, json, sys, tempfile, yaml
