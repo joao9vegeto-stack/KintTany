@@ -116,7 +116,7 @@ def main() -> None:
     sys.path.insert(0, str(engine / "dm/tools"))
     import nso
     sdk_module = nso.read(str(sdk_nso))
-    sdk_id = sdk_module.build_id.hex()
+    sdk_id = bytes(sdk_module.build_id[:16]).hex()
     sdk_sha = hashlib.sha256(sdk_nso.read_bytes()).hexdigest()
     print(f"sdk_build_id={sdk_id}", flush=True)
     print(f"sdk_sha256={sdk_sha}", flush=True)
