@@ -42,7 +42,7 @@ def main() -> None:
     args = parser.parse_args()
 
     engine = args.engine_root.resolve()
-    if (engine / ".upstream-ref").read_text(encoding="utf-8").strip() != ENGINE_PIN:
+    if (engine.parent / ".upstream-ref").read_text(encoding="utf-8").strip() != ENGINE_PIN:
         fail("NXNative engine pin mismatch.")
     handoff = json.loads(args.handoff.read_text(encoding="utf-8"))
     if (handoff.get("project") != PROJECT or handoff.get("branch") != BRANCH
