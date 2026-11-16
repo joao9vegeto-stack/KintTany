@@ -183,6 +183,7 @@ def finish(key, w, j, c1):
 
 def diagnostic_mtlcache_source(original: str) -> str:
     instrumentation = r'''
+import time
 
 # Mugiwara-only timing shim: reports cache hit versus actual Metal front-end+metallib wall time.
 _mugi_original_compile = Cache.compile
@@ -291,6 +292,18 @@ def run_case(label: str, uniform_fix: bool, tool_dir: Path, engine: Path, packag
             returncode = 124
         stream.flush()
     text = logs.read_text(encoding="utf-8", errors="replace")
+    summary_match = re.search(r"^shaders (\d+): ok (\d+)(?:, (.*))?$", text, re.M)
+    shader_summary = None
+    if summary_match:
+        shader_total = int(summary_match.group(1))
+        shader_ok = int(summary_match.group(2))
+        shader_summary = {
+            "total": shader_total,
+            "ok": shader_ok,
+            "failed": shader_total - shader_ok,
+            "failure_breakdown": summary_match.group(3) or "",
+            "complete": shader_total > 0 and shader_ok == shader_total,
+        }
     return {
         "label": label,
         "uniform_pipeline": uniform_fix,
@@ -302,6 +315,8 @@ def run_case(label: str, uniform_fix: bool, tool_dir: Path, engine: Path, packag
         "metal_lines": [line for line in text.splitlines() if line.startswith(("[MUGIWARA_METAL_TIME]", "[MUGIWARA_METAL_SPLIT_TIME]"))],
         "uniform_lines": [line for line in text.splitlines() if line.startswith("[MUGIWARA_UNIFORM_DIAG]")],
         "summary_lines": [line for line in text.splitlines() if line.startswith(("shaders ", "shader cache:", "readable-tile", "pulling libraries"))],
+        "shader_summary": shader_summary,
+        "compile_complete": bool(shader_summary and shader_summary["complete"]),
         "log": str(logs),
     }
 
@@ -349,10 +364,15 @@ def main() -> None:
     args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(f"[Mugiwara4iOS shader diagnostic] A/B report: {args.report}", flush=True)
     print(json.dumps({k: report[k] for k in ("map_stage_counts", "sample_stage_counts", "baseline", "uniform_pipeline")}, indent=2), flush=True)
-    if report["baseline"]["returncode"] not in (0, 124):
-        fail(f"Baseline diagnostic failed with exit code {report['baseline']['returncode']}; see {report['baseline']['log']}.")
-    if report["uniform_pipeline"]["returncode"] not in (0, 124):
-        fail(f"Uniform-tests diagnostic failed with exit code {report['uniform_pipeline']['returncode']}; see {report['uniform_pipeline']['log']}.")
+    for label in ("baseline", "uniform_pipeline"):
+        case = report[label]
+        if case["returncode"] not in (0, 124):
+            fail(f"{label} diagnostic process failed with exit code {case['returncode']}; see {case['log']}.")
+        if case["returncode"] == 0 and not case["compile_complete"]:
+            fail(
+                f"{label} diagnostic returned success without compiling all sampled shaders: "
+                f"{case.get('shader_summary')!r}; see {case['log']}."
+            )
     print("[Mugiwara4iOS shader diagnostic] Bounded A/B completed; no IPA or full shader map was built.", flush=True)
 
 

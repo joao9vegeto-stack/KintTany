@@ -13,12 +13,17 @@ CBSIZE_BANK = 25
 _GSIZE = r'\(\(\*spvDescriptorSet0\.[a-z]+_c%d\)\._m0\[\d\]\.[xyzw] >> 2u\)' % CBSIZE_BANK
 _GZERO = r'0(?:\.0|u)?'
 def _gchoice(cond, read):
-    return re.compile('|'.join(form % (n, cond, n, read % n, n, _GZERO) for n, form in (
+    def read_pattern(n):
+        return read % n if "%s" in read else read
+    return re.compile('|'.join(form % (n, cond, n, read_pattern(n), n, _GZERO) for n, form in (
         (1, r'(?<![\w>])\((?P<q%d>%s) \? (?P<r%d>%s) : (?P<z%d>%s)\)'),
         (2, r'(?P<q%d>%s) \? (?P<r%d>%s) : (?P<z%d>%s)(?![\w.])'),
     )))
 _GBOOL = re.compile(r'\bbool (_\d+) = [^;\n]* < %s;' % _GSIZE)
 _GROW = _gchoice(r'_\d+', r'\(\*spvDescriptorSet0\.[a-z]+_c\d+\)\._m0\[(?P<i%s>_\d+) \? [^\]\n]+ : 0\](?:\[[^\]\n]+\]|\.[xyzw])')
+_GCONST_READ = r'\(\*spvDescriptorSet0\.[a-z]+_c(?:[3-9]|\d{2,})\)\._m0\[\d+\]\.[xyzw]'
+_GCONST_COND = r'\d+u? < ' + _GSIZE + r'\)'
+_GCONST_CHOICE = _gchoice(_GCONST_COND, _GCONST_READ)
 _GLEFT = re.compile(r'%s\) \?' % _GSIZE)
 
 def select_guards(msl: str) -> str:
@@ -29,6 +34,10 @@ def select_guards(msl: str) -> str:
         if c not in conds or m.group('i' + n) != c: return m.group(0)
         return 'select(%s, %s, %s)' % (m.group('z' + n), m.group('r' + n), c)
     if bools: msl = _GROW.sub(lambda m: select(m, bools), msl)
+    def select_fixed(m):
+        n = '1' if m.group('q1') else '2'
+        return 'select(%s, %s, %s)' % (m.group('z' + n), m.group('r' + n), m.group('q' + n))
+    msl = _GCONST_CHOICE.sub(select_fixed, msl)
     left = _GLEFT.search(msl) or next((m for m in re.finditer(r'(?<!\[)\b(_\d+) \?', msl) if m.group(1) in bools), None)
     if left:
         line = msl[msl.rfind('\n', 0, left.start()) + 1:left.end() + 100].split('\n')[0].strip()[:160]
@@ -81,6 +90,22 @@ def self_test():
     selected = select_guards(bounded)
     assert 'select(0.0, (*spvDescriptorSet0.fp_c5)._m0[_5 ? _7 : 0].x, _5)' in selected, selected
     assert select_guards(selected) == selected
+
+    fixed_float = (
+        'using namespace metal;\n'
+        'float _150 = abs((68u < %s) ? (*spvDescriptorSet0.fp_c3)._m0[17].x : 0.0);\n'
+    ) % size
+    fixed_float_out = select_guards(fixed_float)
+    assert 'select(0.0, (*spvDescriptorSet0.fp_c3)._m0[17].x, 68u < %s)' % size in fixed_float_out, fixed_float_out
+    assert select_guards(fixed_float_out) == fixed_float_out
+
+    fixed_uint = (
+        'using namespace metal;\n'
+        'bool _58 = as_type<uint>((2u < %s) ? (*spvDescriptorSet0.cp_c3)._m0[0].x : 0u) >= as_type<uint>(_54);\n'
+    ) % size
+    fixed_uint_out = select_guards(fixed_uint)
+    assert 'select(0u, (*spvDescriptorSet0.cp_c3)._m0[0].x, 2u < %s)' % size in fixed_uint_out, fixed_uint_out
+
     source = ('using namespace metal;\n'
               'bool a = as_type<int>(%s.w) != 100;\n'
               'bool b = as_type<int>(%s.w) != 101;\n'
