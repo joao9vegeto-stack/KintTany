@@ -85,7 +85,7 @@ def patch_worker_source(source: str) -> str:
 def self_test() -> None:
     fixture = (
         "import collections\n"
-        "import mugiwara_guard_rewrite, dmsh_geometry,\n"
+        "import dmsh_geometry, dmsh_atomic\n"
         f"{WORKER_MARKER}\n"
         "def finish(key, w, j, c1):\n"
         "    src = precise(src)   # min / max / clamp with Maxwell's NaN results (see precise)\n"
