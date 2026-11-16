@@ -459,7 +459,7 @@ if EXPECTED_ARTIFACT_SIZE and DOWNLOADED_ZIP_SIZE != EXPECTED_ARTIFACT_SIZE:
 if EXPECTED_ARTIFACT_SHA256 and DOWNLOADED_ZIP_SHA256 != EXPECTED_ARTIFACT_SHA256:
     raise RuntimeError(
         "INTEGRIDADE REPROVADA: SHA-256 do ZIP diferente do digest do GitHub. "
-        f"Esperado={EXPECTED_ARTIFACT_SHA256}; recebido={DOWNLOADED_ARTIFACT_SHA256}. "
+        f"Esperado={EXPECTED_ARTIFACT_SHA256}; recebido={DOWNLOADED_ZIP_SHA256}. "
         "A IPA não será extraída nem enviada."
     )
 if not zipfile.is_zipfile(ZIP_PATH):
@@ -468,7 +468,7 @@ if not zipfile.is_zipfile(ZIP_PATH):
 print("DOWNLOAD E SHA-256 DO ARTIFACT CONFIRMADOS.")
 print("Artifact ID:", ARTIFACT_ID)
 print("Tamanho ZIP:", f"{DOWNLOADED_ZIP_SIZE:,}", "bytes")
-print("SHA-256 ZIP:", DOWNLOADED_ARTIFACT_SHA256)
+print("SHA-256 ZIP:", DOWNLOADED_ZIP_SHA256)
 
 # ------------------------------------------------------------
 # 4. EXTRAIR E VALIDAR SOMENTE A IPA
