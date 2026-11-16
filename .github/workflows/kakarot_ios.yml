@@ -246,9 +246,30 @@ jobs:
         run: |
           set -euo pipefail
           brew install xcodegen zstd glslang cmake ninja pkg-config
-          brew list --cask dotnet-sdk >/dev/null 2>&1 || brew install --cask dotnet-sdk
           python -m pip install --upgrade pip
           python -m pip install lz4 'capstone>=5,<6' fonttools zbic backports.zstd google-api-python-client google-auth PyYAML
+
+      - name: Install explicit .NET 10 SDK and ARM64 runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          DOTNET_ROOT="$RUNNER_TEMP/dotnet10-arm64"
+          curl --fail --location --silent --show-error https://dot.net/v1/dotnet-install.sh \
+            --output "$RUNNER_TEMP/dotnet-install.sh"
+          bash "$RUNNER_TEMP/dotnet-install.sh" \
+            --channel 10.0 \
+            --architecture arm64 \
+            --install-dir "$DOTNET_ROOT" \
+            --no-path
+          test -x "$DOTNET_ROOT/dotnet"
+          "$DOTNET_ROOT/dotnet" --list-sdks | grep -E '^10\\.'
+          "$DOTNET_ROOT/dotnet" --list-runtimes | grep -E '^Microsoft\\.NETCore\\.App 10\\.'
+          "$DOTNET_ROOT/dotnet" --info
+          {
+            echo "DOTNET_ROOT=$DOTNET_ROOT"
+            echo "PATH=$DOTNET_ROOT:$PATH"
+          } >> "$GITHUB_ENV"
 
       - name: Clone and pin NX2Apple / NXNative
         shell: bash
@@ -257,6 +278,19 @@ jobs:
           git clone --depth 1 --branch v1.3.1-rc2 https://github.com/LNPANDY/NX2Apple.git NX2Apple
           python NX2Apple/tools/engine.py sync
           test "$(cat NX2Apple/.upstream-ref)" = "81906931262fb25d774cce8bca2db8926439e5a2"
+
+      - name: Preflight .NET 10 shader translator before Drive restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          test "$DOTNET_ROOT" = "$RUNNER_TEMP/dotnet10-arm64"
+          dotnet --list-sdks | grep -E '^10\\.'
+          dotnet --list-runtimes | grep -E '^Microsoft\\.NETCore\\.App 10\\.'
+          xlate="NX2Apple/engine/dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate"
+          test -x "$xlate" || { echo "::error::Pinned shader translator missing or not executable: $xlate"; exit 1; }
+          "$xlate" --source-sha | tee "$RUNNER_TEMP/dmsh-xlate-source-sha.txt"
+          test -s "$RUNNER_TEMP/dmsh-xlate-source-sha.txt"
 
       - name: Restore workspace and external RomFS from Drive (size + SHA-256)
         env:
