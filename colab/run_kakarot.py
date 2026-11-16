@@ -206,10 +206,22 @@ def download_drive_file(api, item: dict, destination: Path) -> None:
     if size != int(item.get("size", -1)):
         part.unlink(missing_ok=True)
         fail(f"Drive size mismatch for {item.get('name')}: received {size}, expected {item.get('size')}.")
-    digest = sha256_file(part)
-    if digest.lower() != str(item.get("sha256", "")).lower():
+    hashes = file_hashes(part)
+    expected_sha256 = str(item.get("sha256", "")).strip().lower()
+    expected_md5 = str(item.get("md5Checksum", "")).strip().lower()
+    if expected_sha256:
+        if hashes["sha256"] != expected_sha256:
+            part.unlink(missing_ok=True)
+            fail(f"Drive SHA-256 mismatch for {item.get('name')}.")
+    elif expected_md5:
+        # Drive v3 list metadata exposes md5Checksum, not a custom sha256 field.
+        if hashes["md5"] != expected_md5:
+            part.unlink(missing_ok=True)
+            fail(f"Drive MD5 mismatch for {item.get('name')}.")
+        print(f"[KaKaRoTiOS] Drive download verified by size + MD5: {item.get('name')}.", flush=True)
+    else:
         part.unlink(missing_ok=True)
-        fail(f"Drive SHA-256 mismatch for {item.get('name')}.")
+        fail(f"Drive returned neither SHA-256 nor MD5 metadata for {item.get('name')}; refusing unverified input.")
     part.replace(destination)
 
 def build_work_archive(work: Path, destination: Path) -> None:
