@@ -8,8 +8,6 @@ on:
       - scripts/audit_kakarot_memory.py
       - scripts/patch_kakarot_ue_allocator.py
       - scripts/validate_kakarot_memory_fix.py
-      - scripts/build_kakarot_shared.py
-      - .github/workflows/kakarot_memory_audit.yml
 
 permissions:
   contents: read

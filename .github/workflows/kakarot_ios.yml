@@ -13,6 +13,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   validate-handoff:
@@ -391,7 +392,7 @@ jobs:
             --handoff handoff.json \
             --destination "$RUNNER_TEMP/kakarot-actions"
 
-      - name: Verify free disk after restoring RomFS and before shader compilation
+      - name: Verify free disk after restoring RomFS and before cached Metal framework assembly
         shell: bash
         run: |
           set -euo pipefail
@@ -406,14 +407,25 @@ jobs:
             exit 1
           fi
 
-      - name: Build Oodle/shaders, iOS Metal, framework, Shared Shell and thin IPA
+      - name: Download the already compiled Kakarot Metal library from successful Build #6
+        uses: actions/download-artifact@v4
+        with:
+          name: KaKaRoTiOS-Kakarot-IPA
+          path: \${{ runner.temp }}/kakarot-metal-seed
+          github-token: \${{ github.token }}
+          repository: \${{ github.repository }}
+          run-id: 43864761674
+
+      - name: Build repaired framework and thin IPA using cached Metal (no shader rebuild)
         shell: bash
         run: |
           set -euo pipefail
           python scripts/build_kakarot_shared.py \
             --nx2apple-root NX2Apple \
             --prepared-json "$RUNNER_TEMP/kakarot-actions/actions-input.json" \
-            --output "$RUNNER_TEMP/kakarot-output"
+            --output "$RUNNER_TEMP/kakarot-output" \
+            --reuse-ipa "$RUNNER_TEMP/kakarot-metal-seed/KaKaRoTiOS.ipa" \
+            --reuse-report "$RUNNER_TEMP/kakarot-metal-seed/build-report.json"
 
       - name: Upload KaKaRoTiOS IPA and report
         uses: actions/upload-artifact@v4

@@ -375,6 +375,153 @@ def validate_table_stamp(profile, ios_msl: Path, chain: str) -> dict:
             "inputs": inputs, "c1_full": str(profile.table("c1_full.tsv")),
             "cb_extent": str(profile.table("cb_extent.tsv"))}
 
+
+PREVIOUS_METAL_RUN_ID = 43864761674
+PREVIOUS_METAL_PACKAGE_KEY = "01a2622118c296274012da182f06801a66fed4f8aa1e8f1db3fe6ef60937ec0a"
+PREVIOUS_METAL_INPUTS = "c1afd2abe10a"
+
+
+def _copy_ipa_member(archive: zipfile.ZipFile, member: str, destination: Path) -> dict:
+    """Stream one verified ZIP member to disk; reading to EOF also checks its ZIP CRC."""
+    try:
+        info = archive.getinfo(member)
+    except KeyError:
+        fail(f"Previous Kakarot IPA is missing required shader component: {member}")
+    if info.file_size <= 0:
+        fail(f"Previous Kakarot IPA contains an empty shader component: {member}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256()
+    written = 0
+    with archive.open(info, "r") as source, destination.open("wb") as target:
+        while True:
+            block = source.read(16 * 1024 * 1024)
+            if not block:
+                break
+            target.write(block)
+            digest.update(block)
+            written += len(block)
+    if written != info.file_size:
+        fail(f"Previous Kakarot IPA member size mismatch for {member}: {written} != {info.file_size}")
+    return {"size": written, "sha256": digest.hexdigest()}
+
+
+def reuse_previous_metal_library(
+    previous_ipa: Path,
+    previous_report_path: Path,
+    work: Path,
+    profile,
+    prep: dict,
+    actual_flags: dict,
+    actual_paks: dict,
+    actual_chain: str,
+) -> tuple[Path, str, dict]:
+    """Reuse the exact Build #6 Metal output; never fall back to shader compilation."""
+    for path, label in ((previous_ipa, "previous Build #6 IPA"),
+                        (previous_report_path, "previous Build #6 report")):
+        if not path.is_file() or path.stat().st_size == 0:
+            fail(f"{label} is missing or empty: {path}")
+    try:
+        report = json.loads(previous_report_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        fail(f"Cannot read previous Build #6 report: {exc}")
+
+    identity = {
+        "project": PROJECT,
+        "branch": BRANCH,
+        "title_id": TITLE_ID,
+        "package_version": prep["package_version"],
+        "nx2apple_tag": NX2APPLE_TAG,
+        "engine_pin": ENGINE_PIN,
+        "main_build_id": prep["main_build_id"],
+        "main_sha256": prep["main_sha256"],
+        "graphics_api": prep["graphics_api"],
+        "shader_chain": actual_chain,
+        "shader_package_key": PREVIOUS_METAL_PACKAGE_KEY,
+    }
+    for key, expected in identity.items():
+        if report.get(key) != expected:
+            fail(
+                f"Refusing stale Metal reuse: Build #6 report {key}={report.get(key)!r}, "
+                f"current build expects {expected!r}."
+            )
+    if actual_chain != "0c434f1b68df":
+        fail(f"Refusing unverified cached Metal chain {actual_chain!r}.")
+    if report.get("unreal_shader_sources") != actual_flags:
+        fail("Build #6 Unreal shader-source classification differs from the current Kakarot inputs.")
+    if report.get("pak_audit") != actual_paks:
+        fail("Build #6 Unreal PAK audit differs from the current Kakarot inputs.")
+
+    metal = report.get("metal_validation") or {}
+    if (metal.get("game") != TITLE_ID or metal.get("chain") != actual_chain
+            or metal.get("inputs") != PREVIOUS_METAL_INPUTS):
+        fail("Build #6 Metal library stamp does not match the known Kakarot chain/input identity.")
+
+    external = report.get("external_game_data") or {}
+    if external.get("romfs_sha256") != prep.get("romfs_sha256"):
+        fail("Build #6 Metal source RomFS SHA-256 differs from the restored Kakarot RomFS.")
+    def aoc_signature(items):
+        return sorted(
+            (str(item.get("name", "")), int(item.get("size", -1)),
+             str(item.get("sha256", "")).lower())
+            for item in (items or [])
+        )
+    if aoc_signature(external.get("aoc_images")) != aoc_signature(prep.get("aoc_images")):
+        fail("Build #6 shader source AOC inventory differs from the current Kakarot AOC inventory.")
+
+    framework_name = f"DmGame{TITLE_ID}.framework"
+    if report.get("framework") != framework_name:
+        fail(f"Build #6 framework identity is unexpected: {report.get('framework')!r}.")
+    member_suffix = f"/{framework_name}/msl/b-{actual_chain}.img"
+    reused_root = work / "shader" / "reused-build6"
+    shutil.rmtree(reused_root, ignore_errors=True)
+    ios_msl = reused_root / "msl"
+    ios_msl.mkdir(parents=True, exist_ok=True)
+    image_destination = ios_msl / f"b-{actual_chain}.img"
+
+    with zipfile.ZipFile(previous_ipa, "r") as archive:
+        candidates = [name for name in archive.namelist() if name.endswith(member_suffix)]
+        if len(candidates) != 1:
+            fail(
+                "Previous Build #6 IPA must contain exactly one Kakarot Metal image "
+                f"ending in {member_suffix!r}; found {len(candidates)}."
+            )
+        image_member = candidates[0]
+        framework_prefix = image_member[:-len(f"msl/b-{actual_chain}.img")]
+        image_info = _copy_ipa_member(archive, image_member, image_destination)
+
+        copied_tables = {}
+        for name in ("shader_map.tsv", "c1_full.tsv", "cb_extent.tsv"):
+            member = framework_prefix + "dm/" + name
+            destination = Path(profile.table(name))
+            copied_tables[name] = _copy_ipa_member(archive, member, destination)
+
+    shader_map = validate_shader_map(profile)
+    if shader_map.stat().st_size != copied_tables["shader_map.tsv"]["size"]:
+        fail("Reused shader_map.tsv changed while being restored.")
+    table_stamp = validate_table_stamp(profile, ios_msl, actual_chain)
+    if table_stamp.get("inputs") != PREVIOUS_METAL_INPUTS:
+        fail("Restored Metal image/table stamp changed during reuse validation.")
+
+    reuse = {
+        "source_run_id": PREVIOUS_METAL_RUN_ID,
+        "source_build_number": 6,
+        "source_artifact": "KaKaRoTiOS-Kakarot-IPA",
+        "source_ipa": previous_ipa.name,
+        "source_shader_package_key": PREVIOUS_METAL_PACKAGE_KEY,
+        "source_shader_count": 75430,
+        "chain": actual_chain,
+        "inputs": PREVIOUS_METAL_INPUTS,
+        "metal_image": image_info,
+        "tables": copied_tables,
+        "shader_split_executed": False,
+        "oodle_decode_executed": False,
+        "metal_compilation_executed": False,
+    }
+    print("[KaKaRoTiOS] Reused Build #6's verified Metal library; Oodle decode, shader split and Metal compilation were NOT run.", flush=True)
+    print(json.dumps(reuse, indent=2), flush=True)
+    return ios_msl, PREVIOUS_METAL_PACKAGE_KEY, reuse
+
+
 def validate_workspace(prepared: dict, work: Path, nx: Path, builder, game_profiles):
     if prepared.get("project") != PROJECT or prepared.get("branch") != BRANCH:
         fail("Prepared input does not belong to the KaKaRoTiOS project/branch.")
@@ -514,6 +661,8 @@ def main() -> None:
     parser.add_argument("--nx2apple-root", type=Path, required=True)
     parser.add_argument("--prepared-json", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--reuse-ipa", type=Path, required=True)
+    parser.add_argument("--reuse-report", type=Path, required=True)
     args = parser.parse_args()
     if sys.platform != "darwin":
         fail("KaKaRoTiOS Route C must run on macOS ARM64.")
@@ -624,80 +773,20 @@ def main() -> None:
         if actual_paks["readable_pak_count"] == 0:
             fail("No readable Kakarot Unreal PAKs are present on macOS.")
 
-        if actual_flags["ue_decode"]:
-            print("[KaKaRoTiOS] Running NXNative's Unreal shader archive extraction and game-owned Oodle decoder on macOS ARM64...", flush=True)
-            builder.decode_ue_shaders(engine, {prepared["package_version"]: version_dir},
-                prepared["package_version"], patched, work, env, logs, profile)
-            decoded_dir = version_dir / "ue_shaders"
-            decoded = sorted(decoded_dir.glob("*.ushaderbytecode")) if decoded_dir.is_dir() else []
-            if not decoded:
-                fail("Unreal/Oodle decode stage did not produce .ushaderbytecode archives.")
-        else:
-            print("[KaKaRoTiOS] This build has no separate Oodle shader-code archive; shader data is inline in Unreal cooked packages.", flush=True)
-
-        # Match Mugiwara4iOS: UE legacy is itself a reason to expose the game-owned
-        # Oodle/LZ5 decoder. Pak v8 can report Zlib for its index while individual
-        # legacy cooked assets still use Oodle/LZ5, so the PAK method list alone
-        # is not a sufficient detector for Kakarot.
-        need_oodle_host = needs_oodle_host(actual_flags, actual_paks)
-        oodle = None
-        if need_oodle_host:
-            print(
-                "[KaKaRoTiOS] Oodle/LZ5 decoder required ("
-                f"oodle_packs={actual_flags['oodle_packs']}, "
-                f"ue_legacy={actual_flags['ue_legacy']}, "
-                f"pak_audit={actual_paks['oodle_host_required']}); "
-                "building the macOS ARM64 helper host...",
-                flush=True,
-            )
-            oodle = lambda: {
-                "DM_OODLE_HOST": str(builder.build_mac_host(engine, work / "tools" / "dmhost", env, logs, profile)),
-                "DM_OODLE_MODULES": str(patched),
-            }
-        else:
-            print("[KaKaRoTiOS] PAK audit and profile classification confirm no game-owned Oodle/LZ5 decoder is required.", flush=True)
-
-        print("[KaKaRoTiOS] Splitting Kakarot shaders on macOS using the exact rewritten main, RomFS and generated profile...", flush=True)
-        shader_package = work / "shader" / "pkg"
-        package_key = builder.split_shaders(
-            py, engine, [romfs_source], [version_dir / "ExeFS" / "main"],
-            shader_package, env, logs, profile, provisional=True, oodle=oodle, dlc_roms=aoc_images)
-        split_log = logs / "shader_split.log"
-        if not split_log.is_file():
-            fail(f"Shader split log is missing; cannot verify cooked-file readability: {split_log}")
-        unreadable_files = unreadable_shader_file_count(
-            split_log.read_text(encoding="utf-8", errors="replace")
-        )
-        if unreadable_files:
-            fail(
-                f"Shader split left {unreadable_files} cooked file(s) unreadable; "
-                "refusing to compile an incomplete Metal library/IPA. "
-                f"Inspect {split_log}."
-            )
-        print("[KaKaRoTiOS] Shader split readability gate: 0 cooked files omitted.", flush=True)
-        if not isinstance(package_key, str) or not re.fullmatch(r"[0-9a-f]{64}", package_key):
-            fail("NXNative shader split did not return a valid SHA-256 package key.")
-        if builder.package_key(shader_package) != package_key:
-            fail("Shader package content key does not match the split result.")
-        shader_map = validate_shader_map(profile)
-        print(f"[KaKaRoTiOS] Shader map generated: {shader_map} ({shader_map.stat().st_size:,} bytes).", flush=True)
-
-        gpu_selection = builder.ios_gpus("none", profile)
-        pull = builder.ios_wants_pulling(profile, gpu_selection, False, env)
-        print(f"[KaKaRoTiOS] Compiling iOS Metal libraries; pulling libraries: {'yes' if pull else 'no'}...", flush=True)
+        # Build #6 already compiled this exact Kakarot shader package.
+        # Restore the verified Metal image/tables. No shader/Oodle rebuild fallback exists.
         metal_start_free_gib = require_disk_headroom(
-            work, "before iOS Metal compilation", minimum_gib=75)
-        ios_msl = builder.build_shaders(
-            py, engine, work / "shader", xlate, env, logs, profile,
-            pkg_key=package_key, mac=False, seen=None, pull=pull)
+            work, "before cached Metal restore", minimum_gib=8)
+        ios_msl, package_key, shader_reuse = reuse_previous_metal_library(
+            args.reuse_ipa.resolve(), args.reuse_report.resolve(),
+            work, profile, prep, actual_flags, actual_paks, actual_chain,
+        )
         metal_end_free_gib = require_disk_headroom(
-            work, "after Metal library publication / before framework copy", minimum_gib=12)
-        chain_lib = ios_msl / f"b-{actual_chain}"
-        chain_img = Path(str(chain_lib) + ".img")
-        if not (chain_lib.is_dir() or chain_img.is_file()):
-            fail(f"iOS Metal shader library is missing: {chain_lib}(.img).")
+            work, "after cached Metal restore", minimum_gib=8)
+        shader_map = validate_shader_map(profile)
+        print(f"[KaKaRoTiOS] Reused shader map: {shader_map} ({shader_map.stat().st_size:,} bytes).", flush=True)
         table_stamp = validate_table_stamp(profile, ios_msl, actual_chain)
-        print("[KaKaRoTiOS] c1_full.tsv, cb_extent.tsv and Metal chain input stamp all verified.", flush=True)
+        print("[KaKaRoTiOS] Reused c1_full.tsv, cb_extent.tsv and Metal chain input stamp all verified.", flush=True)
 
         control = builder.languages_control(version_dir)
         display_name = nacp.name(control) or profile.get("name") or "DRAGON BALL Z: KAKAROT"
@@ -822,11 +911,11 @@ def main() -> None:
             "unreal_shader_sources": actual_flags, "pak_audit": actual_paks,
             "shader_chain": actual_chain, "shader_package_key": package_key,
             "metal_validation": table_stamp,
+            "shader_reuse": shader_reuse,
             "runner_disk_headroom_gib": {
-                "before_metal": metal_start_free_gib,
-                "after_metal_publication": metal_end_free_gib,
-                "minimum_before_metal": 75,
-                "minimum_before_framework_copy": 12,
+                "before_cached_restore": metal_start_free_gib,
+                "after_cached_restore": metal_end_free_gib,
+                "minimum_for_cached_restore": 8,
             },
             "framework": framework_name, "ipa": ipa.name, "ipa_size_bytes": ipa.stat().st_size,
             "pipeline": [
@@ -837,9 +926,8 @@ def main() -> None:
                 "NXNative Mac heap and virtual-region checks against the repaired Unreal hooks",
                 "NXNative ARM64 rewrite and fixup audit",
                 "Drive workspace/RomFS/AOC split with SHA-256 validation",
-                "GitHub Actions macOS ARM64 conditional Oodle processing",
-                "Unreal shader split and profile shader table generation",
-                "iOS Metal compile, c1_full/cb_extent and chain/input stamp validation",
+                "Build #6 verified Metal library restored from its existing IPA artifact; Oodle decode, shader split and iOS Metal compilation were skipped",
+                "Reused shader_map.tsv, c1_full.tsv, cb_extent.tsv and validated the unchanged chain/input stamp",
                 "DmGame.framework build", "NX2Apple Shared Shell build",
                 "ad-hoc signature and thin IPA packaging",
             ],

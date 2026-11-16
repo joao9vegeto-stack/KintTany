@@ -759,7 +759,7 @@
   },
   "created_utc": "2026-11-16T02:55:09.450345+00:00",
   "dispatch_attempt": {
-    "id": "ue4-slot17-memory-repair-20261116-05",
-    "reason": "Run the full KaKaRoTiOS Route C build with the verified UE4 legacy FMallocBinned3 getter-slot-17 host allocator replacement, iPhone guest-memory profile, and main-only rewrite; produce the IPA and build report."
+    "id": "reuse-build6-metal-20261116-06",
+    "reason": "Rebuild the repaired Kakarot main/allocator and Shared Shell while restoring the verified Build #6 Metal library; explicitly skip Oodle decode, shader split and iOS Metal recompilation."
   }
 }
