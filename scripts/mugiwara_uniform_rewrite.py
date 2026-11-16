@@ -54,11 +54,11 @@ def select_guards(msl: str) -> str:
         n = '1' if m.group('q1') else '2'
         cond = m.group('q' + n)
         read = m.group('r' + n)
-        index = re.search(r'(?<=_m0\\[)\\d+(?=\\])', read)
+        index = re.search(r'_m0\[(\d+)\]', read)
         if not index:
-            raise ValueError('fixed uniform guard has no constant word index')
-        safe_index = '(%s) ? %s : 0' % (cond, index.group(0))
-        safe_read = read[:index.start()] + safe_index + read[index.end():]
+            raise ValueError('fixed uniform guard has no constant word index: ' + read[:120])
+        safe_index = '(%s) ? %s : 0' % (cond, index.group(1))
+        safe_read = read[:index.start(1)] + safe_index + read[index.end(1):]
         return 'select(%s, %s, %s)' % (m.group('z' + n), safe_read, cond)
     msl = _GCONST_CHOICE.sub(select_fixed, msl)
     left = _GLEFT.search(msl) or next((m for m in re.finditer(r'(?<!\[)\b(_\d+) \?', msl) if m.group(1) in bools), None)
