@@ -369,6 +369,7 @@ def build_actions_input_manifest(
         if not name or Path(name).name != name:
             fail(f"Unsafe AOC image name in Colab manifest: {name!r}")
         aoc_paths.append(str(aoc_dir / name))
+    aoc_paths.sort()
 
     prepared = dict(prep)
     prepared.update({
