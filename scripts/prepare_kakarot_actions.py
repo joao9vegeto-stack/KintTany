@@ -2,6 +2,10 @@
 """GitHub Actions restore: verify the KaKaRoTiOS Drive handoff, workspace archive and external RomFS."""
 from __future__ import annotations
 import argparse
+import concurrent.futures as cf
+import threading
+import time
+from urllib.parse import quote
 import hashlib
 import json
 import os
@@ -46,38 +50,255 @@ def verify_drive_metadata(api, item: dict, label: str) -> None:
         fail(f"Drive {label} has no local SHA-256 in the Colab manifest.")
     print(f"[KaKaRoTiOS] Drive {label} metadata verified: {record['size']} bytes; MD5 matches.", flush=True)
 
-def download_drive_file(api, item: dict, destination: Path) -> None:
+class DriveRangeNotSupported(RuntimeError):
+    pass
+
+
+def _drive_pwrite_all(fd: int, data: bytes, offset: int) -> None:
+    """Write a range at an exact offset; os.pwrite avoids shared-file-pointer races."""
+    view = memoryview(data)
+    while view:
+        written = os.pwrite(fd, view, offset)
+        if written <= 0:
+            raise OSError("short positional write while restoring Drive data")
+        offset += written
+        view = view[written:]
+
+
+def _drive_ranges(size: int, chunk_size: int) -> list[tuple[int, int]]:
+    """Inclusive HTTP byte ranges covering [0, size) exactly once."""
+    return [
+        (start, min(start + chunk_size, size) - 1)
+        for start in range(0, size, chunk_size)
+    ]
+
+
+def download_drive_file(
+    api,
+    credentials,
+    item: dict,
+    destination: Path,
+    parallel_workers: int = 6,
+) -> str:
+    """Download, verify once, then atomically promote. Large Drive blobs use parallel HTTP ranges."""
     from googleapiclient.http import MediaIoBaseDownload
+    from http.client import IncompleteRead
+
+    expected_size = int(item.get("size", -1))
+    expected_sha = str(item.get("sha256", "")).lower()
+    if expected_size <= 0 or len(expected_sha) != 64 or any(
+        char not in "0123456789abcdef" for char in expected_sha
+    ):
+        fail(f"Incomplete Drive size/SHA-256 metadata for {item.get('name')!r}.")
+
     destination.parent.mkdir(parents=True, exist_ok=True)
     part = destination.with_suffix(destination.suffix + ".part")
-    request = api.files().get_media(fileId=item["id"], supportsAllDrives=True)
-    with part.open("wb") as stream:
-        downloader = MediaIoBaseDownload(stream, request, chunksize=8 * 1024 * 1024)
-        done, retries = False, 0
-        while not done:
+    part.unlink(missing_ok=True)
+    transfer_started = time.monotonic()
+    range_bytes = 64 * 1024 * 1024
+    stream_bytes = 8 * 1024 * 1024
+    use_ranges = expected_size >= range_bytes
+    range_supported = False
+
+    if use_ranges:
+        from google.auth.transport.requests import AuthorizedSession
+
+        local = threading.local()
+        url = f"https://www.googleapis.com/drive/v3/files/{quote(str(item['id']), safe='')}"
+        params = {"alt": "media", "supportsAllDrives": "true"}
+
+        def session_for_thread():
+            session = getattr(local, "session", None)
+            if session is None:
+                session = AuthorizedSession(credentials)
+                local.session = session
+            return session
+
+        # Probe the exact endpoint before allocating workers. If Drive/proxy ignores
+        # Range, use the proven sequential client rather than corrupting a sparse file.
+        with session_for_thread().get(
+            url,
+            params=params,
+            headers={"Range": "bytes=0-0", "Accept-Encoding": "identity"},
+            stream=True,
+            timeout=(30, 180),
+        ) as response:
+            if response.status_code == 206:
+                wanted = f"bytes 0-0/{expected_size}"
+                if response.headers.get("Content-Range", "").strip() != wanted:
+                    fail(
+                        f"Drive returned an invalid range probe for {item.get('name')}: "
+                        f"{response.headers.get('Content-Range')!r}, expected {wanted!r}."
+                    )
+                probe = next(response.iter_content(chunk_size=1), b"")
+                if len(probe) != 1:
+                    fail(f"Drive returned an empty range probe for {item.get('name')}.")
+                range_supported = True
+            elif response.status_code == 200:
+                range_supported = False
+            else:
+                response.raise_for_status()
+                fail(
+                    f"Unexpected Drive range-probe status for {item.get('name')}: "
+                    f"{response.status_code}."
+                )
+
+        if range_supported:
+            ranges = _drive_ranges(expected_size, range_bytes)
+            workers = max(1, min(int(parallel_workers), len(ranges)))
+            fd = os.open(part, os.O_CREAT | os.O_RDWR | os.O_TRUNC, 0o644)
             try:
-                status, done = downloader.next_chunk()
-                retries = 0
-            except (TimeoutError, ConnectionError, OSError) as exc:
-                retries += 1
-                if retries > 10:
-                    raise RuntimeError(f"Drive download failed after {retries-1} retries at {downloader._progress}: {exc}") from exc
-                import time
-                delay = min(2 ** min(retries, 5), 30)
-                print(f"[KaKaRoTiOS] Drive interrupted at {downloader._progress}; retry {retries}/10 in {delay}s.", flush=True)
-                time.sleep(delay)
-                continue
-            if status:
-                print(f"[KaKaRoTiOS] Drive {item.get('name', item['id'])}: {status.progress()*100:.1f}%", flush=True)
-    size = part.stat().st_size
-    if size != int(item.get("size", -1)):
+                os.ftruncate(fd, expected_size)
+
+                def fetch_range(start: int, end: int) -> int:
+                    expected_length = end - start + 1
+                    for attempt in range(1, 6):
+                        try:
+                            with session_for_thread().get(
+                                url,
+                                params=params,
+                                headers={
+                                    "Range": f"bytes={start}-{end}",
+                                    "Accept-Encoding": "identity",
+                                },
+                                stream=True,
+                                timeout=(30, 180),
+                            ) as response:
+                                if response.status_code == 200:
+                                    raise DriveRangeNotSupported(
+                                        "Drive stopped honoring byte ranges mid-transfer."
+                                    )
+                                if response.status_code != 206:
+                                    response.raise_for_status()
+                                    raise RuntimeError(
+                                        f"Drive range {start}-{end} returned HTTP {response.status_code}."
+                                    )
+                                wanted = f"bytes {start}-{end}/{expected_size}"
+                                actual = response.headers.get("Content-Range", "").strip()
+                                if actual != wanted:
+                                    raise RuntimeError(
+                                        f"Drive Content-Range mismatch: {actual!r}, expected {wanted!r}."
+                                    )
+                                written = 0
+                                for block in response.iter_content(chunk_size=stream_bytes):
+                                    if not block:
+                                        continue
+                                    if written + len(block) > expected_length:
+                                        raise RuntimeError(
+                                            f"Drive range {start}-{end} exceeded its declared length."
+                                        )
+                                    _drive_pwrite_all(fd, block, start + written)
+                                    written += len(block)
+                                if written != expected_length:
+                                    raise IncompleteRead(
+                                        f"Drive range {start}-{end}: received {written}/{expected_length} bytes."
+                                    )
+                                return written
+                        except DriveRangeNotSupported:
+                            raise
+                        except Exception as exc:
+                            if attempt >= 5:
+                                raise RuntimeError(
+                                    f"Drive range {start}-{end} failed after {attempt} attempts: {exc}"
+                                ) from exc
+                            delay = min(2 ** (attempt - 1), 16)
+                            print(
+                                f"[KaKaRoTiOS] Drive range {start}-{end} interrupted; "
+                                f"retry {attempt}/5 in {delay}s ({type(exc).__name__}).",
+                                flush=True,
+                            )
+                            time.sleep(delay)
+                    raise RuntimeError(f"Drive range {start}-{end} exhausted its retry budget.")
+
+                completed = 0
+                next_report = max(256 * 1024 * 1024, int(expected_size * 0.02))
+                report_at = next_report
+                try:
+                    with cf.ThreadPoolExecutor(max_workers=workers) as pool:
+                        futures = [
+                            pool.submit(fetch_range, start, end)
+                            for start, end in ranges
+                        ]
+                        for future in cf.as_completed(futures):
+                            completed += future.result()
+                            if completed >= report_at or completed == expected_size:
+                                elapsed = max(time.monotonic() - transfer_started, 0.001)
+                                rate = completed / elapsed / (1024 * 1024)
+                                print(
+                                    f"[KaKaRoTiOS] Drive {item.get('name', item['id'])}: "
+                                    f"{completed / expected_size:.1%} "
+                                    f"({completed / 1024**3:.2f}/{expected_size / 1024**3:.2f} GiB), "
+                                    f"{rate:.1f} MiB/s, {workers} range workers.",
+                                    flush=True,
+                                )
+                                report_at += next_report
+                except DriveRangeNotSupported:
+                    range_supported = False
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+
+    if not range_supported:
+        if use_ranges:
+            print(
+                f"[KaKaRoTiOS] Drive does not honor byte ranges for {item.get('name')}; "
+                "falling back to the verified sequential downloader.",
+                flush=True,
+            )
         part.unlink(missing_ok=True)
-        fail(f"Drive size mismatch for {item.get('name')}: {size} != {item.get('size')}.")
-    digest = sha256_file(part)
-    if digest.lower() != str(item.get("sha256", "")).lower():
+        request = api.files().get_media(fileId=item["id"], supportsAllDrives=True)
+        with part.open("wb") as stream:
+            downloader = MediaIoBaseDownload(stream, request, chunksize=32 * 1024 * 1024)
+            done, retries = False, 0
+            while not done:
+                try:
+                    status, done = downloader.next_chunk()
+                    retries = 0
+                except (IncompleteRead, TimeoutError, ConnectionError, OSError) as exc:
+                    retries += 1
+                    if retries > 10:
+                        raise RuntimeError(
+                            f"Drive download failed after {retries-1} retries at "
+                            f"{downloader._progress}: {exc}"
+                        ) from exc
+                    delay = min(2 ** min(retries, 5), 30)
+                    print(
+                        f"[KaKaRoTiOS] Drive transfer interrupted at {downloader._progress}; "
+                        f"retry {retries}/10 in {delay}s ({type(exc).__name__}).",
+                        flush=True,
+                    )
+                    time.sleep(delay)
+                    continue
+                if status:
+                    elapsed = max(time.monotonic() - transfer_started, 0.001)
+                    rate = downloader._progress / elapsed / (1024 * 1024)
+                    print(
+                        f"[KaKaRoTiOS] Drive {item.get('name', item['id'])}: "
+                        f"{status.progress()*100:.1f}%, {rate:.1f} MiB/s.",
+                        flush=True,
+                    )
+
+    actual_size = part.stat().st_size
+    if actual_size != expected_size:
+        part.unlink(missing_ok=True)
+        fail(
+            f"Drive size mismatch for {item.get('name')}: "
+            f"{actual_size} != {expected_size}."
+        )
+    # One full-file SHA pass only. Callers compare the manifest digests before
+    # transfer and reuse this verified digest instead of rereading 14 GiB.
+    digest = sha256_file(part).lower()
+    if digest != expected_sha:
         part.unlink(missing_ok=True)
         fail(f"Drive SHA-256 mismatch for {item.get('name')}.")
     part.replace(destination)
+    elapsed = max(time.monotonic() - transfer_started, 0.001)
+    print(
+        f"[KaKaRoTiOS] Drive verified {item.get('name', item['id'])}: "
+        f"{actual_size:,} bytes, SHA-256 OK, average {actual_size / elapsed / (1024 * 1024):.1f} MiB/s.",
+        flush=True,
+    )
+    return digest
 
 def extract_verified_archive(archive: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
@@ -111,6 +332,74 @@ def extract_verified_archive(archive: Path, destination: Path) -> None:
         process.stdout.close()
     if process.wait() != 0:
         fail("zstd/tar workspace extraction failed.")
+
+
+BUILDER_PREP_COMPARE_KEYS = (
+    "project", "title_id", "package_version", "nx2apple_tag", "engine_pin",
+    "profile_type", "profile_source", "profile_relative_dir",
+    "modules", "main_build_id", "main_sha256", "rewrite_audit",
+    "graphics_api", "unreal_shader_sources", "pak_audit", "shader_chain",
+    "romfs_relative_path", "romfs_id_relative_path",
+    "romfs_size", "romfs_sha256", "aoc_relative_dir", "aoc_count",
+    "survey_relative_path", "survey_size", "survey_sha256",
+    "input_package_count", "input_dlc_package_count", "input_packages",
+)
+
+
+def build_actions_input_manifest(
+    prep: dict,
+    handoff: dict,
+    work: Path,
+    base_record: dict,
+    update_record: dict,
+    game_data: dict,
+) -> dict:
+    """Project the complete Colab manifest into Actions input without dropping contract fields."""
+    romfs = work.joinpath(*safe_relative(prep["romfs_relative_path"], "RomFS").parts)
+    identity = work.joinpath(*safe_relative(prep["romfs_id_relative_path"], "RomFS identity").parts)
+    survey = work.joinpath(*safe_relative(prep["survey_relative_path"], "survey").parts)
+    profile_dir = work.joinpath(*safe_relative(prep["profile_relative_dir"], "profile").parts)
+    exefs = work / "extract" / prep["package_version"] / "ExeFS"
+    patched = work / f"patched_{prep['package_version']}"
+    aoc_dir = work.joinpath(*safe_relative(prep.get("aoc_relative_dir", "aoc"), "AOC").parts)
+    aoc_manifest = prep.get("aoc_images", [])
+    aoc_paths = []
+    for item in aoc_manifest:
+        name = str(item.get("name", ""))
+        if not name or Path(name).name != name:
+            fail(f"Unsafe AOC image name in Colab manifest: {name!r}")
+        aoc_paths.append(str(aoc_dir / name))
+
+    prepared = dict(prep)
+    prepared.update({
+        "branch": BRANCH,
+        "request_id": handoff["request_id"],
+        "work_dir": str(work),
+        "romfs_path": str(romfs),
+        "romfs_id_path": str(identity),
+        "survey_path": str(survey),
+        "profile_dir": str(profile_dir),
+        "exefs_dir": str(exefs),
+        "patched_dir": str(patched),
+        "aoc_dir": str(aoc_dir),
+        "aoc_image_manifest": aoc_manifest,
+        "aoc_images": aoc_paths,
+        "base_package": base_record,
+        "update_package": update_record,
+        "game_data": game_data,
+    })
+    return prepared
+
+
+def validate_actions_input_projection(prepared: dict, prep: dict) -> None:
+    for key in BUILDER_PREP_COMPARE_KEYS:
+        if prepared.get(key) != prep.get(key):
+            fail(f"Actions input projection disagrees with Colab workspace on {key}.")
+    if prepared.get("aoc_image_manifest") != prep.get("aoc_images"):
+        fail("Actions input AOC metadata manifest differs from the Colab workspace.")
+    if len(prepared.get("aoc_images", [])) != int(prep.get("aoc_count", -1)):
+        fail("Actions input AOC path count differs from the Colab manifest.")
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -244,8 +533,8 @@ def main() -> None:
     shutil.rmtree(root, ignore_errors=True)
     root.mkdir(parents=True)
     archive = root / "kakarot-work.tar.zst"
-    print("[KaKaRoTiOS] Downloading Colab workspace archive and verifying SHA-256...", flush=True)
-    download_drive_file(api, handoff["work_archive"], archive)
+    print("[KaKaRoTiOS] Downloading Colab workspace archive with parallel Drive ranges (where supported)...", flush=True)
+    download_drive_file(api, credentials, handoff["work_archive"], archive)
     work = root / "work"
     print("[KaKaRoTiOS] Restoring only the prepared game workspace...", flush=True)
     extract_verified_archive(archive, work)
@@ -277,41 +566,22 @@ def main() -> None:
         fail("Workspace archive contains original package/key material: "
              + ", ".join(str(p.relative_to(work)) for p in forbidden[:12]))
 
+    # Resolve all paths and validate the small workspace artifacts BEFORE the 24.3 GB RomFS transfer.
     romfs_rel = safe_relative(prep["romfs_relative_path"], "RomFS")
     identity_rel = safe_relative(prep["romfs_id_relative_path"], "RomFS identity")
     aoc_rel = safe_relative(prep.get("aoc_relative_dir", "aoc"), "AOC")
+    survey_rel = safe_relative(prep["survey_relative_path"], "survey")
+    profile_rel = safe_relative(prep["profile_relative_dir"], "profile")
     if str(game_data.get("aoc_relative_dir", "aoc")) != str(aoc_rel):
         fail("Drive handoff AOC relative path differs from Colab.")
     romfs = work.joinpath(*romfs_rel.parts)
     identity = work.joinpath(*identity_rel.parts)
     aoc_dir = work.joinpath(*aoc_rel.parts)
-    # AOC is stored separately on Drive, never inside the compressed workspace.
-    bundled_aoc = [p for p in aoc_dir.rglob("*") if p.is_file()] if aoc_dir.exists() else []
-    if bundled_aoc:
-        fail("Workspace archive unexpectedly contains AOC images; AOC must be restored from its separate Drive folder.")
-    aoc_dir.mkdir(parents=True, exist_ok=True)
-    print(f"[KaKaRoTiOS] Restoring {len(aoc_records)} AOC image(s) separately from Drive...", flush=True)
-    for item in aoc_records:
-        name = Path(item["name"]).name
-        if name != item["name"]:
-            fail(f"Unsafe AOC filename: {item['name']}")
-        download_drive_file(api, item, aoc_dir / name)
-    restored_aoc = sorted(p for p in aoc_dir.glob("*.img") if p.is_file() and not p.is_symlink())
-    if {p.name for p in restored_aoc} != {x["name"] for x in aoc_records}:
-        fail("Restored AOC image filenames differ from the Drive handoff.")
-    for path in restored_aoc:
-        record = next(x for x in aoc_records if x["name"] == path.name)
-        if path.stat().st_size != int(record["size"]) or sha256_file(path) != record["sha256"]:
-            fail(f"Restored AOC image size/SHA-256 mismatch: {path.name}")
-    print("[KaKaRoTiOS] Restoring external RomFS as a separate Drive object...", flush=True)
-    download_drive_file(api, romfs_record, romfs)
-    if romfs.stat().st_size != int(prep["romfs_size"]):
-        fail("Restored RomFS size differs from Colab.")
-    romfs_sha = sha256_file(romfs)
-    if romfs_sha != prep["romfs_sha256"] or romfs_sha != romfs_record["sha256"]:
-        fail("Restored RomFS SHA-256 differs from Colab and/or Drive.")
-    survey_rel = safe_relative(prep["survey_relative_path"], "survey")
     survey = work.joinpath(*survey_rel.parts)
+    profile_dir = work.joinpath(*profile_rel.parts)
+    exefs = work / "extract" / prep["package_version"] / "ExeFS"
+    patched = work / f"patched_{prep['package_version']}"
+
     if not survey.is_file() or survey.stat().st_size != int(prep["survey_size"]):
         fail("Restored Kakarot survey report is missing or has the wrong size.")
     if sha256_file(survey) != prep["survey_sha256"]:
@@ -328,17 +598,11 @@ def main() -> None:
             or identity_json.get("sha256") != romfs_record["sha256"]):
         fail("RomFS identity sidecar does not match the restored game/version/bytes/SHA-256.")
 
-    profile_rel = safe_relative(prep["profile_relative_dir"], "profile")
-    profile_dir = work.joinpath(*profile_rel.parts)
     profile_file = profile_dir / "game.tsv"
     if not profile_file.is_file():
         fail("Generated Kakarot game.tsv profile is missing.")
-    profile_text = profile_file.read_text(encoding="utf-8")
-    if "Provisional game profile" not in profile_text:
+    if "Provisional game profile" not in profile_file.read_text(encoding="utf-8"):
         fail("Restored profile is not the NXNative-generated provisional profile.")
-    exefs = work / "extract" / prep["package_version"] / "ExeFS"
-    main = exefs / "main"
-    patched = work / f"patched_{prep['package_version']}"
     for name in prep["modules"]:
         if not (patched / f"{name}.patched.bin").is_file():
             fail(f"Restored ARM64 rewrite output is missing for {name}.")
@@ -350,44 +614,45 @@ def main() -> None:
             fail(f"Restored ARM64 module SHA-256 mismatch: {name}.patched.bin")
         if sha256_file(patched / f"{name}.fixups.tsv") != item["fixups_sha256"]:
             fail(f"Restored ARM64 fixup audit SHA-256 mismatch: {name}.fixups.tsv")
+    main = exefs / "main"
     for path in (main, patched / "main.patched.bin", patched / "main.fixups.tsv",
                  patched / "main.cuts.tsv", patched / "main.obs.tsv"):
         if not path.is_file():
             fail(f"Restored source/rewrite artifact missing: {path.relative_to(work)}")
 
-    prepared = {
-        "project": PROJECT, "branch": BRANCH, "title_id": TITLE_ID,
-        "package_version": prep["package_version"],
-        "nx2apple_tag": NX2APPLE_TAG, "engine_pin": ENGINE_PIN,
-        "request_id": handoff["request_id"],
-        "work_dir": str(work),
-        "romfs_path": str(romfs),
-        "romfs_id_path": str(identity),
-        "survey_path": str(survey),
-        "survey_sha256": prep["survey_sha256"],
-        "profile_dir": str(profile_dir),
-        "exefs_dir": str(exefs),
-        "patched_dir": str(patched),
-        "profile_type": prep["profile_type"],
-        "profile_source": prep["profile_source"],
-        "modules": prep["modules"],
-        "input_package_count": prep["input_package_count"],
-        "input_dlc_package_count": prep["input_dlc_package_count"],
-        "main_build_id": prep["main_build_id"],
-        "main_sha256": prep["main_sha256"],
-        "rewrite_audit": prep["rewrite_audit"],
-        "graphics_api": prep["graphics_api"],
-        "unreal_shader_sources": prep["unreal_shader_sources"],
-        "pak_audit": prep["pak_audit"],
-        "shader_chain": prep["shader_chain"],
-        "input_packages": prep["input_packages"],
-        "aoc_dir": str(aoc_dir),
-        "aoc_images": [str(p) for p in restored_aoc],
-        "aoc_count": len(restored_aoc),
-        "base_package": base_record,
-        "update_package": update_record,
-        "game_data": game_data,
-    }
+    prepared = build_actions_input_manifest(
+        prep, handoff, work, base_record, update_record, game_data
+    )
+    validate_actions_input_projection(prepared, prep)
+    print("[KaKaRoTiOS] Builder manifest contract validated before large-file transfer.", flush=True)
+
+    bundled_aoc = [p for p in aoc_dir.rglob("*") if p.is_file()] if aoc_dir.exists() else []
+    if bundled_aoc:
+        fail("Workspace archive unexpectedly contains AOC images; AOC must be restored from its separate Drive folder.")
+    aoc_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[KaKaRoTiOS] Restoring {len(aoc_records)} AOC image(s) separately from Drive...", flush=True)
+    for item in aoc_records:
+        name = Path(item["name"]).name
+        if name != item["name"]:
+            fail(f"Unsafe AOC filename: {name}")
+        download_drive_file(api, credentials, item, aoc_dir / name)
+    restored_aoc = sorted(p for p in aoc_dir.glob("*.img") if p.is_file() and not p.is_symlink())
+    if {p.name for p in restored_aoc} != {x["name"] for x in aoc_records}:
+        fail("Restored AOC image filenames differ from the Drive handoff.")
+    for path in restored_aoc:
+        record = next(x for x in aoc_records if x["name"] == path.name)
+        if path.stat().st_size != int(record["size"]):
+            fail(f"Restored AOC image size mismatch: {path.name}")
+    if [str(p) for p in restored_aoc] != prepared["aoc_images"]:
+        fail("Restored AOC image path list differs from the prevalidated Actions input.")
+
+    print("[KaKaRoTiOS] Restoring external RomFS with 6 parallel 64 MiB Drive ranges (range probe + sequential fallback)...", flush=True)
+    romfs_sha = download_drive_file(api, credentials, romfs_record, romfs)
+    if romfs.stat().st_size != int(prep["romfs_size"]):
+        fail("Restored RomFS size differs from Colab.")
+    if romfs_sha != prep["romfs_sha256"] or romfs_sha != romfs_record["sha256"]:
+        fail("Restored RomFS SHA-256 differs from Colab and/or Drive.")
+
     output_path = root / "actions-input.json"
     output_path.write_text(json.dumps(prepared, indent=2) + "\n", encoding="utf-8")
     print("[KaKaRoTiOS] Actions input validated:", output_path)
