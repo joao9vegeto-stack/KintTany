@@ -8,6 +8,7 @@ on:
       - scripts/audit_kakarot_memory.py
       - scripts/patch_kakarot_ue_allocator.py
       - scripts/validate_kakarot_memory_fix.py
+      - scripts/build_kakarot_shared.py
       - .github/workflows/kakarot_memory_audit.yml
 
 permissions:
@@ -62,4 +63,45 @@ jobs:
             --engine-root "$RUNNER_TEMP/NX2Apple/engine" \
             --handoff "$GITHUB_WORKSPACE/handoff.json" \
             --destination "$RUNNER_TEMP/kakarot-memory-audit"
+
+      - name: Validate production Kakarot build integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile scripts/build_kakarot_shared.py scripts/patch_kakarot_ue_allocator.py scripts/validate_kakarot_memory_fix.py
+          python - <<'PY'
+          import sys
+          import tempfile
+          from pathlib import Path
+          sys.path.insert(0, "scripts")
+          import build_kakarot_shared as build
+
+          source = Path("scripts/build_kakarot_shared.py").read_text(encoding="utf-8")
+          for required in (
+              "apply_kakarot_unreal_memory_fix(",
+              "KAKAROT_ALLOCATOR_SLOT = 17",
+              "OBS_UE_MALLOC_verified",
+              "OBS_UE_REGION_verified",
+              "sdk_region_cuts",
+              '"unreal_memory_fix":',
+          ):
+              assert required in source, f"production builder is missing {required}"
+
+          with tempfile.TemporaryDirectory(prefix="kakarot-profile-contract-") as temp:
+              profile = Path(temp) / "game.tsv"
+              profile.write_text(
+                  "mem_reserve\\t0x1028000000\\n"
+                  "mem_alias\\t0x1000000000\\n"
+                  "mem_stack\\t0x10000000\\n"
+                  "app_pool\\t0xCD500000\\n"
+                  "sys_resource\\t0x1000000\\n",
+                  encoding="utf-8",
+              )
+              build.update_profile_values(profile, build.KAKAROT_IPHONE_MEMORY)
+              rows = profile.read_text(encoding="utf-8").splitlines()
+              for key, value in build.KAKAROT_IPHONE_MEMORY.items():
+                  assert rows.count(f"{key}\\t{value}") == 1
+              assert "sys_resource\\t0x1000000" in rows
+          print("KaKaRoTiOS production memory-fix integration contract: OK")
+          PY
 
