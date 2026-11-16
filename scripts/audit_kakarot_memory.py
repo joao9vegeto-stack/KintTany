@@ -129,6 +129,42 @@ def main() -> None:
     print("\n=== PINNED GENERIC UNREAL ENGINE-REGION DETECTOR ===", flush=True)
     ue_region_output = run_capture([sys.executable, str(tools / "ue_region.py"), str(main)])
 
+    # Temporarily whitelist slot 17 to expose its vtable entries. This is read-only:
+    # no engine file, game module, profile, or rewrite output is modified.
+    print("\\n=== SLOT-17 FMallocBinned3 VTABLE DISASSEMBLY (diagnostic only) ===", flush=True)
+    sys.path.insert(0, str(tools))
+    import nso
+    import ue_malloc
+    module = nso.read(str(main))
+    image = bytes(module.image)
+    original_layouts = dict(ue_malloc.LAYOUTS)
+    ue_malloc.LAYOUTS[17] = "diagnostic unknown slot-17 layout"
+    calls, vtable, getter_slot, allocator_reason = ue_malloc.find(
+        image, module.text_end, module.segments[1][0], module.segments[2][0])
+    ue_malloc.LAYOUTS.clear()
+    ue_malloc.LAYOUTS.update(original_layouts)
+    print("allocator_reason=" + str(allocator_reason), flush=True)
+    print("constructor_calls=" + repr([hex(x) for x in (calls or ())]), flush=True)
+    print("vtable=" + (hex(vtable) if vtable is not None else "none")
+          + " getter_slot=" + str(getter_slot), flush=True)
+    if vtable is not None:
+        relocated = ue_malloc.relocated(image)
+        word_value = lambda offset: relocated.get(
+            offset, int.from_bytes(image[offset:offset + 8], "little"))
+        from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
+        disassembler = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
+        for index in range(0, min(24, getter_slot + 5)):
+            pointer = word_value(vtable + index * 8)
+            print(f"\\nVT[{index}] = {pointer:#x}", flush=True)
+            if 0 < pointer < module.text_end:
+                decoded = list(disassembler.disasm(
+                    image[pointer:min(pointer + 0x60, module.text_end)], pointer))
+                print(" | ".join(
+                    f"{ins.address:#x}: {ins.mnemonic} {ins.op_str}".rstrip()
+                    for ins in decoded[:8]), flush=True)
+            else:
+                print("(not a code pointer in main text)", flush=True)
+
     print("\n=== DIAGNOSTIC VERDICT ===", flush=True)
     print("allocator_detector_has_call_sites=" + str(bool(re.search(r"FMallocBinned3 .*constructor", ue_malloc_output))), flush=True)
     print("engine_region_detector_has_gate=" + str(bool(re.search(r"reserved at .*nninitStartup", ue_region_output))), flush=True)
