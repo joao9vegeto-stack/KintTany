@@ -350,6 +350,7 @@ jobs:
           import sys
           sys.path.insert(0, "scripts")
           import mugiwara_shader_diagnostic as diagnostic
+          diagnostic.shader_map_fixture_test()
           tool_dir = Path("NX2Apple/engine/dm/gfx/tools")
           generated = []
           try:
@@ -365,7 +366,7 @@ jobs:
                   "mugiwara_uniform_rewrite_diag.py",
               ):
                   (tool_dir / name).unlink(missing_ok=True)
-          print("Pinned NXNative sidecar compile: baseline OFF and official uniform-tests ON: OK")
+          print("Pinned NXNative sidecar compile: baseline OFF and official uniform pipeline ON; shader-map parser fixture: OK")
           PY
       - name: Restore workspace, parallel-range RomFS and concurrent unique-title-ID AOC images from Drive (SHA-256)
         env:
@@ -396,6 +397,7 @@ jobs:
             ${{ runner.temp }}/mugiwara-actions/work/logs/**
             ${{ runner.temp }}/mugiwara-actions/work/shader/progress.json
             ${{ runner.temp }}/mugiwara-actions/work/shader-diagnostic/**
+            ${{ runner.temp }}/mugiwara-actions/work/profile/**/shader_map.tsv
             ${{ runner.temp }}/mugiwara-actions/actions-input.json
             ${{ runner.temp }}/mugiwara-output/Mugiwara4iOS-shader-diagnostic.json
           if-no-files-found: ignore

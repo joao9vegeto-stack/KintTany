@@ -12,6 +12,7 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 
 TITLE_ID = "01008FE00E2F6000"
@@ -33,35 +34,85 @@ def select_even(items: list[tuple[str, str]], count: int) -> list[tuple[str, str
     return [items[i] for i in indices]
 
 
+SHADER_MAP_HEADER = ("package", "index", "stage", "dm_ctl_sha16", "source")
+MAP_STAGE_NAMES = {
+    "vertex": "vs",
+    "hull": "hs",
+    "domain": "ds",
+    "geometry": "gs",
+    "pixel": "ps",
+    "compute": "cs",
+    "task": "ts",
+    "mesh": "ms",
+}
+
+
 def shader_sample(shader_map: Path) -> tuple[list[str], dict]:
     stages: dict[str, dict[str, str]] = collections.defaultdict(dict)
+    map_stage_counts: collections.Counter = collections.Counter()
+    header_seen = False
+    data_rows = 0
     with shader_map.open("r", encoding="utf-8", errors="replace") as stream:
-        for line in stream:
-            if not line.strip() or line.startswith("#") or line.startswith("package\t"):
+        for line_number, line in enumerate(stream, 1):
+            if not line.strip() or line.startswith("#"):
                 continue
             fields = line.rstrip("\n").split("\t")
-            if len(fields) < 5:
+            if tuple(fields) == SHADER_MAP_HEADER:
+                header_seen = True
                 continue
-            stage, key, source = fields[2], fields[3], fields[4]
-            if re.fullmatch(r"[0-9a-f]{16}", key):
-                stages[stage].setdefault(key, source)
+            if not header_seen:
+                fail(f"Shader map line {line_number} appeared before the expected header {SHADER_MAP_HEADER!r}: {line[:160]!r}")
+            if len(fields) != 5:
+                fail(f"Shader map line {line_number} has {len(fields)} columns, expected 5: {line[:160]!r}")
+            package, index, stage_name, key, source = fields
+            stage = MAP_STAGE_NAMES.get(stage_name)
+            if stage is None:
+                fail(f"Shader map line {line_number} has unknown stage {stage_name!r}.")
+            if not re.fullmatch(r"[0-9a-f]{32}", key):
+                fail(f"Shader map line {line_number} has invalid 16-byte SHA-256 key {key!r}.")
+            map_stage_counts[stage_name] += 1
+            stages[stage].setdefault(key, source)
+            data_rows += 1
+    if not header_seen:
+        fail(f"Shader map header missing; expected tab-separated columns {SHADER_MAP_HEADER!r}.")
     chosen = (
-        select_even(sorted(stages.get("ps", {}).items()), PS_COUNT)
-        + select_even(sorted(stages.get("vs", {}).items()), VS_COUNT)
-        + select_even(sorted(stages.get("cs", {}).items()), CS_COUNT)
+        [("ps", key, source) for key, source in select_even(sorted(stages.get("ps", {}).items()), PS_COUNT)]
+        + [("vs", key, source) for key, source in select_even(sorted(stages.get("vs", {}).items()), VS_COUNT)]
+        + [("cs", key, source) for key, source in select_even(sorted(stages.get("cs", {}).items()), CS_COUNT)]
     )
     if len(chosen) < 8:
-        fail(f"Shader map yielded too few sample keys: {len(chosen)}.")
-    counts = {stage: len(values) for stage, values in stages.items()}
-    return [key for key, _ in chosen], {
-        "map_stage_counts": counts,
-        "sample": [{"key": key, "source": source} for key, source in chosen],
+        fail(
+            f"Shader map yielded too few sample keys: {len(chosen)}; "
+            f"data_rows={data_rows}, unique_stage_counts="
+            f"{dict((name, len(stages.get(short, {}))) for name, short in MAP_STAGE_NAMES.items())}."
+        )
+    return [key for _, key, _ in chosen], {
+        "map_stage_counts": dict(map_stage_counts),
+        "unique_stage_counts": {name: len(stages.get(short, {})) for name, short in MAP_STAGE_NAMES.items()},
+        "sample": [{"stage": stage, "key": key, "source": source} for stage, key, source in chosen],
         "sample_stage_counts": {
-            stage: sum(1 for key, _ in chosen if key in stages.get(stage, {}))
+            stage: sum(1 for selected_stage, _, _ in chosen if selected_stage == stage)
             for stage in ("ps", "vs", "cs")
         },
     }
 
+
+def shader_map_fixture_test() -> None:
+    """Test the exact shader_split.py header, stage names and 16-byte key encoding."""
+    lines = ["# test fixture", "\t".join(SHADER_MAP_HEADER)]
+    for i in range(PS_COUNT):
+        lines.append(f"pixel.bin\t{i}\tpixel\t{i:032x}\tfixture#pixel{i}")
+    for i in range(VS_COUNT):
+        lines.append(f"vertex.bin\t{i}\tvertex\t{i + 100:032x}\tfixture#vertex{i}")
+    for i in range(CS_COUNT):
+        lines.append(f"compute.bin\t{i}\tcompute\t{i + 200:032x}\tfixture#compute{i}")
+    with tempfile.TemporaryDirectory(prefix="mugiwara-shader-map-test-") as tmp:
+        path = Path(tmp) / "shader_map.tsv"
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        keys, report = shader_sample(path)
+        assert len(keys) == PS_COUNT + VS_COUNT + CS_COUNT, (len(keys), report)
+        assert report["sample_stage_counts"] == {"ps": PS_COUNT, "vs": VS_COUNT, "cs": CS_COUNT}
+        assert report["map_stage_counts"] == {"pixel": PS_COUNT, "vertex": VS_COUNT, "compute": CS_COUNT}
 
 def diagnostic_build_source(original: str, uniform_fix: bool) -> str:
     src = original.replace(
