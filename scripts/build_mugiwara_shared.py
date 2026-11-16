@@ -348,9 +348,8 @@ def main() -> None:
     repo_scripts = Path(__file__).resolve().parent
     sys.path.insert(0, str(repo_scripts))
     builder, game_profiles, nacp, pg = load_builder(engine)
-    # Keep NXNative's pinned dmsh_build.py and own_compilers.py untouched.
-    # SpkIOSzero run #41 completed 14,842 shaders using this exact engine pin and
-    # the upstream J=8 ThreadPoolExecutor scheduler; do not replace it with a sidecar.
+    # Match KaKaRoTiOS: J=8 translator lanes and eight GIL-free, fork-safe finish workers.
+    # The bounded Mugiwara A/B proved a 3.61x gain from the bounds-safe uniform select rewrite.
     # The provisional profile must be first in all engine-side lookups.
     profile_parent = work / "profile"
     os.environ.update({"DM_GAMES_DIR": str(profile_parent), "DM_GAMES_FIRST": "1", "DM_GAME": TITLE_ID})
@@ -370,9 +369,9 @@ def main() -> None:
             f"NXNative shader compilation requires at least 3 Apple Silicon CPUs; "
             f"this runner exposes only {runner_cpus} logical CPUs."
         )
-    # Match Kakarot's successful reference path: pinned NXNative stock scheduler,
-    # J=8 threads and no DMSH_PROCS process backport on this 3-CPU runner.
+    # Match the active KaKaRoTiOS worker configuration exactly.
     shader_threads = 8
+    dmsh_procs = shader_threads
     memory_bytes = int(subprocess.run(
         ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, check=True
     ).stdout.strip())
@@ -384,11 +383,10 @@ def main() -> None:
     env.update({"DM_GAME": TITLE_ID, "DM_GAMES_DIR": str(profile_parent),
                 "DM_GAMES_FIRST": "1", "DM_ROOT": str(work),
                 "WORK": str(work / "tmp"), "IOS_PULL": "1",
-                "J": str(shader_threads)})
-    env.pop("DMSH_PROCS", None)
+                "J": str(shader_threads), "DMSH_PROCS": str(dmsh_procs)})
     print(
-        f"[Mugiwara4iOS] NXNative stock Metal scheduler; "
-        f"J={env['J']}, DMSH_PROCS=unset; "
+        f"[Mugiwara4iOS] NXNative GIL-free Metal finish workers; "
+        f"J={env['J']}, DMSH_PROCS={env['DMSH_PROCS']}, batch={4 * shader_threads}; "
         f"runner={runner_cpus} CPUs/{memory_bytes / 1024**3:.1f} GiB RAM.",
         flush=True,
     )
@@ -502,12 +500,26 @@ def main() -> None:
         pull = builder.ios_wants_pulling(profile, gpu_selection, False, env)
         print(f"[Mugiwara4iOS] Compiling iOS Metal libraries; pulling libraries: {'yes' if pull else 'no'}...", flush=True)
 
-        # Use NXNative's stock scheduler directly. The previous custom sidecar was
-        # slower than SpkIOSzero and has been removed; Drive service-account uploads
-        # to this My Drive folder cannot store CAS snapshots (no storage quota).
+        # Keep the pinned upstream source intact; patch only the per-run worker sidecar.
+        print("[Mugiwara4iOS] Installing Kakarot-matched GIL-free workers and bounds-safe uniform guards...", flush=True)
+        run([py, repo_scripts / "patch_mugiwara_shader_workers.py", "--engine-root", engine], cwd=engine, env=env)
+        run([py, repo_scripts / "patch_mugiwara_shader_guards.py", "--engine-root", engine], cwd=engine, env=env)
         ios_msl = builder.build_shaders(
             py, engine, work / "shader", xlate, env, logs, profile,
             pkg_key=package_key, mac=False, seen=None, pull=pull)
+        dmsh_log = logs / "dmsh_build.log"
+        if not dmsh_log.is_file():
+            fail(f"NXNative Metal compiler log is missing: {dmsh_log}")
+        dmsh_text = dmsh_log.read_text(encoding="utf-8", errors="replace")
+        guard_report = re.search(
+            r"^\\[Mugiwara4iOS\\] Guard rewrite totals: shaders=(\\d+) dynamic_index=(\\d+) fixed_index=(\\d+)$",
+            dmsh_text, re.M)
+        if not guard_report:
+            fail("NXNative compiler did not report its bounds-safe uniform guard rewrite totals.")
+        guard_shaders, guard_dynamic, guard_fixed = map(int, guard_report.groups())
+        if guard_shaders < 1 or guard_dynamic + guard_fixed < 1:
+            fail("The full shader build did not exercise the Mugiwara uniform guard rewrite.")
+        print(f"[Mugiwara4iOS] Bounds-safe uniform guards applied: shaders={guard_shaders}, dynamic={guard_dynamic}, fixed={guard_fixed}.", flush=True)
         chain_lib = ios_msl / f"b-{actual_chain}"
         chain_img = Path(str(chain_lib) + ".img")
         if not (chain_lib.is_dir() or chain_img.is_file()):

@@ -41,9 +41,11 @@ jobs:
           sys.path.insert(0, "scripts")
           from mugiwara_contract import PREPARED_MANIFEST_KEYS, copy_prepared_manifest, prepared_manifest_mismatches
           from mugiwara_uniform_rewrite import self_test as mugiwara_uniform_self_test
+          from patch_mugiwara_shader_guards import self_test as mugiwara_guard_patch_self_test
           from run_mugiwara import valid_aoc_manifest as colab_aoc_valid
           mugiwara_uniform_self_test()
-          print("NXNative uniform-tests workaround synthetic regression: OK")
+          mugiwara_guard_patch_self_test()
+          print("NXNative bounds-safe uniform guard and worker-sidecar regression: OK")
           import importlib.util
           def load_module(name, path):
               spec = importlib.util.spec_from_file_location(name, path)
@@ -68,11 +70,17 @@ jobs:
           build_src = Path("scripts/build_mugiwara_shared.py").read_text()
           diagnostic_src = Path("scripts/mugiwara_shader_diagnostic.py").read_text()
           rewrite_src = Path("scripts/mugiwara_uniform_rewrite.py").read_text()
+          worker_src = Path("scripts/patch_mugiwara_shader_workers.py").read_text()
+          guard_src = Path("scripts/patch_mugiwara_shader_guards.py").read_text()
           workflow_src = Path(".github/workflows/mugiwara4_ios.yml").read_text()
           assert "shader_threads = 8" in build_src
+          assert "dmsh_procs = shader_threads" in build_src
           assert '"J": str(shader_threads)' in build_src
-          assert '"DMSH_PROCS":' not in build_src
-          assert 'env.pop("DMSH_PROCS", None)' in build_src
+          assert '"DMSH_PROCS": str(dmsh_procs)' in build_src
+          assert "patch_mugiwara_shader_workers.py" in build_src
+          assert "patch_mugiwara_shader_guards.py" in build_src
+          assert "select_guards_with_stats" in guard_src
+          assert "Guard rewrite totals: shaders=%d" in guard_src
           assert 'MUGIWARA_SHADER_DIAGNOSTIC' in build_src
           assert "DMSH_RATE_GUARD_SECONDS" not in build_src
           assert "DMSH_MIN_SHADERS_PER_SEC" not in build_src
@@ -87,7 +95,7 @@ jobs:
           assert "mugiwara_uniform_rewrite.py" in workflow_src
           assert "MUGIWARA_SHADER_DIAGNOSTIC" in workflow_src
           assert "ShaderCacheCheckpoint" not in build_src
-          print("Drive ranges/AOC contract, stock J=8 scheduler, official uniform-tests backport and bounded 150s-per-case A/B: OK")
+          print("Drive ranges/AOC contract, Kakarot-matched J=8/DMSH_PROCS=8, bounds-safe guards and diagnostic A/B: OK")
 
           # Regression fixture: 44 source DLC NSPs, but two versions of 20 DLC IDs,
           # giving the same 24 unique AOC IDs reported by the Colab content-meta scan.
@@ -216,6 +224,7 @@ jobs:
             scripts/build_mugiwara_shared.py \
             scripts/mugiwara_shader_diagnostic.py \
             scripts/mugiwara_uniform_rewrite.py \
+            scripts/patch_mugiwara_shader_guards.py \\
             scripts/mugiwara_contract.py
           python - <<'PY'
           import ast, json, sys, tempfile, yaml
