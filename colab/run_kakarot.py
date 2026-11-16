@@ -628,6 +628,11 @@ def dispatch(args) -> None:
     existing = requests.get(url, headers=headers, params={"ref": BRANCH}, timeout=30)
     if existing.status_code not in (200, 404):
         fail(f"Cannot read {BRANCH}/handoff.json ({existing.status_code}): {existing.text[:1000]}")
+    # Ensure every explicit dispatch changes handoff.json so the path-filtered push workflow runs.
+    handoff["dispatch_attempt"] = {
+        "id": uuid.uuid4().hex,
+        "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+    }
     body = {
         "message": f"Queue KaKaRoTiOS build {handoff['request_id'][:8]}",
         "content": base64.b64encode((json.dumps(handoff, indent=2) + "\n").encode()).decode(),
@@ -639,6 +644,7 @@ def dispatch(args) -> None:
     if response.status_code not in (200, 201):
         fail(f"GitHub rejected the KaKaRoTiOS handoff commit ({response.status_code}): {response.text[:1500]}")
     print("[KaKaRoTiOS] Handoff committed to KaKaRoTiOS only.")
+    print("[KaKaRoTiOS] Dispatch attempt:", handoff["dispatch_attempt"]["id"])
     print("Commit:", response.json().get("commit", {}).get("html_url", ""))
     print("No workflow on SpkIOSzero, Link2iOS or any other branch was targeted.")
     print("The token was used in memory only; it was not written to Drive or the repository.")
