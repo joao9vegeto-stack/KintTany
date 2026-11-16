@@ -1,0 +1,63 @@
+name: KaKaRoTiOS · audit existing Unreal memory hooks
+
+on:
+  push:
+    branches:
+      - KaKaRoTiOS
+    paths:
+      - scripts/audit_kakarot_memory.py
+      - .github/workflows/kakarot_memory_audit.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kakarotios-memory-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit-existing-kakarot-workspace:
+    if: github.ref == 'refs/heads/KaKaRoTiOS'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout KaKaRoTiOS only
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install read-only audit dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y zstd
+          python -m pip install --upgrade pip
+          python -m pip install 'capstone>=5,<6' lz4 google-api-python-client google-auth
+
+      - name: Sync exact NX2Apple / NXNative engine pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v1.3.1-rc2 https://github.com/LNPANDY/NX2Apple.git "$RUNNER_TEMP/NX2Apple"
+          cd "$RUNNER_TEMP/NX2Apple"
+          python tools/engine.py sync
+          test "$(cat .upstream-ref)" = "81906931262fb25d774cce8bca2db8926439e5a2"
+
+      - name: Audit the existing Kakarot workspace (no NSP, RomFS, AOC or shader downloads)
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/audit_kakarot_memory.py \
+            --engine-root "$RUNNER_TEMP/NX2Apple/engine" \
+            --handoff "$GITHUB_WORKSPACE/handoff.json" \
+            --destination "$RUNNER_TEMP/kakarot-memory-audit"
+
