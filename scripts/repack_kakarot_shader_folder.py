@@ -212,19 +212,12 @@ def main() -> None:
         flush=True,
     )
 
-    # Route C's current iOS host reads the shader stamp and shader files by
-    # directory path. Expand the already-compiled RomFS-style image verbatim;
-    # no shader source is translated or compiled here.
-    shader_lib.expand(str(image))
-    library_dir = msl_dir / f"b-{CHAIN}"
-    require(library_dir.is_dir() and not image.exists(),
-            "shader image expansion did not produce the expected b-<chain> directory")
-    folder_names = {path.name for path in library_dir.iterdir() if path.is_file()}
-    require("inputs.tsv" in folder_names, "expanded library lost inputs.tsv")
-    require(METALLIB_PROBE in folder_names, "expanded library lost the runtime-failed metallib")
-    require(JSON_PROBE in folder_names, "expanded library lost the runtime-failed JSON file")
-    require(not (library_dir / shader_lib.PULLING_LEFT_OUT).exists(),
-            "expanded library unexpectedly contains PULLING_LEFT_OUT")
+    # The pinned NXNative host reads b-<chain>.img in place through msl_image.h.
+    # Expanding this image is only for legacy hosts and creates ~240k loose files,
+    # which makes LiveContainer install/copy operations pathological.
+    require(not (msl_dir / f"b-{CHAIN}").exists(),
+            "source IPA unexpectedly contains a loose shader directory beside the packed image")
+    require(image.exists(), "packed Metal image disappeared during validation")
 
     dm_dir = framework / "dm"
     for name in ("shader_map.tsv", "c1_full.tsv", "cb_extent.tsv", "shader_pairs.tsv", "pso_pairs.tsv"):
@@ -234,12 +227,11 @@ def main() -> None:
     for name in ("c1_full.tsv", "cb_extent.tsv"):
         first = (dm_dir / name).read_text(encoding="utf-8", errors="replace").splitlines()[0]
         expected = f"# chain b-{CHAIN} inputs {INPUTS} "
-        require(first.startswith(expected), f"{name} does not match the expanded Metal image stamp")
+        require(first.startswith(expected), f"{name} does not match the packed Metal image stamp")
 
-    expanded_size = sum(path.stat().st_size for path in library_dir.iterdir() if path.is_file())
     print(
-        f"Expanded {len(folder_names):,} files ({expanded_size:,} bytes) into "
-        f"{library_dir}; the original .img was removed.",
+        f"Keeping packed Metal image in place: {image.stat().st_size:,} bytes; "
+        "no per-shader files expanded.",
         flush=True,
     )
 
@@ -278,9 +270,7 @@ def main() -> None:
     framework_prefix = f"Payload/DmShell.app/Frameworks/{FRAMEWORK_NAME}/"
     msl_prefix = framework_prefix + f"msl/b-{CHAIN}/"
     required_entries = [
-        msl_prefix + "inputs.tsv",
-        msl_prefix + METALLIB_PROBE,
-        msl_prefix + JSON_PROBE,
+        framework_prefix + f"msl/b-{CHAIN}.img",
         framework_prefix + "dm/shader_map.tsv",
         framework_prefix + "dm/c1_full.tsv",
         framework_prefix + "dm/cb_extent.tsv",
@@ -291,19 +281,14 @@ def main() -> None:
         names = set(archive.namelist())
         missing = [name for name in required_entries if name not in names]
         require(not missing, "final IPA is missing shader runtime resources: " + ", ".join(missing))
-        require(framework_prefix + f"msl/b-{CHAIN}.img" not in names,
-                "final IPA still carries the single-file Metal image instead of the expanded directory")
-        final_metallibs = sum(name.startswith(msl_prefix) and name.endswith(".metallib") for name in names)
-        final_json = sum(name.startswith(msl_prefix) and name.endswith(".json") for name in names)
-        final_pulling = sum(name.startswith(msl_prefix) and name.endswith(shader_lib.PULLING) for name in names)
-        require(final_metallibs == metallib_count,
-                f"final IPA metallib count changed: {final_metallibs} != {metallib_count}")
-        require(final_json == json_count, f"final IPA JSON count changed: {final_json} != {json_count}")
-        require(final_pulling == pulling_count,
-                f"final IPA pulling library count changed: {final_pulling} != {pulling_count}")
-        for name in required_entries[:3]:
-            with archive.open(name) as stream:
-                require(bool(stream.read(64)), f"final IPA shader entry is empty: {name}")
+        with archive.open(framework_prefix + f"msl/b-{CHAIN}.img") as stream:
+            h = hashlib.sha256()
+            for block in iter(lambda: stream.read(16 * 1024 * 1024), b""):
+                h.update(block)
+            require(h.hexdigest() == METAL_IMAGE_SHA256,
+                    "packed Metal image changed during IPA packing")
+        require(not any(name.startswith(msl_prefix) for name in names),
+                "final IPA unexpectedly expanded the packed shader image into loose files")
 
     framework_executable = manifest.get("framework_executable", "")
     framework_binary = framework / str(framework_executable)
@@ -331,8 +316,8 @@ def main() -> None:
             "inputs": INPUTS,
             "source_image_sha256": image_sha,
             "source_image_size": METAL_IMAGE_SIZE,
-            "expanded_to_directory": True,
-            "expanded_file_count": len(folder_names),
+            "expanded_to_directory": False,
+            "packed_image_retained": True,
             "metallib_count": metallib_count,
             "json_count": json_count,
             "pulling_metallib_count": pulling_count,
@@ -347,14 +332,14 @@ def main() -> None:
         },
         "unreal_memory_fix": source_report.get("unreal_memory_fix"),
         "signature": "ad-hoc; Increased Memory Limit preserved",
-        "runtime_layout": "msl/b-0c434f1b68df/ (expanded shader files; no b-0c434f1b68df.img)",
+        "runtime_layout": "msl/b-0c434f1b68df.img (NXNative indexed image; no expanded shader directory)",
         "validation": {
             "source_image_sha256_verified": True,
             "image_stamp_verified": True,
-            "runtime_failed_metallib_present": True,
-            "runtime_failed_prebuild_json_present": True,
+            "runtime_failed_metallib_present_in_packed_image": True,
+            "runtime_failed_prebuild_json_present_in_packed_image": True,
             "c1_full_and_cb_extent_stamps_match": True,
-            "final_ipa_shader_entries_verified": True,
+            "final_ipa_packed_image_sha256_verified": True,
             "final_ipa_pulling_libraries_preserved": True,
         },
     }

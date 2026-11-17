@@ -64,6 +64,9 @@ KAKAROT_IPHONE_MEMORY = {
     "mem_alias": "0xC8000000",
     "mem_stack": "0x10000000",
     "app_pool": "0xCD500000",
+    # Player-selectable Unreal frame cap; display pacing stays on the host's 60 Hz clock.
+    "fps_target": "30",
+    "present_interval": "display",
 }
 KAKAROT_EXPECTED_SYS_RESOURCE = 0x1000000
 KAKAROT_ALLOCATOR_CALL = 0x24B37B8

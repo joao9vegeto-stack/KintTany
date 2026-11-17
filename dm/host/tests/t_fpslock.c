@@ -17,13 +17,25 @@ static void check(int which) {
     assert(base != MAP_FAILED);
     g_nmod = 1; strcpy(g_mod[0].name, "main"); g_mod[0].base = base;
     strcpy(g_mod[0].build_id, "94ceae325c205c4b9d6f7235552f28fd");
-    setenv("DM_FPS_TARGET", which == 1 ? "30" : which == 2 ? "0" : "60", 1);
+    setenv("DM_FPS_TARGET", (which == 1 || which == 10) ? "30" : which == 2 ? "0" : "60", 1);
     int32_t *unity = (int32_t *)(base + 0x4afc868);
     *unity = which == 1 ? 60 : which == 4 ? -1 : which == 5 ? 0 : 30;
     uint8_t object[0x500] = {0};
     float *f = NULL; int32_t *sync = NULL;
+    float *kakarot_fps = NULL, *kakarot_budget = NULL;
+    int32_t *kakarot_vsync = NULL; uint32_t *kakarot_cutscene = NULL;
     if (which == 3) g_mod[0].build_id[0] = '0';
-    if (which == 6) {
+    if (which == 9 || which == 10) {
+        strcpy(g_mod[0].build_id, "e99dffa39354b606");
+        kakarot_fps = (float *)(base + 0x9d02e08);
+        kakarot_budget = (float *)(base + 0x9ccd498);
+        kakarot_vsync = (int32_t *)(base + 0x916f698);
+        kakarot_cutscene = (uint32_t *)(base + 0x9d02d68);
+        kakarot_fps[0] = kakarot_fps[1] = 30.0f;
+        kakarot_budget[0] = kakarot_budget[1] = 33.33f;
+        kakarot_vsync[0] = kakarot_vsync[1] = 1;
+        *kakarot_cutscene = 0x47;
+    } else if (which == 6) {
         strcpy(g_mod[0].build_id, "c9a3dd7702075ecd90101f4555389582");
         *(uintptr_t *)(base + 0x1295b3f0) = (uintptr_t)object;
         f = (float *)(object + 0x434); *f = 30;
@@ -48,13 +60,22 @@ static void check(int which) {
         assert(*unity == (which == 4 ? -1 : which == 5 ? 0 : 30));
     } else if (which == 6) assert(*f == 60 && writes == 1);
     else if (which == 7) assert(fabsf(*f - (1000.0f / 60 - 0.5f)) < 0.001f && writes == 1);
-    else assert(f[0] == 60 && f[1] == 60 && sync[0] == 1 && sync[1] == 1 && writes == 4);
+    else if (which == 8) assert(f[0] == 60 && f[1] == 60 && sync[0] == 1 && sync[1] == 1 && writes == 4);
+    else if (which == 9 || which == 10) {
+        int target = which == 9 ? 60 : 30;
+        assert(kakarot_fps[0] == target && kakarot_fps[1] == target);
+        assert(fabsf(kakarot_budget[0] - (target == 60 ? 16.66f : 33.33f)) < 0.001f);
+        assert(kakarot_budget[0] == kakarot_budget[1]);
+        assert(kakarot_vsync[0] == 0 && kakarot_vsync[1] == 0);
+        assert(*kakarot_cutscene == 7);
+        assert(writes == 7);
+    }
     munmap(base, len);
 }
 
 int main(void) {
     // Each process starts the production one-time initialization with a fresh build and target.
-    for (int i = 0; i < 9; i++) {
+    for (int i = 0; i < 11; i++) {
         pid_t p = fork(); assert(p >= 0);
         if (!p) { check(i); _exit(0); }
         int status; assert(waitpid(p, &status, 0) == p); assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
