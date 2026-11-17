@@ -378,11 +378,14 @@ jobs:
           df -h "$RUNNER_TEMP"
           AVAILABLE_KB="$(df -Pk "$RUNNER_TEMP" | awk 'END {print $4}')"
           AVAILABLE_BYTES="$((AVAILABLE_KB * 1024))"
-          REQUIRED_BYTES="$((105 * 1024 * 1024 * 1024))"
+          ROMFS_BYTES="$(python -c 'import json; n=int(json.load(open("handoff.json"))["prepared"]["romfs_size"]); assert n > 0; print(n)')"
+          MIN_POST_RESTORE_GIB=30
+          REQUIRED_BYTES="$((ROMFS_BYTES + MIN_POST_RESTORE_GIB * 1024 * 1024 * 1024))"
           echo "Available workspace storage before RomFS restore: $((AVAILABLE_BYTES / 1024 / 1024 / 1024)) GiB"
-          echo "Kakarot minimum before restore: 105 GiB (to retain at least 80 GiB after restoring RomFS)"
+          echo "Verified RomFS size: $((ROMFS_BYTES / 1024 / 1024 / 1024)) GiB"
+          echo "Minimum reserved free space after RomFS restore: ${MIN_POST_RESTORE_GIB} GiB"
           if [ "$AVAILABLE_BYTES" -lt "$REQUIRED_BYTES" ]; then
-            echo "::error::Insufficient disk for Kakarot Route C. After reclaiming unused Xcode/simulator/Android storage, at least 105 GiB must be free before restoring the 24.3 GB RomFS."
+            echo "::error::Insufficient disk for Kakarot Route C. Need the exact prepared RomFS size plus ${MIN_POST_RESTORE_GIB} GiB reserved for build outputs."
             exit 1
           fi
 
@@ -402,11 +405,11 @@ jobs:
           df -h "$RUNNER_TEMP"
           AVAILABLE_KB="$(df -Pk "$RUNNER_TEMP" | awk 'END {print $4}')"
           AVAILABLE_BYTES="$((AVAILABLE_KB * 1024))"
-          REQUIRED_BYTES="$((80 * 1024 * 1024 * 1024))"
+          REQUIRED_BYTES="$((30 * 1024 * 1024 * 1024))"
           echo "Available workspace storage after RomFS restore: $((AVAILABLE_BYTES / 1024 / 1024 / 1024)) GiB"
-          echo "Kakarot Metal minimum: 80 GiB free"
+          echo "Kakarot minimum after RomFS restore: 30 GiB free (builder enforces its own 20 GiB / 8 GiB stage guards)"
           if [ "$AVAILABLE_BYTES" -lt "$REQUIRED_BYTES" ]; then
-            echo "::error::Insufficient disk after restoring RomFS. Refusing to start the Oodle/shader/Metal build without 80 GiB free."
+            echo "::error::Insufficient disk after restoring RomFS. Need at least 30 GiB for cached Metal reuse, framework and IPA outputs."
             exit 1
           fi
 
