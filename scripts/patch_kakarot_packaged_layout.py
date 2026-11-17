@@ -111,16 +111,27 @@ def patch_header(source: str) -> tuple[str, bool]:
         "document packed packaged layout field",
     )
 
+def replace_optional(source: str, old: str, new: str, label: str) -> tuple[str, bool]:
+    old_n, new_n = source.count(old), source.count(new)
+    if old_n == 1 and new_n == 0:
+        return source.replace(old, new, 1), True
+    if old_n == 0 and new_n in (0, 1):
+        return source, False
+    fail(f"{label}: ambiguous diagnostic anchor (old={old_n}, new={new_n}).")
+    raise AssertionError("unreachable")
+
 def patch_mtl(source: str) -> tuple[str, bool]:
+    # These two strings are diagnostic-only. Keep the correctness patch usable
+    # even if an upstream log wording change has already updated or removed them.
     changed = False
-    source, did = replace_once(
+    source, did = replace_optional(
         source,
         "block height log2 %d (packaged %d)",
         "block height log2 %d (packaged layout %#x)",
         "label packaged texture diagnostic correctly",
     )
     changed |= did
-    source, did = replace_once(
+    source, did = replace_optional(
         source,
         "stride=%u block_h=%d storage %llu bytes non-zero %llu",
         "stride=%u pkg_layout=%#x storage %llu bytes non-zero %llu",
