@@ -436,3 +436,77 @@ jobs:
             ${{ runner.temp }}/kakarot-output/build-report.json
           if-no-files-found: error
           retention-days: 14
+
+  repack-kakarot-shader-folder:
+    if: github.ref == 'refs/heads/KaKaRoTiOS' && github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Queue KaKaRoTiOS shader-folder repack ')
+    runs-on: macos-26
+    timeout-minutes: 240
+    steps:
+      - name: Checkout KaKaRoTiOS only
+        uses: actions/checkout@v4
+        with:
+          ref: KaKaRoTiOS
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate isolated resource-only repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/KaKaRoTiOS"
+          python -m json.tool handoff.json >/dev/null
+          python -m py_compile scripts/repack_kakarot_shader_folder.py
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          h = json.loads(Path("handoff.json").read_text())
+          assert h.get("project") == "KaKaRoTiOS"
+          assert h.get("branch") == "KaKaRoTiOS"
+          assert h.get("title_id") == "010051C0134F8000"
+          assert h.get("engine_pin") == "81906931262fb25d774cce8bca2db8926439e5a2"
+          assert h.get("dispatch_attempt", {}).get("id") == "kakarot-shader-folder-repack-20261116-01"
+          print("Kakarot shader-folder-only repair contract: OK")
+          PY
+
+      - name: Clone and pin the exact NX2Apple engine utilities
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip PyYAML
+          git clone --depth 1 --branch v1.3.1-rc2 https://github.com/LNPANDY/NX2Apple.git NX2Apple
+          python NX2Apple/tools/engine.py sync
+          test "$(cat NX2Apple/.upstream-ref)" = "81906931262fb25d774cce8bca2db8926439e5a2"
+
+      - name: Download the exact IPA that produced the black-screen log
+        uses: actions/download-artifact@v4
+        with:
+          name: KaKaRoTiOS-Kakarot-IPA
+          path: ${{ runner.temp }}/kakarot-shader-source
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 43979353925
+
+      - name: Expand the verified Metal image, re-sign and repack (zero shader rebuild)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/repack_kakarot_shader_folder.py \
+            --engine-root NX2Apple/engine \
+            --source-dir "$RUNNER_TEMP/kakarot-shader-source" \
+            --output "$RUNNER_TEMP/kakarot-shader-folder-output" \
+            --source-run-id 43979353925 \
+            --source-artifact-id 14283857940
+
+      - name: Upload repaired KaKaRoTiOS IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: KaKaRoTiOS-Kakarot-Folder-Shaders-IPA
+          path: |
+            ${{ runner.temp }}/kakarot-shader-folder-output/KaKaRoTiOS.ipa
+            ${{ runner.temp }}/kakarot-shader-folder-output/build-report.json
+          if-no-files-found: error
+          retention-days: 14

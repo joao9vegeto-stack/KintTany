@@ -759,7 +759,7 @@
   },
   "created_utc": "2026-11-16T02:55:09.450345+00:00",
   "dispatch_attempt": {
-    "id": "reproduce-build6-metadata-no-metal-recompile-20261116-11",
-    "reason": "Run metadata-only NVN shader extraction and Oodle-backed UE4 legacy asset reading; require the exact Build #6 shader package key and input digest; restore cached Metal, then rebuild patched DmGame framework, Shared Shell and thin IPA. Report metadata split/Oodle honestly; do not call dmsh_build.py, shader translation or iOS Metal compilation."
+    "id": "kakarot-shader-folder-repack-20261116-01",
+    "reason": "Repair only the installed NVN resource layout from the exact prior IPA: verify the cached Build #6 image and stamps, expand b-0c434f1b68df.img to the b-0c434f1b68df directory so the iOS host can read inputs.tsv and individual _b.metallib/_b.json files, re-sign and repack. Do not rebuild game modules, RomFS/AOC, shader split, shader translation or Metal compilation."
   }
 }
