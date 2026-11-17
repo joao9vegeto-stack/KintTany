@@ -759,7 +759,7 @@
   },
   "created_utc": "2026-11-16T02:55:09.450345+00:00",
   "dispatch_attempt": {
-    "id": "kakarot-selectable-fps-compact-shaders-20261117",
-    "reason": "Build the corrected Kakarot iOS host with selectable 30/60 FPS using the exact 1.70 main build ID; set present_interval=display and fps_target=30 as the launcher default. Preserve the verified Build #6 packed Metal image in b-0c434f1b68df.img; perform metadata-only shader split and reuse the exact cached Metal image. Do not expand the image, translate shaders, compile shaders, or run Apple's Metal compiler. Retain the existing RomFS/AOC and game module rewrite inputs."
+    "id": "kakarot-sparse-mip-view-repair-20261117",
+    "reason": "Backport the sparse mip-view level-index fix and resolve copy/clear operations through the parent texture in the pinned Kakarot NXNative host. Keep the exact engine pin and game module inputs. Rebuild the host/framework and thin IPA while reusing Build #6's verified packed Metal image b-0c434f1b68df.img; metadata-only shader split is allowed, but do not translate, rebuild or compile any of the 75,430 guest shaders and do not run Apple's guest Metal shader compiler. Preserve the current 30/60 FPS selector, RomFS/AOC and render scale."
   }
 }
