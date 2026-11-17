@@ -468,7 +468,7 @@ jobs:
           assert h.get("branch") == "KaKaRoTiOS"
           assert h.get("title_id") == "010051C0134F8000"
           assert h.get("engine_pin") == "81906931262fb25d774cce8bca2db8926439e5a2"
-          assert h.get("dispatch_attempt", {}).get("id") == "kakarot-shader-folder-repack-20261116-01"
+          assert h.get("dispatch_attempt", {}).get("id") == "kakarot-shader-folder-repack-20261117-02"
           print("Kakarot shader-folder-only repair contract: OK")
           PY
 

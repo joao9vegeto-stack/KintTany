@@ -135,8 +135,9 @@ def main() -> None:
     engine = args.engine_root.resolve()
     source_dir = args.source_dir.resolve()
     output = args.output.resolve()
-    require((engine / ".upstream-ref").is_file(), "pinned NXNative checkout is missing")
-    require((engine / ".upstream-ref").read_text().strip() == ENGINE_PIN, "NXNative pin mismatch")
+    upstream_ref = engine.parent / ".upstream-ref"
+    require(upstream_ref.is_file(), "pinned NX2Apple checkout is missing")
+    require(upstream_ref.read_text(encoding="utf-8").strip() == ENGINE_PIN, "NXNative pin mismatch")
     packer = engine / "dm/ios/tools/pack_ipa.py"
     require(packer.is_file(), "pinned NXNative IPA packer is missing")
 
