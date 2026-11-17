@@ -100,7 +100,8 @@ jobs:
           assert h.get("work_archive", {}).get("sha256")
           print("KaKaRoTiOS RAR/base/update/Drive/RomFS/AOC handoff contract: OK")
           PY
-          python -m py_compile colab/source_kakarot.py colab/prepare_kakarot.py colab/run_kakarot.py scripts/prepare_kakarot_actions.py scripts/build_kakarot_shared.py scripts/patch_kakarot_sparse_textures.py scripts/patch_kakarot_shader_workers.py scripts/patch_kakarot_ue_allocator.py scripts/validate_kakarot_memory_fix.py
+          python -m py_compile colab/source_kakarot.py colab/prepare_kakarot.py colab/run_kakarot.py scripts/prepare_kakarot_actions.py scripts/build_kakarot_shared.py scripts/patch_kakarot_sparse_textures.py scripts/patch_kakarot_packaged_layout.py scripts/patch_kakarot_shader_workers.py scripts/patch_kakarot_ue_allocator.py scripts/validate_kakarot_memory_fix.py
+          python scripts/patch_kakarot_packaged_layout.py --self-test
           python - <<'PY'
           import sys, tempfile
           from pathlib import Path
@@ -302,6 +303,8 @@ jobs:
           test "$(cat NX2Apple/.upstream-ref)" = "81906931262fb25d774cce8bca2db8926439e5a2"
       - name: Backport sparse texture mip-view and copy-level fix (host only)
         run: python scripts/patch_kakarot_sparse_textures.py --engine-root NX2Apple/engine
+      - name: Backport packaged texture width-alignment layout (host only)
+        run: python scripts/patch_kakarot_packaged_layout.py --engine-root NX2Apple/engine
 
       - name: Apply GIL-free Metal workers and fork-safe shader cache
         shell: bash
