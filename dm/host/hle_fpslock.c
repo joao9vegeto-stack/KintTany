@@ -11,18 +11,10 @@
 // period, so frames at exactly 16.667 ms came 0.11 ms late each on the Mac (59.6 fps, every 150th frame shown two vsyncs). Slightly shorter, the host's present pacing sets the pace
 // (the acquire waits): Luigi's Mansion 3's display interval p99 18.69 → 16.67 ms, 60.0 fps. Not at 30: with present_interval display the presents follow every vsync and hold no
 // frame for two, so a shorter time showed some frames for one (30.4 fps); 30 writes the game's own 33.333 ms
-enum { FPS_F32, VSYNCS_I32, MS_F32, FPS_I32, BUDGET_F32, U32_CONST, I32_ZERO };
+enum { FPS_F32, VSYNCS_I32, MS_F32, FPS_I32 };
 #define MS_MARGIN 0.5f
 static float ms_want(int fps) { return 1000.0f / (float)fps - (fps == 60 ? MS_MARGIN : 0); }
-static float budget_want(int fps) { return (float)((int)((100000.0f / (float)fps) + 0.0001f)) / 100.0f; }
-static const struct { const char *build, *what; uint64_t ptr_off; uint32_t field; uint8_t kind, copies; uint32_t constant; } k_locks[] = {
-    // DRAGON BALL Z: KAKAROT 1.70 (Build ID E99DFFA39354B606): exact-build FPSLocker-Warehouse entries.
-    // The host's display pacing owns vsync. Keep Unreal's frame cap and dynamic-resolution budget in sync,
-    // disable its own VSync, and clear bUseFixedFrameRate for cutscenes so the 30/60 choice applies there too.
-    { "e99dffa39354b6068f8e7c984c77bc84", "Unreal t.MaxFPS", 0, 0x9d02e08, FPS_F32, 2, 0 },
-    { "e99dffa39354b6068f8e7c984c77bc84", "Unreal r.DynamicRes.FrameTimeBudget", 0, 0x9ccd498, BUDGET_F32, 2, 0 },
-    { "e99dffa39354b6068f8e7c984c77bc84", "Unreal r.VSync", 0, 0x916f698, I32_ZERO, 2, 0 },
-    { "e99dffa39354b6068f8e7c984c77bc84", "Unreal bUseFixedFrameRate flags", 0, 0x9d02d68, U32_CONST, 1, 7 },
+static const struct { const char *build, *what; uint64_t ptr_off; uint32_t field; uint8_t kind, copies; } k_locks[] = {
     // Pokemon Brilliant Diamond 1.3.0: Unity's Application.targetFrameRate. Its icall registration (main+0xe34e60) resolves to main+0xdc8e70 -> +0x5fa640,
     // which stores w0 at main+0x4afc868; the getter at +0x5fa630 reads the same int32. The game sets 30 when entering the field; display pacing alone does not remove that cap.
     { "94ceae325c205c4b9d6f7235552f28fd", "Unity targetFrameRate", 0, 0x4afc868, FPS_I32, 1 },
@@ -90,16 +82,10 @@ void dm_fps_lock_tick(void) {
         for (int c = 0; c < k_locks[k].copies; c++) {
             uint64_t a = obj + k_locks[k].field + 4 * (uint64_t)c; uint32_t cur, want; char was[16];
             if (!rd(a, &cur, sizeof cur)) break;
-            if (k_locks[k].kind == FPS_F32 || k_locks[k].kind == MS_F32 || k_locks[k].kind == BUDGET_F32) {
-                int ms = k_locks[k].kind == MS_F32;
-                float f, w = ms ? ms_want(target) : k_locks[k].kind == BUDGET_F32 ? budget_want(target) : (float)target;
-                memcpy(&f, &cur, sizeof f); memcpy(&want, &w, sizeof want);
-                if (cur == want || !((ms || k_locks[k].kind == BUDGET_F32) ? (f >= 8 && f <= 100) : (f >= 0 && f <= 120))) continue;   // already set, or not set yet (RE Engine: 6000 at boot; Unreal: 0 = no limit until the config sets it)
+            if (k_locks[k].kind == FPS_F32 || k_locks[k].kind == MS_F32) {
+                int ms = k_locks[k].kind == MS_F32; float f, w = ms ? ms_want(target) : (float)target; memcpy(&f, &cur, sizeof f); memcpy(&want, &w, sizeof want);
+                if (cur == want || !(ms ? f >= 8 && f <= 100 : f >= 10 && f <= 120)) continue;   // already set, or not set yet (RE Engine: 6000 at boot; Unreal: 0 = no limit until the config sets it)
                 snprintf(was, sizeof was, ms ? "%.3f ms" : "%g", f);
-            } else if (k_locks[k].kind == U32_CONST || k_locks[k].kind == I32_ZERO) {
-                want = k_locks[k].kind == U32_CONST ? k_locks[k].constant : 0;
-                if (cur == want) continue;
-                snprintf(was, sizeof was, "%u", cur);
             } else {
                 int fps = k_locks[k].kind == FPS_I32;
                 want = fps ? (uint32_t)target : 60 / (uint32_t)target;
@@ -110,8 +96,6 @@ void dm_fps_lock_tick(void) {
             dm_guest_write_prepare(p, sizeof *p); __atomic_store_n(p, want, __ATOMIC_RELAXED);
             if (nlog[k] < 8) { nlog[k]++; char now[24];
                 if (k_locks[k].kind == MS_F32) snprintf(now, sizeof now, "%.3f ms (%d fps)", ms_want(target), target);
-                else if (k_locks[k].kind == BUDGET_F32) snprintf(now, sizeof now, "%.2f ms (%d fps)", budget_want(target), target);
-                else if (k_locks[k].kind == U32_CONST || k_locks[k].kind == I32_ZERO) snprintf(now, sizeof now, "%u", want);
                 else snprintf(now, sizeof now, "%u%s", k_locks[k].kind == FPS_F32 ? (unsigned)target : want, k_locks[k].kind == FPS_F32 || k_locks[k].kind == FPS_I32 ? " fps" : " vsyncs");
                 LOG("main: %s%s %s → %s (%s)", k_locks[k].what, k_locks[k].copies > 1 ? (c ? " (render thread)" : " (game thread)") : "", was, now, src); }
         }
