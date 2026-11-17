@@ -26,7 +26,7 @@ static void check(int which) {
     int32_t *kakarot_vsync = NULL; uint32_t *kakarot_cutscene = NULL;
     if (which == 3) g_mod[0].build_id[0] = '0';
     if (which == 9 || which == 10) {
-        strcpy(g_mod[0].build_id, "e99dffa39354b606");
+        strcpy(g_mod[0].build_id, "e99dffa39354b6068f8e7c984c77bc84");
         kakarot_fps = (float *)(base + 0x9d02e08);
         kakarot_budget = (float *)(base + 0x9ccd498);
         kakarot_vsync = (int32_t *)(base + 0x916f698);

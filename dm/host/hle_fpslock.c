@@ -19,10 +19,10 @@ static const struct { const char *build, *what; uint64_t ptr_off; uint32_t field
     // DRAGON BALL Z: KAKAROT 1.70 (Build ID E99DFFA39354B606): exact-build FPSLocker-Warehouse entries.
     // The host's display pacing owns vsync. Keep Unreal's frame cap and dynamic-resolution budget in sync,
     // disable its own VSync, and clear bUseFixedFrameRate for cutscenes so the 30/60 choice applies there too.
-    { "e99dffa39354b606", "Unreal t.MaxFPS", 0, 0x9d02e08, FPS_F32, 2, 0 },
-    { "e99dffa39354b606", "Unreal r.DynamicRes.FrameTimeBudget", 0, 0x9ccd498, BUDGET_F32, 2, 0 },
-    { "e99dffa39354b606", "Unreal r.VSync", 0, 0x916f698, I32_ZERO, 2, 0 },
-    { "e99dffa39354b606", "Unreal bUseFixedFrameRate flags", 0, 0x9d02d68, U32_CONST, 1, 7 },
+    { "e99dffa39354b6068f8e7c984c77bc84", "Unreal t.MaxFPS", 0, 0x9d02e08, FPS_F32, 2, 0 },
+    { "e99dffa39354b6068f8e7c984c77bc84", "Unreal r.DynamicRes.FrameTimeBudget", 0, 0x9ccd498, BUDGET_F32, 2, 0 },
+    { "e99dffa39354b6068f8e7c984c77bc84", "Unreal r.VSync", 0, 0x916f698, I32_ZERO, 2, 0 },
+    { "e99dffa39354b6068f8e7c984c77bc84", "Unreal bUseFixedFrameRate flags", 0, 0x9d02d68, U32_CONST, 1, 7 },
     // Pokemon Brilliant Diamond 1.3.0: Unity's Application.targetFrameRate. Its icall registration (main+0xe34e60) resolves to main+0xdc8e70 -> +0x5fa640,
     // which stores w0 at main+0x4afc868; the getter at +0x5fa630 reads the same int32. The game sets 30 when entering the field; display pacing alone does not remove that cap.
     { "94ceae325c205c4b9d6f7235552f28fd", "Unity targetFrameRate", 0, 0x4afc868, FPS_I32, 1 },
