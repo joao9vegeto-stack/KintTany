@@ -26,7 +26,8 @@ from googleapiclient.http import MediaFileUpload
 REPO = "joao9vegeto-stack/KintTany"
 BRANCH = "KaKaRoTiOS"
 WORKFLOW_PATH = ".github/workflows/kakarot_ios.yml"
-ARTIFACT_NAME = "KaKaRoTiOS-Kakarot-IPA"
+ARTIFACT_NAME_PREFIX = "KaKaRoTiOS-Kakarot-"
+ARTIFACT_NAME_SUFFIX = "-IPA"
 
 # Pasta raiz já configurada no notebook KaKaRoTiOS; a célula usa/cria
 # uma subpasta "ipa" dentro dela, sem misturar a IPA com RomFS/AOC.
@@ -157,44 +158,83 @@ runs.sort(
     reverse=True,
 )
 
-selected_run = None
-selected_artifact = None
+def is_kakarot_ipa_artifact(artifact):
+    """Aceita o nome legado e os nomes versionados da IPA Kakarot."""
+    name = str(artifact.get("name") or "")
+    return (
+        name.startswith(ARTIFACT_NAME_PREFIX)
+        and name.endswith(ARTIFACT_NAME_SUFFIX)
+    )
+
+
+# Regressão: os dois nomes reais publicados pelo workflow precisam ser aceitos.
+assert is_kakarot_ipa_artifact({"name": "KaKaRoTiOS-Kakarot-IPA"})
+assert is_kakarot_ipa_artifact({"name": "KaKaRoTiOS-Kakarot-Folder-Shaders-IPA"})
+assert not is_kakarot_ipa_artifact({"name": "KaKaRoTiOS-Kakarot-Build-Report"})
+
+artifact_candidates = []
 for run in runs:
     artifacts = []
     artifacts_url = run.get("artifacts_url") or (
         f"{api_root}/actions/runs/{run['id']}/artifacts"
     )
-    for page in range(1, ARTIFACTS_MAX_PAGES + 1):
+    for artifact_page in range(1, ARTIFACTS_MAX_PAGES + 1):
         payload = github_get(
             artifacts_url,
-            params={"per_page": 100, "page": page},
+            params={"per_page": 100, "page": artifact_page},
         )
         batch = payload.get("artifacts", [])
         artifacts.extend(batch)
         if len(batch) < 100:
             break
 
-    valid = [
-        artifact for artifact in artifacts
-        if artifact.get("name") == ARTIFACT_NAME
-        and not artifact.get("expired", False)
-    ]
-    if valid:
-        valid.sort(
-            key=lambda artifact: (
-                artifact.get("created_at", ""), artifact.get("id", 0)
-            ),
-            reverse=True,
-        )
-        selected_run = run
-        selected_artifact = valid[0]
-        break
+    for artifact in artifacts:
+        if is_kakarot_ipa_artifact(artifact):
+            artifact_candidates.append((run, artifact))
 
-if not selected_run or not selected_artifact:
-    raise RuntimeError(
-        "Nenhuma execução bem-sucedida com o artifact IPA KaKaRoTiOS "
-        "não expirado foi encontrada. Nada foi baixado ou enviado ao Drive."
+
+def artifact_recency_key(candidate):
+    run, artifact = candidate
+    # created_at do artefato é a referência principal: é quando a IPA foi
+    # efetivamente publicada, não quando o commit ou a run começou.
+    created_at = (
+        artifact.get("created_at")
+        or run.get("updated_at")
+        or run.get("created_at")
+        or ""
     )
+    return (
+        str(created_at),
+        int(run.get("id") or 0),
+        int(artifact.get("id") or 0),
+    )
+
+
+if not artifact_candidates:
+    raise RuntimeError(
+        "Nenhuma IPA KaKaRoTiOS foi publicada em uma execução bem-sucedida "
+        "e não expirada. Nada foi baixado ou enviado ao Drive."
+    )
+
+# Ordena TODOS os artefatos IPA elegíveis pela data de geração do artefato.
+# Assim um novo sufixo, como Folder-Shaders, não faz a busca voltar a uma IPA antiga.
+artifact_candidates.sort(key=artifact_recency_key, reverse=True)
+selected_run, selected_artifact = artifact_candidates[0]
+
+if selected_artifact.get("expired", False):
+    raise RuntimeError(
+        "A IPA mais recentemente gerada expirou no GitHub: "
+        f"run={selected_run.get('id')}, artifact={selected_artifact.get('id')}, "
+        f"name={selected_artifact.get('name')!r}, "
+        f"expires_at={selected_artifact.get('expires_at')}. "
+        "Por segurança, uma IPA antiga NÃO será usada como substituta."
+    )
+
+ARTIFACT_NAME = str(selected_artifact.get("name") or "")
+print(
+    f"Seleção dinâmica: {len(artifact_candidates)} IPA(s) candidatas; "
+    f"mais recente criada em {selected_artifact.get('created_at') or 'data não informada'}."
+)
 
 RUN_ID = int(selected_run["id"])
 ARTIFACT_ID = int(selected_artifact["id"])
@@ -229,6 +269,7 @@ print("Criado:", selected_run.get("created_at"))
 print("Status:", selected_run.get("status"), "| conclusão:", selected_run.get("conclusion"))
 print("URL:", RUN_URL)
 print("Artifact:", selected_artifact.get("name"))
+print("Artifact criado:", selected_artifact.get("created_at"))
 print("Artifact ID (dinâmico):", ARTIFACT_ID)
 print("Tamanho ZIP esperado:", f"{EXPECTED_ARTIFACT_SIZE:,}", "bytes")
 print("SHA-256 oficial:", EXPECTED_ARTIFACT_SHA256 or "não informado pela API")
