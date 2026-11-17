@@ -759,7 +759,7 @@
   },
   "created_utc": "2026-11-16T02:55:09.450345+00:00",
   "dispatch_attempt": {
-    "id": "kakarot-shader-folder-repack-20261117-02",
-    "reason": "Retry the same resource-only IPA repack after correcting the NX2Apple pin-file lookup (the .upstream-ref file lives at the repository root, one level above engine/). Verify the exact source artifact and Metal image, expand b-0c434f1b68df.img to the b-0c434f1b68df directory, then re-sign and repack. Do not rebuild game modules, RomFS/AOC, shader split, shader translation or Metal compilation."
+    "id": "kakarot-selectable-fps-compact-shaders-20261117",
+    "reason": "Build the corrected Kakarot iOS host with selectable 30/60 FPS using the exact 1.70 main build ID; set present_interval=display and fps_target=30 as the launcher default. Preserve the verified Build #6 packed Metal image in b-0c434f1b68df.img; perform metadata-only shader split and reuse the exact cached Metal image. Do not expand the image, translate shaders, compile shaders, or run Apple's Metal compiler. Retain the existing RomFS/AOC and game module rewrite inputs."
   }
 }
