@@ -154,7 +154,7 @@ runs = [
     and run.get("conclusion") == "success"
 ]
 runs.sort(
-    key=lambda run: (run.get("created_at", ""), run.get("id", 0)),
+    key=lambda run: (run.get("updated_at") or run.get("created_at", ""), run.get("id", 0)),
     reverse=True,
 )
 
@@ -167,12 +167,17 @@ def is_kakarot_ipa_artifact(artifact):
     )
 
 
-# Regressão: os dois nomes reais publicados pelo workflow precisam ser aceitos.
+# Regressão: reconhece o artefato legado e o nome novo usado pela run 43995139130.
 assert is_kakarot_ipa_artifact({"name": "KaKaRoTiOS-Kakarot-IPA"})
 assert is_kakarot_ipa_artifact({"name": "KaKaRoTiOS-Kakarot-Folder-Shaders-IPA"})
 assert not is_kakarot_ipa_artifact({"name": "KaKaRoTiOS-Kakarot-Build-Report"})
 
-artifact_candidates = []
+selected_run = None
+selected_artifact = None
+
+# A workflow usa concurrency por branch com cancel-in-progress: só uma execução
+# pode publicar nessa branch por vez. Portanto, percorremos as runs concluídas
+# em ordem de conclusão e paramos na primeira que realmente publicou uma IPA.
 for run in runs:
     artifacts = []
     artifacts_url = run.get("artifacts_url") or (
@@ -188,53 +193,47 @@ for run in runs:
         if len(batch) < 100:
             break
 
-    for artifact in artifacts:
-        if is_kakarot_ipa_artifact(artifact):
-            artifact_candidates.append((run, artifact))
+    valid = [
+        artifact for artifact in artifacts
+        if is_kakarot_ipa_artifact(artifact)
+    ]
+    if valid:
+        valid.sort(
+            key=lambda artifact: (
+                artifact.get("created_at", ""),
+                int(artifact.get("id") or 0),
+            ),
+            reverse=True,
+        )
+        selected_run = run
+        selected_artifact = valid[0]
+        print(
+            "Última run com IPA encontrada:",
+            selected_run["id"],
+            "| artifact:",
+            selected_artifact.get("name"),
+            "| criado:",
+            selected_artifact.get("created_at"),
+        )
+        break
 
-
-def artifact_recency_key(candidate):
-    run, artifact = candidate
-    # created_at do artefato é a referência principal: é quando a IPA foi
-    # efetivamente publicada, não quando o commit ou a run começou.
-    created_at = (
-        artifact.get("created_at")
-        or run.get("updated_at")
-        or run.get("created_at")
-        or ""
-    )
-    return (
-        str(created_at),
-        int(run.get("id") or 0),
-        int(artifact.get("id") or 0),
-    )
-
-
-if not artifact_candidates:
+if not selected_run or not selected_artifact:
     raise RuntimeError(
-        "Nenhuma IPA KaKaRoTiOS foi publicada em uma execução bem-sucedida "
-        "e não expirada. Nada foi baixado ou enviado ao Drive."
+        "Nenhuma IPA KaKaRoTiOS foi publicada em uma execução bem-sucedida. "
+        "Nada foi baixado ou enviado ao Drive."
     )
-
-# Ordena TODOS os artefatos IPA elegíveis pela data de geração do artefato.
-# Assim um novo sufixo, como Folder-Shaders, não faz a busca voltar a uma IPA antiga.
-artifact_candidates.sort(key=artifact_recency_key, reverse=True)
-selected_run, selected_artifact = artifact_candidates[0]
 
 if selected_artifact.get("expired", False):
     raise RuntimeError(
-        "A IPA mais recentemente gerada expirou no GitHub: "
-        f"run={selected_run.get('id')}, artifact={selected_artifact.get('id')}, "
+        "A IPA mais recente publicada expirou no GitHub: "
+        f"run={selected_run.get('id')}, "
+        f"artifact={selected_artifact.get('id')}, "
         f"name={selected_artifact.get('name')!r}, "
         f"expires_at={selected_artifact.get('expires_at')}. "
         "Por segurança, uma IPA antiga NÃO será usada como substituta."
     )
 
 ARTIFACT_NAME = str(selected_artifact.get("name") or "")
-print(
-    f"Seleção dinâmica: {len(artifact_candidates)} IPA(s) candidatas; "
-    f"mais recente criada em {selected_artifact.get('created_at') or 'data não informada'}."
-)
 
 RUN_ID = int(selected_run["id"])
 ARTIFACT_ID = int(selected_artifact["id"])
