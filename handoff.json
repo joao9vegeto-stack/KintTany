@@ -759,7 +759,7 @@
   },
   "created_utc": "2026-11-16T02:55:09.450345+00:00",
   "dispatch_attempt": {
-    "id": "kakarot-sparse-mip-view-repair-disk-budget-20261117",
-    "reason": "Retry the sparse mip-view host repair after correcting the Actions disk guard: reserve the exact prepared RomFS size plus 30 GiB before restore and require 30 GiB afterward. The builder retains its own 20 GiB pre-metadata-split and 8 GiB later-stage guards. Reuse the verified Build #6 Metal library and exact 75,430-shader metadata/package identity; do not translate or recompile guest shaders. Preserve the FPS selector, render scale, external RomFS and AOC."
+    "id": "kakarot-packaged-width-alignment-runtime-fix-20261117",
+    "reason": "Backport the reviewed NXNative packaged-texture width-alignment fix to the exact pinned Kakarot host. Preserve NVN packaged layout byte 1 low nibble in the row pitch, mip-level offsets, and array-layer alignment; emit the actual packaged width nibble in device logs and add H/D/W layout regression tests. Keep the current sparse mip-view/copy-level repair. Reuse Build #6's verified packed Metal library and exact 75,430-shader package identity; allow only metadata-only shader splitting, do not run dmsh_build.py, shader translation, or Apple guest Metal compilation. Preserve the 30/60 FPS selector, DM_RENDER_SCALE, external RomFS and AOC."
   }
 }
