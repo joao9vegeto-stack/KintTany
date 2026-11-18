@@ -70,8 +70,6 @@ jobs:
 
       - name: Assemble the reusable NX2Apple-based branch
         shell: bash
-        env:
-          NXNATIVE_SHA: e7dc2d9afdba36adb9b07c26793a342871a9e312
         run: |
           set -euo pipefail
           ASSETS="$RUNNER_TEMP/dante-migration"
@@ -106,6 +104,32 @@ jobs:
           cp "$ASSETS/0017-support-steam-controller-and-shared-mac-control.patch" "patches/0017-support-steam-controller-and-shared-mac-control.patch"
           grep -Fxq '0017-support-steam-controller-and-shared-mac-control.patch' patches/series
           cmp -s "$ASSETS/0017-support-steam-controller-and-shared-mac-control.patch" "patches/0017-support-steam-controller-and-shared-mac-control.patch"
+
+          # Preserve the exact upstream helper so the temporary migration strategy
+          # is removed immediately after the first successful queue rebase.
+          cp tools/patches.py "$ASSETS/patches.py.upstream"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("tools/patches.py")
+          source = path.read_text(encoding="utf-8")
+          original = """def am(wt, patch):
+              return git('-c', 'user.name=patches.py', '-c', 'user.email=patches@localhost', '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false',
+                         'am', '-3', '--quiet', str(patch.path), cwd=wt, check=False)
+          """
+          replacement = """def am(wt, patch):
+              # This branch-local Steam patch has no reachable historical preimage
+              # blobs. Apply its rebased hunks directly once; bump will regenerate
+              # valid blob indexes on the new nxnative base before strict validation.
+              strategy = '--no-3way' if patch.file == '0017-support-steam-controller-and-shared-mac-control.patch' else '-3'
+              return git('-c', 'user.name=patches.py', '-c', 'user.email=patches@localhost', '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false',
+                         'am', strategy, '--quiet', str(patch.path), cwd=wt, check=False)
+          """
+          if source.count(original) != 1:
+              raise SystemExit("Expected NX2Apple patches.py am() implementation exactly once; refusing an unsafe edit.")
+          path.write_text(source.replace(original, replacement, 1), encoding="utf-8")
+          print("Enabled one-time context application for Steam patch 0017 only.")
+          PY
           grep -Fxq '0015-host-read-embedded-sections-from-the-image-that.patch' patches/series
           cmp -s "$ASSETS/0015-host-read-embedded-sections-from-the-image-that.patch" "patches/0015-host-read-embedded-sections-from-the-image-that.patch"
           grep -Fxq '0014-mac-split-a-joy-con-pair-into-two-sideways-contr.patch' patches/series
@@ -125,14 +149,22 @@ jobs:
           test -f legacy/spkioszero/README.md
           test ! -e .github/workflows/spk_ios_zero.yml
 
-      - name: Validate and materialize current nxnative HEAD
+      - name: Resolve and materialize current nxnative main HEAD
         shell: bash
-        env:
-          NXNATIVE_SHA: e7dc2d9afdba36adb9b07c26793a342871a9e312
         run: |
           set -euo pipefail
+          NXNATIVE_SHA="$(git ls-remote --exit-code https://github.com/seedds/nxnative.git refs/heads/main | awk 'NR==1 { print $1 }')"
+          if [[ ! "$NXNATIVE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not resolve seedds/nxnative main HEAD."
+            exit 1
+          fi
+          echo "NXNATIVE_SHA=$NXNATIVE_SHA" >> "$GITHUB_ENV"
+          echo "Resolved seedds/nxnative main HEAD: $NXNATIVE_SHA"
           test "$(cat .upstream-ref)" = 94a0944755da1a443f42651bf7ee49ab24ed5ee5
           python3 tools/engine.py bump --to "$NXNATIVE_SHA"
+          # bump rewrites every applied patch against the new pin, including 0017.
+          # Restore upstream's default three-way helper before strict queue checks.
+          cp "$RUNNER_TEMP/dante-migration/patches.py.upstream" tools/patches.py
           test "$(cat .upstream-ref)" = "$NXNATIVE_SHA"
           python3 tools/engine.py check
           python3 tools/engine.py sync
@@ -149,7 +181,7 @@ jobs:
           test -f engine/dm/games/profile_guess.py
           test -f frontend-ios/Package.swift
           test -f frontend/README.md
-          test "$(cat .upstream-ref)" = e7dc2d9afdba36adb9b07c26793a342871a9e312
+          test "$(cat .upstream-ref)" = "$NXNATIVE_SHA"
           test -d engine/.git
           ! find . -type f \( -name '*.nsp' -o -name '*.xci' -o -name 'prod.keys' \) -print -quit | grep -q .
 

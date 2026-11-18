@@ -5,7 +5,9 @@ This branch is being converted into a maintained, reusable native iOS porting ba
 ## Exact source references
 
 - NX2Apple frontend and patch-queue snapshot: `LNPANDY/NX2Apple` at `7541e9e2f15b8beda26ff5d7b405e234e4015ed2`.
-- nxnative target: `seedds/nxnative` HEAD verified on 18 November 2026 at `e7dc2d9afdba36adb9b07c26793a342871a9e312`.
+- nxnative target: the workflow resolves the current `seedds/nxnative` `main` HEAD immediately before the rebase and records the full 40-character SHA in `.upstream-ref`.
+- The Steam Controller patch `0017` has been rebased on the branch-specific post-`0016` queue. Its original preimage blobs are not reachable from the nxnative repository, so the first bump applies that patch by its exact diff context (`--no-3way`) and immediately rewrites it against the new pin. The workflow then restores the stock NX2Apple patch helper and runs the normal three-way `check` and `sync` against the regenerated patch queue.
+- The Joy-Con split patch `0014` is kept as a branch-specific rebase with full blob indexes for the post-`0013` tree.
 - Upstream engine is materialized by `python3 tools/engine.py sync` into ignored `engine/`. Its source of truth is `.upstream-ref` plus `patches/series`, not a committed copy of the engine.
 
 ## Why this migration is necessary
