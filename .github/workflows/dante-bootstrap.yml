@@ -185,6 +185,79 @@ jobs:
                             f"old_present={old_present} expected_new={expected_new} new_present={new_present}")
               print(f"PATCH_0017_BLOB_MISMATCHES={mismatches}")
           PY
+          python3 - <<'PY'
+          import os
+          import shutil
+          import sys
+          import tarfile
+          from pathlib import Path
+
+          root = Path.cwd()
+          sys.path.insert(0, str(root / "tools"))
+          import engine as E
+          import patches as P
+
+          old_pin = E.pin(root)
+          target = os.environ["NXNATIVE_SHA"]
+          queue = P.load(root)
+          position = next(i for i, p in enumerate(queue)
+                          if p.file == "0017-support-steam-controller-and-shared-mac-control.patch")
+          eng = E.scratch_root(root)
+          E.fetch(eng, old_pin)
+          E.fetch(eng, target)
+          out = Path(os.environ["RUNNER_TEMP"]) / "dante-reject-evidence"
+          shutil.rmtree(out, ignore_errors=True)
+          (out / "preimage").mkdir(parents=True)
+          (out / "partial").mkdir(parents=True)
+          (out / "rejects").mkdir(parents=True)
+
+          with P.Scratch(eng, target, os.environ["RUNNER_TEMP"]) as scratch:
+              applied, landed, conflicts = P.apply_series(scratch.dir, queue[:position])
+              if conflicts:
+                  P.report(old_pin, target, applied, landed, conflicts)
+                  raise SystemExit("Could not materialize the actual preimage for patch 0017")
+              steam = queue[position]
+              patch_result = P.git("apply", "--reject", "--whitespace=nowarn",
+                                   str(steam.path), cwd=scratch.dir, check=False)
+              (out / "apply-result.txt").write_text(
+                  "returncode=" + str(patch_result.returncode) + chr(10)
+                  + patch_result.stdout + chr(10) + patch_result.stderr,
+                  encoding="utf-8")
+              paths = list(dict.fromkeys(steam.files))
+              for rel in paths:
+                  try:
+                      before = P.git("show", "HEAD:" + rel, cwd=scratch.dir, check=False)
+                      if before.returncode == 0:
+                          dest = out / "preimage" / rel
+                          dest.parent.mkdir(parents=True, exist_ok=True)
+                          dest.write_bytes(before.stdout.encode("utf-8") if isinstance(before.stdout, str) else before.stdout)
+                  except Exception:
+                      pass
+                  current = scratch.dir / rel
+                  if current.is_file():
+                      dest = out / "partial" / rel
+                      dest.parent.mkdir(parents=True, exist_ok=True)
+                      shutil.copy2(current, dest)
+              rejects = list(scratch.dir.rglob("*.rej"))
+              for rej in rejects:
+                  dest = out / "rejects" / rej.relative_to(scratch.dir)
+                  dest.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copy2(rej, dest)
+              diff = P.git("diff", "--binary", "HEAD", cwd=scratch.dir, check=False)
+              (out / "accepted-hunks.patch").write_text(diff.stdout, encoding="utf-8")
+              status = P.git("status", "--short", cwd=scratch.dir, check=False)
+              (out / "status.txt").write_text(status.stdout, encoding="utf-8")
+              (out / "reject-list.txt").write_text(
+                  chr(10).join(str(p.relative_to(scratch.dir)) for p in rejects) + chr(10),
+                  encoding="utf-8")
+              print(f"PATCH_0017_APPLY_RETURN={patch_result.returncode}")
+              print(f"PATCH_0017_REJECT_FILES={len(rejects)}")
+              print("REJECTS=" + ", ".join(str(p.relative_to(scratch.dir)) for p in rejects))
+          archive = Path(os.environ["RUNNER_TEMP"]) / "dante-reject-evidence.tar.gz"
+          with tarfile.open(archive, "w:gz") as tar:
+              tar.add(out, arcname="dante-reject-evidence")
+          print(f"PATCH_0017_EVIDENCE={archive}")
+          PY
           python3 tools/engine.py --tmp "$RUNNER_TEMP" bump --to "$NXNATIVE_SHA"
           test "$(cat .upstream-ref)" = "$NXNATIVE_SHA"
           python3 tools/engine.py check
@@ -242,7 +315,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dante-rebase-conflict-${{ github.run_number }}
-          path: ${{ runner.temp }}/dante-conflict.tar.gz
+          path: |
+            ${{ runner.temp }}/dante-conflict.tar.gz
+            ${{ runner.temp }}/dante-reject-evidence.tar.gz
           if-no-files-found: warn
           compression-level: 1
 
