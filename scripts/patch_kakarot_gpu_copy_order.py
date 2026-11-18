@@ -349,13 +349,13 @@ static int tex_cpu_wait(const tex_t *t) {
 B2B_FLUSH = """static void b2b_flush(int cut) {
     if (!g_b2b_n) return;
     if (cut) {
-        uint64_t generation = g_cbgen;
+        uint64_t cuts_before = g_cuts;
         if (!g_enc) {
             if (g_blit) { enc_b_end(g_blit); g_blit = nil; }
             g_cut_copy = 1;
             sub_cut();
         }
-        if (g_cbgen != generation) g_b2b_cuts++;
+        if (g_cuts != cuts_before) g_b2b_cuts++;
         else g_b2b_nocut++;
     }
     for (int i = 0; i < g_b2b_n; i++) {
