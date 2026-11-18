@@ -1,0 +1,134 @@
+name: Dante2iOS · bootstrap NX2Apple migration
+
+on:
+  push:
+    branches: [Dante2iOS]
+    paths:
+      - "migration/**"
+      - ".github/workflows/dante-bootstrap.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dante2ios-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    if: github.ref == 'refs/heads/Dante2iOS'
+    runs-on: macos-26
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: Dante2iOS
+          fetch-depth: 0
+
+      - name: Preserve SpkIOSzero work as a non-active reference
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin +refs/heads/SpkIOSzero:refs/remotes/origin/SpkIOSzero
+          SPK="$RUNNER_TEMP/spkioszero"
+          LEGACY="$RUNNER_TEMP/legacy-spkioszero"
+          mkdir -p "$LEGACY"/{workflows,colab,scripts,ios-overrides,game-profile}
+          git worktree add --detach "$SPK" origin/SpkIOSzero
+          copy() {
+            local src="$1" dst="$2"
+            test -f "$SPK/$src"
+            mkdir -p "$LEGACY/$(dirname "$dst")"
+            cp "$SPK/$src" "$LEGACY/$dst"
+          }
+          copy .github/workflows/spk_ios_zero.yml workflows/spk_ios_zero.yml
+          copy colab/SpkIOSzero.ipynb colab/SpkIOSzero.ipynb
+          copy colab/SpkIOSzero_Corrigido.ipynb colab/SpkIOSzero_Corrigido.ipynb
+          copy colab/prepare_spk.py colab/prepare_spk.py
+          copy colab/run_spk.py colab/run_spk.py
+          copy colab/source_spk.py colab/source_spk.py
+          copy scripts/build_spk_shared.py scripts/build_spk_shared.py
+          copy scripts/prepare_spk_actions.py scripts/prepare_spk_actions.py
+          copy scripts/spk_engine.py scripts/spk_engine.py
+          copy dm/ios/tools/build_game_pipeline.py ios-overrides/build_game_pipeline.py
+          copy dm/ios/tools/diagnose_spk_crash.py ios-overrides/diagnose_spk_crash.py
+          copy dm/ios/tools/build_ipa.sh ios-overrides/build_ipa.sh
+          copy dm/ios/Sources/main.m ios-overrides/main.m
+          copy dm/games/010035F022078000/.gitkeep game-profile/.gitkeep
+          cp migration/DANTE2IOS.md "$LEGACY/README.md"
+          git worktree remove "$SPK"
+          echo "Preserved $(find "$LEGACY" -type f | wc -l | tr -d ' ') SpkIOSzero reference files."
+
+      - name: Fetch the exact NX2Apple source snapshot
+        shell: bash
+        env:
+          NX2APPLE_SHA: 7541e9e2f15b8beda26ff5d7b405e234e4015ed2
+        run: |
+          set -euo pipefail
+          git clone --no-checkout https://github.com/LNPANDY/NX2Apple.git "$RUNNER_TEMP/NX2Apple"
+          git -C "$RUNNER_TEMP/NX2Apple" fetch --no-tags --depth=1 origin "$NX2APPLE_SHA"
+          git -C "$RUNNER_TEMP/NX2Apple" checkout --detach "$NX2APPLE_SHA"
+
+      - name: Assemble the reusable NX2Apple-based branch
+        shell: bash
+        env:
+          NXNATIVE_SHA: 64a1b8f6d4f2b1a0105a518ddf86bd1370191ece
+        run: |
+          set -euo pipefail
+          ASSETS="$RUNNER_TEMP/dante-migration"
+          mkdir -p "$ASSETS"
+          cp migration/0001-ios-game-data-folder.patch "$ASSETS/0001-ios-game-data-folder.patch"
+          cp migration/DANTE2IOS.md "$ASSETS/DANTE2IOS.md"
+          cp migration/dante-engine-validation.yml "$ASSETS/dante-engine-validation.yml"
+          cp migration/dante-sync-upstream.yml "$ASSETS/dante-sync-upstream.yml"
+
+          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          rsync -a --exclude='.git' "$RUNNER_TEMP/NX2Apple/" "$GITHUB_WORKSPACE/"
+          mkdir -p legacy/spkioszero .github/workflows
+          cp -a "$RUNNER_TEMP/legacy-spkioszero/." legacy/spkioszero/
+          cp "$ASSETS/0001-ios-game-data-folder.patch" patches/0001-ios-game-data-folder.patch
+          cp "$ASSETS/DANTE2IOS.md" DANTE2IOS.md
+          printf '%s\n' "$NXNATIVE_SHA" > .upstream-ref
+          printf '%s\n' "7541e9e2f15b8beda26ff5d7b405e234e4015ed2" > NX2APPLE_REF
+          rm -f .github/workflows/*.yml .github/workflows/*.yaml
+          cp "$ASSETS/dante-engine-validation.yml" .github/workflows/dante-engine-validation.yml
+          cp "$ASSETS/dante-sync-upstream.yml" .github/workflows/dante-sync-upstream.yml
+          rm -rf migration
+          test -f patches/series
+          grep -Fxq '0001-ios-game-data-folder.patch' patches/series
+          test -f legacy/spkioszero/README.md
+          test ! -e .github/workflows/spk_ios_zero.yml
+
+      - name: Rebase the complete NX2Apple patch queue onto current nxnative HEAD
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/engine.py bump --to 64a1b8f6d4f2b1a0105a518ddf86bd1370191ece
+          python3 tools/engine.py check
+          python3 tools/engine.py sync
+          python3 tools/engine.py relink
+
+      - name: Verify the migrated source tree (no game extraction or IPA build)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover tools/tests
+          python3 -m compileall -q engine/scripts engine/dm/tools engine/dm/games engine/dm/mac
+          bash -n engine/dm/ios/tools/build_ipa.sh
+          test -f engine/dm/ios/Sources/main.m
+          test -f engine/dm/games/profile_guess.py
+          test -f frontend-ios/Package.swift
+          test -f frontend/README.md
+          test "$(cat .upstream-ref)" = 64a1b8f6d4f2b1a0105a518ddf86bd1370191ece
+          test -d engine/.git
+          ! find . -type f \( -name '*.nsp' -o -name '*.xci' -o -name 'prod.keys' \) -print -quit | grep -q .
+
+      - name: Commit the verified migration to Dante2iOS only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Dante2iOS migration"
+          git config user.email "dante2ios-migration@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Migrate Dante2iOS to current NX2Apple and nxnative"
+          git push origin HEAD:Dante2iOS

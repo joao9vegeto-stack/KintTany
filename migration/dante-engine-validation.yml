@@ -1,0 +1,57 @@
+name: Dante2iOS engine validation
+
+on:
+  push:
+    branches: [Dante2iOS]
+    paths:
+      - ".upstream-ref"
+      - "patches/**"
+      - "tools/**"
+      - ".github/workflows/dante-engine-validation.yml"
+  pull_request:
+    branches: [Dante2iOS]
+    paths:
+      - ".upstream-ref"
+      - "patches/**"
+      - "tools/**"
+      - ".github/workflows/dante-engine-validation.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dante2ios-engine-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/Dante2iOS' || github.base_ref == 'Dante2iOS'
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: Dante2iOS
+          fetch-depth: 0
+
+      - name: Materialize pinned nxnative engine and check patch queue
+        run: |
+          set -euo pipefail
+          python3 tools/engine.py relink
+          python3 tools/engine.py check
+          python3 tools/engine.py sync
+
+      - name: Test NX2Apple patch and build tooling
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover tools/tests
+          python3 -m compileall -q engine/scripts engine/dm/tools engine/dm/games engine/dm/mac
+          bash -n engine/dm/ios/tools/build_ipa.sh
+
+      - name: Verify shared engine structure (no game build)
+        run: |
+          set -euo pipefail
+          test -f engine/dm/ios/Sources/main.m
+          test -f engine/dm/games/profile_guess.py
+          test -d frontend-ios/Sources
+          test -f patches/0001-ios-game-data-folder.patch
