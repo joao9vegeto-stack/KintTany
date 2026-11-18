@@ -85,6 +85,7 @@ jobs:
           cp migration/0013-nsp-script-hand-the-extraction-and-the-shader-sp.patch "$ASSETS/0013-nsp-script-hand-the-extraction-and-the-shader-sp.patch"
           cp migration/0014-mac-split-a-joy-con-pair-into-two-sideways-contr.patch "$ASSETS/0014-mac-split-a-joy-con-pair-into-two-sideways-contr.patch"
           cp migration/0015-host-read-embedded-sections-from-the-image-that.patch "$ASSETS/0015-host-read-embedded-sections-from-the-image-that.patch"
+          cp migration/0017-support-steam-controller-and-shared-mac-control.patch "$ASSETS/0017-support-steam-controller-and-shared-mac-control.patch"
           cp migration/DANTE2IOS.md "$ASSETS/DANTE2IOS.md"
           cp migration/dante-engine-validation.yml "$ASSETS/dante-engine-validation.yml"
           cp migration/dante-sync-upstream.yml "$ASSETS/dante-sync-upstream.yml"
@@ -102,6 +103,9 @@ jobs:
           cp "$ASSETS/0013-nsp-script-hand-the-extraction-and-the-shader-sp.patch" patches/0013-nsp-script-hand-the-extraction-and-the-shader-sp.patch
           cp "$ASSETS/0014-mac-split-a-joy-con-pair-into-two-sideways-contr.patch" "patches/0014-mac-split-a-joy-con-pair-into-two-sideways-contr.patch"
           cp "$ASSETS/0015-host-read-embedded-sections-from-the-image-that.patch" "patches/0015-host-read-embedded-sections-from-the-image-that.patch"
+          cp "$ASSETS/0017-support-steam-controller-and-shared-mac-control.patch" "patches/0017-support-steam-controller-and-shared-mac-control.patch"
+          grep -Fxq '0017-support-steam-controller-and-shared-mac-control.patch' patches/series
+          cmp -s "$ASSETS/0017-support-steam-controller-and-shared-mac-control.patch" "patches/0017-support-steam-controller-and-shared-mac-control.patch"
           grep -Fxq '0015-host-read-embedded-sections-from-the-image-that.patch' patches/series
           cmp -s "$ASSETS/0015-host-read-embedded-sections-from-the-image-that.patch" "patches/0015-host-read-embedded-sections-from-the-image-that.patch"
           grep -Fxq '0014-mac-split-a-joy-con-pair-into-two-sideways-contr.patch' patches/series
