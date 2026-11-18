@@ -180,7 +180,7 @@ jobs:
               count += 1
           (out / "unmerged-count.txt").write_text(str(count) + chr(10))
           print(f"Captured {count} conflict stages from {wt}")
-          PYY
+          PY
           tar -czf "$RUNNER_TEMP/dante-conflict.tar.gz" -C "$OUT" .
           echo "Conflict stages archived: $RUNNER_TEMP/dante-conflict.tar.gz"
 
