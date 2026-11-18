@@ -78,6 +78,7 @@ jobs:
           mkdir -p "$ASSETS"
           cp migration/0001-ios-game-data-folder.patch "$ASSETS/0001-ios-game-data-folder.patch"
           cp migration/0003-mac-keymap.patch "$ASSETS/0003-mac-keymap.patch"
+          cp migration/0006-front-mac-dm-screen.patch "$ASSETS/0006-front-mac-dm-screen.patch"
           cp migration/DANTE2IOS.md "$ASSETS/DANTE2IOS.md"
           cp migration/dante-engine-validation.yml "$ASSETS/dante-engine-validation.yml"
           cp migration/dante-sync-upstream.yml "$ASSETS/dante-sync-upstream.yml"
@@ -88,6 +89,7 @@ jobs:
           cp -a "$RUNNER_TEMP/legacy-spkioszero/." legacy/spkioszero/
           cp "$ASSETS/0001-ios-game-data-folder.patch" patches/0001-ios-game-data-folder.patch
           cp "$ASSETS/0003-mac-keymap.patch" patches/0003-mac-keymap.patch
+          cp "$ASSETS/0006-front-mac-dm-screen.patch" patches/0006-front-mac-dm-screen.patch
           cp "$ASSETS/DANTE2IOS.md" DANTE2IOS.md
           test "$(cat .upstream-ref)" = 94a0944755da1a443f42651bf7ee49ab24ed5ee5
           printf '%s\n' "7541e9e2f15b8beda26ff5d7b405e234e4015ed2" > NX2APPLE_REF
