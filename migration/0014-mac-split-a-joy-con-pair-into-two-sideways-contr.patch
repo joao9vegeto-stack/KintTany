@@ -26,7 +26,6 @@ Issue: LNPANDY/NX2Apple#740
  create mode 100644 dm/host/pad_joycon_mac.h
 
 diff --git a/dm/host/front_mac.m b/dm/host/front_mac.m
-index 0e9c3cfd..838c39ca 100644
 --- a/dm/host/front_mac.m
 +++ b/dm/host/front_mac.m
 @@ -24,7 +24,6 @@
@@ -412,7 +411,6 @@ index 0e9c3cfd..838c39ca 100644
                  if (conn) hidpad_gc_connected(c);   // a HID pad of its name that only waited for it (pad_hid_mac.h)
                  pads_changed(conn ? nil : c);
 diff --git a/dm/host/haptics_apple.h b/dm/host/haptics_apple.h
-index 8b34bb68..484e5ef0 100644
 --- a/dm/host/haptics_apple.h
 +++ b/dm/host/haptics_apple.h
 @@ -4,6 +4,7 @@
@@ -424,7 +422,6 @@ index 8b34bb68..484e5ef0 100644
  // rumble queue, with Rumble strength and Rumble cutoff applied (DM_RUMBLE_GAIN, DM_RUMBLE_MIN; amplitudes 0..1). A suspension (focus lost) sends silence. NULL gives the player back.
  void dm_haptics_apple_set_sink(int player, void (*sink)(const dm_haptic_state *state));
 diff --git a/dm/host/haptics_apple.m b/dm/host/haptics_apple.m
-index cb75e050..470c6937 100644
 --- a/dm/host/haptics_apple.m
 +++ b/dm/host/haptics_apple.m
 @@ -39,6 +39,7 @@
@@ -515,7 +512,6 @@ index cb75e050..470c6937 100644
  #if TARGET_OS_IPHONE
          [nc addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; suspend(DM_HAPTICS_INACTIVE, YES); }];
 diff --git a/dm/host/hle_hid.c b/dm/host/hle_hid.c
-index cc3b61e4..e2de0acc 100644
 --- a/dm/host/hle_hid.c
 +++ b/dm/host/hle_hid.c
 @@ -422,7 +422,11 @@
@@ -1010,7 +1006,6 @@ index 00000000..0ac115d1
 +    }
 +}
 diff --git a/dm/host/tests/Makefile b/dm/host/tests/Makefile
-index 8dee8534..bc1e100a 100644
 --- a/dm/host/tests/Makefile
 +++ b/dm/host/tests/Makefile
 @@ -487,7 +487,7 @@
@@ -1023,7 +1018,6 @@ index 8dee8534..bc1e100a 100644
  run: $(B)/t_pad_pro
  $(B)/t_pad_pro: t_pad_pro.c ../pad_pro.h ../dm_input.h | $(B)
 diff --git a/dm/host/tests/t_haptics_apple.m b/dm/host/tests/t_haptics_apple.m
-index 4f7c6c5e..9b9fe8d2 100644
 --- a/dm/host/tests/t_haptics_apple.m
 +++ b/dm/host/tests/t_haptics_apple.m
 @@ -587,6 +587,20 @@
@@ -1048,7 +1042,6 @@ index 4f7c6c5e..9b9fe8d2 100644
      dm_haptics_apple_shutdown();
      puts("Apple haptics: channels, pulses, idle release, startup handlers, engine replacement, backoff, stale callbacks, plain players, Joy-Con recovery and lifetime, the DualSense's handles, level cutoff and the DualShock 4 route passed");
 diff --git a/dm/host/tests/t_hid.c b/dm/host/tests/t_hid.c
-index b11a239e..81a59455 100644
 --- a/dm/host/tests/t_hid.c
 +++ b/dm/host/tests/t_hid.c
 @@ -303,6 +303,19 @@
@@ -1072,7 +1065,6 @@ index b11a239e..81a59455 100644
      CHECK(h_hid_GetStyle(&(uint32_t){0}) == STYLE_FULLKEY && h_hid_GetStyle(&(uint32_t){1}) == STYLE_FULLKEY, "no Joy-Con reported any more: full-key controllers, as before");
      dm_haptics_route(0, 0); dm_pad_players(1); h_hid_SetStyles(0xffffffffu);
 diff --git a/dm/host/tests/t_pad_hid.c b/dm/host/tests/t_pad_hid.c
-index 7f6b1a94..1ab34757 100644
 --- a/dm/host/tests/t_pad_hid.c
 +++ b/dm/host/tests/t_pad_hid.c
 @@ -1,10 +1,137 @@
@@ -1222,7 +1214,6 @@ index 7f6b1a94..1ab34757 100644
      return fails != 0;
  }
 diff --git a/dm/ios/tests/duo/Sources/DuoRuntimeStubs.m b/dm/ios/tests/duo/Sources/DuoRuntimeStubs.m
-index 2b649987..500e86fa 100644
 --- a/dm/ios/tests/duo/Sources/DuoRuntimeStubs.m
 +++ b/dm/ios/tests/duo/Sources/DuoRuntimeStubs.m
 @@ -103,6 +103,7 @@
