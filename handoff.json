@@ -760,7 +760,7 @@
   },
   "created_utc": "2026-11-16T02:55:09.450345+00:00",
   "dispatch_attempt": {
-    "id": "kakarot-pr2919-conflict-hunks-20261118b",
-    "reason": "Capture exact rejected hunks from applying NXNative PR #2919 to the NX2Apple v1.3.1-rc2 engine tree (configured pin plus 70 fork patches), then fail closed without building. Use the diagnostic output to manually port the three conflicts in nvn_dirty.c, nvn_dirty.h and nvn_mtl.m while preserving NX2Apple's BC CPU decoder, runtime profiling, host-image read, video path and teardown changes. This is a short host-only patch-integration preflight; do not restore RomFS, download cached Metal, split/translate/compile shaders, or generate an IPA in this diagnostic run."
+    "id": "kakarot-pr2919-pinned-runtime-adaptation-20261118-final",
+    "reason": "Execute the pin-compatible PR #2919 adaptation now present in scripts/patch_kakarot_gpu_copy_order.py. The NX2Apple v1.3.1-rc2 engine sync uses upstream pin 81906931262fb25d774cce8bca2db8926439e5a2 plus 70 fork patches, so this run validates and builds against that exact synthetic integration tree. Apply only the targeted NVN host runtime changes: capture physical sparse copy destinations, stamp GPU-written pages, group B2B copy runs and cut before later commands when legal, reuse the pinned GPU completion event only for CPU snapshots, and invalidate sparse cache baselines after ordered writes. Preserve BC decoding, IOS teardown, existing texture paths, DM_RENDER_SCALE=1.0, FPS settings and external RomFS/AOC. Repack shader job must remain skipped; reuse the already compiled Metal library and do not run shader translation or DMSH_CHAIN generation."
   }
 }
