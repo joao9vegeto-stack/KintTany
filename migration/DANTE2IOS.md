@@ -5,7 +5,7 @@ This branch is being converted into a maintained, reusable native iOS porting ba
 ## Exact source references
 
 - NX2Apple frontend and patch-queue snapshot: `LNPANDY/NX2Apple` at `7541e9e2f15b8beda26ff5d7b405e234e4015ed2`.
-- nxnative target: `seedds/nxnative` HEAD observed at `64a1b8f6d4f2b1a0105a518ddf86bd1370191ece`.
+- nxnative target: `seedds/nxnative` HEAD observed at `a3663659342ef43afe1f29909c7c36d0cf7555be`.
 - Upstream engine is materialized by `python3 tools/engine.py sync` into ignored `engine/`. Its source of truth is `.upstream-ref` plus `patches/series`, not a committed copy of the engine.
 
 ## Why this migration is necessary

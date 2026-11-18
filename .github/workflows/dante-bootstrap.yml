@@ -71,7 +71,7 @@ jobs:
       - name: Assemble the reusable NX2Apple-based branch
         shell: bash
         env:
-          NXNATIVE_SHA: 64a1b8f6d4f2b1a0105a518ddf86bd1370191ece
+          NXNATIVE_SHA: a3663659342ef43afe1f29909c7c36d0cf7555be
         run: |
           set -euo pipefail
           ASSETS="$RUNNER_TEMP/dante-migration"
@@ -81,6 +81,7 @@ jobs:
           cp migration/0006-front-mac-dm-screen.patch "$ASSETS/0006-front-mac-dm-screen.patch"
           cp migration/0009-runtime-profile.patch "$ASSETS/0009-runtime-profile.patch"
           cp migration/0010-front-mac-pointer-hide.patch "$ASSETS/0010-front-mac-pointer-hide.patch"
+          cp migration/0012-ios-quit-from-game.patch "$ASSETS/0012-ios-quit-from-game.patch"
           cp migration/DANTE2IOS.md "$ASSETS/DANTE2IOS.md"
           cp migration/dante-engine-validation.yml "$ASSETS/dante-engine-validation.yml"
           cp migration/dante-sync-upstream.yml "$ASSETS/dante-sync-upstream.yml"
@@ -94,6 +95,7 @@ jobs:
           cp "$ASSETS/0006-front-mac-dm-screen.patch" patches/0006-front-mac-dm-screen.patch
           cp "$ASSETS/0009-runtime-profile.patch" patches/0009-runtime-profile.patch
           cp "$ASSETS/0010-front-mac-pointer-hide.patch" patches/0010-front-mac-pointer-hide.patch
+          cp "$ASSETS/0012-ios-quit-from-game.patch" patches/0012-ios-quit-from-game.patch
           cp "$ASSETS/DANTE2IOS.md" DANTE2IOS.md
           test "$(cat .upstream-ref)" = 94a0944755da1a443f42651bf7ee49ab24ed5ee5
           printf '%s\n' "7541e9e2f15b8beda26ff5d7b405e234e4015ed2" > NX2APPLE_REF
@@ -108,9 +110,11 @@ jobs:
 
       - name: Rebase the complete NX2Apple patch queue onto current nxnative HEAD
         shell: bash
+        env:
+          NXNATIVE_SHA: a3663659342ef43afe1f29909c7c36d0cf7555be
         run: |
           set -euo pipefail
-          python3 tools/engine.py bump --to 64a1b8f6d4f2b1a0105a518ddf86bd1370191ece
+          python3 tools/engine.py bump --to "$NXNATIVE_SHA"
           python3 tools/engine.py check
           python3 tools/engine.py sync
           python3 tools/engine.py relink
@@ -126,7 +130,7 @@ jobs:
           test -f engine/dm/games/profile_guess.py
           test -f frontend-ios/Package.swift
           test -f frontend/README.md
-          test "$(cat .upstream-ref)" = 64a1b8f6d4f2b1a0105a518ddf86bd1370191ece
+          test "$(cat .upstream-ref)" = a3663659342ef43afe1f29909c7c36d0cf7555be
           test -d engine/.git
           ! find . -type f \( -name '*.nsp' -o -name '*.xci' -o -name 'prod.keys' \) -print -quit | grep -q .
 
