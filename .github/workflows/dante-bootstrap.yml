@@ -85,23 +85,7 @@ jobs:
           rsync -a --exclude='.git' "$RUNNER_TEMP/NX2Apple/" "$GITHUB_WORKSPACE/"
           mkdir -p legacy/spkioszero .github/workflows
           cp -a "$RUNNER_TEMP/legacy-spkioszero/." legacy/spkioszero/
-          cp "$ASSETS/0001-ios-game-data-folder.patch" patches/0001-ios-game-data-folder.patch
-          cp "$ASSETS/0003-mac-keymap.patch" patches/0003-mac-keymap.patch
-          cp "$ASSETS/0006-front-mac-dm-screen.patch" patches/0006-front-mac-dm-screen.patch
-          cp "$ASSETS/0009-runtime-profile.patch" patches/0009-runtime-profile.patch
-          cp "$ASSETS/0010-front-mac-pointer-hide.patch" patches/0010-front-mac-pointer-hide.patch
-          cp "$ASSETS/0012-ios-quit-from-game.patch" patches/0012-ios-quit-a-game-from-the-in-game-menu-or-by-hold.patch
-          cp "$ASSETS/0013-nsp-script-hand-the-extraction-and-the-shader-sp.patch" patches/0013-nsp-script-hand-the-extraction-and-the-shader-sp.patch
-          cp "$ASSETS/0014-mac-split-a-joy-con-pair-into-two-sideways-contr.patch" "patches/0014-mac-split-a-joy-con-pair-into-two-sideways-contr.patch"
-          cp "$ASSETS/0015-host-read-embedded-sections-from-the-image-that.patch" "patches/0015-host-read-embedded-sections-from-the-image-that.patch"
-          cp "$ASSETS/0017-support-steam-controller-and-shared-mac-control.patch" "patches/0017-support-steam-controller-and-shared-mac-control.patch"
-          grep -Fxq '0017-support-steam-controller-and-shared-mac-control.patch' patches/series
-          cmp -s "$ASSETS/0017-support-steam-controller-and-shared-mac-control.patch" "patches/0017-support-steam-controller-and-shared-mac-control.patch"
 
-          grep -Fxq '0015-host-read-embedded-sections-from-the-image-that.patch' patches/series
-          cmp -s "$ASSETS/0015-host-read-embedded-sections-from-the-image-that.patch" "patches/0015-host-read-embedded-sections-from-the-image-that.patch"
-          grep -Fxq '0014-mac-split-a-joy-con-pair-into-two-sideways-contr.patch' patches/series
-          cmp -s "$ASSETS/0014-mac-split-a-joy-con-pair-into-two-sideways-contr.patch" "patches/0014-mac-split-a-joy-con-pair-into-two-sideways-contr.patch"
           cp "$ASSETS/DANTE2IOS.md" DANTE2IOS.md
           test "$(cat .upstream-ref)" = 94a0944755da1a443f42651bf7ee49ab24ed5ee5
           printf '%s\n' "7541e9e2f15b8beda26ff5d7b405e234e4015ed2" > NX2APPLE_REF
@@ -110,10 +94,6 @@ jobs:
           cp "$ASSETS/dante-sync-upstream.yml" .github/workflows/dante-sync-upstream.yml
           rm -rf migration
           test -f patches/series
-          grep -Fxq '0001-ios-game-data-folder.patch' patches/series
-          grep -Fxq '0003-mac-keymap.patch' patches/series
-          grep -Fxq '0012-ios-quit-a-game-from-the-in-game-menu-or-by-hold.patch' patches/series
-          cmp -s "$ASSETS/0012-ios-quit-from-game.patch" patches/0012-ios-quit-a-game-from-the-in-game-menu-or-by-hold.patch
           test -f legacy/spkioszero/README.md
           test ! -e .github/workflows/spk_ios_zero.yml
 
