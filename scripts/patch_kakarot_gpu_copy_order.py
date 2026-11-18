@@ -123,18 +123,36 @@ def main() -> int:
         stderr=subprocess.STDOUT, check=False,
     )
     if apply.returncode:
-        # Restore the synthetic NX2Apple integration HEAD, not the bare pin.
+        # Collect exact rejected hunks against the 70-patch NX2Apple tree so
+        # conflicting iOS-specific edits can be ported deliberately.
+        run(["git", "-C", str(root), "reset", "--hard", head])
+        reject = subprocess.run(
+            ["git", "-C", str(root), "apply", "--reject", "--whitespace=nowarn", "-"],
+            input=patch, text=True, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, check=False,
+        )
+        reject_files = sorted(root.rglob("*.rej"))
+        reports = []
+        for rej in reject_files:
+            try:
+                reports.append(f"--- {rej.relative_to(root)} ---\n" + rej.read_text(encoding="utf-8", errors="replace"))
+            finally:
+                rej.unlink(missing_ok=True)
+        reject_text = "\n".join(reports)
         run(["git", "-C", str(root), "reset", "--hard", head])
         fail(
-            "PR #2919 does not merge cleanly onto the pinned Kakarot engine; "
-            "no partial source patch will be built.\n" + (apply.stdout or "")[-12000:]
+            "PR #2919 overlaps NX2Apple's fork patches; refusing partial runtime source. "
+            f"three_way_exit={apply.returncode}, reject_exit={reject.returncode}.\n"
+            + (apply.stdout or "")[-6000:]
+            + "\n=== REJECTED HUNKS FOR MANUAL INTEGRATION ===\n"
+            + (reject_text[-26000:] if reject_text else (reject.stdout or "No .rej files were produced.")[-6000:])
         )
 
     changed = set(run([
         "git", "-C", str(root), "diff", "--cached", "--name-only",
     ]).splitlines())
     if changed != set(FILES):
-        run(["git", "-C", str(root), "reset", "--hard", ENGINE_PIN])
+        run(["git", "-C", str(root), "reset", "--hard", head])
         fail(f"unexpected modified-file set: {sorted(changed)}")
     for rel, markers in REQUIRED.items():
         source = (root / rel).read_text(encoding="utf-8")
