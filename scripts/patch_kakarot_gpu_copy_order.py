@@ -592,7 +592,12 @@ def self_test() -> None:
     assert "nvn_buffer_write_ranges" in VPT_WALK_NEW
     assert "POST_BUFFER_COPY = 5" in POST_HELPERS
     assert "g_b2b_nocut" in B2B_FLUSH
-    assert "nvn_dirty_own_writes" in TEX_CPU_WAIT
+    # CPU snapshot waits check pending GPU work via the pin's existing completion
+    # event. Replay-thread write accounting belongs to the dirty tracker, not here.
+    assert "gpu_read_wait(WS_UPALLOC)" in TEX_CPU_WAIT
+    assert "nvn_dirty_own_writes" in OWN_TRACKING
+    assert "nvn_dirty_gpu_written" in GPU_WRITTEN
+    assert "POST_BUFFER_COPY = 5" in POST_HELPERS
     print("[KaKaRoTiOS] PR #2919 adaptation contract: GPU copy ordering, sparse physical attribution, CPU-upload waits, and dirty-page publication.")
 
 def main() -> int:
