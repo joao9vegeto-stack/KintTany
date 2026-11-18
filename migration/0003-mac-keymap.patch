@@ -1281,11 +1281,24 @@ index 00000000..136b4035
 +    printf("launcher contract: %d checks, %d failed\n", checks, fails);
 +    return fails != 0;
 +}
+diff --git a/docs/development.md b/docs/development.md
+index ac101f0c..dcf85e0d 100644
+--- a/docs/development.md
++++ b/docs/development.md
+@@ -14,6 +14,8 @@ The README covers packing and playing. This page is for working on nxnative itse
+ | iOS app | One unsigned IPA for iPhone and iPad. The rewritten code is embedded in the executable; the shader libraries, the RomFS and the game icon are inside the app. A settings screen comes before the game (`Launcher.swift`, drawn from `dm/launcher.json`, which `dm/games/settings.py` writes from `dm/games/settings.tsv`); the host's loading starts at app launch meanwhile, and the frame rate and render scale go into the frame step state when the game starts (`loader.c` `dm_fps_state_apply`) |
+ | Known gaps | Conditional render is always drawn; [indirect-count multi-draws](reference/rendering.md#indirect-count-multi-draws) can wait for a GPU-written count when the records need conversion, cannot be GPU-masked, or exceed the mask table capacity; geometry shaders do not translate. TBDR optimizations are off by default (they don't understand bindless textures yet). No amiibo. On the Mac, Mario's menu and dialogue text render blank (fine on the iPhone) |
+ 
++On the Mac, `DM_KEYMAP=<name>=<key code>,…` puts a button, a stick direction (the right stick too, on no key by default) or `Shake` on another key, and `DM_PAD_MAP=<name>=<name>,…` changes what a controller's buttons send (`A=B,B=A` swaps them; `input_map.h`).
++
+ ## Cheats
+ 
+ How a Switch with Atmosphère runs cheats, and where this host differs, is in [Cheats on a Switch](reference/cheats.md).
 diff --git a/dm/tools/impact_map.tsv b/dm/tools/impact_map.tsv
-index 59d735e6..434bb349 100644
+index 91eddde6..434bb349 100644
 --- a/dm/tools/impact_map.tsv
 +++ b/dm/tools/impact_map.tsv
-@@ -1,167 +1,168 @@
+@@ -1,155 +1,168 @@
 -# kind: rules  The coarse change → usage map of scripts/regress.py impact (dm/tools/usage.py): which rows of a game's usage manifest (dm/games/<id>/usage.tsv) a change can reach.
 -# Columns: file glob[:function regex] <TAB> usage pattern <TAB> why
 -#   A rule with a function regex applies to the changed functions it matches (the function around each changed hunk); the file's rules without one apply to the other changed
@@ -1302,16 +1315,6 @@ index 59d735e6..434bb349 100644
 -dm/host/tests/*	-	host tests
 -dm/gfx/tex/tests/*	-	CPU texture tests
 -dm/sanitizers/*	-	test sanitizer configuration
--dm/host/hle.h	*:*	HLE and service registration declarations shared by every game
--dm/host/registration.h	*:*	linker registration layout shared by every game and graphics API
--dm/host/hle_table.c	*:*	C library import registrations shared by every game
--dm/host/hle_offline.c	*:*	offline service registrations present in every host
--dm/host/hle_movie_av1.*	hle:*Av1Decoder*	AV1 decoding on the codec worker, beyond the static caller graph
--dm/host/hle_movie_avc.*	hle:*H264Decoder*	H.264 decoding on the codec worker, beyond the static caller graph
--dm/host/hle_movie_avc.*	hle:_ZN*5movie7Decoder*	H.264 decoding on the movie worker, beyond the static caller graph
--dm/host/hle_movie_vt.h	hle:*Av1Decoder*	VideoToolbox reference history and lifecycle recovery
--dm/host/hle_movie_vt.h	hle:*H264Decoder*	VideoToolbox reference history and lifecycle recovery
--dm/host/hle_movie_vt.h	hle:_ZN*5movie7Decoder*	VideoToolbox reference history and lifecycle recovery
 -dm/ios/tests/*	-	iOS tests
 -.github/*	-	CI
 -dm/games/*/README.md	-	a game's note
@@ -1349,7 +1352,7 @@ index 59d735e6..434bb349 100644
 -dm/gfx/nvn/nvn_mtl.m:present|snap|metalfx|upscale	present:*	the present path
 -dm/gfx/tex/*	api:*	texture layouts: every game
 -dm/gfx/vk/*	api:vulkan	Vulkan on Metal
--dm/gfx/gl/*	api:gl	OpenGL on Metal, including per-stage argument buffers
+-dm/gfx/gl/*	api:gl	OpenGL on Metal
 -dm/gfx/tools/dmsh_atomic.py	shader:image_atomic*	image atomics in the MSL
 -dm/gfx/tools/dmsh_wide.py	shader:stage:*	storage buffer reads in the MSL: every NVN game
 -dm/gfx/tools/dmsh_build.py:vs_tf|tf_layout	shader:transform_feedback	transform feedback capture
@@ -1396,7 +1399,7 @@ index 59d735e6..434bb349 100644
 -dm/third_party/ryujinx/*/InstEmitMemory.cs	shader:buffer_atomic	global and shared memory, buffer atomics
 -dm/third_party/ryujinx/*	shader:stage:*	fallback: any other translator change
 -dm/gfx/tools/vk_shaders.py	api:vulkan	Vulkan shaders
--dm/gfx/tools/gl_shaders.py	api:gl	OpenGL shaders and resource-binding ABI
+-dm/gfx/tools/gl_shaders.py	api:gl	OpenGL shaders
 -dm/gfx/tools/pso_offline.py	present:pipeline_prebuild	the offline pipeline archive of the Mac app and the iPhone
 -dm/gfx/tools/c1_guard.py	shader:stage:*	the c1 guard table
 -dm/gfx/tools/cb_extent.py	shader:stage:*	the uniform read extents
@@ -1419,7 +1422,6 @@ index 59d735e6..434bb349 100644
 -dm/mac/pack_app.py	*:*	Mac app packaging: every game's bundled resources
 -dm/gfx/tools/cpk.py	shader:stage:*	CRI archive input to shader scanning
 -dm/gfx/tools/vbf.py	shader:stage:*	Virtuos archive input to shader scanning
--dm/gfx/tools/kit.py	shader:stage:*	KIT archive input to shader scanning
 -dm/gfx/tools/dmsh_mesh.py	shader:stage:gs	passthrough geometry composed into a mesh shader
 -dm/host/hle_fpslock.c	present:*	build-gated engine frame limits and dynamic resolution
 -dm/host/hle_uecvar.c	present:*	Unreal console variables found by name; the texture pool (profile ue_texture_pool)
@@ -1439,13 +1441,12 @@ index 59d735e6..434bb349 100644
 -dm/host/loader.c	*:*	module loading
 -dm/host/hle.c	hle:*	the HLE tables
 -dm/host/front_mac.m	present:*	the Mac front end
--dm/host/front_role.h	present:*	task scheduling for windowless Mac games
 -dm/host/dm_input.h	hle:*hid*	the shared input interface
 -dm/host/motion_apple.h	hle:*SixAxisSensor*	controller motion supplied by GameController
 -dm/host/pad_apple.h	hle:*hid*	controller face buttons from GameController
 -dm/host/motion_fusion.h	hle:*SixAxisSensor*	six-axis motion mapping and orientation
 -dm/host/motion_pro.h	hle:*SixAxisSensor*	passive Switch Pro Controller IMU decoder
--dm/host/motion_pro_mac.h	hle:*SixAxisSensor*	Mac Pro Controller and DualShock 4 raw motion transport and routing
+-dm/host/motion_pro_mac.h	hle:*SixAxisSensor*	Mac Pro Controller raw motion transport and routing
 -dm/host/switch2_proto.h	hle:*hid*	Switch 2 controller protocol: reports, sticks, buttons, motion maps
 -dm/host/pad_switch2_apple.h	hle:*hid*	Switch 2 controllers over Bluetooth LE (off unless DM_SW2=1)
 -dm/host/pad_switch2_apple.m	hle:*hid*	Switch 2 controllers over Bluetooth LE (off unless DM_SW2=1)
@@ -1621,16 +1622,3 @@ index 59d735e6..434bb349 100644
 +dm/ios/*	*:*	the iOS app
 +dm/third_party/ryujinx/src/Ryujinx.Graphics.Shader/Translation/ResourceReservations.cs	shader:stage:gs	geometry compute varying slots
 +dm/third_party/ryujinx/src/Ryujinx.Graphics.Shader/Translation/Transforms/GeometryToCompute.cs	shader:stage:gs	geometry compute input and output lowering
-diff --git a/docs/development.md b/docs/development.md
-index ac101f0c..dcf85e0d 100644
---- a/docs/development.md
-+++ b/docs/development.md
-@@ -14,6 +14,8 @@ The README covers packing and playing. This page is for working on nxnative itse
- | iOS app | One unsigned IPA for iPhone and iPad. The rewritten code is embedded in the executable; the shader libraries, the RomFS and the game icon are inside the app. A settings screen comes before the game (`Launcher.swift`, drawn from `dm/launcher.json`, which `dm/games/settings.py` writes from `dm/games/settings.tsv`); the host's loading starts at app launch meanwhile, and the frame rate and render scale go into the frame step state when the game starts (`loader.c` `dm_fps_state_apply`) |
- | Known gaps | Conditional render is always drawn; [indirect-count multi-draws](reference/rendering.md#indirect-count-multi-draws) can wait for a GPU-written count when the records need conversion, cannot be GPU-masked, or exceed the mask table capacity; geometry shaders do not translate. TBDR optimizations are off by default (they don't understand bindless textures yet). No amiibo. On the Mac, Mario's menu and dialogue text render blank (fine on the iPhone) |
- 
-+On the Mac, `DM_KEYMAP=<name>=<key code>,…` puts a button, a stick direction (the right stick too, on no key by default) or `Shake` on another key, and `DM_PAD_MAP=<name>=<name>,…` changes what a controller's buttons send (`A=B,B=A` swaps them; `input_map.h`).
-+
- ## Cheats
- 
- How a Switch with Atmosphère runs cheats, and where this host differs, is in [Cheats on a Switch](reference/cheats.md).
