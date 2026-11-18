@@ -77,7 +77,6 @@ jobs:
           ASSETS="$RUNNER_TEMP/dante-migration"
           mkdir -p "$ASSETS"
           cp migration/0001-ios-game-data-folder.patch "$ASSETS/0001-ios-game-data-folder.patch"
-          cp migration/0002a-nxnative-conflict-base.patch "$ASSETS/0002a-nxnative-conflict-base.patch"
           cp migration/0003-mac-keymap.patch "$ASSETS/0003-mac-keymap.patch"
           cp migration/0006-front-mac-dm-screen.patch "$ASSETS/0006-front-mac-dm-screen.patch"
           cp migration/0009-runtime-profile.patch "$ASSETS/0009-runtime-profile.patch"
@@ -92,8 +91,6 @@ jobs:
           mkdir -p legacy/spkioszero .github/workflows
           cp -a "$RUNNER_TEMP/legacy-spkioszero/." legacy/spkioszero/
           cp "$ASSETS/0001-ios-game-data-folder.patch" patches/0001-ios-game-data-folder.patch
-          cp "$ASSETS/0002a-nxnative-conflict-base.patch" patches/0002a-nxnative-conflict-base.patch
-          python3 -c 'from pathlib import Path; p=Path("patches/series"); lines=p.read_text(encoding="utf-8").splitlines(); name="0002a-nxnative-conflict-base.patch"; lines.insert(lines.index("0003-mac-keymap.patch"), name) if name not in lines else None; p.write_text("\n".join(lines) + "\n", encoding="utf-8")'
           cp "$ASSETS/0003-mac-keymap.patch" patches/0003-mac-keymap.patch
           cp "$ASSETS/0006-front-mac-dm-screen.patch" patches/0006-front-mac-dm-screen.patch
           cp "$ASSETS/0009-runtime-profile.patch" patches/0009-runtime-profile.patch
@@ -108,22 +105,20 @@ jobs:
           rm -rf migration
           test -f patches/series
           grep -Fxq '0001-ios-game-data-folder.patch' patches/series
-          grep -Fxq '0002a-nxnative-conflict-base.patch' patches/series
           grep -Fxq '0003-mac-keymap.patch' patches/series
-          test "$(grep -n '0002a-nxnative-conflict-base.patch' patches/series | cut -d: -f1)" -lt "$(grep -n '0003-mac-keymap.patch' patches/series | cut -d: -f1)"
           grep -Fxq '0012-ios-quit-a-game-from-the-in-game-menu-or-by-hold.patch' patches/series
           cmp -s "$ASSETS/0012-ios-quit-from-game.patch" patches/0012-ios-quit-a-game-from-the-in-game-menu-or-by-hold.patch
           test -f legacy/spkioszero/README.md
           test ! -e .github/workflows/spk_ios_zero.yml
 
-      - name: Rebase the complete NX2Apple patch queue onto current nxnative HEAD
+      - name: Validate and materialize current nxnative HEAD
         shell: bash
         env:
           NXNATIVE_SHA: a3663659342ef43afe1f29909c7c36d0cf7555be
         run: |
           set -euo pipefail
           test "$(cat .upstream-ref)" = "$NXNATIVE_SHA"
-          python3 tools/engine.py check
+          python3 tools/engine.py relink
           python3 tools/engine.py check
           python3 tools/engine.py sync
           python3 tools/engine.py relink
