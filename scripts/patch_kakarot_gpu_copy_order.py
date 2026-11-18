@@ -543,11 +543,28 @@ def patch_mtl(source: str) -> tuple[str, bool]:
         source, did = replace_once(source, anchor, GPU_READ_WAIT + anchor, "add shared GPU-read completion wait")
         changed |= did
 
-    source, did = replace_in_function(
+    source, did = replace_once(
         source,
-        "static void mdi_wait(void) {",
-        "    rp_end(); ubd_land();",
-        "    int ok = gpu_read_wait(WS_MDI);",
+        """static void mdi_wait(void) {
+    rp_end(); ubd_land();
+    if (g_blit) { enc_b_end(g_blit); g_blit = nil; }
+    up_flush(); res_commit();
+    [g_cb endCommandBuffer];
+    rec_commit(g_cb, nil);
+    if (!g_mdi_ev) g_mdi_ev = [g_dev newSharedEvent];
+    rec_signal(g_mdi_ev, ++g_mdi_v); rec_drain();
+    uint64_t w0 = ws_t0(); int ok = [g_mdi_ev waitUntilSignaledValue:g_mdi_v timeoutMS:10000]; if (ws_on()) ws_put(WS_MDI, w0, 1);
+    if (!ok) RED_ONCE(97, "indirect-count multi-draw: the GPU did not finish within 10 s; the count is read anyway");
+    else drw_drained();
+    g_cb = rec_cb_new();
+    [g_cb beginCommandBufferWithAllocator:g_alloc4[g_alloc_cur]];
+    if (!g_mdi_waits++) MLOG("indirect-count multi-draw: first wait for the GPU-written count at frame %llu pass %llu", (unsigned long long)atomic_load(&g_cur_frame), g_stat_pass);
+}""",
+        """static void mdi_wait(void) {
+    int ok = gpu_read_wait(WS_MDI);
+    if (!ok) RED_ONCE(97, "indirect-count multi-draw: the GPU did not finish within 10 s; the count is read anyway");
+    if (!g_mdi_waits++) MLOG("indirect-count multi-draw: first wait for the GPU-written count at frame %llu pass %llu", (unsigned long long)atomic_load(&g_cur_frame), g_stat_pass);
+}""",
         "share the pinned completion event with CPU texture uploads",
     )
     changed |= did
