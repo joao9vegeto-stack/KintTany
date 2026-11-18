@@ -83,6 +83,7 @@ jobs:
           cp migration/0010-front-mac-pointer-hide.patch "$ASSETS/0010-front-mac-pointer-hide.patch"
           cp migration/0012-ios-quit-from-game.patch "$ASSETS/0012-ios-quit-from-game.patch"
           cp migration/0013-nsp-script-hand-the-extraction-and-the-shader-sp.patch "$ASSETS/0013-nsp-script-hand-the-extraction-and-the-shader-sp.patch"
+          cp migration/0014-mac-split-a-joy-con-pair-into-two-sideways-contr.patch "$ASSETS/0014-mac-split-a-joy-con-pair-into-two-sideways-contr.patch"
           cp migration/DANTE2IOS.md "$ASSETS/DANTE2IOS.md"
           cp migration/dante-engine-validation.yml "$ASSETS/dante-engine-validation.yml"
           cp migration/dante-sync-upstream.yml "$ASSETS/dante-sync-upstream.yml"
@@ -98,6 +99,9 @@ jobs:
           cp "$ASSETS/0010-front-mac-pointer-hide.patch" patches/0010-front-mac-pointer-hide.patch
           cp "$ASSETS/0012-ios-quit-from-game.patch" patches/0012-ios-quit-a-game-from-the-in-game-menu-or-by-hold.patch
           cp "$ASSETS/0013-nsp-script-hand-the-extraction-and-the-shader-sp.patch" patches/0013-nsp-script-hand-the-extraction-and-the-shader-sp.patch
+          cp "$ASSETS/0014-mac-split-a-joy-con-pair-into-two-sideways-contr.patch" "patches/0014-mac-split-a-joy-con-pair-into-two-sideways-contr.patch"
+          grep -Fxq '0014-mac-split-a-joy-con-pair-into-two-sideways-contr.patch' patches/series
+          cmp -s "$ASSETS/0014-mac-split-a-joy-con-pair-into-two-sideways-contr.patch" "patches/0014-mac-split-a-joy-con-pair-into-two-sideways-contr.patch"
           cp "$ASSETS/DANTE2IOS.md" DANTE2IOS.md
           test "$(cat .upstream-ref)" = 94a0944755da1a443f42651bf7ee49ab24ed5ee5
           printf '%s\n' "7541e9e2f15b8beda26ff5d7b405e234e4015ed2" > NX2APPLE_REF
