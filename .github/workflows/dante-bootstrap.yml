@@ -93,16 +93,7 @@ jobs:
           cp -a "$RUNNER_TEMP/legacy-spkioszero/." legacy/spkioszero/
           cp "$ASSETS/0001-ios-game-data-folder.patch" patches/0001-ios-game-data-folder.patch
           cp "$ASSETS/0002a-nxnative-conflict-base.patch" patches/0002a-nxnative-conflict-base.patch
-          python3 - <<'PY'
-from pathlib import Path
-p = Path("patches/series")
-lines = p.read_text(encoding="utf-8").splitlines()
-name = "0002a-nxnative-conflict-base.patch"
-if name not in lines:
-    pos = lines.index("0003-mac-keymap.patch")
-    lines.insert(pos, name)
-p.write_text("\n".join(lines) + "\n", encoding="utf-8")
-PY
+          python3 -c 'from pathlib import Path; p=Path("patches/series"); lines=p.read_text(encoding="utf-8").splitlines(); name="0002a-nxnative-conflict-base.patch"; lines.insert(lines.index("0003-mac-keymap.patch"), name) if name not in lines else None; p.write_text("\n".join(lines) + "\n", encoding="utf-8")'
           cp "$ASSETS/0003-mac-keymap.patch" patches/0003-mac-keymap.patch
           cp "$ASSETS/0006-front-mac-dm-screen.patch" patches/0006-front-mac-dm-screen.patch
           cp "$ASSETS/0009-runtime-profile.patch" patches/0009-runtime-profile.patch
