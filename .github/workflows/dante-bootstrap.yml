@@ -92,35 +92,6 @@ jobs:
 
           find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           rsync -a --exclude='.git' "$RUNNER_TEMP/NX2Apple/" "$GITHUB_WORKSPACE/"
-          # Some forwarded NX2Apple patches carry an index blob from the PR branch, not from nxnative.
-          # Keep the normal three-way path; fall back to strict context application only when Git says
-          # the preimage blob is missing. Ordinary content conflicts still fail and stop the migration.
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path("tools/patches.py")
-          source = path.read_text(encoding="utf-8")
-          old = """def am(wt, patch):
-              return git('-c', 'user.name=patches.py', '-c', 'user.email=patches@localhost', '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false',
-                         'am', '-3', '--quiet', str(patch.path), cwd=wt, check=False)
-          """
-          new = """def am(wt, patch):
-              config = ('-c', 'user.name=patches.py', '-c', 'user.email=patches@localhost',
-                        '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false')
-              r = git(*config, 'am', '-3', '--quiet', str(patch.path), cwd=wt, check=False)
-              detail = (r.stdout or '') + (r.stderr or '')
-              missing_base = ('sha1 information is lacking or useless' in detail or
-                              'could not build fake ancestor' in detail)
-              if r.returncode and missing_base:
-                  git('am', '--abort', cwd=wt, check=False)
-                  print(f'patches.py: {patch.file}: missing preimage blob; retrying exact-context apply without three-way', flush=True)
-                  r = git(*config, 'am', '--quiet', str(patch.path), cwd=wt, check=False)
-              return r
-          """
-          if source.count(old) != 1:
-              raise SystemExit("NX2Apple tools/patches.py am() implementation changed; refusing an unverified edit")
-          path.write_text(source.replace(old, new), encoding="utf-8")
-          print("Installed guarded missing-preimage fallback in tools/patches.py", flush=True)
-          PY
           mkdir -p legacy/spkioszero .github/workflows
           cp -a "$RUNNER_TEMP/legacy-spkioszero/." legacy/spkioszero/
           cp "$ASSETS/0001-ios-game-data-folder.patch" patches/0001-ios-game-data-folder.patch
