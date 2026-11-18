@@ -305,8 +305,7 @@ static void buffer_copy_note(uint64_t dst, uint64_t n) {
 }
 """
 
-GPU_READ_WAIT = """static id<MTLSharedEvent> g_tex_read_ev;
-static uint64_t g_tex_read_v;
+GPU_READ_WAIT = """// Reuse the pinned runtime's indirect-count completion event for CPU reads.
 static int gpu_read_wait(int site) {
     rp_end();
     ubd_land();
@@ -315,11 +314,11 @@ static int gpu_read_wait(int site) {
     res_commit();
     [g_cb endCommandBuffer];
     rec_commit(g_cb, nil);
-    if (!g_tex_read_ev) g_tex_read_ev = [g_dev newSharedEvent];
-    rec_signal(g_tex_read_ev, ++g_tex_read_v);
+    if (!g_mdi_ev) g_mdi_ev = [g_dev newSharedEvent];
+    rec_signal(g_mdi_ev, ++g_mdi_v);
     rec_drain();
     uint64_t w0 = ws_t0();
-    int ok = [g_tex_read_ev waitUntilSignaledValue:g_tex_read_v timeoutMS:10000];
+    int ok = [g_mdi_ev waitUntilSignaledValue:g_mdi_v timeoutMS:10000];
     if (ws_on()) ws_put(site, w0, 1);
     if (ok) drw_drained();
     g_cb = rec_cb_new();
@@ -463,6 +462,63 @@ def patch_mtl(source: str) -> tuple[str, bool]:
 
     source, did = replace_once(
         source,
+        "uint64_t stamp, seen, hash, spare_fence, vgen, vseen, sub; const void *span;",
+        "uint64_t stamp, seen, hash, spare_fence, vgen, vseen, sub, own; const void *span;",
+        "store the sparse package replay-write baseline",
+    )
+    changed |= did
+
+    source, did = replace_once(
+        source,
+        "static inline int sparse_checked(const NvPkg *pk) { return pk->sub == g_sub_serial; }",
+        "static inline int sparse_checked(const NvPkg *pk) { return pk->sub == g_sub_serial && pk->own == nvn_dirty_own_writes(); }",
+        "invalidate sparse package checks after replay-ordered writes",
+    )
+    changed |= did
+
+    source, did = replace_once(
+        source,
+        "else if (pk->sparse) { uint64_t g = nvn_sparse_gen(); clean = (now == pk->seen && g == pk->vseen) || !nvn_sparse_since(t->pool, (uint64_t)(uintptr_t)t->mem, t->L.size, pk->vgen, pk->stamp); pk->vseen = g; pk->sub = g_sub_serial; }",
+        "else if (pk->sparse) { uint64_t g = nvn_sparse_gen(); clean = (now == pk->seen && g == pk->vseen) || !nvn_sparse_since(t->pool, (uint64_t)(uintptr_t)t->mem, t->L.size, pk->vgen, pk->stamp); pk->vseen = g; pk->sub = g_sub_serial; pk->own = nvn_dirty_own_writes(); }",
+        "advance the sparse package replay-write baseline",
+    )
+    changed |= did
+
+    source, did = replace_once(
+        source,
+        "pk->sparse = t->pool && nvn_sparse_pool(t->pool); pk->vgen = pk->vseen = nvn_sparse_gen();",
+        "pk->sparse = t->pool && nvn_sparse_pool(t->pool); pk->vgen = pk->vseen = nvn_sparse_gen(); pk->sub = g_sub_serial; pk->own = nvn_dirty_own_writes();",
+        "initialize sparse package write baseline",
+    )
+    changed |= did
+
+    source, did = replace_once(
+        source,
+        "    enum { RANGES = 4096 }; uint64_t (*ranges)[2] = NULL; int nr = -1;",
+        "    if (!s->gpu) tex_cpu_wait(t);\n    if (whole) s->wown = nvn_dirty_own_writes();\n"
+        "    enum { RANGES = 4096 }; uint64_t (*ranges)[2] = NULL; int nr = -1;",
+        "wait before CPU sparse tile snapshots and record replay-write baseline",
+    )
+    changed |= did
+
+    source, did = replace_once(
+        source,
+        "    s->gen = gen; s->stamp = stamp;",
+        "    if (whole) { s->gen = gen; s->stamp = stamp; }",
+        "preserve dirty baselines across partial sparse mapping scans",
+    )
+    changed |= did
+
+    source, did = replace_once(
+        source,
+        "if (!s->gpu && nvn_dirty_sparse_writes() != s->wseen && atomic_load(&g_cur_frame) - s->wframe >= 60) sparse_sync(s, t, 2);",
+        "if (!s->gpu && nvn_dirty_sparse_writes() != s->wseen && (s->wown != nvn_dirty_own_writes() || atomic_load(&g_cur_frame) - s->wframe >= 60)) sparse_sync(s, t, 2);",
+        "refresh placement sparse tiles after same-submission GPU copies",
+    )
+    changed |= did
+
+    source, did = replace_once(
+        source,
         "static void sparse_sync(NvSparse *s, const tex_t *t, int whole) {\n"
         "    id<MTLTexture> stex = s->tex; if (!stex) return;\n",
         "static void sparse_sync(NvSparse *s, const tex_t *t, int whole) {\n"
@@ -487,6 +543,15 @@ def patch_mtl(source: str) -> tuple[str, bool]:
         source, did = replace_once(source, anchor, GPU_READ_WAIT + anchor, "add shared GPU-read completion wait")
         changed |= did
 
+    source, did = replace_in_function(
+        source,
+        "static void mdi_wait(void) {",
+        "    rp_end(); ubd_land();",
+        "    int ok = gpu_read_wait(WS_MDI);",
+        "share the pinned completion event with CPU texture uploads",
+    )
+    changed |= did
+
     if "static void b2b_flush(int cut) {" not in source:
         anchor = "void mtl_exec(const uint8_t *p) {\n"
         source, did = replace_once(source, anchor, B2B_FLUSH + anchor, "add buffer-copy run completion")
@@ -510,6 +575,8 @@ def patch_mtl(source: str) -> tuple[str, bool]:
         "static int tex_cpu_wait(const tex_t *t)",
         "if (!s->gpu) tex_cpu_wait(t);",
         "s->wown != nvn_dirty_own_writes()",
+        "pk->own == nvn_dirty_own_writes()",
+        "if (whole) { s->gen = gen; s->stamp = stamp; }",
         "static int gpu_read_wait(int site) {",
         "static void b2b_flush(int cut) {",
         "b2b_flush(h.op != OP_END || g_nrest);",
