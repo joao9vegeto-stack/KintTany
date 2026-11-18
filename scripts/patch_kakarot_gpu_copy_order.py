@@ -216,7 +216,7 @@ def patch_dirty(source: str) -> tuple[str, bool]:
     elif "own_note();" not in source[source.index("void nvn_dirty_gpu_written("):source.index("void nvn_dirty_gpu_written(") + 1800]:
         fail("GPU dirty-page function is present but lacks replay-thread write publication.")
 
-    if "nvn_dirty_own_thread(void);" not in source:
+    if "void nvn_dirty_own_thread(void) {" not in source:
         fail("dirty tracker implementation is missing nvn_dirty_own_thread.")
     return source, changed
 
