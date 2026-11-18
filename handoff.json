@@ -760,7 +760,7 @@
   },
   "created_utc": "2026-11-16T02:55:09.450345+00:00",
   "dispatch_attempt": {
-    "id": "kakarot-packaged-width-alignment-runtime-fix-20261117",
-    "reason": "Backport the reviewed NXNative packaged-texture width-alignment fix to the exact pinned Kakarot host. Preserve NVN packaged layout byte 1 low nibble in the row pitch, mip-level offsets, and array-layer alignment; emit the actual packaged width nibble in device logs and add H/D/W layout regression tests. Keep the current sparse mip-view/copy-level repair. Reuse Build #6's verified packed Metal library and exact 75,430-shader package identity; allow only metadata-only shader splitting, do not run dmsh_build.py, shader translation, or Apple guest Metal compilation. Preserve the 30/60 FPS selector, DM_RENDER_SCALE, external RomFS and AOC."
+    "id": "kakarot-pr2919-retry-synthetic-nx2apple-head-20261118",
+    "reason": "Retry the selective NXNative PR #2919 host runtime backport. engine.py sync materializes configured upstream pin 81906931262fb25d774cce8bca2db8926439e5a2 plus 70 NX2Apple patches as synthetic engine HEAD 13d7e7d24b663390f34140c042182bd75fc9354c; validate the authoritative .upstream-ref pin and preserve that synthetic HEAD/worktree, do not require git HEAD to equal bare pin. On a clean worktree, three-way apply only the six NVN runtime files from seedds/nxnative PR commit 23427a7befb6662fec04aa810e0713e5c8d1dd96 (parent 3fe574dfe06638996d6fbaf80275253db47b86b9); on any conflict, reset to the exact synthetic HEAD and fail closed. Keep existing sparse-mip and packaged-width backports. Reuse Build #6 cached Metal image/package key and do not run dmsh_build.py, shader translation, or iOS Metal compilation. Preserve 30/60 FPS, DM_RENDER_SCALE 1.0, external RomFS and AOC."
   }
 }
