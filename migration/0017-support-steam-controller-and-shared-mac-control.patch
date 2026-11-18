@@ -60,6 +60,7 @@ Issue: seedds/nxnative#221
  create mode 100644 docs/mac-controllers.md
 
 diff --git a/dm/games/0100F2C0115B6000/README.md b/dm/games/0100F2C0115B6000/README.md
+index 0d04cf1a..b940537e 100644
 --- a/dm/games/0100F2C0115B6000/README.md
 +++ b/dm/games/0100F2C0115B6000/README.md
 @@ -66,6 +66,8 @@ Game-specific findings. The general host changes they led to are listed under [F
