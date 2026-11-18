@@ -71,7 +71,7 @@ jobs:
       - name: Assemble the reusable NX2Apple-based branch
         shell: bash
         env:
-          NXNATIVE_SHA: 42d02fa88a0ab908510ac31cdb62d039b14dfee7
+          NXNATIVE_SHA: e7dc2d9afdba36adb9b07c26793a342871a9e312
         run: |
           set -euo pipefail
           ASSETS="$RUNNER_TEMP/dante-migration"
@@ -128,7 +128,7 @@ jobs:
       - name: Validate and materialize current nxnative HEAD
         shell: bash
         env:
-          NXNATIVE_SHA: 42d02fa88a0ab908510ac31cdb62d039b14dfee7
+          NXNATIVE_SHA: e7dc2d9afdba36adb9b07c26793a342871a9e312
         run: |
           set -euo pipefail
           test "$(cat .upstream-ref)" = 94a0944755da1a443f42651bf7ee49ab24ed5ee5
@@ -149,7 +149,7 @@ jobs:
           test -f engine/dm/games/profile_guess.py
           test -f frontend-ios/Package.swift
           test -f frontend/README.md
-          test "$(cat .upstream-ref)" = 42d02fa88a0ab908510ac31cdb62d039b14dfee7
+          test "$(cat .upstream-ref)" = e7dc2d9afdba36adb9b07c26793a342871a9e312
           test -d engine/.git
           ! find . -type f \( -name '*.nsp' -o -name '*.xci' -o -name 'prod.keys' \) -print -quit | grep -q .
 
