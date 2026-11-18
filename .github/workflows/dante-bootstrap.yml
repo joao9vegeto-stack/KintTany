@@ -131,6 +131,7 @@ jobs:
           fi
           echo "NXNATIVE_SHA=$NXNATIVE_SHA" >> "$GITHUB_ENV"
           echo "Resolved seedds/nxnative main HEAD: $NXNATIVE_SHA"
+          export NXNATIVE_SHA
           test "$(cat .upstream-ref)" = 94a0944755da1a443f42651bf7ee49ab24ed5ee5
           python3 - <<'PY'
           import os
