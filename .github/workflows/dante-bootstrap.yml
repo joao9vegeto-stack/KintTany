@@ -87,7 +87,7 @@ jobs:
           cp -a "$RUNNER_TEMP/legacy-spkioszero/." legacy/spkioszero/
           cp "$ASSETS/0001-ios-game-data-folder.patch" patches/0001-ios-game-data-folder.patch
           cp "$ASSETS/DANTE2IOS.md" DANTE2IOS.md
-          printf '%s\n' "$NXNATIVE_SHA" > .upstream-ref
+          test "$(cat .upstream-ref)" = 94a0944755da1a443f42651bf7ee49ab24ed5ee5
           printf '%s\n' "7541e9e2f15b8beda26ff5d7b405e234e4015ed2" > NX2APPLE_REF
           rm -f .github/workflows/*.yml .github/workflows/*.yaml
           cp "$ASSETS/dante-engine-validation.yml" .github/workflows/dante-engine-validation.yml
