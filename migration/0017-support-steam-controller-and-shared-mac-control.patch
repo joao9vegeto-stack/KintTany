@@ -5230,13 +5230,14 @@ diff --git a/dm/mac/launcher.c b/dm/mac/launcher.c
      snprintf(p, sizeof p, "%s/env.txt", sup); env_file(p);
      snprintf(p, sizeof p, "%s/env.txt", dm); env_file(p);
      setenv("DM_ENV_FILE_KEYS", g_file_keys ? g_file_keys : "", 1); setenv("DM_ENV_LAUNCH_KEYS", g_launch_keys ? g_launch_keys : "", 1);
-@@ -206,7 +226,7 @@ int main(int argc, char **argv) {
+@@ -225,8 +245,8 @@ int main(int argc, char **argv) {
      if (!window) fprintf(stderr, "launcher: no settings window (DM_LAUNCHER=0 or --no-launcher)\n");
      int shown = window ? dm_mac_launcher() : 2;
      if (!shown) return 0;   // Quit: no game
 -    if (shown == 2) saved_choices();
 +    saved_choices(shown == 1);   // the window applied its settings; the controls are not among them
      cloud_saves_folder();
+     microphone_at_launch();
      setenv("DM_ROOT", sup, 0); setenv("DM_ROMFS", romfs, 0); setenv("DM_TEMP", temp, 0);
      snprintf(p, sizeof p, "%s/Library/Application Support/nxnative/system", home); setenv("DM_SYSTEM_DIR", p, 0);   // the player's own console files, for every game
 diff --git a/dm/mac/pack_app.py b/dm/mac/pack_app.py
@@ -5251,15 +5252,11 @@ diff --git a/dm/mac/pack_app.py b/dm/mac/pack_app.py
      if icon: p['CFBundleIconFile'] = 'AppIcon'
      if a.settings:
          listed = json.loads(Path(a.settings).read_text(encoding='utf-8'))['settings']
-@@ -335,7 +335,7 @@ def pack(a):
-         if not codesign: raise SystemExit('codesign is not available')
-         codesign = Path(codesign).resolve()
+@@ -418,3 +418,3 @@ def pack(a):
          minos = min_os(a.host)
 -        sources = [Path(__file__).resolve(), HERE / 'launcher.c', HERE.parent / 'host/romfs_image.h', HERE.parent / 'host/save_sync.c', HERE.parent / 'host/save_sync.h', HERE.parent / 'tools/romfs.py', HERE.parent / 'tools/nso_syms.py'] + swift_sources()
 +        sources = [Path(__file__).resolve(), HERE / 'launcher.c', HERE.parent / 'host/romfs_image.h', HERE.parent / 'host/input_map.h', HERE.parent / 'host/dm_input.h', HERE.parent / 'host/save_sync.c', HERE.parent / 'host/save_sync.h', HERE.parent / 'tools/romfs.py', HERE.parent / 'tools/nso_syms.py'] + swift_sources()
          large = {*msls, *pso, *(p for x in programs for p in x[5])}   # the shader libraries and pipeline archives (13.5 GB for Ocarina of Time): by stat, as the RomFS trees below
-         inputs = {'options': vars(a), 'files': [file_row(p, p in large) for p in files + sources],
-                   'trees': [(p, inventory(Path(p))) for p in (a.romfs, a.aoc, a.html, *(str(x[1]) for x in programs), *(str(x[3]) for x in programs)) if p and Path(p).exists()],
 diff --git a/dm/tools/impact_map.tsv b/dm/tools/impact_map.tsv
 --- a/dm/tools/impact_map.tsv
 +++ b/dm/tools/impact_map.tsv
@@ -5305,14 +5302,11 @@ diff --git a/dm/tools/tests/test_nsp_mac_app.py b/dm/tools/tests/test_nsp_mac_ap
      def test_retargeted_input_symlink_repacks(self):
          msl = self.tmp / 'msl'
          for name in ('left.metallib', 'right.metallib'): (msl / name).write_bytes(b'same library')
-@@ -208,6 +215,7 @@ class PackReuse(unittest.TestCase):
-                  'patched/main.obs.tsv', 'patched/nro.tsv', 'msl/k.metallib', 'msl/k.json', 'msl/inputs.tsv', 'font/nintendo_ext.ttf',
+@@ -223,3 +223,4 @@ def test_each_selected_file_content_invalidates_even_with_same_stat(self):
                   'pso/gpu.mtl4a', 'pso/prebuilt.tsv', 'pso/rest_pairs.tsv', 'pso/archive.tsv', 'pso/gpu-prewarm-00.mtl4a', 'pso/gpu-prewarm-00.keys', 'pso/prewarm.tsv', 'env.txt', 'icon.jpg', 'source/launcher.c',
-                  'source/Launcher.swift', 'ios/Sources/LauncherSettings.swift', 'ios/Sources/LauncherRow.swift', 'ios/Sources/SaveSyncReport.swift',   # the settings window's sources
 +                 'host/input_map.h', 'host/dm_input.h',   # the launcher's headers
+                  'tools/nso_syms.py', 'source/Launcher.swift', 'ios/Sources/LauncherSettings.swift', 'ios/Sources/LauncherRow.swift', 'ios/Sources/SaveSyncReport.swift',   # the settings window's sources
                   'host/save_sync.c', 'host/save_sync.h']   # the cloud-save code the launcher links (its send after the host exits)
-         names += ['profile/' + n for n in pack_app.TABLES]
-         for name in names:
 @@ -572,6 +580,7 @@ class App(unittest.TestCase):
          self.assertEqual((p['CFBundleExecutable'], p['CFBundleName'], p['CFBundleIdentifier'], p['CFBundleShortVersionString']), ('nxnative', 'Game: Test', 'org.nxnative.01008cf01baac000', '1.0.1'))
          self.assertEqual((p['DMTitleID'], p['DMLanguage'], p['DMRomfsMarker'], p['CFBundleIconFile']), (TID, 'fr', 'region_common/audio/edward.bfsar', 'AppIcon'))
