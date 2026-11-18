@@ -97,7 +97,7 @@ jobs:
           cp "$ASSETS/0010-front-mac-pointer-hide.patch" patches/0010-front-mac-pointer-hide.patch
           cp "$ASSETS/0012-ios-quit-from-game.patch" patches/0012-ios-quit-a-game-from-the-in-game-menu-or-by-hold.patch
           cp "$ASSETS/DANTE2IOS.md" DANTE2IOS.md
-          printf '%s\n' "$NXNATIVE_SHA" > .upstream-ref
+          test "$(cat .upstream-ref)" = 94a0944755da1a443f42651bf7ee49ab24ed5ee5
           printf '%s\n' "7541e9e2f15b8beda26ff5d7b405e234e4015ed2" > NX2APPLE_REF
           rm -f .github/workflows/*.yml .github/workflows/*.yaml
           cp "$ASSETS/dante-engine-validation.yml" .github/workflows/dante-engine-validation.yml
@@ -117,8 +117,9 @@ jobs:
           NXNATIVE_SHA: a3663659342ef43afe1f29909c7c36d0cf7555be
         run: |
           set -euo pipefail
+          test "$(cat .upstream-ref)" = 94a0944755da1a443f42651bf7ee49ab24ed5ee5
+          python3 tools/engine.py bump --to "$NXNATIVE_SHA"
           test "$(cat .upstream-ref)" = "$NXNATIVE_SHA"
-          python3 tools/engine.py relink
           python3 tools/engine.py check
           python3 tools/engine.py sync
           python3 tools/engine.py relink
