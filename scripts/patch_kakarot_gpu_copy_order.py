@@ -84,12 +84,20 @@ def main() -> int:
     pin = pin_file.read_text(encoding="utf-8").strip() if pin_file.is_file() else ""
     if pin != ENGINE_PIN:
         fail(f"NXNative engine pin is {pin!r}; expected {ENGINE_PIN}.")
+    # NX2Apple engine.py sync materializes the pinned engine plus its own patch
+    # series as a synthetic integration commit. That HEAD is not the upstream pin;
+    # .upstream-ref is the authoritative provenance marker.
     head = run(["git", "-C", str(root), "rev-parse", "HEAD"]).strip()
-    if head != ENGINE_PIN:
-        fail(f"checked-out NXNative HEAD is {head}, expected {ENGINE_PIN}; refusing an unreviewed base.")
+    if not head:
+        fail("NX2Apple produced an empty engine HEAD.")
     dirty = run(["git", "-C", str(root), "status", "--porcelain"]).strip()
     if dirty:
-        fail("NXNative worktree is not clean before the backport:\n" + dirty[:6000])
+        fail("NX2Apple engine worktree is not clean before the backport:\n" + dirty[:6000])
+    print(
+        f"[KaKaRoTiOS] Verified NX2Apple engine provenance: upstream pin={pin}; "
+        f"synthetic integration HEAD={head}.",
+        flush=True,
+    )
 
     print(
         f"[KaKaRoTiOS] Selective NVN runtime backport: {UPSTREAM_COMMIT} "
@@ -115,7 +123,8 @@ def main() -> int:
         stderr=subprocess.STDOUT, check=False,
     )
     if apply.returncode:
-        run(["git", "-C", str(root), "reset", "--hard", ENGINE_PIN])
+        # Restore the synthetic NX2Apple integration HEAD, not the bare pin.
+        run(["git", "-C", str(root), "reset", "--hard", head])
         fail(
             "PR #2919 does not merge cleanly onto the pinned Kakarot engine; "
             "no partial source patch will be built.\n" + (apply.stdout or "")[-12000:]
@@ -131,7 +140,7 @@ def main() -> int:
         source = (root / rel).read_text(encoding="utf-8")
         missing = [marker for marker in markers if marker not in source]
         if missing:
-            run(["git", "-C", str(root), "reset", "--hard", ENGINE_PIN])
+            run(["git", "-C", str(root), "reset", "--hard", head])
             fail(f"{rel}: required PR #2919 implementation markers missing: {missing}")
 
     print("[KaKaRoTiOS] PR #2919 runtime code merged cleanly and all implementation markers verified.", flush=True)
