@@ -494,26 +494,9 @@ def patch_mtl(source: str) -> tuple[str, bool]:
 
     source, did = replace_once(
         source,
-        "    enum { RANGES = 4096 }; uint64_t (*ranges)[2] = NULL; int nr = -1;",
-        "    if (!s->gpu) tex_cpu_wait(t);\n    if (whole) s->wown = nvn_dirty_own_writes();\n"
-        "    enum { RANGES = 4096 }; uint64_t (*ranges)[2] = NULL; int nr = -1;",
-        "wait before CPU sparse tile snapshots and record replay-write baseline",
-    )
-    changed |= did
-
-    source, did = replace_once(
-        source,
         "    s->gen = gen; s->stamp = stamp;",
         "    if (whole) { s->gen = gen; s->stamp = stamp; }",
         "preserve dirty baselines across partial sparse mapping scans",
-    )
-    changed |= did
-
-    source, did = replace_once(
-        source,
-        "if (!s->gpu && nvn_dirty_sparse_writes() != s->wseen && atomic_load(&g_cur_frame) - s->wframe >= 60) sparse_sync(s, t, 2);",
-        "if (!s->gpu && nvn_dirty_sparse_writes() != s->wseen && (s->wown != nvn_dirty_own_writes() || atomic_load(&g_cur_frame) - s->wframe >= 60)) sparse_sync(s, t, 2);",
-        "refresh placement sparse tiles after same-submission GPU copies",
     )
     changed |= did
 
