@@ -18,6 +18,9 @@ from pathlib import Path
 
 PATCH_NAME = "0017-support-steam-controller-and-shared-mac-control.patch"
 QUEUE_BASE = "0b5fd6020093407af8bb5ad166e78e00bd2b7242"
+PR_COMMIT = "6a585be66dbfdd02c2ff5e0a39c51cc03f7e8dbb"
+PR_PARENT = "72047f1aa94f42f6f8d359e4934787304d85d5cc"
+PR_REF = "refs/dante2ios/pr-221"
 ZERO = "0" * 40
 
 
@@ -91,48 +94,87 @@ def main() -> int:
     import engine as E
     import patches as P
 
-    nx2apple_pin = E.pin(root)
-    if nx2apple_pin != "94a0944755da1a443f42651bf7ee49ab24ed5ee5":
+    nx2apple_pin=E.pin(root)
+    if nx2apple_pin!="94a0944755da1a443f42651bf7ee49ab24ed5ee5":
         raise SystemExit(f"Unexpected NX2Apple source pin {nx2apple_pin}")
-    queue_base = QUEUE_BASE
-    queue = P.load(root)
+    queue_base=QUEUE_BASE
+    queue=P.load(root)
+    positions=[i for i,patch in enumerate(queue) if patch.file==PATCH_NAME]
+    if len(positions)!=1:
+        raise SystemExit(f"Expected exactly one {PATCH_NAME} in patches/series")
+    steam_position=positions[0]
 
-    engine_repo = E.scratch_root(root)
-    E.fetch(engine_repo, nx2apple_pin)
-    E.fetch(engine_repo, args.to)
-    E.fetch(engine_repo, queue_base)
-
-    upstream_url = os.environ.get("NX2APPLE_ENGINE_URL") or E.UPSTREAM_URL
-    shallow = git(P, "rev-parse", "--is-shallow-repository", cwd=engine_repo).stdout.strip()
-    if shallow == "true":
-        deepened = git(P,"fetch","--quiet","--no-tags","--unshallow",upstream_url,args.to,cwd=engine_repo,check=False)
+    engine_repo=E.scratch_root(root)
+    E.fetch(engine_repo,nx2apple_pin)
+    E.fetch(engine_repo,args.to)
+    E.fetch(engine_repo,queue_base)
+    upstream_url=os.environ.get("NX2APPLE_ENGINE_URL") or E.UPSTREAM_URL
+    shallow=git(P,"rev-parse","--is-shallow-repository",cwd=engine_repo).stdout.strip()
+    if shallow=="true":
+        deepened=git(P,"fetch","--quiet","--no-tags","--unshallow",upstream_url,args.to,cwd=engine_repo,check=False)
         if deepened.returncode:
             detail=(deepened.stdout+deepened.stderr).strip()
             raise SystemExit("Could not fetch complete nxnative history. "+detail[-5000:])
-    shallow = git(P, "rev-parse", "--is-shallow-repository", cwd=engine_repo).stdout.strip()
-    if shallow != "false":
+    if git(P,"rev-parse","--is-shallow-repository",cwd=engine_repo).stdout.strip()!="false":
         raise SystemExit("nxnative object database is still shallow")
     print(f"Fetched complete nxnative history through {args.to}.",flush=True)
 
-    if git(P,"merge-base","--is-ancestor",queue_base,args.to,cwd=engine_repo,check=False).returncode:
-        raise SystemExit(f"Queue preparation base {queue_base} is not an ancestor of target {args.to}")
+    for ancestor_sha,label in ((queue_base,"queue preparation base"),(PR_PARENT,"PR #221 parent")):
+        if git(P,"merge-base","--is-ancestor",ancestor_sha,args.to,cwd=engine_repo,check=False).returncode:
+            raise SystemExit(f"{label} {ancestor_sha} is not an ancestor of target {args.to}")
+    pr_fetch=git(P,"fetch","--quiet","--no-tags","https://github.com/seedds/nxnative.git",
+                 f"+refs/pull/221/head:{PR_REF}",cwd=engine_repo,check=False)
+    if pr_fetch.returncode:
+        detail=(pr_fetch.stdout+pr_fetch.stderr).strip()
+        raise SystemExit("Could not fetch original seedds/nxnative PR #221. "+detail[-5000:])
+    pr_sha=git(P,"rev-parse",PR_REF,cwd=engine_repo).stdout.strip()
+    if pr_sha!=PR_COMMIT:
+        raise SystemExit(f"PR #221 head changed: expected {PR_COMMIT}, found {pr_sha}")
+    if git(P,"rev-parse",f"{pr_sha}^",cwd=engine_repo).stdout.strip()!=PR_PARENT:
+        raise SystemExit("PR #221 parent changed; review the upstream PR before rebasing")
+    print(f"Verified upstream PR #221 commit {pr_sha} and parent {PR_PARENT}.",flush=True)
 
-    # Recreate the exact intended series on its preparation base. Generate
-    # full old/new blob IDs for every patch, including patches after 0017.
     prepared=[]
     already_landed=[]
     with P.Scratch(engine_repo,queue_base,args.tmp) as source:
         for index,patch in enumerate(queue):
             before=git(P,"rev-parse","HEAD",cwd=source.dir).stdout.strip()
-            if patch.name == "support-steam-controller-and-shared-mac-control":
+            if index==steam_position:
                 replay=git(P,"-c","user.name=patches.py","-c","user.email=patches@localhost",
-                           "-c","commit.gpgsign=false","-c","core.autocrlf=false",
-                           "am","--no-3way","--quiet",str(patch.path),cwd=source.dir,check=False)
+                           "-c","commit.gpgsign=false","cherry-pick","--no-edit",PR_COMMIT,
+                           cwd=source.dir,check=False)
                 if replay.returncode:
+                    unmerged=git(P,"ls-files","-u",cwd=source.dir,check=False).stdout.strip()
+                    clean=(git(P,"diff","--cached","--quiet",cwd=source.dir,check=False).returncode==0
+                           and git(P,"diff","--quiet",cwd=source.dir,check=False).returncode==0)
+                    if not unmerged and clean:
+                        git(P,"cherry-pick","--skip",cwd=source.dir,check=False)
+                        already_landed.append(patch)
+                        print("PR #221 is already present on the preparation tree.",flush=True)
+                        continue
                     source.keep=True
-                    git(P,"am","--abort",cwd=source.dir,check=False)
+                    paths=git(P,"diff","--name-only","--diff-filter=U",cwd=source.dir,check=False).stdout.split()
                     detail=(replay.stdout+replay.stderr).strip()
-                    raise SystemExit("Custom Steam patch 0017 does not apply to the post-0016 source tree. "+detail[-9000:])
+                    raise SystemExit("Original PR #221 conflicts on the reconstructed post-0016 source tree. "
+                                     +"files: "+", ".join(paths)+" "+detail[-7000:])
+                subject="Support Steam Controller and shared Mac control mappings"
+                body="""Rebase the original seedds/nxnative PR #221 onto the current nxnative tree after the Dante2iOS branch patches.
+
+Upstream-Status: forwarded seedds/nxnative#221
+Reason: Provide Steam Controller support and shared Mac controller mappings on the maintained iOS porting base
+Issue: seedds/nxnative#221"""
+                amend=git(P,"-c","user.name=patches.py","-c","user.email=patches@localhost",
+                          "-c","commit.gpgsign=false","commit","--amend","-m",subject,"-m",body,
+                          cwd=source.dir,check=False)
+                if amend.returncode:
+                    source.keep=True
+                    raise SystemExit("Could not attach patch metadata to rebased PR #221 commit. "+amend.stderr[-5000:])
+                after=git(P,"rev-parse","HEAD",cwd=source.dir).stdout.strip()
+                generated=args.tmp/"0017-original-pr-221.patch"
+                formatted=git(P,"format-patch","--binary","--zero-commit","--no-signature",
+                              "--no-numbered","--stdout","-1",after,cwd=source.dir,binary=True)
+                generated.write_bytes(formatted.stdout)
+                source_patch=generated
             else:
                 applied,landed,conflicts=P.apply_series(source.dir,[patch])
                 if conflicts:
@@ -144,21 +186,22 @@ def main() -> int:
                     continue
                 if len(applied)!=1:
                     raise SystemExit(f"Unexpected source replay result for {patch.file}")
+                after=git(P,"rev-parse","HEAD",cwd=source.dir).stdout.strip()
+                source_patch=patch.path
 
             after=git(P,"rev-parse","HEAD",cwd=source.dir).stdout.strip()
             if after==before:
                 already_landed.append(patch)
                 continue
-            temp=args.tmp/f"indexed-{index:03d}-{patch.file}"
-            count=indexed_patch(P,patch.path,temp,before,after,engine_repo)
+            indexed=args.tmp/f"indexed-{index:03d}-{patch.file}"
+            count=indexed_patch(P,source_patch,indexed,before,after,engine_repo)
             if count==0:
-                raise SystemExit(f"No diff sections found in {patch.file}")
-            prepared.append((patch,P.Patch(temp)))
+                raise SystemExit(f"No diff sections found for {patch.file}")
+            prepared.append((patch,P.Patch(indexed)))
             print(f"Prepared {patch.file}: {count} full blob indexes.",flush=True)
-    print(f"Reconstructed queue: {len(prepared)} patches indexed; {len(already_landed)} already present.",flush=True)
 
-    # Reapply each patch on current main. Every three-way ancestor is available
-    # in the full object database, independent of earlier rebased postimages.
+    print(f"Reconstructed full patch queue: {len(prepared)} indexed, {len(already_landed)} already present.",flush=True)
+
     with P.Scratch(engine_repo,args.to,args.tmp) as target:
         target_applied=[]
         target_landed=[]
@@ -166,11 +209,10 @@ def main() -> int:
             applied,landed,conflicts=P.apply_series(target.dir,[patch_obj])
             if conflicts:
                 target.keep=True
-                mapped=[(original,detail) for _,detail in conflicts]
-                P.report(args.to,args.to,target_applied,target_landed,mapped)
+                P.report(args.to,args.to,target_applied,target_landed,[(original,msg) for _,msg in conflicts])
                 paths=git(P,"diff","--name-only","--diff-filter=U",cwd=target.dir,check=False).stdout.split()
                 print("Rebase conflict paths: "+", ".join(paths),flush=True)
-                raise SystemExit(f"Patch {original.file} has a three-way conflict on current nxnative main")
+                raise SystemExit(f"Patch {original.file} has a real three-way conflict on current nxnative main")
             if applied:
                 target_applied.append((original,applied[0][1]))
             elif landed:
@@ -183,11 +225,7 @@ def main() -> int:
         P.write_series(root,target.dir,target_applied,all_landed,queue)
         (root/".upstream-ref").write_text(args.to+chr(10),encoding="utf-8")
         relinked=E.relink(root)
-        print(
-            f"Rebased full queue onto nxnative {args.to}: "
-            f"{len(target_applied)} retained patches, {len(all_landed)} already upstream.",
-            flush=True,
-        )
+        print(f"Rebased full queue onto nxnative {args.to}: {len(target_applied)} retained, {len(all_landed)} already upstream.",flush=True)
         print("Retained: "+", ".join(p.name for p,_ in target_applied),flush=True)
         if all_landed:
             print("Landed upstream: "+", ".join(p.name for p in all_landed),flush=True)
