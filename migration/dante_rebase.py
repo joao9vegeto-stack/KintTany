@@ -401,6 +401,111 @@ def resolve_runtime_profile_patch(P, worktree: Path) -> str:
     return result
 
 
+def resolve_ios_quit_patch(P, worktree: Path) -> str:
+    expected = {"dm/ios/Sources/front_ios.m"}
+    unmerged = set(
+        git(P, "diff", "--name-only", "--diff-filter=U", cwd=worktree, check=False)
+        .stdout.splitlines()
+    )
+    if unmerged != expected:
+        raise RuntimeError(
+            "0012 conflict set changed: " + ", ".join(sorted(unmerged))
+        )
+
+    # Stage 3 is the patch's newer whole-file postimage. It contains newer
+    # upstream audio/screen edits unrelated to #421, so transplant only the
+    # appended quit implementation and its required imports/prototypes onto
+    # our current stage-2 front end.
+    current = git(P, "show", ":2:dm/ios/Sources/front_ios.m", cwd=worktree).stdout
+    postimage = git(P, "show", ":3:dm/ios/Sources/front_ios.m", cwd=worktree).stdout
+    tag = "// ---- Quit to the launcher (LNPANDY/NX2Apple#421) ----"
+    if current.count(tag) != 0 or postimage.count(tag) != 1:
+        raise RuntimeError("Could not isolate the unique quit-to-launcher implementation block")
+    quit_block = postimage[postimage.index(tag):]
+    if "dm_movie_active(0)" in postimage or "dm_movie_active(1)" in postimage:
+        # Those calls are from later upstream movie-lifecycle work, not this
+        # quit feature. They live before the quit block and are not imported.
+        pass
+
+    def replace_once(text: str, old: str, new: str, label: str) -> str:
+        if text.count(old) != 1:
+            raise RuntimeError(f"Expected exactly one {label} insertion point")
+        return text.replace(old, new, 1)
+
+    # Headers needed by the new implementation. home_quit.h is present at the
+    # declared nxnative pin; quit_prompt.h is added by this same patch.
+    current = replace_once(
+        current,
+        '#import <AVFAudio/AVFAudio.h>\n',
+        '#import <AVFAudio/AVFAudio.h>\n#import <GameController/GameController.h>\n',
+        "GameController import",
+    )
+    current = replace_once(
+        current,
+        '#include "save_sync.h"\n',
+        '#include "save_sync.h"\n#include "home_quit.h"\n',
+        "home_quit include",
+    )
+    current = replace_once(
+        current,
+        '#import "CloudSaves.h"\n',
+        '#import "CloudSaves.h"\n#import "quit_prompt.h"\n',
+        "quit prompt import",
+    )
+    current = replace_once(
+        current,
+        'void dm_gamepad_active(void);\n',
+        'void dm_gamepad_active(void);\nvoid dm_gamepad_pads_read(void);\nstatic void quit_close(void);\n',
+        "gamepad-read and quit-close prototypes",
+    )
+
+    # The foreground-resign event closes any active prompt before inputs are
+    # reset. Do not import the unrelated newer dm_movie_active hooks.
+    current = replace_once(
+        current,
+        'case 0: dm_gamepad_reset(); dm_focus_set(2); break;',
+        'case 0: quit_close(); dm_gamepad_reset(); dm_focus_set(2); break;',
+        "focus-resign quit close",
+    )
+    if "dm_movie_active(" in current:
+        raise RuntimeError("Unexpected movie-lifecycle dependency in current front_ios.m")
+    resolved = current.rstrip() + "\n\n" + quit_block.rstrip() + "\n"
+    if resolved.count(tag) != 1:
+        raise RuntimeError("Quit implementation block was not appended exactly once")
+    if "static void quit_close(void)" not in resolved or "void dm_gamepad_pads_read(void);" not in resolved:
+        raise RuntimeError("Quit implementation prototypes are incomplete")
+    if "int front_ios_quit_blocks_input(void)" not in resolved or "void *dm_quit_menu(void)" not in resolved:
+        raise RuntimeError("Quit implementation exports are incomplete")
+    if "dm_movie_active(" in resolved:
+        raise RuntimeError("Unrelated movie-lifecycle call leaked into the quit resolution")
+    if any(line.startswith(("<<<<<<<", "=======", ">>>>>>>")) for line in resolved.splitlines()):
+        raise RuntimeError("Conflict markers remain in resolved front_ios.m")
+
+    path=worktree/"dm/ios/Sources/front_ios.m"
+    path.write_text(resolved,encoding="utf-8")
+    staged=git(P,"add","--","dm/ios/Sources/front_ios.m",cwd=worktree,check=False)
+    if staged.returncode:
+        raise RuntimeError("Could not stage resolved 0012 front_ios.m: "+staged.stderr[-3000:])
+    continued=git(
+        P,"-c","user.name=patches.py","-c","user.email=patches@localhost",
+        "-c","commit.gpgsign=false","am","--continue",
+        cwd=worktree,check=False,
+    )
+    if continued.returncode:
+        raise RuntimeError(
+            "Could not continue resolved 0012 patch: "
+            +(continued.stdout+continued.stderr)[-7000:]
+        )
+    result=git(P,"rev-parse","HEAD",cwd=worktree).stdout.strip()
+    print(
+        "Resolved 0012 by keeping the official-pin front_ios.m, adding the "
+        "quit prompt imports/prototypes and focus-close hook, and transplanting "
+        "only the #421 quit implementation (no newer audio/screen/movie changes).",
+        flush=True,
+    )
+    return result
+
+
 def main() -> int:
     ap=argparse.ArgumentParser()
     ap.add_argument("--repo",required=True,type=Path)
@@ -499,6 +604,16 @@ def main() -> int:
                         source.keep=True
                         P.report(QUEUE_BASE,QUEUE_BASE,applied,landed,conflicts)
                         raise SystemExit(f"Could not resolve the 0009 runtime-profile source/test integration: {exc}")
+                    applied=[(patch,resolved_head)]
+                    landed=[]
+                    conflicts=[]
+                elif conflicts and patch.file == "0012-ios-quit-from-game.patch":
+                    try:
+                        resolved_head = resolve_ios_quit_patch(P, source.dir)
+                    except Exception as exc:
+                        source.keep=True
+                        P.report(QUEUE_BASE,QUEUE_BASE,applied,landed,conflicts)
+                        raise SystemExit(f"Could not resolve the 0012 iOS quit-to-launcher integration: {exc}")
                     applied=[(patch,resolved_head)]
                     landed=[]
                     conflicts=[]
