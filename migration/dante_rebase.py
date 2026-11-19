@@ -607,7 +607,7 @@ def main() -> int:
                     applied=[(patch,resolved_head)]
                     landed=[]
                     conflicts=[]
-                elif conflicts and patch.file == "0012-ios-quit-from-game.patch":
+                elif conflicts and patch.file == "0012-ios-quit-a-game-from-the-in-game-menu-or-by-hold.patch":
                     try:
                         resolved_head = resolve_ios_quit_patch(P, source.dir)
                     except Exception as exc:
