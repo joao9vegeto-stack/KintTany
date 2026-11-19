@@ -75,6 +75,74 @@ def indexed_patch(P, source: Path, destination: Path, old_commit: str, new_commi
     return count
 
 
+def resolve_conflict_markers(path: Path) -> int:
+    """Keep both independent sides of the known 0001 iOS game-data additions."""
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+    out: list[str] = []
+    i = 0
+    count = 0
+    while i < len(lines):
+        if not lines[i].startswith("<<<<<<<"):
+            out.append(lines[i])
+            i += 1
+            continue
+        i += 1
+        left: list[str] = []
+        while i < len(lines) and not lines[i].startswith("======="):
+            left.append(lines[i])
+            i += 1
+        if i >= len(lines):
+            raise RuntimeError(f"Unterminated conflict in {path}")
+        i += 1
+        right: list[str] = []
+        while i < len(lines) and not lines[i].startswith(">>>>>>>"):
+            right.append(lines[i])
+            i += 1
+        if i >= len(lines):
+            raise RuntimeError(f"Unterminated conflict in {path}")
+        i += 1
+        # The two 0001 conflicts are additive: keep the pin's RomFS locator
+        # and the patch's external-folder/program-ROMFS additions.
+        out.extend(left)
+        out.extend(right)
+        count += 1
+    if count:
+        path.write_text("".join(out), encoding="utf-8")
+    return count
+
+
+def resolve_game_data_patch(P, worktree: Path, patch_path: Path) -> str:
+    expected = {
+        "dm/ios/Sources/DmIOS-Bridging-Header.h",
+        "dm/ios/Sources/main.m",
+    }
+    unmerged = set(git(P, "diff", "--name-only", "--diff-filter=U", cwd=worktree, check=False).stdout.splitlines())
+    if unmerged != expected:
+        raise RuntimeError("0001 conflict set changed: " + ", ".join(sorted(unmerged)))
+    for relative in sorted(expected):
+        path = worktree / relative
+        count = resolve_conflict_markers(path)
+        if count != 1:
+            raise RuntimeError(f"Expected one additive conflict block in {relative}, found {count}")
+    staged = git(P, "add", "--", *sorted(expected), cwd=worktree, check=False)
+    if staged.returncode:
+        raise RuntimeError("Could not stage resolved 0001 files: " + staged.stderr[-2000:])
+    continued = git(
+        P, "-c", "user.name=patches.py", "-c", "user.email=patches@localhost",
+        "-c", "commit.gpgsign=false", "am", "--continue",
+        cwd=worktree, check=False,
+    )
+    if continued.returncode:
+        raise RuntimeError("Could not continue resolved 0001 patch: " + (continued.stdout + continued.stderr)[-5000:])
+    result = git(P, "rev-parse", "HEAD", cwd=worktree).stdout.strip()
+    print(
+        "Resolved 0001 by preserving RomFS/shader-map setup and adding the "
+        "external RomFS-program directory plus DataBookmark bridging declarations.",
+        flush=True,
+    )
+    return result
+
+
 def main() -> int:
     ap=argparse.ArgumentParser()
     ap.add_argument("--repo",required=True,type=Path)
@@ -136,7 +204,17 @@ def main() -> int:
                                      +detail[-9000:])
             else:
                 applied,landed,conflicts=P.apply_series(source.dir,[patch])
-                if conflicts:
+                if conflicts and patch.file == "0001-ios-game-data-folder.patch":
+                    try:
+                        resolved_head = resolve_game_data_patch(P, source.dir, patch.path)
+                    except Exception as exc:
+                        source.keep=True
+                        P.report(QUEUE_BASE,QUEUE_BASE,applied,landed,conflicts)
+                        raise SystemExit(f"Could not resolve the two known 0001 iOS game-data hunks: {exc}")
+                    applied=[(patch,resolved_head)]
+                    landed=[]
+                    conflicts=[]
+                elif conflicts:
                     source.keep=True
                     P.report(QUEUE_BASE,QUEUE_BASE,applied,landed,conflicts)
                     raise SystemExit(f"Patch {patch.file} cannot be reconstructed from the official NX2Apple pin")
