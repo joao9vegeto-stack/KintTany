@@ -197,6 +197,210 @@ def resolve_dm_screen_patch(P, worktree: Path) -> str:
     return result
 
 
+def profile_target_key(line: str):
+    match = re.match(r'^\$\(B\)/([^: ]+):', line)
+    return match.group(1) if match else None
+
+
+def add_profile_source(command: str) -> str:
+    if "../hle_profile.c" in command:
+        return command
+    ending = "\n" if command.endswith("\n") else ""
+    body = command[:-1] if ending else command
+    continuation = body.endswith("\\")
+    if continuation:
+        body = body[:-1].rstrip()
+    positions = [
+        match.start()
+        for match in re.finditer(r"\s(?:-framework\s+|-l[A-Za-z0-9_]+)", body)
+    ]
+    if positions:
+        at = min(positions)
+        body = body[:at] + " ../hle_profile.c" + body[at:]
+    else:
+        body += " ../hle_profile.c"
+    if continuation:
+        body += " \\"
+    return body + ending
+
+
+def merge_profile_test_makefile(current_text: str, postimage_text: str) -> str:
+    current = current_text.splitlines(keepends=True)
+    postimage = postimage_text.splitlines(keepends=True)
+    target_indices: dict[str, list[int]] = {}
+    for index, line in enumerate(current):
+        key = profile_target_key(line)
+        if key:
+            target_indices.setdefault(key, []).append(index)
+
+    # Carry only the runtime-profile prerequisites introduced by 0009 onto
+    # target rules which already exist at the declared NX2Apple source pin.
+    # Later upstream-only test targets are intentionally not copied backwards.
+    for line in postimage:
+        key = profile_target_key(line)
+        if not key or ("../hle_profile.c" not in line and "../hle_profile.h" not in line):
+            continue
+        for index in target_indices.get(key, []):
+            old = current[index]
+            if "../hle_profile.c" in old:
+                continue
+            if "| $(B)" in old:
+                current[index] = old.replace(
+                    "| $(B)", "../hle_profile.c ../hle_profile.h | $(B)"
+                )
+            else:
+                current[index] = old.rstrip("\n") + " ../hle_profile.c ../hle_profile.h\n"
+
+    # Link hle_profile.c into existing test executables which now reference
+    # dm_profile(). Match by Make target, retaining the old pin's own flags,
+    # source list, ordering and any branch-local test additions.
+    for index, line in enumerate(postimage):
+        if not (
+            line.startswith("\t")
+            and "-o $@" in line
+            and "../hle_profile.c" in line
+        ):
+            continue
+        key = None
+        for previous in range(index - 1, -1, -1):
+            key = profile_target_key(postimage[previous])
+            if key:
+                break
+        if not key or key not in target_indices:
+            continue
+        command_index = None
+        for target_index in target_indices[key]:
+            for candidate in range(target_index + 1, min(len(current), target_index + 16)):
+                if candidate > target_index + 1 and profile_target_key(current[candidate]):
+                    break
+                if current[candidate].startswith("\t") and "-o $@" in current[candidate]:
+                    command_index = candidate
+                    break
+            if command_index is not None:
+                break
+        if command_index is not None:
+            current[command_index] = add_profile_source(current[command_index])
+
+    # The memory tests use one shared dependency variable.
+    memory_deps = next(
+        (
+            line for line in postimage
+            if line.startswith("MEM_DEPS =") and "../hle_profile.c" in line
+        ),
+        None,
+    )
+    if memory_deps:
+        for index, line in enumerate(current):
+            if line.startswith("MEM_DEPS =") and "../hle_profile.c" not in line:
+                current[index] = line.rstrip("\n") + " ../hle_profile.c ../hle_profile.h\n"
+                break
+
+    # Add the runtime-profile regression executable to the existing branch
+    # test run list and run recipe, but do not import unrelated newer tests.
+    profile_target = "$(B)/t_profile_runtime"
+    for index, line in enumerate(current):
+        if (
+            line.startswith("run:")
+            and "$(B)/t_launcher_contract" in line
+            and profile_target not in line
+        ):
+            current[index] = line.rstrip("\n") + " " + profile_target + "\n"
+            break
+
+    run_command = 'TMPDIR="$(abspath $(B))" $(B)/t_profile_runtime'
+    if not any(line.strip() == run_command for line in current):
+        for index, line in enumerate(current):
+            if line.strip() == "$(B)/t_shared_font":
+                current.insert(index + 1, "\t" + run_command + "\n")
+                break
+
+    if not any("$(B)/t_profile_runtime:" in line for line in current):
+        start = next(
+            (index for index, line in enumerate(postimage)
+             if line.startswith("# runtime-profile test:")),
+            None,
+        )
+        if start is None:
+            raise RuntimeError("The 0009 runtime-profile test target is absent from the patch postimage")
+        current.append("\n")
+        current.extend(postimage[start:])
+
+    merged = "".join(current)
+    if merged.count("$(B)/t_profile_runtime:") != 1:
+        raise RuntimeError("Expected exactly one t_profile_runtime target after resolving 0009")
+    if sum(
+        line.startswith("run:") and profile_target in line
+        for line in merged.splitlines()
+    ) != 1:
+        raise RuntimeError("Expected t_profile_runtime in exactly one run prerequisite")
+    if sum(line.strip() == run_command for line in merged.splitlines()) != 2:
+        raise RuntimeError("Expected t_profile_runtime in the run recipe and profile-runtime target")
+    if any(line.startswith(("<<<<<<<", "=======", ">>>>>>>")) for line in merged.splitlines()):
+        raise RuntimeError("Conflict markers remain in the resolved host test Makefile")
+    return merged
+
+
+def resolve_runtime_profile_patch(P, worktree: Path) -> str:
+    expected = {
+        "dm/host/hle_fs.c",
+        "dm/host/tests/Makefile",
+    }
+    unmerged = set(
+        git(P, "diff", "--name-only", "--diff-filter=U", cwd=worktree, check=False)
+        .stdout.splitlines()
+    )
+    if unmerged != expected:
+        raise RuntimeError(
+            "0009 conflict set changed: " + ", ".join(sorted(unmerged))
+        )
+
+    # hle_fs.c has a small semantic change: make the existing single-user save
+    # path read IDs from the runtime profile. Do not import account-user,
+    # per-user-save or multi-program RomFS code from the newer postimage blob.
+    fs = git(P, "show", ":2:dm/host/hle_fs.c", cwd=worktree).stdout
+    if fs.count("DM_GAME_PROGRAM_ID") != 3 or fs.count("DM_GAME_ID") != 2:
+        raise RuntimeError("Unexpected static game-ID references in the 0009 hle_fs preimage")
+    fs = fs.replace("DM_GAME_PROGRAM_ID", "dm_profile()->program_id")
+    fs = fs.replace("DM_GAME_ID", "dm_profile()->id")
+    fs_path = worktree / "dm/host/hle_fs.c"
+    fs_path.write_text(fs, encoding="utf-8")
+
+    # Rebuild the conflicted Makefile from stage 2 (the official old pin plus
+    # the preceding branch patches), carrying only the 0009 profile link edits
+    # and its own test target from stage 3.
+    make_current = git(P, "show", ":2:dm/host/tests/Makefile", cwd=worktree).stdout
+    make_postimage = git(P, "show", ":3:dm/host/tests/Makefile", cwd=worktree).stdout
+    make_merged = merge_profile_test_makefile(make_current, make_postimage)
+    make_path = worktree / "dm/host/tests/Makefile"
+    make_path.write_text(make_merged, encoding="utf-8")
+
+    staged = git(
+        P, "add", "--", "dm/host/hle_fs.c", "dm/host/tests/Makefile",
+        cwd=worktree, check=False,
+    )
+    if staged.returncode:
+        raise RuntimeError("Could not stage the resolved 0009 files: " + staged.stderr[-3000:])
+
+    continued = git(
+        P, "-c", "user.name=patches.py", "-c", "user.email=patches@localhost",
+        "-c", "commit.gpgsign=false", "am", "--continue",
+        cwd=worktree, check=False,
+    )
+    if continued.returncode:
+        raise RuntimeError(
+            "Could not continue the resolved 0009 patch: "
+            + (continued.stdout + continued.stderr)[-7000:]
+        )
+    result = git(P, "rev-parse", "HEAD", cwd=worktree).stdout.strip()
+    print(
+        "Resolved 0009 by switching only the five game-ID references to the "
+        "runtime profile and linking hle_profile.c into the existing profile-dependent "
+        "tests; the pin's save/filesystem structure and branch-local test list were retained.",
+        flush=True,
+    )
+    return result
+
+
 def main() -> int:
     ap=argparse.ArgumentParser()
     ap.add_argument("--repo",required=True,type=Path)
@@ -285,6 +489,16 @@ def main() -> int:
                         source.keep=True
                         P.report(QUEUE_BASE,QUEUE_BASE,applied,landed,conflicts)
                         raise SystemExit(f"Could not resolve the additive 0006 DM_SCREEN documentation change: {exc}")
+                    applied=[(patch,resolved_head)]
+                    landed=[]
+                    conflicts=[]
+                elif conflicts and patch.file == "0009-runtime-profile.patch":
+                    try:
+                        resolved_head = resolve_runtime_profile_patch(P, source.dir)
+                    except Exception as exc:
+                        source.keep=True
+                        P.report(QUEUE_BASE,QUEUE_BASE,applied,landed,conflicts)
+                        raise SystemExit(f"Could not resolve the 0009 runtime-profile source/test integration: {exc}")
                     applied=[(patch,resolved_head)]
                     landed=[]
                     conflicts=[]
