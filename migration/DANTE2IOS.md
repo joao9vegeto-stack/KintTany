@@ -38,3 +38,7 @@ The native NX2Apple pre-push hook is **not disabled**. The bootstrap installs th
 The official triage-script regression suite also runs before commit, alongside the Qt and tools tests; its workflow fixtures are present as pristine upstream copies. Only `Dante2iOS` receives this branch update, while the upstream workflows' automatic push branches remain `main`.
 
 The bootstrap runner label is `xcode-27` (macOS 27, Xcode 27), matching NX2Apple's current launcher API availability: `GCControllerHomeButtonSettingsManager` is not in the Xcode 26 SDK on `macos-26`. This selects the required Apple SDK instead of weakening or replacing upstream Swift code.
+
+## Xcode 27.1 SwiftUI compatibility
+
+The exact upstream NX2Apple source snapshot remains the baseline. Xcode 27.1's SDK does not yet expose `GeometryProxy.reservedRegions(kind:)` or `ArrangementView` used in upstream's divided-display views. The Dante bootstrap applies a deterministic, fail-closed compatibility script: five `GeometryProxy` call sites use a named empty-region adapter, leaving UIKit native region APIs untouched, and the unreachable `ArrangementView` tabletop branch falls back to the existing expanded/portrait layout. No nxnative engine, patch queue, game profile, or regular layout is changed. The script fails if upstream changes these call sites unexpectedly. The bootstrap compiles the Swift shell before the costly inherited pre-push test suites; those suites are not skipped.

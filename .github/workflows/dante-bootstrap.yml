@@ -177,6 +177,8 @@ jobs:
           test -f frontend-ios/Sources/ShellUI/DanteReservedRegionsCompat.swift
           grep -Fq 'geometry.danteReservedRegions(kind: .division)' frontend-ios/Sources/ShellUI/GameLaunchActions.swift
           grep -Fq 'proxy.danteReservedRegions(kind: .division)' frontend-ios/Sources/ShellUI/CoverFlowView.swift
+          ! grep -Fq 'ArrangementView {' frontend-ios/Sources/ShellUI/PortraitLibrary.swift
+          grep -Fq 'if expanded {' frontend-ios/Sources/ShellUI/PortraitLibrary.swift
           # Compile the iOS shell early. The full native Swift test suites still
           # run under the inherited pre-push hook and must pass before publish.
           (cd frontend-ios && swift build)
