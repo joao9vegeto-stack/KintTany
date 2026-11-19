@@ -1,0 +1,74 @@
+name: Dante2iOS · sync nxnative
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: "nxnative branch or full commit SHA"
+        required: true
+        default: "main"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dante2ios-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.ref == 'refs/heads/Dante2iOS'
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: Dante2iOS
+          fetch-depth: 0
+
+      - name: Resolve requested nxnative ref
+        id: upstream
+        env:
+          REQUESTED_REF: ${{ inputs.upstream_ref }}
+        run: |
+          set -euo pipefail
+          if [[ "$REQUESTED_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            NEW="$REQUESTED_REF"
+          else
+            NEW="$(git ls-remote https://github.com/seedds/nxnative.git "refs/heads/$REQUESTED_REF" | cut -f1)"
+          fi
+          [[ "$NEW" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Could not resolve nxnative ref $REQUESTED_REF"; exit 1; }
+          echo "sha=$NEW" >> "$GITHUB_OUTPUT"
+
+      - name: Rebase NX2Apple patch queue onto nxnative
+        env:
+          NEW: ${{ steps.upstream.outputs.sha }}
+        run: |
+          set -euo pipefail
+          python3 tools/engine.py bump --to "$NEW"
+          python3 tools/engine.py check
+          python3 tools/engine.py sync
+          python3 tools/engine.py relink
+
+      - name: Validate engine without building a game
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover tools/tests
+          python3 -m compileall -q engine/scripts engine/dm/tools engine/dm/games engine/dm/mac
+          bash -n engine/dm/ios/tools/build_ipa.sh
+          test -f engine/dm/ios/Sources/main.m
+          test -f frontend-ios/Package.swift
+
+      - name: Commit the verified pin and patch queue to Dante2iOS only
+        run: |
+          set -euo pipefail
+          git config user.name "dante2ios-sync"
+          git config user.email "dante2ios-sync@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Dante2iOS is already current."
+            exit 0
+          fi
+          git diff --cached --check
+          git commit -m "Sync nxnative engine on Dante2iOS"
+          git push origin HEAD:Dante2iOS
