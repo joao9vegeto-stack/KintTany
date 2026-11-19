@@ -42,3 +42,8 @@ The bootstrap runner label is `xcode-27` (macOS 27, Xcode 27), matching NX2Apple
 ## Xcode 27.1 SwiftUI compatibility
 
 The exact upstream NX2Apple source snapshot remains the baseline. Xcode 27.1's SDK does not yet expose `GeometryProxy.reservedRegions(kind:)` or `ArrangementView` used in upstream's divided-display views. The Dante bootstrap applies a deterministic, fail-closed compatibility script: five `GeometryProxy` call sites use a named empty-region adapter, leaving UIKit native region APIs untouched, and the unreachable `ArrangementView` tabletop branch falls back to the existing expanded/portrait layout. No nxnative engine, patch queue, game profile, or regular layout is changed. The script fails if upstream changes these call sites unexpectedly. The bootstrap compiles the Swift shell before the costly inherited pre-push test suites; those suites are not skipped.
+
+
+## GitHub Actions workflow permission boundary
+
+Run #82 (44587274425) passed the engine checks, source/Python tests, 1,400 native macOS launcher tests (50 skipped, zero failures), and native iOS shell tests. Its push was rejected only because the runner token cannot update `.github/workflows/build-mac-app.yml`. The bootstrap now stages no changes under `.github/workflows/` or `migration/` for its final push; it preserves both directories from the authenticated branch HEAD. Upstream workflow fixtures remain in the working tree during the full hook, so the tests are unchanged. The five reference workflows are added to this branch in a separate authenticated repository commit before running the bootstrap, avoiding the runner's workflow write restriction. The final source commit does not retrigger the bootstrap because neither its workflow nor its migration input files change.

@@ -198,6 +198,21 @@ jobs:
           # fixture origin so those release tests use their declared source.
           export GITHUB_REPOSITORY=LNPANDY/NX2Apple
           git add -A
+
+          # The runner's GitHub App token has contents:write but cannot
+          # CREATE/UPDATE GitHub workflow files. All upstream workflow
+          # fixtures stay in this working tree for the full pre-push tests;
+          # keep the branch's already-installed workflow files and migration
+          # helpers unchanged in the outgoing commit. This also prevents
+          # the bootstrap from retriggering itself when migration/ is deleted
+          # from the temporary assembly workspace.
+          git restore --source=HEAD --staged -- .github/workflows migration
+          if test -n "$(git diff --cached --name-only -- .github/workflows migration)"; then
+            echo "::error::Runner may not publish workflow or migration changes."
+            exit 1
+          fi
+          test -f "$GITHUB_WORKSPACE/.github/workflows/build-mac-app.yml"
+          test -f "$GITHUB_WORKSPACE/.github/workflows/tests.yml"
           # Patches are verbatim git-format-patch mail files and contain leading
           # '+' lines with intentional spaces. 'git diff --cached --check' on
           # the whole imported tree misidentifies those mail lines as trailing
