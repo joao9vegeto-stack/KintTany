@@ -132,7 +132,7 @@ def main() -> int:
             raise SystemExit("A patch before 0017 conflicts on current nxnative main")
 
         before = git(P, "rev-parse", "HEAD", cwd=target.dir).stdout.strip()
-        replay = git(P, "cherry-pick", "--no-edit", pr_sha, cwd=target.dir, check=False)
+        replay = git(P, "-c", "user.name=patches.py", "-c", "user.email=patches@localhost", "-c", "commit.gpgsign=false", "cherry-pick", "--no-edit", pr_sha, cwd=target.dir, check=False)
         steam_applied = []
         steam_landed = []
         if replay.returncode:
