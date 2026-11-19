@@ -19,6 +19,9 @@ from pathlib import Path
 
 PATCH_NAME = "0017-support-steam-controller-and-shared-mac-control.patch"
 QUEUE_BASE = "94a0944755da1a443f42651bf7ee49ab24ed5ee5"
+JOYCON_PR_COMMIT = "c7d7bd484d7af2d50a4ed9201cfa22409631cf86"
+JOYCON_PR_PARENT = "04811a634b7f9344e882129b0973dd493369dd62"
+JOYCON_PR_REF = "refs/dante2ios/pr-1322"
 ZERO = "0" * 40
 
 
@@ -729,6 +732,23 @@ def main() -> int:
         raise SystemExit(f"NX2Apple source pin {QUEUE_BASE} is not an ancestor of current nxnative main {args.to}")
     print(f"Fetched complete nxnative history: {QUEUE_BASE} -> {args.to}.",flush=True)
 
+    # Patch 0014 is a branch-local subset of original Joy-Con PR #1322.
+    # Its mail-diff Makefile preimage belongs to an intermediate queue tree;
+    # fetch the original commit so Git can use the real parent and file blobs.
+    if git(P,"merge-base","--is-ancestor",JOYCON_PR_PARENT,QUEUE_BASE,cwd=engine_repo,check=False).returncode:
+        raise SystemExit(f"Joy-Con PR #1322 parent {JOYCON_PR_PARENT} is not an ancestor of NX2Apple pin {QUEUE_BASE}")
+    pr_fetch=git(P,"fetch","--quiet","--no-tags","https://github.com/seedds/nxnative.git",
+                 f"+refs/pull/1322/head:{JOYCON_PR_REF}",cwd=engine_repo,check=False)
+    if pr_fetch.returncode:
+        detail=(pr_fetch.stdout+pr_fetch.stderr).strip()
+        raise SystemExit("Could not fetch original seedds/nxnative PR #1322. "+detail[-5000:])
+    joycon_sha=git(P,"rev-parse",JOYCON_PR_REF,cwd=engine_repo).stdout.strip()
+    if joycon_sha!=JOYCON_PR_COMMIT:
+        raise SystemExit(f"Joy-Con PR #1322 head changed: expected {JOYCON_PR_COMMIT}, found {joycon_sha}")
+    if git(P,"rev-parse",f"{joycon_sha}^",cwd=engine_repo).stdout.strip()!=JOYCON_PR_PARENT:
+        raise SystemExit("Joy-Con PR #1322 parent changed; refusing different patch ancestry")
+    print(f"Verified original Joy-Con PR #1322 commit {joycon_sha} and parent {JOYCON_PR_PARENT}.",flush=True)
+
     # Reconstruct the queue on its actual NX2Apple pin. This pin is critical:
     # patch 0017's context was prepared on top of patches 0001-0016 from here;
     # replaying on a later intermediate nxnative commit changes its preimages.
@@ -748,24 +768,49 @@ def main() -> int:
                     raise SystemExit("Custom Steam patch 0017 does not apply on the official pin after patches 0001-0016. "
                                      +detail[-9000:])
             elif patch.file == "0014-mac-split-a-joy-con-pair-into-two-sideways-contr.patch":
-                # The 0014 mail patch's Makefile preimage hash belongs to the
-                # original patch queue before our additive 0003 test-list
-                # resolution. Git cannot find that historic blob in this
-                # reconstructed source tree, but the textual hunks are still
-                # applicable. Apply by context, then regenerate all full blob
-                # indexes from the actual before/after trees below.
+                # Replay the actual upstream PR commit, not the custom mail
+                # patch with stale intermediate preimages. Preserve the scope
+                # of branch patch 0014 by restoring the two PR files it omitted.
                 replay=git(P,"-c","user.name=patches.py","-c","user.email=patches@localhost",
-                           "-c","commit.gpgsign=false","-c","core.autocrlf=false",
-                           "am","--no-3way","--quiet",str(patch.path),
-                           cwd=source.dir,check=False)
+                           "-c","commit.gpgsign=false","cherry-pick","--no-edit",
+                           JOYCON_PR_COMMIT,cwd=source.dir,check=False)
                 if replay.returncode:
+                    unmerged=git(P,"ls-files","-u",cwd=source.dir,check=False).stdout.strip()
+                    clean=(git(P,"diff","--cached","--quiet",cwd=source.dir,check=False).returncode==0
+                           and git(P,"diff","--quiet",cwd=source.dir,check=False).returncode==0)
+                    if not unmerged and clean:
+                        git(P,"cherry-pick","--skip",cwd=source.dir,check=False)
+                        already_landed.append(patch)
+                        print("Joy-Con PR #1322 is already present after patches 0001-0013.",flush=True)
+                        continue
                     source.keep=True
-                    git(P,"am","--abort",cwd=source.dir,check=False)
+                    paths=git(P,"diff","--name-only","--diff-filter=U",cwd=source.dir,check=False).stdout.split()
                     detail=(replay.stdout+replay.stderr).strip()
-                    raise SystemExit("Joy-Con patch 0014 does not apply by textual context after the reconstructed 0001-0013 queue. "
-                                     +detail[-9000:])
-                applied=[(patch,git(P,"rev-parse","HEAD",cwd=source.dir).stdout.strip())]
-                landed=[]
+                    raise SystemExit("Original Joy-Con PR #1322 conflicts on the reconstructed 0001-0013 source tree. "
+                                     +"files: "+", ".join(paths)+" "+detail[-9000:])
+                restore=git(P,"restore","--source",before,"--staged","--worktree",
+                            "--","dm/host/Makefile","docs/env_switches.tsv",
+                            cwd=source.dir,check=False)
+                if restore.returncode:
+                    source.keep=True
+                    raise SystemExit("Could not restore the two files excluded from branch patch 0014. "+restore.stderr[-3000:])
+                amend_body="""Rebase the original seedds/nxnative Joy-Con PR #1322 into the Dante2iOS branch patch queue.
+
+Upstream-Status: forwarded seedds/nxnative#1322
+Reason: Add native Mac Joy-Con split HID handling, motion and rumble to the existing controller backend
+Issue: seedds/nxnative#1322"""
+                amended=git(P,"-c","user.name=patches.py","-c","user.email=patches@localhost",
+                            "-c","commit.gpgsign=false","commit","--amend",
+                            "-m","Mac: split a Joy-Con pair into two sideways controllers",
+                            "-m",amend_body,cwd=source.dir,check=False)
+                if amended.returncode:
+                    source.keep=True
+                    raise SystemExit("Could not attach patch metadata to rebased Joy-Con PR #1322. "+amended.stderr[-5000:])
+                generated=args.tmp/"0014-original-joycon-pr-1322.patch"
+                formatted=git(P,"format-patch","--binary","--zero-commit","--no-signature",
+                              "--no-numbered","--stdout","-1","HEAD",cwd=source.dir,binary=True)
+                generated.write_bytes(formatted.stdout)
+                source_patch=generated
                 conflicts=[]
             else:
                 applied,landed,conflicts=P.apply_series(source.dir,[patch])
