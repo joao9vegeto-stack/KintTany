@@ -111,33 +111,50 @@ def resolve_conflict_markers(path: Path) -> int:
     return count
 
 
-def resolve_game_data_patch(P, worktree: Path, patch_path: Path) -> str:
-    expected = {
-        "dm/ios/Sources/DmIOS-Bridging-Header.h",
-        "dm/ios/Sources/main.m",
-    }
+def resolve_additive_patch(P, worktree: Path, expected: set[str], label: str) -> str:
     unmerged = set(git(P, "diff", "--name-only", "--diff-filter=U", cwd=worktree, check=False).stdout.splitlines())
     if unmerged != expected:
-        raise RuntimeError("0001 conflict set changed: " + ", ".join(sorted(unmerged)))
+        raise RuntimeError(f"{label} conflict set changed: " + ", ".join(sorted(unmerged)))
     for relative in sorted(expected):
-        path = worktree / relative
-        count = resolve_conflict_markers(path)
+        count = resolve_conflict_markers(worktree / relative)
         if count != 1:
             raise RuntimeError(f"Expected one additive conflict block in {relative}, found {count}")
     staged = git(P, "add", "--", *sorted(expected), cwd=worktree, check=False)
     if staged.returncode:
-        raise RuntimeError("Could not stage resolved 0001 files: " + staged.stderr[-2000:])
+        raise RuntimeError(f"Could not stage resolved {label} files: " + staged.stderr[-2000:])
     continued = git(
         P, "-c", "user.name=patches.py", "-c", "user.email=patches@localhost",
         "-c", "commit.gpgsign=false", "am", "--continue",
         cwd=worktree, check=False,
     )
     if continued.returncode:
-        raise RuntimeError("Could not continue resolved 0001 patch: " + (continued.stdout + continued.stderr)[-5000:])
-    result = git(P, "rev-parse", "HEAD", cwd=worktree).stdout.strip()
+        raise RuntimeError(f"Could not continue resolved {label} patch: " + (continued.stdout + continued.stderr)[-5000:])
+    return git(P, "rev-parse", "HEAD", cwd=worktree).stdout.strip()
+
+
+def resolve_game_data_patch(P, worktree: Path, patch_path: Path) -> str:
+    expected = {
+        "dm/ios/Sources/DmIOS-Bridging-Header.h",
+        "dm/ios/Sources/main.m",
+    }
+    result = resolve_additive_patch(P, worktree, expected, "0001")
     print(
         "Resolved 0001 by preserving RomFS/shader-map setup and adding the "
         "external RomFS-program directory plus DataBookmark bridging declarations.",
+        flush=True,
+    )
+    return result
+
+
+def resolve_mac_keymap_patch(P, worktree: Path) -> str:
+    expected = {
+        "dm/host/tests/Makefile",
+        "dm/tools/impact_map.tsv",
+    }
+    result = resolve_additive_patch(P, worktree, expected, "0003")
+    print(
+        "Resolved 0003 additively: kept all existing host tests and added "
+        "friends/input-map/launcher-contract tests plus both impact-map entries.",
         flush=True,
     )
     return result
@@ -211,6 +228,16 @@ def main() -> int:
                         source.keep=True
                         P.report(QUEUE_BASE,QUEUE_BASE,applied,landed,conflicts)
                         raise SystemExit(f"Could not resolve the two known 0001 iOS game-data hunks: {exc}")
+                    applied=[(patch,resolved_head)]
+                    landed=[]
+                    conflicts=[]
+                elif conflicts and patch.file == "0003-mac-keymap.patch":
+                    try:
+                        resolved_head = resolve_mac_keymap_patch(P, source.dir)
+                    except Exception as exc:
+                        source.keep=True
+                        P.report(QUEUE_BASE,QUEUE_BASE,applied,landed,conflicts)
+                        raise SystemExit(f"Could not resolve the two additive 0003 Mac key-map hunks: {exc}")
                     applied=[(patch,resolved_head)]
                     landed=[]
                     conflicts=[]
