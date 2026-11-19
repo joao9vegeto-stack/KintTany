@@ -1103,6 +1103,28 @@ Issue: seedds/nxnative#1322"""
                 generated.write_bytes(formatted.stdout)
                 source_patch=generated
                 conflicts=[]
+            elif patch.file == "0015-host-read-embedded-sections-from-the-image-that.patch":
+                # The 0015 mail patch contains abbreviated preimage IDs, and
+                # the hle_nvn.c ID (d78cd345) is no longer a usable fake
+                # ancestor on the reconstructed 0001-0014 tree. Its hunks are
+                # still context-applicable: apply without --3way, then rebuild
+                # every index from the exact source before/after commits below.
+                replay=git(P,"-c","user.name=patches.py","-c","user.email=patches@localhost",
+                           "-c","commit.gpgsign=false","-c","core.autocrlf=false",
+                           "am","--no-3way","--quiet",str(patch.path),
+                           cwd=source.dir,check=False)
+                if replay.returncode:
+                    source.keep=True
+                    git(P,"am","--abort",cwd=source.dir,check=False)
+                    detail=(replay.stdout+replay.stderr).strip()
+                    raise SystemExit(
+                        "Host-image section patch 0015 does not apply by textual context after the "
+                        "reconstructed 0001-0014 queue. " + detail[-9000:]
+                    )
+                applied=[(patch,git(P,"rev-parse","HEAD",cwd=source.dir).stdout.strip())]
+                landed=[]
+                conflicts=[]
+                source_patch=patch.path
             else:
                 applied,landed,conflicts=P.apply_series(source.dir,[patch])
                 if conflicts and patch.file == "0001-ios-game-data-folder.patch":
