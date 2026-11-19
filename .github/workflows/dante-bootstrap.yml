@@ -158,6 +158,13 @@ jobs:
           git config user.name "Dante2iOS migration"
           git config user.email "dante2ios-migration@users.noreply.github.com"
           git add -A
-          git diff --cached --check
+          # Patches are verbatim git-format-patch mail files and contain leading
+          # '+' lines with intentional spaces. 'git diff --cached --check' on
+          # the whole imported tree misidentifies those mail lines as trailing
+          # whitespace. Validate only our own authored migration files here;
+          # the full official patch queue was verified by engine.py check.
+          git diff --cached --check -- DANTE2IOS.md NX2APPLE_REF \
+            .github/workflows/dante-engine-validation.yml \
+            .github/workflows/dante-sync-upstream.yml
           git commit -m "Bootstrap Dante2iOS on current NX2Apple with its verified nxnative pin"
           git push origin HEAD:Dante2iOS
