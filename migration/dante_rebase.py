@@ -1098,7 +1098,7 @@ Issue: seedds/nxnative#1322"""
                     source.keep=True
                     raise SystemExit("Could not attach patch metadata to rebased Joy-Con PR #1322. "+amended.stderr[-5000:])
                 generated=args.tmp/"0014-original-joycon-pr-1322.patch"
-                formatted=git(P,"format-patch","--binary","--zero-commit","--no-signature",
+                formatted=P.git("format-patch","--binary","--zero-commit","--no-signature",
                               "--no-numbered","--stdout","-1","HEAD",cwd=source.dir,binary=True)
                 generated.write_bytes(formatted.stdout)
                 source_patch=generated
