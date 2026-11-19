@@ -17,6 +17,10 @@ from pathlib import Path
 
 
 PATCH_NAME = "0017-support-steam-controller-and-shared-mac-control.patch"
+# The migration patch queue was rebased on this nxnative snapshot before the
+# queue was transplanted into the current NX2Apple frontend. It is deliberately
+# different from NX2Apple's declared .upstream-ref pin (94a094...).
+QUEUE_BASE = "0b5fd6020093407af8bb5ad166e78e00bd2b7242"
 ZERO = "0" * 40
 
 
@@ -103,9 +107,13 @@ def main() -> int:
     import engine as E
     import patches as P
 
-    old_pin = E.pin(root)
-    if old_pin != "94a0944755da1a443f42651bf7ee49ab24ed5ee5":
-        raise SystemExit(f"Unexpected starting pin {old_pin}; expected the migration's recorded base")
+    nx2apple_pin = E.pin(root)
+    if nx2apple_pin != "94a0944755da1a443f42651bf7ee49ab24ed5ee5":
+        raise SystemExit(
+            f"Unexpected NX2Apple source pin {nx2apple_pin}; "
+            "the checked-in frontend snapshot has changed"
+        )
+    queue_base = QUEUE_BASE
     queue = P.load(root)
     positions = [i for i, patch in enumerate(queue) if patch.file == PATCH_NAME]
     if len(positions) != 1:
@@ -114,8 +122,9 @@ def main() -> int:
     steam_patch = queue[position]
 
     engine_repo = E.scratch_root(root)
-    E.fetch(engine_repo, old_pin)
+    E.fetch(engine_repo, nx2apple_pin)
     E.fetch(engine_repo, args.to)
+    E.fetch(engine_repo, queue_base)
 
     # tools/engine.py intentionally fetches each pinned commit at depth 1.
     # The migration patch queue carries preimage blob IDs from intermediate
@@ -138,16 +147,28 @@ def main() -> int:
     if shallow != "false":
         raise SystemExit("nxnative object database is still shallow; refusing an incomplete three-way rebase")
     print(f"Fetched complete nxnative history through {args.to}.", flush=True)
+    ancestor = git(
+        P, "merge-base", "--is-ancestor", queue_base, args.to,
+        cwd=engine_repo, check=False,
+    )
+    if ancestor.returncode:
+        raise SystemExit(
+            f"Queue preparation base {queue_base} is not an ancestor of target {args.to}"
+        )
 
     anchor = f"refs/dante2ios/rebase/{args.to[:12]}/steam-0017-postimage"
     target_success = False
 
-    # Materialize the patch's exact before/after blobs on its declared base.
-    with P.Scratch(engine_repo, old_pin, args.tmp) as base:
+    # Materialize the patch's exact before/after blobs on the actual base used
+    # when the branch-local queue was prepared. The NX2Apple .upstream-ref is
+    # older and is not the preimage of these customized patches.
+    with P.Scratch(engine_repo, queue_base, args.tmp) as base:
         prior_applied, prior_landed, prior_conflicts = P.apply_series(base.dir, queue[:position])
         if prior_conflicts:
-            P.report(old_pin, old_pin, prior_applied, prior_landed, prior_conflicts)
-            raise SystemExit("The first sixteen patches no longer reproduce the declared old base")
+            P.report(queue_base, queue_base, prior_applied, prior_landed, prior_conflicts)
+            raise SystemExit(
+                f"The patch queue does not reproduce its recorded preparation base {queue_base}"
+            )
         before = git(P, "rev-parse", "HEAD", cwd=base.dir).stdout.strip()
 
         replay = git(
@@ -187,12 +208,12 @@ def main() -> int:
         with P.Scratch(engine_repo, args.to, args.tmp) as target:
             first_applied, first_landed, first_conflicts = P.apply_series(target.dir, queue[:position])
             if first_conflicts:
-                P.report(old_pin, args.to, first_applied, first_landed, first_conflicts)
+                P.report(queue_base, args.to, first_applied, first_landed, first_conflicts)
                 raise SystemExit("A patch before 0017 conflicts on current nxnative main")
 
             steam_applied, steam_landed, steam_conflicts = P.apply_series(target.dir, [temp_patch])
             if steam_conflicts:
-                P.report(old_pin, args.to, first_applied + steam_applied,
+                P.report(queue_base, args.to, first_applied + steam_applied,
                          first_landed + steam_landed, steam_conflicts)
                 raise SystemExit("Steam/controller patch 0017 has a genuine three-way conflict on current nxnative main")
 
@@ -205,7 +226,7 @@ def main() -> int:
             if last_conflicts:
                 combined_applied = first_applied + steam_commits + last_applied
                 combined_landed = first_landed + steam_landed_original + last_landed
-                P.report(old_pin, args.to, combined_applied, combined_landed, last_conflicts)
+                P.report(queue_base, args.to, combined_applied, combined_landed, last_conflicts)
                 raise SystemExit("A later NX2Apple patch conflicts after rebasing patch 0017")
 
             all_applied = first_applied + steam_commits + last_applied
