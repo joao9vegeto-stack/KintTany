@@ -5,6 +5,10 @@ on:
     branches: [Dante2iOS]
     paths:
       - ".upstream-ref"
+      - "NX2APPLE_REF"
+      - "frontend-ios/**"
+      - "frontend/**"
+      - "frontend-qt/**"
       - "patches/**"
       - "tools/**"
       - ".github/workflows/dante-engine-validation.yml"
@@ -12,6 +16,10 @@ on:
     branches: [Dante2iOS]
     paths:
       - ".upstream-ref"
+      - "NX2APPLE_REF"
+      - "frontend-ios/**"
+      - "frontend/**"
+      - "frontend-qt/**"
       - "patches/**"
       - "tools/**"
       - ".github/workflows/dante-engine-validation.yml"
@@ -26,7 +34,7 @@ concurrency:
 jobs:
   validate:
     if: github.ref == 'refs/heads/Dante2iOS' || github.base_ref == 'Dante2iOS'
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -63,3 +71,9 @@ jobs:
           test -f engine/dm/games/profile_guess.py
           test -d frontend-ios/Sources
           test -f patches/0001-ios-game-data-folder.patch
+
+      - name: Compile Swift iOS shell against Xcode 27
+        run: |
+          set -euo pipefail
+          cd frontend-ios
+          swift build
