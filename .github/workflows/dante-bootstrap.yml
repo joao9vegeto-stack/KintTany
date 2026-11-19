@@ -58,12 +58,17 @@ jobs:
           git worktree remove "$SPK"
           echo "Preserved $(find "$LEGACY" -type f | wc -l | tr -d ' ') SpkIOSzero reference files."
 
-      - name: Fetch the exact NX2Apple source snapshot
+      - name: Fetch current NX2Apple main source snapshot
         shell: bash
-        env:
-          NX2APPLE_SHA: 7541e9e2f15b8beda26ff5d7b405e234e4015ed2
         run: |
           set -euo pipefail
+          NX2APPLE_SHA="$(git ls-remote --exit-code https://github.com/LNPANDY/NX2Apple.git refs/heads/main | awk 'NR==1 { print $1 }')"
+          if [[ ! "$NX2APPLE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not resolve LNPANDY/NX2Apple main HEAD."
+            exit 1
+          fi
+          echo "NX2APPLE_SHA=$NX2APPLE_SHA" >> "$GITHUB_ENV"
+          echo "Resolved LNPANDY/NX2Apple main HEAD: $NX2APPLE_SHA"
           git clone --no-checkout https://github.com/LNPANDY/NX2Apple.git "$RUNNER_TEMP/NX2Apple"
           git -C "$RUNNER_TEMP/NX2Apple" fetch --no-tags --depth=1 origin "$NX2APPLE_SHA"
           git -C "$RUNNER_TEMP/NX2Apple" checkout --detach "$NX2APPLE_SHA"
@@ -90,6 +95,7 @@ jobs:
           cp migration/DANTE2IOS.md "$ASSETS/DANTE2IOS.md"
           cp migration/dante-engine-validation.yml "$ASSETS/dante-engine-validation.yml"
           cp migration/dante-sync-upstream.yml "$ASSETS/dante-sync-upstream.yml"
+          cp migration/dante_rebase.py "$ASSETS/dante_rebase.py"
 
           find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           rsync -a --exclude='.git' "$RUNNER_TEMP/NX2Apple/" "$GITHUB_WORKSPACE/"
@@ -111,7 +117,7 @@ jobs:
 
           cp "$ASSETS/DANTE2IOS.md" DANTE2IOS.md
           test "$(cat .upstream-ref)" = 94a0944755da1a443f42651bf7ee49ab24ed5ee5
-          printf '%s\n' "7541e9e2f15b8beda26ff5d7b405e234e4015ed2" > NX2APPLE_REF
+          printf '%s\n' "$NX2APPLE_SHA" > NX2APPLE_REF
           rm -f .github/workflows/*.yml .github/workflows/*.yaml
           cp "$ASSETS/dante-engine-validation.yml" .github/workflows/dante-engine-validation.yml
           cp "$ASSETS/dante-sync-upstream.yml" .github/workflows/dante-sync-upstream.yml
@@ -120,7 +126,7 @@ jobs:
           test -f legacy/spkioszero/README.md
           test ! -e .github/workflows/spk_ios_zero.yml
 
-      - name: Resolve and materialize current nxnative main HEAD
+      - name: Rebase NX2Apple patch queue onto current nxnative main
         shell: bash
         run: |
           set -euo pipefail
@@ -131,195 +137,16 @@ jobs:
           fi
           echo "NXNATIVE_SHA=$NXNATIVE_SHA" >> "$GITHUB_ENV"
           echo "Resolved seedds/nxnative main HEAD: $NXNATIVE_SHA"
-          export NXNATIVE_SHA
-          test "$(cat .upstream-ref)" = 94a0944755da1a443f42651bf7ee49ab24ed5ee5
-          python3 - <<'PY'
-          import os
-          import re
-          import sys
-          from pathlib import Path
-
-          root = Path.cwd()
-          sys.path.insert(0, str(root / "tools"))
-          import engine as E
-          import patches as P
-
-          old_pin = E.pin(root)
-          target = os.environ["NXNATIVE_SHA"]
-          queue = P.load(root)
-          steam_name = "0017-support-steam-controller-and-shared-mac-control.patch"
-          position = next(i for i, p in enumerate(queue) if p.file == steam_name)
-          eng = E.scratch_root(root)
-          E.fetch(eng, old_pin)
-          E.fetch(eng, target)
-
-          with P.Scratch(eng, target, os.environ["RUNNER_TEMP"]) as scratch:
-              applied, landed, conflicts = P.apply_series(scratch.dir, queue[:position])
-              if conflicts:
-                  P.report(old_pin, target, applied, landed, conflicts)
-                  raise SystemExit("Preimage diagnostic could not reproduce patches 0001-0016")
-              print(f"Preimage base after {len(applied)} applied patches: "
-                    + P.git("rev-parse", "HEAD", cwd=scratch.dir).stdout.strip())
-
-              patch_text = queue[position].path.read_text(encoding="utf-8")
-              sections = list(re.finditer(r"(?m)^diff --git a/(\S+) b/(\S+)$", patch_text))
-              mismatches = 0
-              for i, match in enumerate(sections):
-                  end = sections[i + 1].start() if i + 1 < len(sections) else len(patch_text)
-                  section = patch_text[match.start():end]
-                  path = match.group(1)
-                  index = re.search(r"(?m)^index ([0-9a-f]+)\.\.([0-9a-f]+)", section)
-                  if not index:
-                      print(f"NO_INDEX {path}")
-                      mismatches += 1
-                      continue
-                  expected_old, expected_new = index.groups()
-                  row = P.git("ls-tree", "HEAD", "--", path, cwd=scratch.dir, check=False).stdout.strip()
-                  actual_old = row.split()[2] if row else "MISSING"
-                  old_ok = actual_old.startswith(expected_old) if actual_old != "MISSING" else expected_old.startswith("00000000")
-                  old_present = P.git("cat-file", "-e", expected_old + "^{blob}", cwd=scratch.dir, check=False).returncode == 0 if expected_old != "00000000" else True
-                  new_present = P.git("cat-file", "-e", expected_new + "^{blob}", cwd=scratch.dir, check=False).returncode == 0 if expected_new != "00000000" else True
-                  if not old_ok or not old_present or not new_present:
-                      mismatches += 1
-                      print(f"BLOB_MISMATCH {path} expected_old={expected_old} actual_old={actual_old} "
-                            f"old_present={old_present} expected_new={expected_new} new_present={new_present}")
-              print(f"PATCH_0017_BLOB_MISMATCHES={mismatches}")
-          PY
-          python3 - <<'PY'
-          import os
-          import shutil
-          import sys
-          import tarfile
-          from pathlib import Path
-
-          root = Path.cwd()
-          sys.path.insert(0, str(root / "tools"))
-          import engine as E
-          import patches as P
-
-          old_pin = E.pin(root)
-          target = os.environ["NXNATIVE_SHA"]
-          queue = P.load(root)
-          position = next(i for i, p in enumerate(queue)
-                          if p.file == "0017-support-steam-controller-and-shared-mac-control.patch")
-          eng = E.scratch_root(root)
-          E.fetch(eng, old_pin)
-          E.fetch(eng, target)
-          out = Path(os.environ["RUNNER_TEMP"]) / "dante-reject-evidence"
-          shutil.rmtree(out, ignore_errors=True)
-          (out / "preimage").mkdir(parents=True)
-          (out / "partial").mkdir(parents=True)
-          (out / "rejects").mkdir(parents=True)
-
-          with P.Scratch(eng, target, os.environ["RUNNER_TEMP"]) as scratch:
-              applied, landed, conflicts = P.apply_series(scratch.dir, queue[:position])
-              if conflicts:
-                  P.report(old_pin, target, applied, landed, conflicts)
-                  raise SystemExit("Could not materialize the actual preimage for patch 0017")
-              steam = queue[position]
-              patch_result = P.git("apply", "--reject", "--whitespace=nowarn",
-                                   str(steam.path), cwd=scratch.dir, check=False)
-              (out / "apply-result.txt").write_text(
-                  "returncode=" + str(patch_result.returncode) + chr(10)
-                  + patch_result.stdout + chr(10) + patch_result.stderr,
-                  encoding="utf-8")
-              paths = list(dict.fromkeys(steam.files))
-              for rel in paths:
-                  try:
-                      before = P.git("show", "HEAD:" + rel, cwd=scratch.dir, check=False)
-                      if before.returncode == 0:
-                          dest = out / "preimage" / rel
-                          dest.parent.mkdir(parents=True, exist_ok=True)
-                          dest.write_bytes(before.stdout.encode("utf-8") if isinstance(before.stdout, str) else before.stdout)
-                  except Exception:
-                      pass
-                  current = scratch.dir / rel
-                  if current.is_file():
-                      dest = out / "partial" / rel
-                      dest.parent.mkdir(parents=True, exist_ok=True)
-                      shutil.copy2(current, dest)
-              rejects = list(scratch.dir.rglob("*.rej"))
-              for rej in rejects:
-                  dest = out / "rejects" / rej.relative_to(scratch.dir)
-                  dest.parent.mkdir(parents=True, exist_ok=True)
-                  shutil.copy2(rej, dest)
-              diff = P.git("diff", "--binary", "HEAD", cwd=scratch.dir, check=False)
-              (out / "accepted-hunks.patch").write_text(diff.stdout, encoding="utf-8")
-              status = P.git("status", "--short", cwd=scratch.dir, check=False)
-              (out / "status.txt").write_text(status.stdout, encoding="utf-8")
-              (out / "reject-list.txt").write_text(
-                  chr(10).join(str(p.relative_to(scratch.dir)) for p in rejects) + chr(10),
-                  encoding="utf-8")
-              print(f"PATCH_0017_APPLY_RETURN={patch_result.returncode}")
-              print(f"PATCH_0017_REJECT_FILES={len(rejects)}")
-              print("REJECTS=" + ", ".join(str(p.relative_to(scratch.dir)) for p in rejects))
-          archive = Path(os.environ["RUNNER_TEMP"]) / "dante-reject-evidence.tar.gz"
-          with tarfile.open(archive, "w:gz") as tar:
-              tar.add(out, arcname="dante-reject-evidence")
-          print(f"PATCH_0017_EVIDENCE={archive}")
-          PY
-          python3 tools/engine.py --tmp "$RUNNER_TEMP" bump --to "$NXNATIVE_SHA"
+          test "$(cat .upstream-ref)" = "94a0944755da1a443f42651bf7ee49ab24ed5ee5"
+          mkdir -p "$RUNNER_TEMP/dante-rebase-tmp"
+          python3 "$RUNNER_TEMP/dante-migration/dante_rebase.py" \
+            --repo "$GITHUB_WORKSPACE" \
+            --to "$NXNATIVE_SHA" \
+            --tmp "$RUNNER_TEMP/dante-rebase-tmp"
           test "$(cat .upstream-ref)" = "$NXNATIVE_SHA"
           python3 tools/engine.py check
           python3 tools/engine.py sync
           python3 tools/engine.py relink
-
-      - name: Capture exact Git three-way conflict stages
-        if: failure()
-        shell: bash
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          WORKTREES=( "$RUNNER_TEMP"/patches-*/tree )
-          if (( ${#WORKTREES[@]} == 0 )); then
-            echo "No retained rebase worktree found."
-            exit 0
-          fi
-          WT="${WORKTREES[-1]}"
-          OUT="$RUNNER_TEMP/dante-conflict"
-          mkdir -p "$OUT"
-          git -C "$WT" status --short > "$OUT/status.txt"
-          git -C "$WT" rev-parse HEAD > "$OUT/head.txt"
-          git -C "$WT" ls-files -u -z > "$OUT/unmerged.z"
-          git -C "$WT" am --show-current-patch > "$OUT/current.patch" || true
-          export WT OUT
-          python3 - <<'PY'
-          import os
-          import pathlib
-          import subprocess
-
-          wt = os.environ["WT"]
-          out = pathlib.Path(os.environ["OUT"])
-          raw = subprocess.check_output(["git", "-C", wt, "ls-files", "-u", "-z"])
-          count = 0
-          for record in raw.split(bytes([0])):
-              if not record:
-                  continue
-              meta, raw_path = record.split(bytes([9]), 1)
-              mode, blob, stage = meta.split()
-              path = os.fsdecode(raw_path)
-              stage = stage.decode()
-              content = subprocess.check_output(["git", "-C", wt, "show", f":{stage}:{path}"])
-              target = out / f"stage-{stage}" / path
-              target.parent.mkdir(parents=True, exist_ok=True)
-              target.write_bytes(content)
-              count += 1
-          (out / "unmerged-count.txt").write_text(str(count) + chr(10))
-          print(f"Captured {count} conflict stages from {wt}")
-          PY
-          tar -czf "$RUNNER_TEMP/dante-conflict.tar.gz" -C "$OUT" .
-          echo "Conflict stages archived: $RUNNER_TEMP/dante-conflict.tar.gz"
-
-      - name: Upload conflict evidence
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: dante-rebase-conflict-${{ github.run_number }}
-          path: |
-            ${{ runner.temp }}/dante-conflict.tar.gz
-            ${{ runner.temp }}/dante-reject-evidence.tar.gz
-          if-no-files-found: warn
-          compression-level: 1
 
       - name: Verify the migrated source tree (no game extraction or IPA build)
         shell: bash

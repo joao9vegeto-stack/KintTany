@@ -4,9 +4,9 @@ This branch is being converted into a maintained, reusable native iOS porting ba
 
 ## Exact source references
 
-- NX2Apple frontend and patch-queue snapshot: `LNPANDY/NX2Apple` at `7541e9e2f15b8beda26ff5d7b405e234e4015ed2`.
+- NX2Apple frontend and patch-queue snapshot: the bootstrap resolves the current `LNPANDY/NX2Apple` `main` HEAD at run time and records the exact 40-character commit in `NX2APPLE_REF`.
 - nxnative target: the workflow resolves the current `seedds/nxnative` `main` HEAD immediately before the rebase and records the full 40-character SHA in `.upstream-ref`.
-- The Steam Controller patch `0017` has been rebased on the branch-specific post-`0016` queue. Its original preimage blobs are not reachable from the nxnative repository, so the first bump applies that patch by its exact diff context (`--no-3way`) and immediately rewrites it against the new pin. The workflow then restores the stock NX2Apple patch helper and runs the normal three-way `check` and `sync` against the regenerated patch queue.
+- The Steam Controller patch `0017` is branch-specific and follows the post-`0016` queue. Its original preimage blobs are not reachable from nxnative. `migration/dante_rebase.py` first replays patches `0001`–`0016` and `0017` on the declared old pin (`0017` by exact diff context, `--no-3way`), materializes the real full blob IDs for the exact preimage and postimage, then replays it with a genuine three-way merge on current nxnative `main`. The pin and patch queue are written only after every patch has rebased; the stock NX2Apple `check` and `sync` then validate the regenerated queue.
 - The Joy-Con split patch `0014` is kept as a branch-specific rebase with full blob indexes for the post-`0013` tree.
 - Upstream engine is materialized by `python3 tools/engine.py sync` into ignored `engine/`. Its source of truth is `.upstream-ref` plus `patches/series`, not a committed copy of the engine.
 
