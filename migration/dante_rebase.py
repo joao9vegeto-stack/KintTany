@@ -691,6 +691,293 @@ def resolve_nsp_experimental_builder_patch(P, worktree: Path) -> str:
     return result
 
 
+def joycon_replace_once(text: str, old: str, new: str, label: str) -> str:
+    count = text.count(old)
+    if count != 1:
+        raise RuntimeError(f"{label}: expected one anchor, found {count}")
+    return text.replace(old, new, 1)
+
+
+def resolve_joycon_pr_1322(P, worktree: Path) -> str:
+    """Resolve the three Joy-Con PR overlaps while retaining the current Dante frontend."""
+    expected = {
+        "dm/host/Makefile",
+        "dm/host/front_mac.m",
+        "dm/host/hle_hid.c",
+    }
+    unmerged = set(
+        git(P, "diff", "--name-only", "--diff-filter=U", cwd=worktree, check=False)
+        .stdout.splitlines()
+    )
+    if unmerged != expected:
+        raise RuntimeError(
+            "Joy-Con PR #1322 conflict set changed: " + ", ".join(sorted(unmerged))
+        )
+
+    # The current NX2Apple pin builds host objects with compiler-generated
+    # dependency files (-MMD/-MP). PR #1322's Makefile hunk targets an older
+    # monolithic build; keep stage 2 unchanged rather than importing that
+    # obsolete rule. Its new headers are included by the compiler depfiles.
+    makefile = git(P, "show", ":2:dm/host/Makefile", cwd=worktree).stdout
+
+    front = git(P, "show", ":2:dm/host/front_mac.m", cwd=worktree).stdout
+    pr_front = git(P, "show", ":3:dm/host/front_mac.m", cwd=worktree).stdout
+
+    # New unified Joy-Con Bluetooth transport supersedes the old JC1 HID path.
+    # Keep the newer Dante key-map, cursor, Switch 2 rumble and Pro-motion code.
+    front = joycon_replace_once(
+        front, '#include "pad_jc1_mac.h"\n', "",
+        "old JC1 header removal",
+    )
+    include_anchor = "static void merge_rumble_to(void (*sink)(const dm_haptic_state *));\n"
+    front = joycon_replace_once(
+        front, include_anchor,
+        include_anchor + '#include "pad_joycon_mac.h"\n',
+        "new Joy-Con header insertion",
+    )
+    front = joycon_replace_once(
+        front,
+        "static int pad_gc_unread(GCController *c) { return hidpad_gc_unread(c) || jc1_gc_unread(c); }",
+        "static int pad_gc_unread(GCController *c) { return hidpad_gc_unread(c) || (g_joycon_split && joycon_is_gc_controller(c)); }",
+        "GameController HID unread filter",
+    )
+    front = joycon_replace_once(
+        front,
+        "// GameController's controllers that the host reads from their HID reports instead, so they stay unread here: identical pads (pad_hid_mac.h) and original Joy-Cons (pad_jc1_mac.h)",
+        "// GameController controllers read from raw HID stay unread: identical pads and Joy-Con controllers handled by pad_joycon_mac.h",
+        "HID unread comment",
+    )
+
+    # Import only the PR's Joy-Con filter and haptics routing helpers, not its
+    # older front-end globals or Switch 2 rumble implementation.
+    helper_start = pr_front.index("static int gc_pad_used(GCController *c) {")
+    helper_end = pr_front.index(
+        "// DM_PAD_MERGE: whether a controller still plays player 1",
+        helper_start,
+    )
+    joycon_helpers = pr_front[helper_start:helper_end].rstrip()
+    merge_comment = "// DM_PAD_MERGE: whether a controller still plays player 1 (gone: one just removed, not counted), a GameController one or a raw HID pad (pad_hid_mac.h)\n"
+    front = joycon_replace_once(
+        front, merge_comment, joycon_helpers + "\n" + merge_comment,
+        "Joy-Con filter/haptics helper insertion",
+    )
+
+    # DM_PAD_MERGE must count raw Joy-Cons after the old g_jc1_pads list is gone.
+    ours_merge_start = front.index("static int merge_pads_left(GCController *gone) {")
+    ours_merge_end = front.index("\n// Called at start and on every connect / disconnect", ours_merge_start)
+    pr_merge_start = pr_front.index("static int merge_pads_left(GCController *gone) {")
+    pr_merge_end = pr_front.index("\n// Called at start and on every connect / disconnect", pr_merge_start)
+    front = front[:ours_merge_start] + pr_front[pr_merge_start:pr_merge_end] + front[ours_merge_end:]
+
+    # Replace the controller-connect routine's JC1-specific branches with the
+    # PR Joy-Con model while retaining the current Pro-motion callback name.
+    ours_changed_start = front.index("static void pads_changed(GCController *gone) {")
+    ours_changed_end = front.index("\n// Display sleep:", ours_changed_start)
+    pr_changed_start = pr_front.index("static void pads_changed(GCController *gone) {")
+    pr_changed_end = pr_front.index("\n// Display sleep:", pr_changed_start)
+    changed = pr_front[pr_changed_start:pr_changed_end]
+    changed = changed.replace("hidpad_gc_unread(", "pad_gc_unread(")
+    changed = changed.replace("pro_players_changed(", "pads_motion_changed(")
+    front = front[:ours_changed_start] + changed + front[ours_changed_end:]
+
+    # Replace only the old JC1 transport callbacks with the original PR's
+    # Joy-Con attach/read/pair/split code. Keep the Dante Home-quit UI unchanged.
+    old_joy_start = front.index(
+        "// Original Joy-Cons read from their HID reports (pad_jc1_mac.h):"
+    )
+    old_joy_end = front.index("// Quit with the Home button", old_joy_start)
+    new_joy_start = pr_front.index("// Bluetooth Joy-Cons (pad_joycon_mac.h):")
+    new_joy_end = pr_front.index("// Quit with the Home button", new_joy_start)
+    joycon_block = pr_front[new_joy_start:new_joy_end].rstrip()
+    front = front[:old_joy_start] + joycon_block + "\n" + front[old_joy_end:]
+
+    # Clear the gamepad state and the correct Joy-Con side on focus loss;
+    # reread the unified HID driver when focus returns.
+    front = joycon_replace_once(
+        front,
+        "    for (jc1_pad *d = g_jc1_pads; d; d = d->next) { int p = jc1pad_player(d); if (p >= 0) { dm_pad_set_player(p, 0, 0, 0, 0, 0); dm_joy_set(p, 0, 0, 0, 0); dm_joy_set(p, 1, 0, 0, 0); } }",
+        """    for (joycon_pad *d = g_joycons; d; d = d->next) {
+        joycon_pad *pri = joycon_pad_primary(d);
+        int p = pad_slot_of(&g_slots, pri);
+        if (p >= 0) { dm_pad_set_player(p, 0, 0, 0, 0, 0); dm_joy_set(p, joycon_side(d->st.pid), 0, 0, 0); }
+    }""",
+        "pads_release Joy-Con state clear",
+    )
+    front = joycon_replace_once(
+        front,
+        "    if (g_merge) { for (GCController *c in GCController.controllers) if (c.extendedGamepad) pad_read(c.extendedGamepad); }",
+        "    if (g_merge) { for (GCController *c in GCController.controllers) if (gc_pad_used(c)) pad_read(c.extendedGamepad); }",
+        "pads_reread merged GameController filter",
+    )
+    front = joycon_replace_once(
+        front,
+        "    for (jc1_pad *d = g_jc1_pads; d; d = d->next) jc1pad_read(d);",
+        "    for (joycon_pad *d = g_joycons; d; d = d->next) joycon_read(d);",
+        "pads_reread Joy-Con loop",
+    )
+
+    # The new driver is gated by g_input_on; it has no separate JC1 active switch.
+    front = joycon_replace_once(
+        front,
+        "    dm_switch2_active(0); dm_jc1_active(0);\n",
+        """    dm_switch2_active(0);
+    for (joycon_pad *d = g_joycons; d; d = d->next) {
+        d->motion = (pro_motion){0};
+        joycon_pad *pri = joycon_pad_primary(d);
+        int p = g_merge ? 0 : pad_slot_of(&g_slots, pri);
+        if (p >= 0) {
+            dm_motion_clear_hid(p);
+            if (!g_merge) dm_motion_clear_joy(p, joycon_side(d->st.pid));
+        }
+    }
+""",
+        "input_release Joy-Con motion clear",
+    )
+    front = joycon_replace_once(
+        front,
+        "    dm_switch2_active(1); dm_jc1_active(1);\n",
+        "    dm_switch2_active(1);\n",
+        "input_resume Joy-Con reactivation removal",
+    )
+
+    # The Home and controller prompts read buttons from the same Joy-Con state.
+    front = joycon_replace_once(
+        front,
+        "    for (jc1_pad *d = g_jc1_pads; d; d = d->next) { if (jc1_pad_home(d)) *home = 1; jc1_pad_ab(d, a, b); }   // original Joy-Cons read from HID (pad_jc1_mac.h)",
+        """    for (joycon_pad *d = g_joycons; d; d = d->next) {
+        if (d->st.home) *home = 1;
+        uint64_t m = d->partner ? d->st.joy_buttons : d->st.buttons;
+        if (m & DM_BTN_A) *a = 1;
+        if (m & DM_BTN_B) *b = 1;
+    }""",
+        "Home prompt Joy-Con buttons",
+    )
+    front = joycon_replace_once(
+        front,
+        "    for (GCController *c in GCController.controllers) {\n        GCExtendedGamepad *g = c.extendedGamepad; if (!g) continue;",
+        "    for (GCController *c in GCController.controllers) {\n        if (!gc_pad_used(c)) continue;\n        GCExtendedGamepad *g = c.extendedGamepad; if (!g) continue;",
+        "Home prompt GameController duplicate filter",
+    )
+    front = joycon_replace_once(
+        front,
+        "    for (jc1_pad *d = g_jc1_pads; d; d = d->next) jc1_pad_ab(d, a, b);             // original Joy-Cons read from HID (pad_jc1_mac.h)",
+        """    for (joycon_pad *d = g_joycons; d; d = d->next) {
+        uint64_t m = d->partner ? d->st.joy_buttons : d->st.buttons;
+        if (m & DM_BTN_A) *a = 1;
+        if (m & DM_BTN_B) *b = 1;
+    }""",
+        "controller prompt Joy-Con buttons",
+    )
+    front = joycon_replace_once(
+        front,
+        "    for (GCController *c in GCController.controllers) if (c.extendedGamepad && !pad_gc_unread(c) && pad_slot_of(&g_slots, (__bridge const void *)c) < 0) n++;\n    for (jc1_pad *d = g_jc1_pads; d; d = d->next) if (pad_slot_of(&g_slots, d) < 0) n++;",
+        "    for (GCController *c in GCController.controllers) if (gc_pad_used(c) && !pad_gc_unread(c) && pad_slot_of(&g_slots, (__bridge const void *)c) < 0) n++;",
+        "controller prompt waiting Joy-Con count",
+    )
+
+    # Start the IOHID Joy-Con manager before the initial controller scan.
+    front = joycon_replace_once(
+        front,
+        "    hq_start();\n    pads_changed(nil);",
+        "    hq_start();\n    joycon_start();\n    pads_changed(nil);",
+        "Joy-Con manager startup order",
+    )
+    front = joycon_replace_once(
+        front,
+        "    dm_jc1_start(g_merge);\n",
+        "",
+        "old JC1 manager startup removal",
+    )
+    front = joycon_replace_once(
+        front,
+        "                GCController *c = n.object; int conn = n.name == GCControllerDidConnectNotification;\n",
+        "                GCController *c = n.object; int conn = n.name == GCControllerDidConnectNotification;\n                if (g_joycon_split && joycon_is_gc_controller(c)) return;\n",
+        "GameController duplicate Joy-Con observer filter",
+    )
+
+    legacy = (
+        "pad_jc1_mac.h", "jc1_pad", "jc1pad_", "g_jc1_pads",
+        "dm_jc1_", "jc1_gc_unread", "g_jc1_",
+    )
+    for symbol in legacy:
+        if symbol in front:
+            raise RuntimeError(f"Old JC1 transport reference remains in front_mac.m: {symbol}")
+    for symbol in (
+        '#include "pad_joycon_mac.h"', "static int gc_pad_used",
+        "static void joycon_haptics_sync", "static void joycon_read",
+        "joycon_start();", "pads_motion_changed(gone)",
+        "g_held_fn = 0", "g_shift_fn",
+    ):
+        if symbol not in front:
+            raise RuntimeError(f"Joy-Con integration is missing required current-front-end code: {symbol}")
+
+    # Stage 2's modern object-based Makefile is intentionally retained.
+    makefile = git(P, "show", ":2:dm/host/Makefile", cwd=worktree).stdout
+    if "-MMD -MP" not in makefile:
+        raise RuntimeError("Expected current host Makefile's generated dependency-file model")
+
+    # hle_hid.c: add the re-pair reset while retaining current side-report
+    # bookkeeping and the live six-axis history/sampling implementation.
+    hid = git(P, "show", ":2:dm/host/hle_hid.c", cwd=worktree).stdout
+    if "static _Thread_local live_hist src" not in hid or "answer_tick(&g_hwm_states" not in hid:
+        raise RuntimeError("Refusing to replace the current live six-axis history implementation")
+    old_attach = """    if (sides == 3 || !sides) atomic_store(&g_joy_paired[p], sides == 3);
+    atomic_fetch_and(&g_joy_reported[p], sides);   // a Joy-Con taken away has reported nothing yet when it comes back
+    if (atomic_exchange(&g_joy_sides[p], sides) != sides && !sides) for (int s = 0; s < 2; s++) { atomic_store(&g_joy_btn[p][s], 0); atomic_store(&g_joy_axes[p][s], 0); }
+    styles_sync();"""
+    new_attach = """    if (sides == 3 || !sides) atomic_store(&g_joy_paired[p], sides == 3);
+    atomic_fetch_and(&g_joy_reported[p], sides);   // a Joy-Con taken away has reported nothing yet when it comes back
+    uint32_t old = atomic_exchange(&g_joy_sides[p], sides);
+    if (sides == 3 && old != 0) atomic_fetch_and(&g_single_mask, ~(1u << p));
+    if (old != sides && !sides) for (int s = 0; s < 2; s++) { atomic_store(&g_joy_btn[p][s], 0); atomic_store(&g_joy_axes[p][s], 0); }
+    styles_sync();"""
+    hid = joycon_replace_once(hid, old_attach, new_attach, "dm_joy_attach single-assignment reset")
+
+    old_six = """    for (int i = 0; i < n; i++) six_at(&out[i], samp - i, &src, shakes);
+    return n;"""
+    new_six = """    int split = ((1u << (h & 0xff)) & (STYLE_JOYDUAL | STYLE_JOYLEFT | STYLE_JOYRIGHT)) != 0;
+    for (int i = 0; i < n; i++) {
+        six_at(&out[i], samp - i, &src, shakes);
+        // Super Mario Party rejects a Joy-Con sample when an acceleration component is exactly zero.
+        if (split) for (int k = 0; k < 3; k++) if (out[i].acc[k] == 0.0f) out[i].acc[k] = 1e-6f;
+    }
+    return n;"""
+    hid = joycon_replace_once(hid, old_six, new_six, "six-axis zero-acceleration workaround")
+
+    front_path = worktree / "dm/host/front_mac.m"
+    hid_path = worktree / "dm/host/hle_hid.c"
+    front_path.write_text(front, encoding="utf-8")
+    hid_path.write_text(hid, encoding="utf-8")
+
+    staged = git(
+        P, "add", "--",
+        "dm/host/Makefile", "dm/host/front_mac.m", "dm/host/hle_hid.c",
+        cwd=worktree, check=False,
+    )
+    if staged.returncode:
+        raise RuntimeError("Could not stage resolved Joy-Con PR #1322 overlaps: " + staged.stderr[-4000:])
+
+    continued = git(
+        P, "-c", "user.name=patches.py", "-c", "user.email=patches@localhost",
+        "-c", "commit.gpgsign=false", "cherry-pick", "--continue",
+        cwd=worktree, check=False,
+    )
+    if continued.returncode:
+        raise RuntimeError(
+            "Could not continue original Joy-Con PR #1322 after the targeted merge: "
+            + (continued.stdout + continued.stderr)[-9000:]
+        )
+
+    print(
+        "Resolved original PR #1322: retained the modern object-based Makefile, "
+        "replaced the old JC1 Bluetooth transport with the unified Joy-Con driver, "
+        "kept current Pro-motion/Switch 2/key-map logic, and preserved the live "
+        "six-axis history while adding the Joy-Con re-pair and zero-acceleration fixes.",
+        flush=True,
+    )
+    return git(P, "rev-parse", "HEAD", cwd=worktree).stdout.strip()
+
+
 def main() -> int:
     ap=argparse.ArgumentParser()
     ap.add_argument("--repo",required=True,type=Path)
@@ -783,11 +1070,15 @@ def main() -> int:
                         already_landed.append(patch)
                         print("Joy-Con PR #1322 is already present after patches 0001-0013.",flush=True)
                         continue
-                    source.keep=True
-                    paths=git(P,"diff","--name-only","--diff-filter=U",cwd=source.dir,check=False).stdout.split()
-                    detail=(replay.stdout+replay.stderr).strip()
-                    raise SystemExit("Original Joy-Con PR #1322 conflicts on the reconstructed 0001-0013 source tree. "
-                                     +"files: "+", ".join(paths)+" "+detail[-9000:])
+                    try:
+                        resolve_joycon_pr_1322(P, source.dir)
+                    except Exception as exc:
+                        source.keep=True
+                        paths=git(P,"diff","--name-only","--diff-filter=U",cwd=source.dir,check=False).stdout.split()
+                        raise SystemExit(
+                            "Could not resolve the three original Joy-Con PR #1322 integration overlaps. "
+                            + "files: " + ", ".join(paths) + "; " + str(exc)
+                        )
                 restore=git(P,"restore","--source",before,"--staged","--worktree",
                             "--","dm/host/Makefile","docs/env_switches.tsv",
                             cwd=source.dir,check=False)
