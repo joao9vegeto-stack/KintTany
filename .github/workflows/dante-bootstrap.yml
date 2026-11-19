@@ -87,6 +87,8 @@ jobs:
           cp migration/DANTE2IOS.md "$ASSETS/DANTE2IOS.md"
           cp migration/dante-engine-validation.yml "$ASSETS/dante-engine-validation.yml"
           cp migration/dante-sync-upstream.yml "$ASSETS/dante-sync-upstream.yml"
+          cp migration/compat/geometry_proxy_reserved_regions.py "$ASSETS/geometry_proxy_reserved_regions.py"
+          cp migration/compat/DanteReservedRegionsCompat.swift "$ASSETS/DanteReservedRegionsCompat.swift"
 
           # The official NX2Apple main now has a newer nxnative pin and an
           # extensive, interdependent patch queue. Copy it unmodified; the
@@ -107,6 +109,14 @@ jobs:
           cp -a "$RUNNER_TEMP/legacy-spkioszero/." legacy/spkioszero/
           cp "$ASSETS/DANTE2IOS.md" DANTE2IOS.md
           printf '%s\n' "$NX2APPLE_SHA" > NX2APPLE_REF
+
+          # Xcode 27.1 lacks the SwiftUI GeometryProxy division API used by
+          # upstream. Preserve the entire upstream snapshot and replace only
+          # the five unsupported GeometryProxy calls with a safe adapter.
+          python3 -m py_compile "$ASSETS/geometry_proxy_reserved_regions.py"
+          python3 "$ASSETS/geometry_proxy_reserved_regions.py" \
+            --repo "$GITHUB_WORKSPACE" \
+            --shim "$ASSETS/DanteReservedRegionsCompat.swift"
 
           # Avoid triggering other upstream workflows or SpkIOSzero's build.
           rm -f .github/workflows/*.yml .github/workflows/*.yaml
@@ -164,6 +174,12 @@ jobs:
           test -f engine/dm/ios/Sources/main.m
           test -f engine/dm/games/profile_guess.py
           test -f frontend-ios/Package.swift
+          test -f frontend-ios/Sources/ShellUI/DanteReservedRegionsCompat.swift
+          grep -Fq 'geometry.danteReservedRegions(kind: .division)' frontend-ios/Sources/ShellUI/GameLaunchActions.swift
+          grep -Fq 'proxy.danteReservedRegions(kind: .division)' frontend-ios/Sources/ShellUI/CoverFlowView.swift
+          # Compile the iOS shell early. The full native Swift test suites still
+          # run under the inherited pre-push hook and must pass before publish.
+          (cd frontend-ios && swift build)
           test -f frontend/README.md
           test "$(cat .upstream-ref)" = "$PINNED_NXNATIVE_SHA"
           test -d engine/.git
