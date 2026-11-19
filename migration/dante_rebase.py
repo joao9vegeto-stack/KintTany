@@ -41,42 +41,59 @@ def tree_entry(P, commit: str, path: str, cwd: Path):
 
 
 def indexed_patch(P, source: Path, destination: Path, old_commit: str, new_commit: str, repo: Path):
-    """Write full blob indexes from the exact old/new commit trees."""
-    lines = source.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
-    out: list[str] = []
-    i = 0
-    count = 0
-    while i < len(lines):
-        line = lines[i]
-        if not line.startswith("diff --git "):
-            out.append(line)
-            i += 1
+    """Export the exact Git commit diff, not just new hashes on stale patch hunks.
+
+    Conflict resolutions and context replays can change both the preimage and
+    the actual hunk content. Replacing only 'index' lines would produce a mail
+    patch that does not describe either committed source tree.
+    """
+    raw = P.git(
+        "format-patch", "--stdout", "--binary", "--full-index",
+        "--no-numbered", "--no-signature", "-1", new_commit,
+        cwd=repo, binary=True,
+    )
+    body = raw.stdout.decode("utf-8")
+    if "\n---\n" not in body or "diff --git a/" not in body:
+        raise RuntimeError(f"Git did not format an actual source diff for {new_commit}")
+
+    # Retain the migration queue's upstream disposition and issue metadata,
+    # even for resolver commits whose cherry-picked metadata was different.
+    original = P.Patch(source)
+    header, remainder = body.split("\n---\n", 1)
+    for name, value in (
+        ("Upstream-Status", original.status),
+        ("Reason", original.reason),
+        ("Issue", original.issue),
+    ):
+        if not value:
             continue
-        end = i + 1
-        while end < len(lines) and not lines[end].startswith("diff --git "):
-            end += 1
-        section = lines[i + 1:end]
-        match = re.match(r"diff --git a/(.+) b/(.+)$", line.rstrip("\r\n"))
-        if not match:
-            raise RuntimeError("Unparseable diff header: " + line.rstrip())
-        old_path, new_path = match.group(1), match.group(2)
-        old_entry = tree_entry(P, old_commit, old_path, repo)
-        new_entry = tree_entry(P, new_commit, new_path, repo)
-        if old_entry is None and new_entry is None:
-            raise RuntimeError(f"Patch path is absent from both trees: {old_path}")
-        old_blob = old_entry[1] if old_entry else ZERO
-        new_blob = new_entry[1] if new_entry else ZERO
-        suffix = " " + old_entry[0] if old_entry and new_entry and old_entry[0] == new_entry[0] else ""
-        index_line = f"index {old_blob}..{new_blob}{suffix}\n"
-        section = [item for item in section if not item.startswith("index ")]
-        place = next((n for n,item in enumerate(section) if item.startswith("--- ") or item.startswith("@@")),len(section))
-        section.insert(place,index_line)
-        out.append(line)
-        out.extend(section)
-        count += 1
-        i = end
-    destination.write_text("".join(out), encoding="utf-8")
-    return count
+        anchor = re.compile(r"(?m)^" + re.escape(name) + r": [^\n]*$")
+        entry = f"{name}: {value}"
+        if anchor.search(header):
+            header = anchor.sub(lambda _: entry, header, count=1)
+        else:
+            header += "\n" + entry
+    body = header + "\n---\n" + remainder
+
+    # Every diff in the exported patch must use complete blob IDs, including
+    # 40 zero digits for newly created files; and its file set must match the
+    # actual before/after commit, never the original stale mail patch.
+    sections = re.findall(r"(?m)^diff --git a/([^\n ]+) b/([^\n ]+)$", body)
+    indexes = re.findall(r"(?m)^index ([0-9a-f]{40})\.\.([0-9a-f]{40})(?: [0-7]{6})?$", body)
+    changed = set(git(P, "diff", "--name-only", old_commit, new_commit, cwd=repo).stdout.splitlines())
+    actual = {p for pair in sections for p in pair}
+    if not sections or len(indexes) != len(sections) or actual != changed:
+        raise RuntimeError(
+            "Formatted patch does not describe the actual source commit: "
+            f"expected paths {sorted(changed)}, got {sorted(actual)}, "
+            f"sections={len(sections)}, full_indexes={len(indexes)}"
+        )
+    destination.write_text(body, encoding="utf-8")
+    reparsed = P.Patch(destination)
+    for key in ("status", "reason", "issue"):
+        if getattr(reparsed, key) != getattr(original, key):
+            raise RuntimeError(f"Patch metadata {key} changed while exporting {source.name}")
+    return len(sections)
 
 
 def resolve_conflict_markers(path: Path) -> int:
@@ -978,6 +995,118 @@ def resolve_joycon_pr_1322(P, worktree: Path) -> str:
     return git(P, "rev-parse", "HEAD", cwd=worktree).stdout.strip()
 
 
+def resolve_host_image_patch(P, worktree: Path) -> str:
+    """Reimplement 0015 as a checked, minimal API substitution on the actual pin.
+
+    The 0015 mail preimages predate several GL/NVN refactors; transplanting
+    their whole files or their stale context would regress the graphics layer.
+    """
+    paths = (
+        "dm/gfx/gl/hle_gl.m",
+        "dm/gfx/tests/t_gl_imports.m",
+        "dm/gfx/vk/hle_vk.m",
+        "dm/host/hle.c",
+        "dm/host/hle_jit.c",
+        "dm/host/hle_sf.c",
+        "dm/gfx/nvn/hle_nvn.c",
+        "dm/host/loader.c",
+    )
+    header_path = "dm/host/host_image.h"
+    header_text = (
+        "// The Mach-O header of the image that holds the host: the executable in a normal build, the framework's dylib when the host is\n"
+        "// linked as a framework. The linker defines __dso_handle at the start of every image, executable and dylib alike, and\n"
+        "// getsectiondata() takes it as the mach_header_64 *.\n"
+        "#pragma once\n"
+        "#include <mach-o/getsect.h>\n"
+        "\n"
+        "extern const struct mach_header_64 __dso_handle;\n"
+        "#define DM_HOST_IMAGE (&__dso_handle)\n"
+    )
+    expected = set(paths) | {header_path}
+    clean = git(P, "status", "--porcelain", cwd=worktree, check=False).stdout.strip()
+    if clean:
+        raise RuntimeError("0015 semantic rebase requires a clean source tree, found: " + clean[:500])
+    if (worktree / header_path).exists():
+        raise RuntimeError("0015 host_image.h already exists: refusing to overwrite it")
+
+    original = "getsectiondata(&_mh_execute_header,"
+    modified = "getsectiondata(DM_HOST_IMAGE,"
+    for path in paths:
+        target = worktree / path
+        body = target.read_text(encoding="utf-8")
+        if path != "dm/gfx/tests/t_gl_imports.m":
+            old_headers = "#include <mach-o/getsect.h>\n#include <mach-o/ldsyms.h>"
+            new_header = (
+                '#include "../../host/host_image.h"'
+                if path.startswith("dm/gfx/")
+                else '#include "host_image.h"'
+            )
+            body = joycon_replace_once(
+                body, old_headers, new_header,
+                f"0015 Mach-O header relocation in {path}",
+            )
+        else:
+            if '#include "../gl/hle_gl.m"' not in body:
+                raise RuntimeError("0015 GL import test no longer includes hle_gl.m")
+
+        body = joycon_replace_once(
+            body, original, modified, f"0015 Mach-O section lookup in {path}"
+        )
+        if path == "dm/host/loader.c":
+            body = joycon_replace_once(
+                body,
+                "static const struct mach_header_64 *g_game_image = &_mh_execute_header;",
+                "static const struct mach_header_64 *g_game_image = DM_HOST_IMAGE;",
+                "0015 embedded module image default",
+            )
+        if "_mh_execute_header" in body:
+            raise RuntimeError(f"0015 legacy executable-header lookup remains in {path}")
+        if modified not in body:
+            raise RuntimeError(f"0015 host image substitution missing in {path}")
+        target.write_text(body, encoding="utf-8")
+
+    (worktree / header_path).write_text(header_text, encoding="utf-8")
+    stage = git(P, "add", "--", *sorted(expected), cwd=worktree, check=False)
+    if stage.returncode:
+        raise RuntimeError("0015 could not stage host-image edits: " + stage.stderr[-3000:])
+    changed = set(
+        git(P, "diff", "--cached", "--name-only", cwd=worktree).stdout.splitlines()
+    )
+    if changed != expected:
+        raise RuntimeError(
+            f"0015 changed unexpected files: wanted {sorted(expected)}, got {sorted(changed)}"
+        )
+    whitespace = git(P, "diff", "--cached", "--check", cwd=worktree, check=False)
+    if whitespace.returncode:
+        raise RuntimeError("0015 semantic integration whitespace error: " + whitespace.stdout[-3000:])
+
+    commit = git(
+        P, "-c", "user.name=patches.py", "-c", "user.email=patches@localhost",
+        "-c", "commit.gpgsign=false", "commit", "--no-verify",
+        "-m", "host: read embedded sections from the image that holds the host (DM_HOST_IMAGE)",
+        "-m", (
+            "Use __dso_handle for host section lookups in the executable or dynamic framework, "
+            "without replacing or downgrading existing GL/NVN/loader logic.\n\n"
+            "Upstream-Status: pending\n"
+            "Reason: Let the host read its Mach-O sections when linked into a dynamic framework as well as the main executable\n"
+            "Issue: LNPANDY/NX2Apple#451"
+        ),
+        cwd=worktree, check=False,
+    )
+    if commit.returncode:
+        raise RuntimeError(
+            "0015 could not commit the checked host-image integration: "
+            + (commit.stdout + commit.stderr)[-5000:]
+        )
+    print(
+        "Resolved 0015 semantically: migrated 8 section lookups and the loader's "
+        "game-image default to DM_HOST_IMAGE, created host_image.h, and preserved "
+        "all existing GL/Vulkan/NVN/loader implementations.",
+        flush=True,
+    )
+    return git(P, "rev-parse", "HEAD", cwd=worktree).stdout.strip()
+
+
 def main() -> int:
     ap=argparse.ArgumentParser()
     ap.add_argument("--repo",required=True,type=Path)
@@ -1104,27 +1233,17 @@ Issue: seedds/nxnative#1322"""
                 source_patch=generated
                 conflicts=[]
             elif patch.file == "0015-host-read-embedded-sections-from-the-image-that.patch":
-                # The 0015 mail patch contains abbreviated preimage IDs, and
-                # the hle_nvn.c ID (d78cd345) is no longer a usable fake
-                # ancestor on the reconstructed 0001-0014 tree. Its hunks are
-                # still context-applicable: apply without --3way, then rebuild
-                # every index from the exact source before/after commits below.
-                replay=git(P,"-c","user.name=patches.py","-c","user.email=patches@localhost",
-                           "-c","commit.gpgsign=false","-c","core.autocrlf=false",
-                           "am","--no-3way","--quiet",str(patch.path),
-                           cwd=source.dir,check=False)
-                if replay.returncode:
+                # Both GL hunks and the old hle_nvn.c index in the 0015 mail
+                # patch predate the pin. Apply only its semantic substitutions.
+                try:
+                    resolve_host_image_patch(P, source.dir)
+                except Exception as exc:
                     source.keep=True
-                    git(P,"am","--abort",cwd=source.dir,check=False)
-                    detail=(replay.stdout+replay.stderr).strip()
                     raise SystemExit(
-                        "Host-image section patch 0015 does not apply by textual context after the "
-                        "reconstructed 0001-0014 queue. " + detail[-9000:]
+                        "Could not integrate 0015 host-image section discovery: " + str(exc)
                     )
-                applied=[(patch,git(P,"rev-parse","HEAD",cwd=source.dir).stdout.strip())]
-                landed=[]
-                conflicts=[]
                 source_patch=patch.path
+                conflicts=[]
             else:
                 applied,landed,conflicts=P.apply_series(source.dir,[patch])
                 if conflicts and patch.file == "0001-ios-game-data-folder.patch":
