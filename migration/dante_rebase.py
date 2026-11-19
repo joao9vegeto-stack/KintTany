@@ -506,6 +506,187 @@ def resolve_ios_quit_patch(P, worktree: Path) -> str:
     return result
 
 
+def resolve_nsp_experimental_builder_patch(P, worktree: Path) -> str:
+    expected = {"scripts/build_ipa_from_nsp.py"}
+    unmerged = set(
+        git(P, "diff", "--name-only", "--diff-filter=U", cwd=worktree, check=False)
+        .stdout.splitlines()
+    )
+    if unmerged != expected:
+        raise RuntimeError(
+            "0013 conflict set changed: " + ", ".join(sorted(unmerged))
+        )
+
+    current = git(P, "show", ":2:scripts/build_ipa_from_nsp.py", cwd=worktree).stdout
+    postimage = git(P, "show", ":3:scripts/build_ipa_from_nsp.py", cwd=worktree).stdout
+
+    def replace_once(text: str, old: str, new: str, label: str) -> str:
+        if text.count(old) != 1:
+            raise RuntimeError(f"Expected exactly one {label} integration point")
+        return text.replace(old, new, 1)
+
+    # The experimental helpers are the dedicated nxbuild block in the patch's
+    # postimage. Do not replace the whole script: that blob also contains later
+    # NUP multi-program, profile-source-cache, capture and renderer changes.
+    helper_start = postimage.index("# ---- The experimental builder (nxbuild) ----")
+    helper_end = postimage.index("\n\n# ---- NSP identification ----", helper_start)
+    experimental_helpers = postimage[helper_start:helper_end].rstrip()
+    if "def nxb_tool(" not in experimental_helpers or "def nxb_extract(" not in experimental_helpers or "def nxb_split(" not in experimental_helpers:
+        raise RuntimeError("The nxbuild helper block is incomplete")
+
+    # nxb_extract rejects NSZ, merged NSPs and XCIs before invoking nxbuild.
+    # These small parsers are part of the experimental-builder patch; keep the
+    # existing nx_extract path and all of its package validation unchanged.
+    parser_start = postimage.index("def pfs0_names(")
+    parser_end = postimage.index("def is_package(path):", parser_start)
+    package_helpers = postimage[parser_start:parser_end].rstrip()
+    if "def package_names(" not in package_helpers:
+        raise RuntimeError("The PFS0/HFS0 package-name helpers are incomplete")
+
+    # A visible opt-in note in the script header; with the switch off, no path
+    # or behavior changes and the existing builder remains the default.
+    header = next(
+        (line for line in current.splitlines(keepends=True)
+         if line.startswith("# The console shows one line per stage")),
+        None,
+    )
+    if header is None:
+        raise RuntimeError("Could not find the script's progress/header description")
+    current = replace_once(
+        current, header,
+        header + "# DM_EXPERIMENTAL_BUILDER=1 with NXB_BIN enables nxbuild extraction and shader splitting where supported; other cases use the standard tools.\n",
+        "experimental-builder header",
+    )
+
+    current = replace_once(
+        current,
+        "# ---- NSP identification ----",
+        experimental_helpers + "\n\n# ---- NSP identification ----",
+        "experimental-builder helper insertion",
+    )
+    current = replace_once(
+        current,
+        "def is_package(path):",
+        package_helpers + "\n\n def is_package(path):".replace("\n ", "\n"),
+        "PFS0/HFS0 package parser insertion",
+    )
+
+    # Keep the standard extraction exactly as before unless nxb_extract
+    # validates a complete output and its title ID; on unsupported/failure/
+    # mismatched output it removes the partial folder and runs nx_extract.
+    old_extract = "    run([nx, keys, base, upd or '-', tmp, '--romfs-image'] + extract_flags(app), log)\n"
+    new_extract = (
+        "    if not nxb_extract(keys, base, upd, tmp, logs, name, app, marker):\n"
+        "        run([nx, keys, base, upd or '-', tmp, '--romfs-image'] + extract_flags(app), log)\n"
+    )
+    current = replace_once(current, old_extract, new_extract, "NSP extraction fallback")
+
+    # A NUP's version extraction has its own reuse stamp and aoc images; never
+    # hand control to nxbuild unless its entire output passes all checks.
+    old_nup_sig = "def extract_nup(ex, name, k, base, app, n):"
+    current = replace_once(
+        current, old_nup_sig,
+        "def extract_nup(ex, name, k, base, app, n, marker=None):",
+        "NUP extraction signature",
+    )
+    nup_stage = "        PROG.stage(f'unpack {name}', poll=poll, unit='B', total=n.tree_bytes(pack_nup.romfs_of(k, base)), est=True)\n"
+    current = replace_once(
+        current, nup_stage,
+        nup_stage
+        + "        if nxb_extract_nup(ex, name, k, base, app, n, marker):\n"
+        + "            PROG.end(amount((dst / 'RomFS.img').stat().st_size, 'B')); return dst\n",
+        "NUP experimental extraction",
+    )
+
+    # nxb-extract writes NUP DLC images alongside version images. Reuse those
+    # files rather than extracting the same content a second time.
+    old_aoc = (
+        "    if fam.get('nup'):\n"
+        "        PROG.stage('unpack DLC', step='unpacking')\n"
+        "        try: pack_nup.pack_dlc(fam['nup'], app, {tid: k for tid, _, k in fam['dlc']}, work / 'aoc', say=lambda s: None)\n"
+    )
+    new_aoc = (
+        "    if fam.get('nup'):\n"
+        "        PROG.stage('unpack DLC', step='unpacking')\n"
+        "        if fam['nup'].path in _nxb_nups and all((work / 'aoc' / f'{tid - app - 0x1000}.img').is_file() for tid, _, _ in fam['dlc']):\n"
+        "            want = {f'{tid - app - 0x1000}.img' for tid, _, _ in fam['dlc']}\n"
+        "            for f in (work / 'aoc').iterdir():\n"
+        "                if f.name not in want: rmtree(f)\n"
+        "            PROG.end(f'{len(fam[\"dlc\"])} DLC'); return work / 'aoc'\n"
+        "        try: pack_nup.pack_dlc(fam['nup'], app, {tid: k for tid, _, k in fam['dlc']}, work / 'aoc', say=lambda s: None)\n"
+    )
+    current = replace_once(current, old_aoc, new_aoc, "NUP DLC reuse")
+
+    # The split only goes through nxb-split for an ordinary registered profile
+    # with plain extracted RomFS images and no DLC, captures, NROs or decoder.
+    old_split = (
+        "    run([py, repo / 'dm/gfx/tools/shader_split.py', ','.join(map(str, roms)), ','.join(map(str, mains)), tmp / 'pkg'] + [tmp / 'tables' / n for n in names + ('pso_pairs.tsv',)] + ([','.join(map(str, dlc_roms))] if dlc_roms else []),\n"
+        "        logs / 'shader_split.log', env=env, on_line=counted)\n"
+        "    text = (logs / 'shader_split.log').read_text(errors='replace')\n"
+    )
+    new_split = (
+        "    # The experimental builder takes a registered profile's split of the game files alone; DLC, run-time captures, NROs and a game decoder stay with shader_split.py.\n"
+        "    captured = env.get('DM_NRO_DIR') or any(env.get(s) or next((Path(r).parent / f).glob(p), None) for r in roms for s, f, p in\n"
+        "                                             (('DM_GLSLC_CAPTURE', 'glslc_capture', '*.glslc'), ('DM_UE_SHADERS', 'ue_shaders', '*.ushaderbytecode')))\n"
+        "    plain = not (provisional or oodle or dlc_roms or captured)\n"
+        "    if not plain and os.environ.get('DM_EXPERIMENTAL_BUILDER') == '1':\n"
+        "        nxb_note('shader split: a provisional or derived profile, DLC, run-time captures or a game decoder is not supported yet, the standard builder runs it')\n"
+        "    text = nxb_split(roms, mains, tmp, names, logs, g) if plain else None\n"
+        "    if text is None:\n"
+        "        run([py, repo / 'dm/gfx/tools/shader_split.py', ','.join(map(str, roms)), ','.join(map(str, mains)), tmp / 'pkg'] + [tmp / 'tables' / n for n in names + ('pso_pairs.tsv',)] + ([','.join(map(str, dlc_roms))] if dlc_roms else []),\n"
+        "            logs / 'shader_split.log', env=env, on_line=counted)\n"
+        "        text = (logs / 'shader_split.log').read_text(errors='replace')\n"
+    )
+    current = replace_once(current, old_split, new_split, "shader-split fallback")
+
+    # Supply the registered RomFS marker to the NUP path too, so the same
+    # validation prevents an incomplete image from being accepted by nxbuild.
+    old_bottom = "dirs[ver] = extract_nup(ex, ver, u or b, b, app, fam['nup']) if nup else"
+    current = replace_once(
+        current, old_bottom,
+        "dirs[ver] = extract_nup(ex, ver, u or b, b, app, fam['nup'], g.get('romfs_marker')) if nup else",
+        "NUP RomFS marker",
+    )
+
+    if current.count("def nxb_extract(") != 1 or current.count("def nxb_extract_nup(") != 1 or current.count("def nxb_split(") != 1:
+        raise RuntimeError("The integrated experimental-builder helpers are not unique")
+    if current.count("if not nxb_extract(keys, base, upd, tmp, logs, name, app, marker):") != 1:
+        raise RuntimeError("The standard extraction fallback is not wired exactly once")
+    if current.count("text = nxb_split(roms, mains, tmp, names, logs, g) if plain else None") != 1:
+        raise RuntimeError("The standard shader-split fallback is not wired exactly once")
+
+    path = worktree / "scripts/build_ipa_from_nsp.py"
+    path.write_text(current, encoding="utf-8")
+    pycheck = subprocess.run(
+        [sys.executable, "-m", "py_compile", str(path)],
+        capture_output=True, text=True,
+    )
+    if pycheck.returncode:
+        raise RuntimeError("The integrated NSP builder does not compile: " + pycheck.stderr[-5000:])
+    staged = git(P, "add", "--", "scripts/build_ipa_from_nsp.py", cwd=worktree, check=False)
+    if staged.returncode:
+        raise RuntimeError("Could not stage resolved 0013 script: " + staged.stderr[-3000:])
+    continued = git(
+        P, "-c", "user.name=patches.py", "-c", "user.email=patches@localhost",
+        "-c", "commit.gpgsign=false", "am", "--continue",
+        cwd=worktree, check=False,
+    )
+    if continued.returncode:
+        raise RuntimeError(
+            "Could not continue resolved 0013 patch: "
+            + (continued.stdout + continued.stderr)[-7000:]
+        )
+    result = git(P, "rev-parse", "HEAD", cwd=worktree).stdout.strip()
+    print(
+        "Resolved 0013 by keeping the pin's existing NSP/NUP pipeline and "
+        "adding guarded nxbuild extraction/shader-split adapters with output "
+        "checks and fallback; only its two added helpers/tests and required "
+        "integration points were retained.",
+        flush=True,
+    )
+    return result
+
+
 def main() -> int:
     ap=argparse.ArgumentParser()
     ap.add_argument("--repo",required=True,type=Path)
@@ -614,6 +795,16 @@ def main() -> int:
                         source.keep=True
                         P.report(QUEUE_BASE,QUEUE_BASE,applied,landed,conflicts)
                         raise SystemExit(f"Could not resolve the 0012 iOS quit-to-launcher integration: {exc}")
+                    applied=[(patch,resolved_head)]
+                    landed=[]
+                    conflicts=[]
+                elif conflicts and patch.file == "0013-nsp-script-hand-the-extraction-and-the-shader-sp.patch":
+                    try:
+                        resolved_head = resolve_nsp_experimental_builder_patch(P, source.dir)
+                    except Exception as exc:
+                        source.keep=True
+                        P.report(QUEUE_BASE,QUEUE_BASE,applied,landed,conflicts)
+                        raise SystemExit(f"Could not resolve the 0013 experimental nxbuild extraction/shader adapter: {exc}")
                     applied=[(patch,resolved_head)]
                     landed=[]
                     conflicts=[]
