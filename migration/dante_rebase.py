@@ -52,7 +52,7 @@ def indexed_patch(P, source: Path, destination: Path, old_commit: str, new_commi
         while end < len(lines) and not lines[end].startswith("diff --git "):
             end += 1
         section = lines[i + 1:end]
-        match = re.match(r"diff --git a/(.+) b/(.+)$", line.rstrip("\\r\\n"))
+        match = re.match(r"diff --git a/(.+) b/(.+)$", line.rstrip("\r\n"))
         if not match:
             raise RuntimeError("Unparseable diff header: " + line.rstrip())
         old_path, new_path = match.group(1), match.group(2)
@@ -63,7 +63,7 @@ def indexed_patch(P, source: Path, destination: Path, old_commit: str, new_commi
         old_blob = old_entry[1] if old_entry else ZERO
         new_blob = new_entry[1] if new_entry else ZERO
         suffix = " " + old_entry[0] if old_entry and new_entry and old_entry[0] == new_entry[0] else ""
-        index_line = f"index {old_blob}..{new_blob}{suffix}\\n"
+        index_line = f"index {old_blob}..{new_blob}{suffix}\n"
         section = [item for item in section if not item.startswith("index ")]
         place = next((n for n,item in enumerate(section) if item.startswith("--- ") or item.startswith("@@")),len(section))
         section.insert(place,index_line)

@@ -139,6 +139,7 @@ jobs:
           echo "Resolved seedds/nxnative main HEAD: $NXNATIVE_SHA"
           test "$(cat .upstream-ref)" = "94a0944755da1a443f42651bf7ee49ab24ed5ee5"
           mkdir -p "$RUNNER_TEMP/dante-rebase-tmp"
+          python3 -m py_compile "$RUNNER_TEMP/dante-migration/dante_rebase.py"
           python3 "$RUNNER_TEMP/dante-migration/dante_rebase.py" \
             --repo "$GITHUB_WORKSPACE" \
             --to "$NXNATIVE_SHA" \
