@@ -10,6 +10,7 @@ after every patch has replayed successfully.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
@@ -115,6 +116,28 @@ def main() -> int:
     engine_repo = E.scratch_root(root)
     E.fetch(engine_repo, old_pin)
     E.fetch(engine_repo, args.to)
+
+    # tools/engine.py intentionally fetches each pinned commit at depth 1.
+    # The migration patch queue carries preimage blob IDs from intermediate
+    # nxnative commits, so a shallow object database cannot perform its
+    # three-way merges even when those blobs are still in upstream history.
+    upstream_url = os.environ.get("NX2APPLE_ENGINE_URL") or E.UPSTREAM_URL
+    shallow = git(P, "rev-parse", "--is-shallow-repository", cwd=engine_repo).stdout.strip()
+    if shallow == "true":
+        deepened = git(
+            P, "fetch", "--quiet", "--no-tags", "--unshallow",
+            upstream_url, args.to, cwd=engine_repo, check=False,
+        )
+        if deepened.returncode:
+            detail = (deepened.stdout + "\n" + deepened.stderr).strip()
+            raise SystemExit(
+                "Could not fetch complete nxnative history needed by the patch preimages.\n"
+                + detail[-5000:]
+            )
+    shallow = git(P, "rev-parse", "--is-shallow-repository", cwd=engine_repo).stdout.strip()
+    if shallow != "false":
+        raise SystemExit("nxnative object database is still shallow; refusing an incomplete three-way rebase")
+    print(f"Fetched complete nxnative history through {args.to}.", flush=True)
 
     anchor = f"refs/dante2ios/rebase/{args.to[:12]}/steam-0017-postimage"
     target_success = False
