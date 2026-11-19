@@ -25,6 +25,10 @@ jobs:
           ref: Dante2iOS
           fetch-depth: 0
 
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
       - name: Preserve SpkIOSzero work as a non-active reference
         shell: bash
         run: |
@@ -112,6 +116,7 @@ jobs:
           # Their push triggers target main, not this Dante2iOS branch.
           cp "$RUNNER_TEMP/NX2Apple/.github/workflows/build-mac-app.yml" .github/workflows/build-mac-app.yml
           cp "$RUNNER_TEMP/NX2Apple/.github/workflows/sync-upstream.yml" .github/workflows/sync-upstream.yml
+          cp "$RUNNER_TEMP/NX2Apple/.github/workflows/build-qt.yml" .github/workflows/build-qt.yml
           rm -rf migration
 
           test "$(cat .upstream-ref)" = "$PINNED_NXNATIVE_SHA"
@@ -122,6 +127,7 @@ jobs:
           test ! -e .github/workflows/spk_ios_zero.yml
           test -f .github/workflows/build-mac-app.yml
           test -f .github/workflows/sync-upstream.yml
+          test -f .github/workflows/build-qt.yml
           echo "Official NX2Apple snapshot: $NX2APPLE_SHA"
           echo "Official nxnative pin: $PINNED_NXNATIVE_SHA"
 
@@ -140,7 +146,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The official pre-push hook checks Qt's native decoding tests;
+          # these pinned wheel versions come from upstream build-qt.yml.
+          python3 -m pip install --disable-pip-version-check --only-binary=:all: \
+            'capstone==5.0.9' 'unicorn==2.1.4'
+          python3 -c 'import capstone, unicorn'
           GITHUB_REPOSITORY=LNPANDY/NX2Apple python3 -m unittest discover tools/tests
+          python3 -m unittest discover -s frontend-qt/tests
           python3 -m compileall -q engine/scripts engine/dm/tools engine/dm/games engine/dm/mac
           bash -n engine/dm/ios/tools/build_ipa.sh
           test -f engine/dm/ios/Sources/main.m
@@ -157,6 +169,10 @@ jobs:
           set -euo pipefail
           git config user.name "Dante2iOS migration"
           git config user.email "dante2ios-migration@users.noreply.github.com"
+          # The inherited pre-push hook runs the original NX2Apple release
+          # fixtures. Do not change the fork's remote; just select the upstream
+          # fixture origin so those release tests use their declared source.
+          export GITHUB_REPOSITORY=LNPANDY/NX2Apple
           git add -A
           # Patches are verbatim git-format-patch mail files and contain leading
           # '+' lines with intentional spaces. 'git diff --cached --check' on
