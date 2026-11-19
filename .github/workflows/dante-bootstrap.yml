@@ -107,6 +107,11 @@ jobs:
           rm -f .github/workflows/*.yml .github/workflows/*.yaml
           cp "$ASSETS/dante-engine-validation.yml" .github/workflows/dante-engine-validation.yml
           cp "$ASSETS/dante-sync-upstream.yml" .github/workflows/dante-sync-upstream.yml
+          # Upstream's build/macos and version-integrity tests deliberately
+          # validate these two workflow texts. Keep the originals available.
+          # Their push triggers target main, not this Dante2iOS branch.
+          cp "$RUNNER_TEMP/NX2Apple/.github/workflows/build-mac-app.yml" .github/workflows/build-mac-app.yml
+          cp "$RUNNER_TEMP/NX2Apple/.github/workflows/sync-upstream.yml" .github/workflows/sync-upstream.yml
           rm -rf migration
 
           test "$(cat .upstream-ref)" = "$PINNED_NXNATIVE_SHA"
@@ -115,6 +120,8 @@ jobs:
           grep -Fxq '0017-support-steam-controller-and-shared-mac-control.patch' patches/series
           test -f legacy/spkioszero/README.md
           test ! -e .github/workflows/spk_ios_zero.yml
+          test -f .github/workflows/build-mac-app.yml
+          test -f .github/workflows/sync-upstream.yml
           echo "Official NX2Apple snapshot: $NX2APPLE_SHA"
           echo "Official nxnative pin: $PINNED_NXNATIVE_SHA"
 
@@ -133,7 +140,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m unittest discover tools/tests
+          GITHUB_REPOSITORY=LNPANDY/NX2Apple python3 -m unittest discover tools/tests
           python3 -m compileall -q engine/scripts engine/dm/tools engine/dm/games engine/dm/mac
           bash -n engine/dm/ios/tools/build_ipa.sh
           test -f engine/dm/ios/Sources/main.m

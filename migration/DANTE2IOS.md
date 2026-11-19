@@ -27,7 +27,7 @@ Those resources do not run in the Dante2iOS app or modify generic runtime behavi
 
 ## Branch isolation and validation
 
-Only `Dante2iOS` receives the migration commit. `SpkIOSzero` and every other branch remain untouched. The bootstrap archives the Spk reference and replaces the active workflows with only Dante2iOS engine validation and manual nxnative-sync workflows. Validation checks the official patch queue, materializes the engine, runs Python tooling tests and compilation/shell checks, and checks the project directory layout. No game packages, decryption keys, RomFS, DLC images or shader cache are committed.
+Only `Dante2iOS` receives the migration commit. `SpkIOSzero` and every other branch remain untouched. The bootstrap archives the Spk reference and uses Dante2iOS engine validation and manual nxnative-sync workflows; it also retains the two upstream workflow files `build-mac-app.yml` and `sync-upstream.yml` that upstream's version/build regression tests inspect. Their original push triggers are scoped to `main`, not `Dante2iOS`. When testing upstream release manifests on the fork, the regression suite sets `GITHUB_REPOSITORY=LNPANDY/NX2Apple` so the upstream test fixture expects the upstream release URL; this does not change the fork's actual release destination. Validation checks the official patch queue, materializes the engine, runs Python tooling tests and compilation/shell checks, and checks the project directory layout. No game packages, decryption keys, RomFS, DLC images or shader cache are committed.
 
 ## Follow-on phase
 

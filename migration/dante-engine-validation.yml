@@ -44,7 +44,9 @@ jobs:
       - name: Test NX2Apple patch and build tooling
         run: |
           set -euo pipefail
-          python3 -m unittest discover tools/tests
+          # These are NX2Apple upstream regression tests, not fork-release tests.
+          # The test fixtures expect the upstream GitHub release origin.
+          GITHUB_REPOSITORY=LNPANDY/NX2Apple python3 -m unittest discover tools/tests
           python3 -m compileall -q engine/scripts engine/dm/tools engine/dm/games engine/dm/mac
           bash -n engine/dm/ios/tools/build_ipa.sh
 
