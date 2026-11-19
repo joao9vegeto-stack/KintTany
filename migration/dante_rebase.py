@@ -160,6 +160,43 @@ def resolve_mac_keymap_patch(P, worktree: Path) -> str:
     return result
 
 
+def resolve_dm_screen_patch(P, worktree: Path) -> str:
+    expected = {"docs/development.md"}
+    unmerged = set(git(P, "diff", "--name-only", "--diff-filter=U", cwd=worktree, check=False).stdout.splitlines())
+    if unmerged != expected:
+        raise RuntimeError("0006 conflict set changed: " + ", ".join(sorted(unmerged)))
+    # The patch's documentation blob is based on an older copy of the whole
+    # page. Start from our current stage-2 document and add only its DM_SCREEN
+    # sentence; this retains all newer upstream sections and the 0001/0003 docs.
+    current = git(P, "show", ":2:docs/development.md", cwd=worktree).stdout
+    needle = "`DM_FULLSCREEN=1` starts it that way."
+    addition = needle + " `DM_SCREEN=<NSScreenNumber>` opens it on that screen instead of the one macOS picks."
+    if current.count(needle) != 1:
+        raise RuntimeError("Could not find exactly one fullscreen sentence in current docs/development.md")
+    if "DM_SCREEN=<NSScreenNumber>" in current:
+        raise RuntimeError("DM_SCREEN documentation already exists; refusing to duplicate it")
+    resolved = current.replace(needle, addition, 1)
+    path = worktree / "docs/development.md"
+    path.write_text(resolved, encoding="utf-8")
+    staged = git(P, "add", "--", "docs/development.md", cwd=worktree, check=False)
+    if staged.returncode:
+        raise RuntimeError("Could not stage resolved 0006 docs: " + staged.stderr[-2000:])
+    continued = git(
+        P, "-c", "user.name=patches.py", "-c", "user.email=patches@localhost",
+        "-c", "commit.gpgsign=false", "am", "--continue",
+        cwd=worktree, check=False,
+    )
+    if continued.returncode:
+        raise RuntimeError("Could not continue resolved 0006 patch: " + (continued.stdout + continued.stderr)[-5000:])
+    result = git(P, "rev-parse", "HEAD", cwd=worktree).stdout.strip()
+    print(
+        "Resolved 0006 by retaining the current development guide and adding "
+        "only the DM_SCREEN option; upstream documentation changes were preserved.",
+        flush=True,
+    )
+    return result
+
+
 def main() -> int:
     ap=argparse.ArgumentParser()
     ap.add_argument("--repo",required=True,type=Path)
@@ -238,6 +275,16 @@ def main() -> int:
                         source.keep=True
                         P.report(QUEUE_BASE,QUEUE_BASE,applied,landed,conflicts)
                         raise SystemExit(f"Could not resolve the two additive 0003 Mac key-map hunks: {exc}")
+                    applied=[(patch,resolved_head)]
+                    landed=[]
+                    conflicts=[]
+                elif conflicts and patch.file == "0006-front-mac-dm-screen.patch":
+                    try:
+                        resolved_head = resolve_dm_screen_patch(P, source.dir)
+                    except Exception as exc:
+                        source.keep=True
+                        P.report(QUEUE_BASE,QUEUE_BASE,applied,landed,conflicts)
+                        raise SystemExit(f"Could not resolve the additive 0006 DM_SCREEN documentation change: {exc}")
                     applied=[(patch,resolved_head)]
                     landed=[]
                     conflicts=[]
