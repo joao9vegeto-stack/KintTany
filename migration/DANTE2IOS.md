@@ -36,3 +36,5 @@ After a validated baseline, advance nxnative with the branch's explicit sync wor
 The native NX2Apple pre-push hook is **not disabled**. The bootstrap installs the same `capstone` and `unicorn` wheel versions required by its Qt test suite before the final push, and executes those tests explicitly. The upstream release-fixture repository name is set only in the test environment, never in the fork's Git remote.
 
 The official triage-script regression suite also runs before commit, alongside the Qt and tools tests; its workflow fixtures are present as pristine upstream copies. Only `Dante2iOS` receives this branch update, while the upstream workflows' automatic push branches remain `main`.
+
+The bootstrap runner label is `xcode-27` (macOS 27, Xcode 27), matching NX2Apple's current launcher API availability: `GCControllerHomeButtonSettingsManager` is not in the Xcode 26 SDK on `macos-26`. This selects the required Apple SDK instead of weakening or replacing upstream Swift code.
