@@ -747,6 +747,26 @@ def main() -> int:
                     detail=(replay.stdout+replay.stderr).strip()
                     raise SystemExit("Custom Steam patch 0017 does not apply on the official pin after patches 0001-0016. "
                                      +detail[-9000:])
+            elif patch.file == "0014-mac-split-a-joy-con-pair-into-two-sideways-contr.patch":
+                # The 0014 mail patch's Makefile preimage hash belongs to the
+                # original patch queue before our additive 0003 test-list
+                # resolution. Git cannot find that historic blob in this
+                # reconstructed source tree, but the textual hunks are still
+                # applicable. Apply by context, then regenerate all full blob
+                # indexes from the actual before/after trees below.
+                replay=git(P,"-c","user.name=patches.py","-c","user.email=patches@localhost",
+                           "-c","commit.gpgsign=false","-c","core.autocrlf=false",
+                           "am","--no-3way","--quiet",str(patch.path),
+                           cwd=source.dir,check=False)
+                if replay.returncode:
+                    source.keep=True
+                    git(P,"am","--abort",cwd=source.dir,check=False)
+                    detail=(replay.stdout+replay.stderr).strip()
+                    raise SystemExit("Joy-Con patch 0014 does not apply by textual context after the reconstructed 0001-0013 queue. "
+                                     +detail[-9000:])
+                applied=[(patch,git(P,"rev-parse","HEAD",cwd=source.dir).stdout.strip())]
+                landed=[]
+                conflicts=[]
             else:
                 applied,landed,conflicts=P.apply_series(source.dir,[patch])
                 if conflicts and patch.file == "0001-ios-game-data-folder.patch":
