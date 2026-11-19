@@ -1,0 +1,761 @@
+import SwiftUI
+import UniformTypeIdentifiers
+import NXCore
+import NXModel
+import NXLauncher
+
+struct LauncherView: View {
+    let stores: LauncherStores   // the wiring: the stores below are its, the views take what they show
+    @StateObject var m: BuildStore   // the build: the stages, the failure, the inputs
+    @ObservedObject var devices: DeviceStore   // the copy card and the activity line while the data goes over
+    @ObservedObject var loc: Localizer   // the strings: handed on to every view below through the environment
+    @ObservedObject var updates: AppUpdateStore   // the app's self-update: the update icon, the sheet, the uninstall dialog
+    @ObservedObject private var repo: RepoStore   // the repository: the activity line, and the checks that follow a change of it
+    @ObservedObject private var buildDependencies: DependencyStore
+    @ObservedObject private var buildQueue: BuildQueueStore
+    @ObservedObject private var engine: EngineSyncStore   // the engine: the sync banner, and the checks that follow a sync
+    @StateObject var library: GameLibrary
+    @State var buildLogOpen = false
+    @State var allBuildStepsOpen = false
+    @State var buildStep = 0
+    @State var page: LauncherPage = .library
+    @State var settingsCategory: SettingsCategory = .general   // the part of Settings shown
+    @State var search = ""
+    @State var searching = false
+    @State private var consolePrompt = false
+    private let enterConsole: (() -> Void)?   // nil until the console mode is wired: no entry button, no prompt
+    private let injectedDriver: Bool
+    @StateObject private var consoleDriver: AnyConsoleDriver
+    @State private var controllerSheet = false
+    @FocusState var searchFocused: Bool
+    @State var artwork: [UUID: NSImage] = [:]   // card size
+    @State var heroArtwork: (id: UUID, image: NSImage)?   // the hero game's, at the size the hero needs
+    @State var heroIcon: (id: UUID, image: NSImage)?   // the hero game's 1:1 icon, loaded asynchronously off the hero backdrop path
+    @StateObject private var recorder: BuildRecorder   // writes the builds into the library: the session's, so a build that ends in console mode is recorded too
+    var activeBuildID: UUID? { recorder.activeBuildID }
+    @State var profileHelpOpen = false
+    @State var launching = false
+    @State var launchingGameID: UUID?
+    @State var showGatekeeperHint = false
+    @State var launchHintGeneration = 0
+    @StateObject var cloudGate = CloudSaveGate()   // the check of the cloud's save before a start (CloudSaveGate.swift, #957)
+    @State var launchError: String?
+    @State private var removing: LibraryGame?
+    @State private var selectingGames = false   // the Build selected games sheet (BuildSelectedSheet.swift)
+    @State var batchRefreshOpen = false
+    @State var missingImgGuideFor: MissingImgGuideContext?
+    @State private var deleting: LibraryGame?   // the game whose Delete sheet is open (DeleteGameSheet.swift)
+    @State var supportedGames: [SupportedGame]?   // the Supported games sheet is open when this is set (SupportedGamesSheet.swift)
+    @State var skippedItemsOpen = false
+    @State private var renaming: LibraryGame?   // the game whose Rename sheet is open (RenameGameSheet.swift)
+    @State var optionsFor: UUID?
+    @State private var controllerMappingOpen = false
+    @State private var freeSpaceFor: UUID?   // the game whose Free space sheet is open
+    @State private var controlsOpen = false
+    @State private var controlsCancelRequest = 0   // the controller's B in the Controls sheet: asks to leave like Cancel
+    @State private var savesFor: UUID?   // the game whose Saves sheet is open (SaveTransfer.swift)
+    @State private var cheatsFor: UUID?  // the game whose Cheats sheet is open (CheatsView.swift)
+    @State var manageOpenFor: UUID?   // the game whose Manage menu is open (ManageMenu.swift)
+    @State var artworkEditor: ArtworkEditor?   // the game whose artwork panel is open (ArtworkPanel.swift, LauncherView+Artwork.swift)
+    @State var artworkSlot: ArtworkSlot?   // its tab: the part of the library not being edited dims
+    @State var artworkPreview: GameArtwork?   // its draft, which the hero and the selected card draw instead of the saved artwork
+    @State var previewGeneration = 0   // the latest preview decode: an older one that finishes late is dropped
+    @State var artworkFetchGeneration = 0   // the latest artwork language fetch: an older one that finishes late is dropped
+    @State var artworkHeroAspect = ArtworkEditor.heroBandAspect   // the hero's proportions now, the band the panel frames for
+    let artworkStore: ArtworkStore
+    @StateObject var controls: ControlLayout
+    @StateObject private var gamepad: LauncherGamepad
+    @StateObject var padFocus: PadFocus
+    @StateObject var dropdowns: LauncherDropdownState
+    @StateObject var toolsAge: ToolsAge
+    @StateObject var verifiedProfiles = VerifiedProfilesTracker()
+    @StateObject var signatures = SignatureTracker()
+    var signatureExpiry: [UUID: Date] { signatures.expiry }
+    @State var resignNote: String?   // the last re-sign's outcome, shown below the hero actions
+    var performStartupChecks: Bool
+    private let onRunSetup: (() -> Void)?   // Settings' "Run setup again"; the root view supplies it
+    private let qaManage: (open: Bool, ring: Bool)   // visual QA: the Manage menu open at launch, with the controller's focus ring or without
+    private let qaArtwork: ArtworkSlot?   // visual QA: the artwork panel open at launch, on this tab
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) var reduceMotion
+    @Environment(\.colorScheme) var colorScheme
+
+    init(stores: LauncherStores? = nil, library: GameLibrary? = nil, initialPage: LauncherPage = .library, initialBuildEditorOpen: Bool = false, settingsCategory: SettingsCategory = .general,
+         activeBuildID: UUID? = nil, performStartupChecks: Bool = true, search: String? = nil, olderTools: Set<UUID> = [],
+         toolsAssessments: [UUID: GameRefreshAssessment] = [:],
+         manageOpen: Bool = false, padRing: Bool = false, onRunSetup: (() -> Void)? = nil,
+         enterConsole: (() -> Void)? = nil, controllerDriver: AnyConsoleDriver? = nil, controls sharedControls: ControlLayout? = nil, recorder: BuildRecorder? = nil, qaPrompt: Bool = false, qaLaunching: Bool = false, qaSkippedOpen: Bool = false,
+         gamepad: LauncherGamepad? = nil, padFocus: PadFocus? = nil, dropdowns: LauncherDropdownState? = nil, artworkOpen: ArtworkSlot? = nil, artworkEditor: ArtworkEditor? = nil, artworkStore: ArtworkStore = .shared, completionDismissal: BuildCompletionDismissal? = nil) {
+        _completionDismissal = StateObject(wrappedValue: completionDismissal ?? BuildCompletionDismissal())
+        _padFocus = StateObject(wrappedValue: padFocus ?? PadFocus())
+        _dropdowns = StateObject(wrappedValue: dropdowns ?? LauncherDropdownState())
+        _consolePrompt = State(initialValue: qaPrompt)   // visual QA: the connect prompt open at launch
+        _skippedItemsOpen = State(initialValue: qaSkippedOpen)
+        _launching = State(initialValue: qaLaunching)
+        _showGatekeeperHint = State(initialValue: qaLaunching)
+        self.onRunSetup = onRunSetup
+        let layout = sharedControls ?? ControlLayout()
+        _controls = StateObject(wrappedValue: layout)
+        _consoleDriver = StateObject(wrappedValue: controllerDriver ?? AnyConsoleDriver(LauncherControllerDriver(layout: layout)))
+        injectedDriver = controllerDriver != nil
+        self.enterConsole = enterConsole
+        qaManage = (manageOpen, padRing)
+        qaArtwork = artworkOpen
+        self.artworkStore = artworkStore
+        _artworkEditor = State(initialValue: artworkEditor)   // tests hand in one with its own environment
+        _artworkPreview = State(initialValue: artworkEditor?.draft)   // and the library draws its draft from the first frame
+        _artworkSlot = State(initialValue: artworkEditor?.slot)
+        if let search { _search = State(initialValue: search); _searching = State(initialValue: true) }   // visual QA: the bar with its field open
+        _toolsAge = StateObject(wrappedValue: ToolsAge(older: olderTools, assessments: toolsAssessments))   // visual QA: games marked without a checkout to compare
+        _gamepad = StateObject(wrappedValue: gamepad ?? LauncherGamepad())   // LauncherPerformanceTests presses its buttons
+        let stores = stores ?? LauncherStores(); self.stores = stores
+        _m = StateObject(wrappedValue: stores.build); _loc = ObservedObject(wrappedValue: stores.localizer)
+        _updates = ObservedObject(wrappedValue: stores.appUpdates); _devices = ObservedObject(wrappedValue: stores.deviceStore)
+        _buildDependencies = ObservedObject(wrappedValue: stores.dependencies)
+        _buildQueue = ObservedObject(wrappedValue: stores.queue)
+        _repo = ObservedObject(wrappedValue: stores.repo); _engine = ObservedObject(wrappedValue: stores.engineSync)
+        let library = library ?? GameLibrary()
+        _library = StateObject(wrappedValue: library)
+        _recorder = StateObject(wrappedValue: recorder ?? BuildRecorder(stores: stores, library: library, activeBuildID: activeBuildID))
+        _page = State(initialValue: initialPage)
+        _buildEditorOpen = State(initialValue: initialBuildEditorOpen)
+        _settingsCategory = State(initialValue: settingsCategory)
+        _libraryFilter = State(initialValue: LibraryFilter.loadDesktop(stores.defaults))
+        self.performStartupChecks = performStartupChecks
+    }
+
+    /// "All controllers are player 1": saved here, passed to games as DM_PAD_MERGE, shown in the Controllers sheet too.
+    private func setPadMerge(_ on: Bool) {
+        controls.padMerge = on
+        if injectedDriver { consoleDriver.setPadMerge(on) }
+    }
+
+    @State var libraryFilter: LibraryFilter
+    @FocusState var keyboardCard: UUID?
+    @State var librarySort: LibrarySort = LibrarySort.load()
+
+    /// Order of the collection. The selection stays whatever it was: the order only moves cards.
+    func setLibrarySort(_ sort: LibrarySort) {
+        guard sort != librarySort else { return }
+        librarySort = sort
+        sort.save()
+    }
+
+    func setLibraryFilter(_ filter: LibraryFilter) {
+        guard filter != libraryFilter else { return }
+        withAnimation(.easeInOut(duration: 0.2)) { libraryFilter = filter }
+        filter.saveDesktop(stores.defaults)
+        let states = library.cachedArtworkStates(buildingID: activeBuildID)
+        let after = filter.reconcile(
+            games: library.games,
+            selectedID: library.selectedID,
+            focused: padFocus.focused,
+            sort: librarySort,
+            search: search,
+            lang: loc.lang,
+            buildingID: activeBuildID,
+            states: states
+        )
+        if after.selectedID != library.selectedID { library.selectedID = after.selectedID }
+        if after.focused != padFocus.focused { padFocus.focused = after.focused }
+    }
+
+    var filteredGames: [LibraryGame] {
+        let states = library.cachedArtworkStates(buildingID: activeBuildID)
+        return libraryFilter.visibleGames(
+            library.games,
+            matching: search,
+            lang: loc.lang,
+            sort: librarySort,
+            buildingID: activeBuildID,
+            states: states
+        )
+    }
+
+    /// The hero's game: the selection, unless the filter hides it, then the first game the filter shows.
+    var heroGame: LibraryGame? {
+        let visible = filteredGames
+        if let selected = library.selected, visible.contains(where: { $0.id == selected.id }) { return selected }
+        return visible.first
+    }
+
+    var libraryInputAvailable: Bool {
+        currentPadScope == "main" && padFocus.scope == "main" && dropdowns.request == nil && dropdowns.custom == nil && manageOpenFor == nil && removing == nil && !consolePrompt && !profileHelpOpen
+            && !updates.showUpdateSheet && launchError == nil && library.error == nil
+    }
+
+    var body: some View {
+        launcherBody
+        .overlay(alignment: .top) {
+            if !controllerSheet, let toast = consoleDriver.state.toast { ConsoleToastView(toast: toast) }
+        }
+        .sheet(isPresented: $controllerSheet) {
+            ConsoleControllersSheet(driver: consoleDriver, lang: loc.lang, close: { controllerSheet = false; consoleDriver.back() })
+                .environmentObject(padFocus)
+        }
+        .onChange(of: controllerSheet) { open in
+            padFocus.scope = open ? "console.controllers" : currentPadScope
+            if open { consoleDriver.openControllers(); padFocus.focused = "console.controller.merge" }
+            else if consoleDriver.state.presentedSheet == .controllers { consoleDriver.back() }
+        }
+        .overlay {
+            if consolePrompt, let enterConsole {
+                ConsoleConnectionPrompt(lang: loc.lang, enterConsole: { consolePrompt = false; enterConsole() }, dismissPrompt: { consolePrompt = false })
+            }
+        }
+        .onChange(of: gamepad.connected) { _ in offerConsolePrompt() }
+        .onChange(of: padFocus.scope) { _ in offerConsolePrompt() }
+        .onChange(of: consoleDriver.state.padMerge) { merged in if injectedDriver { controls.padMerge = merged } }
+        .onChange(of: consolePrompt) { open in
+            padFocus.scope = open ? "console.entry" : currentPadScope
+            if open { padFocus.focused = "console.entry.enter" }
+        }
+        .environmentObject(padFocus)
+        .environmentObject(loc)
+    }
+
+    private func offerConsolePrompt() {
+        guard gamepad.connected, enterConsole != nil,
+              ConsolePrompt.shouldShow(enabled: ConsolePrompt.enabled, shown: ConsolePrompt.shownThisSession,
+                                       surfaceAvailable: libraryInputAvailable && NSApp.modalWindow == nil) else { return }
+        ConsolePrompt.didShow()
+        consolePrompt = true
+    }
+
+    @State var confirmingBuildCancel = false
+    @State var buildEditorOpen = false
+    @State var editingBuildResult = false
+    @StateObject private var completionDismissal: BuildCompletionDismissal
+    @State private var completedFooterDismissed = false
+
+    var needsBuildSetup: Bool { (!repo.isRepo && !m.usesExternalUpstreamRepo) || !buildDependencies.allPresent }
+    private var completedActivityVisible: Bool {
+        !completedFooterDismissed && !completionDismissal.expired && m.completionStatus != nil && buildQueue.running == nil && !buildQueue.isAdvancing
+    }
+    private var completionKey: String? {
+        guard !m.running, !stores.queue.active, m.completionStatus != nil else { return nil }
+        return "complete"
+    }
+    var completedBuildGame: LibraryGame? { library.games.first { $0.titleID == m.gameTitleID } }
+    var buildEditorVisible: Bool { true }
+
+    private var launcherBody: some View {
+        VStack(spacing: 0) {
+            if page != .library {
+                topBar.background(LauncherPalette.background).zIndex(1)
+                LauncherTopBarRule()
+                EngineSyncBanner(engine: engine, m: m)
+            }
+            if page == .library {
+                VStack(spacing: 0) {
+                    libraryPage.transaction { if reduceMotion { $0.animation = nil } }
+                    if !m.running && !completedActivityVisible { activityBar }
+                }
+            } else {
+                let allowsArtworkFetch = performStartupChecks || artworkStore !== ArtworkStore.shared
+                VStack(spacing: 0) {
+                CardPages(artworkStore: artworkStore, fetchMetadata: allowsArtworkFetch, buildStep: $buildStep, confirmingBuildCancel: $confirmingBuildCancel, buildLogOpen: $buildLogOpen, allBuildStepsOpen: $allBuildStepsOpen, settings: page == .settings, build: m, updates: updates, repo: repo, engine: engine, dependencies: stores.dependencies, devices: devices, queue: stores.queue, transfers: stores.transfers, onSelectGames: { selectingGames = true },
+                          sticks: stores.sticks, saveSettings: stores.saveSettings, players: stores.players,
+                          library: library, diagnostics: stores.diagnostics, onCancelBuild: { buildEditorOpen = false }, onViewGame: {
+                              if let game = completedBuildGame { showInLibrary(game.id) } else { page = .library }
+                              buildEditorOpen = false
+                          }, onPlayGame: completedBuildGame.flatMap { game in game.isReady ? { primaryAction(game) } : nil }, onPlayQueuedGame: { titleID in
+                              if let game = library.games.first(where: { $0.titleID == titleID }), game.isReady, !launching { primaryAction(game) }
+                          }, queuePlayEnabled: !launching, editingBuildResult: $editingBuildResult, onOpenSettings: { settingsCategory = .tools; page = .settings },
+                          onChooseLibraryFolder: chooseLibraryFolder, onOpenControls: { controlsOpen = true }, onOpenControllers: { controllerSheet = true }, onRunSetup: onRunSetup, controlChanges: controls.changeCount,
+                          padMerge: Binding(get: { controls.padMerge }, set: { setPadMerge($0) }), buildFiles: stores.buildFiles, buildingID: m.running ? activeBuildID : nil, onBuildFileDetails: { freeSpaceFor = $0 }, settingsCategory: $settingsCategory)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            if (m.running || stores.queue.active || completedActivityVisible) && page != .builds {
+                BuildActivityFooter(build: m, library: library, queue: stores.queue, repo: repo.path, artworkStore: artworkStore, fetchMetadata: performStartupChecks || artworkStore !== ArtworkStore.shared, onOpen: {
+                    page = .builds; buildEditorOpen = true
+                    if padFocus.visible { padFocus.focused = "set.build.action" }
+                }, onPlay: completedBuildGame.flatMap { game in game.isReady ? { if !launching { primaryAction(game) } } : nil },
+                    playEnabled: !launching, completedAt: completionDismissal.startedAt, onDismiss: {
+                        completedFooterDismissed = true
+                        if padFocus.visible && padFocus.scope == "main" {
+                            padFocus.focused = page == .library ? library.selectedID.map { "card." + $0.uuidString } : "set.category"
+                        }
+                    })
+                .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .modifier(active: BuildFooterExit(hidden: true), identity: BuildFooterExit(hidden: false))))
+            }
+        }
+        .environment(\.selectionArtworkDirectory, library.artworkDirectory)
+        .animation(.easeOut(duration: 0.24), value: completedActivityVisible)
+        .task(id: completionKey) {
+            await completionDismissal.monitor(completionKey)
+        }
+        .onChange(of: completionDismissal.expired) { expired in
+            if expired, padFocus.focused?.hasPrefix("build.activity") == true {
+                padFocus.focused = page == .library ? library.selectedID.map { "card." + $0.uuidString } : page == .builds ? "builds.first" : "set.category"
+            }
+        }
+        .padScope("main", padFocus)
+        .environmentObject(padFocus)
+        .manageMenuOverlay(items: manageOpenFor.flatMap { id in library.games.first { $0.id == id } }.map(manageItems),
+                           label: loc.t("library.manage"), pad: padFocus) { manageOpenFor = nil }
+        .launcherDropdownHost(dropdowns, pad: padFocus)
+        .onChange(of: dropdowns.custom?.id) { _ in padFocus.scope = currentPadScope }
+        .onChange(of: dropdowns.request?.id) { id in padFocus.scope = id == nil ? currentPadScope : "dropdown" }
+        .onChange(of: manageOpenFor) { id in
+            padFocus.scope = id != nil ? "manage" : currentPadScope
+            if id != nil, padFocus.visible {   // opened by the controller: its focus lands on the first usable row
+                DispatchQueue.main.async { padFocus.show(default: ManagePad.firstFocus(manageItems(for: library.selected))) }
+            }
+        }
+        .background(LauncherPalette.background)
+        .background(LauncherWindowChrome())
+        .ignoresSafeArea(.container, edges: .top)
+        .launcherAppearance()
+        .tint(LauncherPalette.accent)
+        .font(.manrope(13))   // the default for text without a font of its own
+        .frame(minWidth: 900, idealWidth: 1280, minHeight: 680, idealHeight: 900)
+        .onDisappear { gamepad.deactivate() }
+        .onAppear {
+            gamepad.perform = padAction
+            gamepad.capture = { [consoleDriver] id, action in consoleDriver.consumePress(controllerID: id, isBack: action == .b) }
+            if performStartupChecks {
+                library.migrateLaunchOptions(); library.migrateArtwork(); CloudSavesMigration.run()
+                library.syncSharedApp(root: m.shellCachePath, fallbackDevice: stores.deviceStore.installDevice)
+            }
+            if let slot = qaArtwork, artworkEditor == nil, let game = library.selected { openArtwork(game, slot: slot) }
+            if qaManage.open {
+                if qaManage.ring { padFocus.show(default: nil) }
+                manageOpenFor = library.selected?.id
+            }
+            refreshArtwork()
+            readSignatures()
+            m.sharedAppDataSources = { [library] in   // the games with packed data, for Send all game data (#1036)
+                library.games.filter { !$0.archivePath.isEmpty && FileManager.default.fileExists(atPath: $0.archivePath) }
+                    .map { TransferSource(titleID: $0.titleID, name: $0.name, archive: $0.archivePath) }
+            }
+            m.macFallbackIconArguments = { [library] titleID in   // the engine takes it only for a game without an icon of its own (#784)
+                let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("NX2Apple/fallback-icons", isDirectory: true)
+                return FallbackIcon.arguments(titleID: titleID, banners: library.artworkDirectory, folder: support)
+            }
+            library.keysFile = { [m] in m.savedKeys }   // the scan reads renamed packages' title IDs with them (#1012)
+            if performStartupChecks { library.discover(); fetchArtwork(); library.fillMissingTitleNames(); _ = stores.deviceStore.refresh(); checkTools() }
+            if performStartupChecks {
+                _ = stores.dependencies.check()
+                if engine.usesEngineStore { engine.prepareEngine() }   // the release app: its engine store, never git
+                else { engine.syncEngine() }   // a checkout whose engine/ is missing or older than its pin (#214)
+                if repo.isRepo && repo.isGit { repo.checkForUpdates(silent: true) } else { repo.adoptAtLaunch() }
+                updates.checkForUpdate(silent: true)
+                BuildNotifier.shared.watch(m, library: library)   // BuildNotifications.swift
+            }
+        }
+        .onReceive(BuildNotifier.shared.$route) { route in   // a clicked build notification
+            guard let route else { return }
+            page = route.page
+            if route.page == .builds { buildEditorOpen = true }
+            if let id = route.game { library.selectedID = id }
+            DispatchQueue.main.async { BuildNotifier.shared.route = nil }
+        }
+        .onChange(of: loc.lang) { _ in if performStartupChecks { fetchArtwork() } }   // the banners in the new language
+        .onChange(of: library.games) { _ in
+            if performStartupChecks { library.syncSharedApp(root: m.shellCachePath, fallbackDevice: stores.deviceStore.installDevice) }
+            refreshArtwork()
+            readSignatures()
+            if performStartupChecks { fetchArtwork(); library.fillMissingTitleNames() }
+        }
+        .onChange(of: m.savedKeys) { _ in
+            if performStartupChecks {
+                library.discover()
+                library.fillMissingTitleNames()
+            }
+        }   // other keys may name other packages (#1012) and unlock control-data lookups
+        .onReceive(library.$scanning.removeDuplicates().dropFirst()) { scanning in if !scanning && performStartupChecks { checkTools() } }
+        .onChange(of: m.shellCachePath) { root in
+            if performStartupChecks { library.syncSharedApp(root: root, fallbackDevice: stores.deviceStore.installDevice); readSignatures() }
+        }
+        .onChange(of: stores.deviceStore.installDevice) { device in
+            if performStartupChecks, !device.isEmpty { library.syncSharedApp(root: m.shellCachePath, fallbackDevice: device); readSignatures() }
+        }
+        .onChange(of: repo.path) { _ in refreshArtwork(); if performStartupChecks { checkTools(); library.fillMissingTitleNames() } }
+        // A clone, pull or update check has finished (the automatic pull at launch among them): the checkout may have moved
+        .onReceive(repo.$busy.removeDuplicates().dropFirst()) { busy in if !busy && performStartupChecks { checkTools() } }
+        .onReceive(engine.$syncing.removeDuplicates().dropFirst()) { syncing in if !syncing && performStartupChecks { checkTools() } }   // a sync made or moved the engine (its HEAD is what ToolsAge compares)
+        .onReceive(m.$running) { running in if running { editingBuildResult = false; completedFooterDismissed = false } }
+        .onChange(of: library.selectedID) { _ in resignNote = nil }   // the last re-sign's note belongs to its game
+        .onChange(of: heroGame?.id) { _ in profileHelpOpen = false; refreshHeroArtwork() }
+        .onReceive(recorder.recorded) {   // a build was written into the library (BuildRecorder); a window opened since reads it in onAppear
+            refreshArtwork()
+            if m.runningTarget != BuildTarget.mac { readSignatures() }
+            if performStartupChecks { checkTools() }
+        }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active {
+                library.invalidateArtworkStates()
+                library.objectWillChange.send()
+            }
+        }
+        .alert(loc.t("library.error"), isPresented: Binding(
+            get: { launchError != nil || library.error != nil },
+            set: { if !$0 { launchError = nil; library.error = nil } }
+        )) {
+            Button(loc.t("library.ok")) { launchError = nil; library.error = nil }
+        } message: { Text(launchError ?? library.error ?? "") }
+        .sheet(item: $removing) { game in
+            LauncherConfirmSheet(title: loc.t("library.removeQuestion"), subtitle: game.displayName(loc.lang), note: loc.t("library.removeNote"),
+                cancelTitle: loc.t("saves.cancel"), confirmTitle: loc.t("library.remove"), destructive: true, scope: "remove",
+                cancel: { removing = nil }, confirm: { library.remove(game.id); removing = nil }).environmentObject(padFocus)
+        }
+        .onChange(of: removing?.id) { _ in padFocus.scope = currentPadScope }
+        .sheet(isPresented: Binding(get: { optionsFor != nil }, set: { if !$0 { optionsFor = nil } })) {
+            if let id = optionsFor { LaunchOptionsView(m: m, library: library, gameID: id, globalControls: controls, controllerMappingPresentation: $controllerMappingOpen,
+                              onBuild: { game in DispatchQueue.main.async { configureBuild(game) } },
+                              openCheats: { id in optionsFor = nil; DispatchQueue.main.async { cheatsFor = id } },
+                              openSaves: { id in optionsFor = nil; DispatchQueue.main.async { savesFor = id } }).environmentObject(padFocus).environmentObject(stores.saveSettings).environmentObject(stores.players).launcherDropdownHost(dropdowns, pad: padFocus) }
+        }
+        .sheet(isPresented: $controlsOpen) { ControlsView(layout: controls, cancelRequest: controlsCancelRequest).environmentObject(padFocus).launcherDropdownHost() }
+        .sheet(isPresented: Binding(get: { freeSpaceFor != nil }, set: { if !$0 { freeSpaceFor = nil } })) {
+            if let id = freeSpaceFor, let game = BuildFiles.freeSpaceGame(id: id, in: library.games, store: stores.buildFiles) {
+                FreeSpaceView(m: m, game: game).environmentObject(padFocus)
+            }
+        }
+        .onChange(of: freeSpaceFor) { id in
+            padFocus.scope = id != nil ? "free" : currentPadScope
+            if id == nil {
+                stores.buildFiles.refresh(
+                    BuildFiles.games(
+                        library.games,
+                        lang: loc.lang,
+                        extraRoots: [library.folder, m.outDir, m.gameDir],
+                        engineRoot: EngineLayout.root(m.repo.path),
+                        t: loc.t
+                    )
+                )
+            }
+        }
+        .buildFilesWiring(stores.buildFiles, library: library, build: m, recorded: recorder.recorded, buildingID: m.running ? activeBuildID : nil, pad: padFocus, scope: { currentPadScope })
+        .cloudSaveSheet(cloudGate, pad: padFocus, scope: { currentPadScope })
+        .syncControllerLayouts(library: library, controls: controls)
+        .deleteGameSheet($deleting, shellRoot: m.shellCachePath, library: library, loc: loc, pad: padFocus, scope: { currentPadScope })
+        .libraryDiagnosticsWiring(library: library, repo: repo, engine: engine, verified: verifiedProfiles, skippedOpen: $skippedItemsOpen, pad: padFocus, scope: { currentPadScope }, openKeysSettings: openKeysSettingsFromDiagnostics)
+        .sheet(isPresented: $selectingGames) {
+            BuildSelectedSheet(library: library, queue: stores.queue, engineID: engine.selection.engineID, target: m.target, packagesSharedApp: !m.exportsOneGame && !m.exportsFramework, exportsFramework: m.exportsFramework,
+                added: { target in m.target = target; buildEditorOpen = true; page = .builds }) { selectingGames = false }
+                .environmentObject(loc).environmentObject(padFocus)
+        }
+        .refreshSheetsWiring(batchOpen: $batchRefreshOpen, imgGuide: $missingImgGuideFor, stores: stores, library: library, toolsAge: toolsAge, page: $page, buildEditorOpen: $buildEditorOpen, pad: padFocus, scope: { currentPadScope })
+        .onChange(of: selectingGames) { _ in padFocus.scope = currentPadScope }
+        .sheet(isPresented: Binding(get: { supportedGames != nil }, set: { if !$0 { supportedGames = nil } })) {
+            SupportedGamesSheet(games: supportedGames ?? [], owned: { id in library.games.first { $0.titleID.uppercased() == id } },
+                                covers: .live(store: artworkStore, directory: library.artworkDirectory, language: loc.lang.code, maxPixel: SupportedGamesSheet.coverPixels),
+                                showInLibrary: showInLibrary)
+                .environmentObject(padFocus)
+        }
+        .onChange(of: supportedGames == nil) { closed in padFocus.scope = closed ? currentPadScope : "supported" }
+        .renameGameSheet($renaming, library: library, pad: padFocus, scope: { currentPadScope })
+        .sheet(isPresented: $updates.showUpdateSheet) { UpdateSheet(updates: updates, build: m).environmentObject(padFocus) }
+        .onChange(of: updates.showUpdateSheet) { _ in padFocus.scope = currentPadScope }
+        .sheet(isPresented: Binding(get: { updates.uninstallPlan != nil }, set: { if !$0 { updates.uninstallPlan = nil } })) {
+            LauncherConfirmSheet(title: loc.t("uninstall.title"), subtitle: "", note: loc.t("uninstall.confirm"),
+                cancelTitle: loc.t("saves.cancel"), confirmTitle: loc.t("uninstall.confirmButton"), destructive: true, scope: "uninstall",
+                cancel: { updates.uninstallPlan = nil }, confirm: { updates.confirmUninstall() }).environmentObject(padFocus)
+        }
+        .onChange(of: updates.uninstallPlan == nil) { _ in padFocus.scope = currentPadScope }
+        .sheet(isPresented: Binding(get: { savesFor != nil }, set: { if !$0 { savesFor = nil } })) {
+            if let id = savesFor { SavesView(m: m, library: library, gameID: id).environmentObject(padFocus).launcherDropdownHost(dropdowns, pad: padFocus) }
+        }
+        .onChange(of: savesFor) { id in padFocus.scope = id != nil ? "saves" : currentPadScope }
+        .cheatsSheet(for: $cheatsFor, m: m, library: library, pad: padFocus) { currentPadScope }
+        .onChange(of: optionsFor) { id in
+            if id == nil { controllerMappingOpen = false }
+            padFocus.scope = currentPadScope
+        }
+        .onChange(of: controllerMappingOpen) { _ in padFocus.scope = currentPadScope }
+        .onChange(of: controlsOpen) { open in padFocus.scope = open ? "controls" : (optionsFor != nil ? "launch" : "main") }
+        .onChange(of: page) { page in
+            profileHelpOpen = false
+            padFocus.focused = nil
+            if page != .library { closeArtwork(save: false) }
+        }
+        .onChange(of: artworkEditor?.gameID) { id in
+            padFocus.scope = id != nil ? "artwork" : currentPadScope
+            if id != nil, padFocus.visible {   // opened by the controller: its focus lands on the chosen tile once the panel is drawn
+                DispatchQueue.main.async { padFocus.show(default: artworkPadFocus) }
+            }
+        }
+        .onChange(of: keyboardCard) { id in
+            if let id { library.selectedID = id }
+        }
+        .onChange(of: padFocus.focused) { id in   // a controller moving onto a game's card selects it, as a click does
+            if let id, id.hasPrefix("card."), let uuid = UUID(uuidString: String(id.dropFirst(5))) { library.selectedID = uuid; keyboardCard = uuid }
+        }
+    }
+
+    @State var libraryHeaderHeight: CGFloat = 64
+    /// The hero's height with the panel closed, kept while it is open so the scaled-down hero keeps its proportions.
+    @State var closedHeroHeight: CGFloat = 498
+
+    private var activityBar: some View {
+        VStack(spacing: 0) {
+            Divider().opacity(0.3)
+            HStack(spacing: 22) {
+                if m.running {
+                    let stage = m.stages.last { $0.state == .running }
+                    Image(systemName: "wrench.and.screwdriver").font(.system(size: 22, weight: .light)).foregroundStyle(LauncherPalette.secondaryText)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(m.operationTitle ?? loc.t(devices.shellCopy != nil || devices.shellWaiting || m.stages.contains { $0.id == 1003 && $0.state == .running }
+                                 ? "activity.transfer" : (m.runningTarget == BuildTarget.mac ? "activity.mac" : "activity.ios"))).font(.manrope(15, .bold))
+                            .lineLimit(2)
+                        TimelineView(.periodic(from: Date(), by: 1)) { context in   // the clock ticks while a count may stand still
+                            let badge = m.currentStagePosition.map { "[\($0.current)/\($0.total)]" } ?? ""
+                            Text(stage
+                                    .map { [badge.isEmpty ? $0.displayName(loc.t) : "\(badge) \($0.displayName(loc.t))", $0.detail, $0.clock(at: context.date, left: loc.t("prog.etaEstimate"))].filter { !$0.isEmpty }.joined(separator: " · ") }
+                                 ?? loc.t("library.preparing"))
+                                .font(.manrope(13)).monospacedDigit().foregroundStyle(LauncherPalette.secondaryText).lineLimit(1).truncationMode(.middle)
+                        }
+                        if stage?.isScanningLastShaderFiles == true {
+                            Text(loc.t("prog.lastShaderFiles")).font(.manrope(13)).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .frame(minWidth: 180, alignment: .leading)
+                    LauncherProgressBar(value: buildProgress).frame(maxWidth: 480)
+                        .accessibilityLabel(loc.t("prog.stageProgress"))
+                    Text(buildProgress.map { "\(Int($0 * 100))%" } ?? "")
+                        .font(.manrope(14, .semibold)).monospacedDigit().foregroundStyle(LauncherPalette.secondaryText).frame(width: 46, alignment: .leading)
+                    Spacer(minLength: 8)
+                    Button(loc.t("library.viewBuild")) { page = .builds; buildEditorOpen = true }.buttonStyle(LauncherSecondaryButtonStyle())
+                    Button(loc.t(m.stopping ? "library.stopping" : "btn.stop")) { m.stop() }
+                        .buttonStyle(LauncherSecondaryButtonStyle(accent: LauncherPalette.building)).disabled(m.stopping)
+                } else {
+                    Image(systemName: "desktopcomputer").foregroundStyle(LauncherPalette.secondaryText)
+                    Text(loc.t("library.localNote")).font(.manrope(13)).foregroundStyle(LauncherPalette.secondaryText)
+                    if let n = repo.autoPulled, n > 0 {   // the automatic update when the app opened (RepoStore.autoPull): the tools are current
+                        Circle().fill(LauncherPalette.ready).frame(width: 6, height: 6).padding(.leading, 10)
+                        Text(String(format: loc.t("library.toolsUpdated"), n)).font(.manrope(13)).foregroundStyle(LauncherPalette.secondaryText)
+                    }
+                    if repo.autoAdopted {   // a ZIP copy connected and updated when the app opened (RepoStore.adoptAtLaunch)
+                        Circle().fill(LauncherPalette.ready).frame(width: 6, height: 6).padding(.leading, 10)
+                        Text(loc.t("library.toolsAdopted")).font(.manrope(13)).foregroundStyle(LauncherPalette.secondaryText)
+                    }
+                    Spacer()
+                    if let staged = updates.staged {
+                        // A downloaded, verified update (AppUpdateStore.stage): it goes in when the app quits, or now.
+                        // This branch only shows with no build running, and restartNow checks again.
+                        HStack(spacing: 10) {
+                            Circle().fill(LauncherPalette.ready).frame(width: 6, height: 6)
+                            Text(String(format: loc.t("library.appReady"), staged.release.tag)).font(.manrope(13)).foregroundStyle(LauncherPalette.secondaryText)
+                        }
+                        Button(loc.t("app.restartNow")) { updates.restartNow() }.buttonStyle(LauncherSecondaryButtonStyle())
+                    }
+                    if gamepad.connected {
+                        // The buttons a controller has here, named as the game names them (A on the right)
+                        HStack(spacing: 18) {
+                            padHint(.activate, loc.t("pad.play")); padHint(.launchOptions, loc.t("pad.options")); padHint(.back, loc.t("pad.back"))
+                            padHint(.manage, loc.t("pad.manage"))
+                            if enterConsole != nil { padHint(.select, loc.t("console.entry")) }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 30).frame(minHeight: 84)
+        }
+    }
+
+    /// A pad hint shows the glyph of the controller connected (the same ConsoleGlyphs the console mode uses), so it names the button
+    /// that really performs the action on a DualSense, an Xbox or a Nintendo-layout controller.
+    private func padHint(_ role: ConsoleGlyphs.Role, _ label: String) -> some View {
+        HStack(spacing: 7) {
+            ConsoleGlyphView(glyph: ConsoleGlyphs.current().glyph(for: role), size: 18).foregroundStyle(LauncherPalette.accent)
+            Text(label).font(.manrope(13)).foregroundStyle(LauncherPalette.secondaryText)
+        }
+    }
+
+    private var buildProgress: Double? {
+        if let overall = m.overallProgress { return overall }
+        guard let percent = m.stages.last(where: { $0.state == .running })?.percent else { return nil }
+        return percent / 100
+    }
+
+    /// Reads the engine's profiles and opens the Supported games sheet. The profiles are small files, read off the main thread.
+    func openSupportedGames() {
+        let root = EngineLayout.root(repo.path)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let list = SupportedGames.list(engineRoot: root)
+            DispatchQueue.main.async { supportedGames = list }
+        }
+    }
+
+    /// Supported games > Show in library: the page, the filter and the selection go to that game.
+    func showInLibrary(_ id: UUID) {
+        page = .library
+        if let game = library.games.first(where: { $0.id == id }), !libraryFilter.includes(game) { setLibraryFilter(.owned) }
+        library.selectedID = id
+    }
+
+    func newBuild() {
+        buildEditorOpen = true
+        guard !m.running else { page = .builds; return }
+        buildStep = 0
+        m.leaveGameFolder()
+        for index in m.slots.indices { m.slots[index].paths = []; m.slots[index].problem = ""; m.slots[index].note = "" }
+        m.gameDir = ""; m.done = false; m.doneNote = ""; m.macAppPath = ""; m.stages = []
+        if m.outDir.isEmpty && !library.folder.isEmpty { m.outDir = library.folder }
+        page = .builds
+    }
+
+    func configureBuild(_ game: LibraryGame) {
+        buildEditorOpen = true
+        guard !m.running else { page = .builds; return }
+        buildStep = 0
+        if let folder = game.inputs[GameLibrary.folderInput]?.first {
+            m.scan(folder: folder)   // a game folder is read again: its updates and DLC may have changed since
+        } else {
+            m.leaveGameFolder()
+            for index in m.slots.indices {
+                m.slots[index].paths = game.inputs[m.slots[index].id] ?? []
+                m.slots[index].problem = ""
+                m.slots[index].note = ""
+            }
+            // The folder the game's files were found in (a base package may sit one level down in its own folder) — from the
+            // scan, or from the last build. Falling back to the base's folder would put the update and DLC out of reach.
+            m.gameDir = game.sourceFolder.isEmpty ? (m.basePath as NSString).deletingLastPathComponent : game.sourceFolder
+        }
+        m.macAppPath = game.appPath
+        m.outDir = game.outputDirectory
+        m.done = false; m.doneNote = ""; m.stages = []
+        m.target = game.lastTarget
+        page = .builds
+    }
+
+    /// A controller's button (LauncherGamepad): the first press shows the focus (on the selected game's card in the library),
+    /// then the D-pad moves it (PadFocus), A activates, B closes a sheet or goes back to the library, X opens the selected
+    /// game's launch options, L and R switch the pages.
+    private func padAction(_ action: LauncherGamepad.Action) {
+        if NSApp.modalWindow != nil || NSApp.keyWindow is NSSavePanel { return }
+        if action == .select {   // the controller's Select-type button opens console mode
+            guard libraryInputAvailable else { return }
+            if let enterConsole { consolePrompt = false; enterConsole() }
+            return
+        }
+        if consolePrompt {
+            switch action {
+            case .b: consolePrompt = false
+            case .a: padFocus.activate()
+            case .left: padFocus.horizontal(-1)
+            case .right: padFocus.horizontal(1)
+            case .up: padFocus.move(dx: 0, dy: -1)
+            case .down: padFocus.move(dx: 0, dy: 1)
+            default: break
+            }
+            return
+        }
+        if profileHelpOpen {
+            if action == .b || action == .a { profileHelpOpen = false }
+            return
+        }
+        if launchError != nil || library.error != nil {
+            if action == .b || action == .a { launchError = nil; library.error = nil }
+            return
+        }
+        if dropdowns.request != nil || dropdowns.custom != nil {
+            padFocus.show(default: nil)
+            switch action {
+            case .b: dropdowns.close()
+            case .a: padFocus.activate()
+            case .up: padFocus.move(dx: 0, dy: -1)
+            case .down: padFocus.move(dx: 0, dy: 1)
+            default: break
+            }
+            return
+        }
+        let sheetOpen = padFocus.scope != "main" || selectingGames || batchRefreshOpen || missingImgGuideFor != nil || controllerSheet || supportedGames != nil || skippedItemsOpen || optionsFor != nil || controlsOpen || savesFor != nil || cheatsFor != nil || freeSpaceFor != nil || stores.buildFiles.confirming != nil || deleting != nil || removing != nil || renaming != nil || artworkEditor != nil || cloudGate.isActive
+        switch ManagePad.route(action, menuOpen: manageOpenFor != nil, sheetOpen: sheetOpen, hasGame: library.selected != nil && page == .library) {
+        case .close: manageOpenFor = nil; return
+        case .swallow: return
+        case .open:
+            guard let game = library.selected else { return }
+            padFocus.show(default: nil)   // the ring shows: the menu's own focus follows once it is drawn
+            manageOpenFor = game.id
+            return
+        case .pass: break
+        }
+        if action == .b, padFocus.cancel() { return }
+        if action == .b, padFocus.scope != currentPadScope { return }
+        if cloudGate.isActive && [.b, .x, .l, .r].contains(action) { if action == .b { cloudGate.cancel() }; return }
+        if action == .b, controllerMappingOpen { controllerMappingOpen = false; return }
+        if action == .b, controllerSheet { controllerSheet = false; return }
+        if action == .b, artworkEditor != nil { closeArtwork(save: false); return }
+        if action == .b, savesFor != nil { padFocus.focused = "saves.done"; padFocus.activate(); return }
+        if action == .b, cheatsFor != nil { padFocus.focused = "cheats.done"; padFocus.activate(); return }
+        // The Free space sheet: B closes it, the D-pad and A work in it, X, L and R do nothing behind it
+        if freeSpaceFor != nil && [.b, .x, .l, .r].contains(action) { if action == .b { freeSpaceFor = nil }; return }
+        if deleting != nil && [.b, .x, .l, .r].contains(action) { if action == .b { deleting = nil }; return }
+        if supportedGames != nil && [.b, .x, .l, .r].contains(action) { if action == .b { supportedGames = nil }; return }
+        if skippedItemsOpen && [.b, .x, .l, .r].contains(action) {
+            if action == .b { skippedItemsOpen = false }
+            return
+        }
+        if renaming != nil && [.b, .x, .l, .r].contains(action) { if action == .b { renaming = nil }; return }
+        if action == .b {
+            if batchRefreshOpen { batchRefreshOpen = false } else if missingImgGuideFor != nil { missingImgGuideFor = nil } else if optionsFor != nil { optionsFor = nil } else if controlsOpen { controlsCancelRequest += 1 }
+            else if searching { searching = false; search = "" } else if page != .library { page = .library }
+            return
+        }
+        if !padFocus.visible {
+            padFocus.show(default: manageOpenFor != nil ? ManagePad.firstFocus(manageItems(for: library.selected))
+                          : artworkEditor != nil ? artworkPadFocus : !sheetOpen && page == .library ? library.selectedID.map { "card." + $0.uuidString } : nil)
+            if [.up, .down, .left, .right].contains(action) { return }   // the first press only shows where the focus is
+        }
+        switch action {
+        case .up: padFocus.move(dx: 0, dy: -1)
+        case .down: padFocus.move(dx: 0, dy: 1)
+        case .left, .right:
+            let step = action == .left ? -1 : 1
+            if !sheetOpen, page == .library, let focused = padFocus.focused, focused.hasPrefix("card."),
+               let uuid = UUID(uuidString: String(focused.dropFirst(5))),
+               let game = filteredGames.first(where: { $0.id == uuid }) {
+                _ = moveCollectionFocus(game, by: step)
+            } else {
+                padFocus.horizontal(step)
+            }
+        case .a: padFocus.activate()
+        case .x:
+            if !sheetOpen, page == .library,
+               let game = library.selected, game.isReady { optionsFor = game.id }
+        case .l, .r:
+            guard !sheetOpen, let at = LauncherPage.allCases.firstIndex(of: page) else { return }
+            let pages = LauncherPage.allCases
+            page = pages[(at + (action == .l ? pages.count - 1 : 1)) % pages.count]
+        case .y, .plus, .select:   // Y is the Manage menu: ManagePad.route opened it above
+            return
+        case .b:
+            return
+        }
+    }
+
+    /// The Manage menu's rows for a game, wired to the launcher's sheets and actions (ManageItem.list).
+    private func manageItems(_ game: LibraryGame) -> [ManageItem] {
+        ManageItem.list(game: game, labels: loc.t, running: m.running, olderTools: toolsAge.older.contains(game.id), activeBuildID: activeBuildID,
+                        hasBuildFolder: BuildFolder.location(for: game) != nil,
+                        buildFilesTitle: BuildFiles.menuTitle(stores.buildFiles, game: game.id, t: loc.t),
+                        hasLog: GameLog.latest(titleID: game.titleID, appPath: game.appPath) != nil,
+                        deviceName: devices.deviceName(game.installedDevice), launching: launching,
+                        actions: ManageActions(
+                            rebuild: { configureBuild(game) }, openOnDevice: { openOnDevice(game) }, options: { optionsFor = game.id }, saves: { savesFor = game.id }, cheats: { cheatsFor = game.id },
+                            changeArtwork: { page = .library; openArtwork(game) }, rename: { renaming = game },
+                            reveal: { if let path = game.revealTarget { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) } },
+                            showLog: { if let log = GameLog.latest(titleID: game.titleID, appPath: game.appPath) { GameLog.show(log) } },
+                            removeBuildFiles: { stores.buildFiles.ask(game.id, building: m.running && activeBuildID == game.id) }, remove: { removing = game }, delete: { deleting = game }))
+    }
+
+    private func manageItems(for game: LibraryGame?) -> [ManageItem] { game.map(manageItems) ?? [] }
+
+    private func openKeysSettingsFromDiagnostics() {
+        skippedItemsOpen = false
+        page = .settings
+        settingsCategory = .tools
+    }
+
+    /// The scope a controller acts in when no menu is open: the innermost sheet, else the window.
+    private var currentPadScope: String {
+        dropdowns.custom != nil ? "engineDropdown" : updates.showUpdateSheet ? "update" : updates.uninstallPlan != nil ? "uninstall" : cloudGate.isActive ? "cloudsave" : selectingGames ? "batch" : controllerSheet ? "console.controllers" : controllerMappingOpen ? "controls" : batchRefreshOpen ? "batchRefresh" : missingImgGuideFor != nil ? "imgGuide" : artworkEditor != nil ? "artwork" : savesFor != nil ? "saves" : cheatsFor != nil ? "cheats" : freeSpaceFor != nil ? "free" : stores.buildFiles.confirming != nil ? "buildfiles" : deleting != nil ? "delete" : removing != nil ? "remove" : skippedItemsOpen ? "skipped" : supportedGames != nil ? "supported" : renaming != nil ? "rename" : optionsFor != nil ? "launch" : controlsOpen ? "controls" : "main"
+    }
+
+    /// The space the collection row keeps around its cards for the focus ring (PadFocus draws it 4 pt outside a target).
+    static let ringRoom: CGFloat = 6
+}

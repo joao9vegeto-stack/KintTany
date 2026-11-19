@@ -1,0 +1,666 @@
+"""Per-OS paths, tool discovery and process launching.
+
+Everything the UI needs that differs between Windows and macOS lives here, so the model and
+the window never branch on sys.platform themselves.
+"""
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+IS_WIN = sys.platform.startswith('win')
+IS_MAC = sys.platform == 'darwin'
+
+#: The build script's own floor: `build_ipa_from_nsp.py` raises below 3.12 for a direct RomFS
+#: image build, and its f-strings do not parse on 3.9. `/usr/bin/python3` is 3.9 on a stock Mac,
+#: and pip-installing into it produced a build that died inside the script (issue #53 in the
+#: SwiftUI front end) instead of a row that said why.
+MIN_PYTHON = (3, 12)
+
+
+# ---------------------------------------------------------------- tool discovery
+
+def _which(name: str, extra: list[str] | None = None) -> str | None:
+    """shutil.which plus a list of absolute candidates (a GUI launch does not inherit the
+    shell's PATH on either OS, so the usual install locations are probed by hand)."""
+    if found := shutil.which(name):
+        return found
+    for c in extra or []:
+        if c and Path(c).is_file() and os.access(c, os.X_OK):
+            return c
+    return None
+
+
+def uv_pythons() -> list[str]:
+    """The interpreters `uv python install` manages.
+
+    uv downloads its own Pythons into a store (`~/.local/share/uv/python`, or
+    `UV_PYTHON_INSTALL_DIR`) and links shims into `~/.local/bin`. Neither directory is on a GUI
+    process's PATH and neither was in the probe list, so a uv user with a working 3.12 and the
+    packages was told no interpreter had been found. Windows keeps the store under
+    `%LOCALAPPDATA%\\uv\\python` and puts the exe straight in the install folder.
+    """
+    # The interpreter itself, not `python3-config` and friends that share the prefix.
+    name_re = re.compile(r'^python(3(\.\d+)?)?\.exe$' if IS_WIN else r'^python3(\.\d+)?$')
+
+    def named(d: Path, pattern: str) -> list[str]:
+        return sorted(str(p) for p in d.glob(pattern) if name_re.match(p.name))
+
+    out: list[str] = []
+    home = Path.home()
+    shim_dir = home / '.local' / 'bin'
+    if shim_dir.is_dir():
+        out += named(shim_dir, 'python*.exe' if IS_WIN else 'python3*')
+    local = Path(os.environ.get('LOCALAPPDATA', str(home / 'AppData' / 'Local')))
+    roots = [os.environ.get('UV_PYTHON_INSTALL_DIR') or '',
+             str(local / 'uv' / 'python') if IS_WIN else str(home / '.local' / 'share' / 'uv' / 'python')]
+    for root in roots:
+        if not root or not Path(root).is_dir():
+            continue
+        for install in sorted(Path(root).iterdir(), reverse=True):
+            if install.is_dir():
+                out += named(install if IS_WIN else install / 'bin',
+                             'python*.exe' if IS_WIN else 'python3*')
+    return out
+
+
+def version_manager_pythons() -> list[str]:
+    """The interpreters mise and asdf manage (issue #113).
+
+    mise keeps its installs in `~/.local/share/mise` (`MISE_DATA_DIR`) with shims in `shims/`,
+    asdf in `~/.asdf` (`ASDF_DATA_DIR`). A GUI process's PATH has neither. asdf's shims are
+    scripts that need `asdf` on the PATH, so only its installs are probed. Not on Windows.
+    """
+    if IS_WIN:
+        return []
+    # The interpreter itself, not `python3-config` and friends that share the folder.
+    name_re = re.compile(r'^python3(\.\d+)?$')
+
+    def newest_first(paths) -> list:
+        return sorted(paths, key=lambda n: [int(x) if x.isdigit() else 0
+                                            for x in re.split(r'(\d+)', Path(n).name)], reverse=True)
+
+    def named(d: Path) -> list[str]:
+        if not d.is_dir():
+            return []
+        return newest_first(str(p) for p in d.iterdir() if name_re.match(p.name))
+
+    home = Path.home()
+    mise = Path(os.environ.get('MISE_DATA_DIR') or home / '.local' / 'share' / 'mise')
+    asdf = Path(os.environ.get('ASDF_DATA_DIR') or home / '.asdf')
+    out: list[str] = []
+    for root in (mise / 'installs' / 'python', asdf / 'installs' / 'python'):
+        if root.is_dir():
+            for install in newest_first(root.iterdir()):
+                out += named(install / 'bin')
+    return out + named(mise / 'shims')
+
+
+def python_candidates(extra_candidates: list[str] | None = None) -> list[str]:
+    """Every interpreter a build could run under, best first.
+
+    The app's own venv, then whatever the caller passes (the interpreter the app installed for
+    itself, which a machine with no system Python is exactly the one that has to be found again),
+    then the platform's usual installs, uv's store, mise and asdf, and last what `which` can see — which, in a
+    GUI launch, is next to nothing.
+    """
+    cands: list[str] = [venv_python()] + [c for c in (extra_candidates or []) if c]
+    if IS_WIN:
+        local_app = Path(os.environ.get('LOCALAPPDATA', str(Path.home() / 'AppData' / 'Local')))
+        tools_root = local_app / 'NS Port Builder' / 'tools'
+        if tools_root.is_dir():
+            for d in sorted(tools_root.glob('python-*'), reverse=True):
+                cands.append(str(d / 'python.exe'))
+        cands += [
+            os.path.expandvars(r'%LOCALAPPDATA%\Programs\Python\Python312\python.exe'),
+            os.path.expandvars(r'%LOCALAPPDATA%\Programs\Python\Python311\python.exe'),
+            os.path.expandvars(r'%ProgramFiles%\Python312\python.exe'),
+            r'C:\Python312\python.exe',
+        ]
+    else:
+        fw = '/Library/Frameworks/Python.framework/Versions'
+        if Path(fw).is_dir():
+            for v in sorted(os.listdir(fw), reverse=True):
+                cands.append(f'{fw}/{v}/bin/python3')
+        cands += ['/opt/homebrew/bin/python3', '/usr/local/bin/python3', '/usr/bin/python3']
+        cands += uv_pythons()
+        cands += version_manager_pythons()
+    if w := _which('python3' if not IS_WIN else 'python'):
+        cands.append(w)
+    if IS_WIN:
+        cands = [c for c in cands if c and 'windowsapps' not in c.replace('/', '\\').lower()]
+    return cands
+
+
+def _usable_venv_base(py: str, ver: str) -> bool:
+    """Whether `py` (at version `ver`) can create a venv and install the bundled wheels.
+
+    On Windows the shipped offline `wheels/` folder carries `cp312` (`win_amd64`) wheels only, so
+    an unpacked system Python 3.13 / 3.14 without the packages pre-installed would fail offline
+    `pip install --no-index`. Also reject Windows embeddable zip layouts (`python*._pth`) and
+    custom system installs where `Lib/` is present without `Lib/venv` or `Lib/ensurepip`.
+    """
+    vt = _ver_tuple(ver)
+    if vt < MIN_PYTHON:
+        return False
+    if IS_WIN:
+        if vt != (3, 12):
+            return False
+        py_dir = Path(py).parent
+        try:
+            if any(py_dir.glob('python*._pth')):
+                return False
+            lib_dir = py_dir / 'Lib'
+            if any(py_dir.glob('python*.zip')) and not lib_dir.is_dir():
+                return False
+            if lib_dir.is_dir() and not ((lib_dir / 'venv').is_dir() and (lib_dir / 'ensurepip').is_dir()):
+                return False
+        except OSError:
+            return False
+    return True
+
+
+def find_python(extra_candidates: list[str] | None = None) -> tuple[str, bool, str]:
+    """The interpreter to build with: (path, has_packages, version_or_empty).
+
+    The build scripts need lz4, capstone, fontTools, zbic, zstd and (for compressed dumps) nsz. A
+    system interpreter rarely has them, so the venv the app manages is checked first, then
+    every python on the machine (see python_candidates for the order).
+    """
+    probe = (
+        "import lz4, capstone, fontTools, zbic, unicorn\n"
+        "try:\n"
+        "    from compression import zstd\n"
+        "except ImportError:\n"
+        "    from backports import zstd\n"
+    )
+
+    ready: tuple[str, str] | None = None     # newest that already has the packages
+    fallback: tuple[str, str] | None = None  # newest that runs at all: 安装 finishes it
+    old_venv: tuple[str, str] | None = None  # the app's venv when it is below the floor
+    seen: set[str] = set()
+    for c in python_candidates(extra_candidates):
+        if not c or c in seen or not Path(c).is_file():
+            continue
+        seen.add(c)
+        ver = _python_version(c)
+        if ver and _ver_tuple(ver) < MIN_PYTHON and c == venv_python():
+            old_venv = (c, ver)
+        if not ver or _ver_tuple(ver) < MIN_PYTHON:
+            continue
+        if _runs(c, ['-c', probe]):
+            if ready is None or _win_ver_rank(ver) > _win_ver_rank(ready[1]):
+                ready = (c, ver)
+        elif _usable_venv_base(c, ver) and (fallback is None or _win_ver_rank(ver) > _win_ver_rank(fallback[1])):
+            fallback = (c, ver)
+    if ready:
+        return (ready[0], True, ready[1])
+    if fallback:
+        return (fallback[0], False, fallback[1])
+    if old_venv:
+        return (old_venv[0], False, old_venv[1])   # the row says which version is too old
+    return ('python' if IS_WIN else '/usr/bin/python3', False, '')
+
+
+def venv_base(preferred: str) -> str | None:
+    """The interpreter to create the app's venv from, or None when the machine has none.
+
+    `preferred` is what the panel picked; when find_python() found nothing that is `/usr/bin/
+    python3` (3.9, below MIN_PYTHON) or the venv path it hopes to create — neither can run
+    `-m venv`, and the Python row never recovered from it. So a base that does not run at the
+    required version falls back to the newest candidate that does.
+    """
+    p = Path(preferred) if preferred else Path()
+    if preferred and p.is_dir():
+        sub = p / ('python.exe' if IS_WIN else 'bin/python3')
+        if sub.is_file():
+            p = sub
+            preferred = str(sub)
+    if preferred and p.is_file() and os.access(preferred, os.X_OK):
+        v = _python_version(preferred)
+        if v and _usable_venv_base(preferred, v):
+            return preferred
+    best: tuple[str, str] | None = None
+    for c in python_candidates():
+        if not c or not Path(c).is_file() or not os.access(c, os.X_OK):
+            continue
+        v = _python_version(c)
+        if not v or not _usable_venv_base(c, v):
+            continue
+        if best is None or _win_ver_rank(v) > _win_ver_rank(best[1]):
+            best = (c, v)
+    return best[0] if best else None
+
+
+def _python_version(py: str) -> str:
+    try:
+        r = subprocess.run([py, '-c', 'import sys;print("%d.%d"%sys.version_info[:2])'],
+                           capture_output=True, text=True, timeout=20, env=child_env())
+        return r.stdout.strip() if r.returncode == 0 else ''
+    except Exception:
+        return ''
+
+
+def _ver_tuple(v: str) -> tuple[int, int]:
+    parts = v.split('.')
+    try:
+        return (int(parts[0]), int(parts[1]))
+    except (IndexError, ValueError):
+        return (0, 0)
+
+
+def _win_ver_rank(v: str) -> tuple[int, int, int]:
+    vt = _ver_tuple(v)
+    # On Windows the bundled offline wheels target Python 3.12 (cp312); prefer 3.12 over
+    # pre-release/newer system Pythons (e.g. 3.15) when both are present on the machine.
+    return (1 if (IS_WIN and vt == (3, 12)) else 0, vt[0], vt[1])
+
+
+def _runs(exe: str, args: list[str]) -> bool:
+    try:
+        return subprocess.run([exe] + args, capture_output=True, timeout=120, env=child_env()).returncode == 0
+    except Exception:
+        return False
+
+
+def venv_dir() -> Path:
+    if IS_WIN:
+        base = Path(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData' / 'Local'))
+    else:
+        base = Path.home() / 'Library' / 'Application Support'
+    return base / 'NS Port Builder' / 'venv'
+
+
+def venv_python() -> str:
+    v = venv_dir()
+    return str(v / ('Scripts/python.exe' if IS_WIN else 'bin/python3'))
+
+
+# ---------------------------------------------------------------- dotnet
+
+def find_dotnet() -> tuple[str, bool]:
+    cands = []
+    if IS_WIN:
+        cands += [r'C:\Program Files\dotnet\dotnet.exe',
+                  os.path.expandvars(r'%LOCALAPPDATA%\Microsoft\dotnet\dotnet.exe')]
+    else:
+        cands += [str(Path.home() / '.dotnet' / 'dotnet'),
+                  '/usr/local/share/dotnet/dotnet',
+                  '/opt/homebrew/bin/dotnet']
+    path = _which('dotnet', cands) or ('dotnet.exe' if IS_WIN else 'dotnet')
+    ok = _runs(path, ['--list-sdks'])
+    return (path, ok)
+
+
+def dotnet_root(dotnet: str) -> str | None:
+    """The runtime root the apphost looks for, from `dotnet --list-runtimes`.
+
+    A set-but-wrong DOTNET_ROOT is worse than none (the apphost stops searching), so this
+    returns None when the derivation does not answer and the caller leaves the variable out —
+    the build script derives and verifies its own in that case.
+    """
+    try:
+        r = subprocess.run([dotnet, '--list-runtimes'], capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            return None
+    except Exception:
+        return None
+    for ln in r.stdout.splitlines():
+        if not ln.startswith('Microsoft.NETCore.App'):
+            continue
+        if '[' in ln and ']' in ln:
+            p = ln[ln.rfind('[') + 1:ln.rfind(']')]
+        else:
+            continue
+        suffix = os.sep + os.path.join('shared', 'Microsoft.NETCore.App')
+        if p.endswith(suffix):
+            return p[:-len(suffix)]
+        if p:
+            return p
+    return None
+
+
+# ---------------------------------------------------------------- external tools
+
+def find_tool(name: str) -> str | None:
+    """xcodegen / zstd / spirv-cross / metal, by the usual locations per OS."""
+    if IS_WIN:
+        extra = [rf'C:\Program Files\{name}\{name}.exe',
+                 rf'C:\ProgramData\chocolatey\bin\{name}.exe']
+        return _which(name + '.exe', extra)
+    return _which(name, [f'/opt/homebrew/bin/{name}', f'/usr/local/bin/{name}'])
+
+
+def metal_toolchain_ok() -> bool:
+    """Whether a Metal compiler answers. On Windows that is Apple's Metal Developer Tools
+    (metal.exe + metallib.exe); on macOS it is xcrun's."""
+    if IS_WIN:
+        return find_tool('metal') is not None and find_tool('metallib') is not None
+    return _runs('/usr/bin/xcrun', ['-sdk', 'macosx', 'metal', '--version'])
+
+
+def ios_sdk_ok() -> bool:
+    if IS_WIN:
+        # The Windows path uses an iPhoneOS SDK extracted from an archive, located by the
+        # caller (the WebUI does the same); presence of the directory is the check.
+        return bool(os.environ.get('IPHONEOS_SDK_DIR') and Path(os.environ['IPHONEOS_SDK_DIR']).is_dir())
+    return _runs('/usr/bin/xcrun', ['--sdk', 'iphoneos', '--show-sdk-version'])
+
+
+def xcode_developer_dir() -> str:
+    """The selected developer directory (`xcode-select -p`), or '' when none is selected.
+
+    Asked rather than assumed: an Xcode **beta** lives at /Applications/Xcode-beta.app, and the
+    hard-coded /Applications/Xcode.app check reported "no Xcode" to anyone whose only install is
+    a beta (issue #21). `xcode-select` is the same source of truth xcodebuild and xcrun use, so
+    agreeing with it is what makes the panel match what the build will actually do.
+    """
+    if IS_WIN:
+        return ''
+    try:
+        r = subprocess.run(['/usr/bin/xcode-select', '-p'], capture_output=True, text=True,
+                           timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return ''
+    return (r.stdout or '').strip() if r.returncode == 0 else ''
+
+
+def xcode_ok() -> bool:
+    if IS_WIN:
+        return False        # Xcode is macOS-only; Windows uses the cross toolchain instead
+    # A selected developer directory that exists is the real condition: it covers Xcode.app,
+    # Xcode-beta.app, a custom location, and a Command Line Tools-only setup (which selects
+    # /Library/Developer/CommandLineTools and has no xcodebuild-driven iOS build at all — that
+    # case is caught by the iOS SDK probe below, which is what the row reports).
+    dev = xcode_developer_dir()
+    if not dev or not Path(dev).is_dir():
+        return False
+    return Path('/usr/bin/xcodebuild').is_file()
+
+
+# ---------------------------------------------------------------- process helpers
+
+def child_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """The environment every child process gets: a PATH with the usual tool directories,
+    HOME/USER present (a GUI launch can strip them), and DOTNET_CLI_HOME so .NET's first-run
+    state has somewhere to go."""
+    env = dict(os.environ)
+    meipass = getattr(sys, '_MEIPASS', None) or env.get('_MEIPASS') or env.get('_MEIPASS2')
+    is_frozen = bool(getattr(sys, 'frozen', False) or meipass)
+    env.pop('_MEIPASS', None)
+    env.pop('_MEIPASS2', None)
+    env.pop('VIRTUAL_ENV', None)
+    env.pop('PYTHONSTARTUP', None)
+    env.pop('PIP_USER', None)
+    env.pop('PIP_TARGET', None)
+    env.pop('PIP_REQUIRE_VIRTUALENV', None)
+    if is_frozen:
+        for k in ('PYTHONHOME', 'QT_PLUGIN_PATH', 'QML2_IMPORT_PATH'):
+            env.pop(k, None)
+    meipass_norm = os.path.normcase(os.path.normpath(meipass)) if meipass else None
+    sep = ';' if IS_WIN else ':'
+    if meipass_norm and 'PYTHONPATH' in env:
+        clean_pypath = [
+            d for d in env['PYTHONPATH'].split(sep)
+            if d and os.path.normcase(os.path.normpath(d)) != meipass_norm
+        ]
+        if clean_pypath:
+            env['PYTHONPATH'] = sep.join(clean_pypath)
+        else:
+            env.pop('PYTHONPATH', None)
+    raw_dirs = [d for d in env.get('PATH', '').split(sep)
+                if d and (not meipass_norm or os.path.normcase(os.path.normpath(d)) != meipass_norm)]
+    dirs = [sep.join(raw_dirs)]
+    if IS_WIN:
+        dirs += [r'C:\Program Files\dotnet', os.path.expandvars(r'%LOCALAPPDATA%\Microsoft\dotnet')]
+    else:
+        dirs += ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin']
+    env['PATH'] = sep.join(d for d in dirs if d)
+    if not env.get('HOME') or not Path(env['HOME']).is_dir():
+        env['HOME'] = str(Path.home())
+    env.setdefault('USER', os.environ.get('USERNAME') or os.environ.get('USER') or 'user')
+    env.setdefault('DOTNET_CLI_HOME', env['HOME'])
+    # No first-run banner, no telemetry (issue #10's question): the deps panel runs `dotnet
+    # --list-sdks` directly, outside the build script where the same two lines are set. The
+    # telemetry call can hang the very first run on a network that cannot reach Microsoft.
+    env.setdefault('DOTNET_CLI_TELEMETRY_OPTOUT', '1')
+    env.setdefault('DOTNET_NOLOGO', '1')
+    env.setdefault('PYTHONUTF8', '1')
+    env.setdefault('PYTHONIOENCODING', 'utf-8')
+    if extra:
+        env.update(extra)
+    return env
+
+
+def short_path(p: str) -> str:
+    """Home shown as ~ (keeps the account name out of screenshots)."""
+    home = str(Path.home())
+    return '~' + p[len(home):] if p.startswith(home) else p
+
+
+def no_window_kwargs() -> dict:
+    """Hide the console window a child process would otherwise flash on Windows."""
+    if IS_WIN:
+        return {'creationflags': subprocess.CREATE_NO_WINDOW}
+    return {}
+
+
+def process_group_kwargs() -> dict:
+    """Start a child process in its own process group so descendants can be terminated together."""
+    if IS_WIN:
+        if hasattr(subprocess, 'CREATE_NEW_PROCESS_GROUP') or hasattr(subprocess, 'CREATE_NO_WINDOW'):
+            flags = (
+                getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
+                | getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+            )
+            return {'creationflags': flags}
+        return {'start_new_session': True}
+    return {'start_new_session': True}
+
+
+def kill_process_tree(proc: subprocess.Popen | None, *, grace_sec: float = 0.2) -> None:
+    """Terminate `proc` and all of its descendants so inherited stdout/stderr pipes close immediately."""
+    if proc is None:
+        return
+    pid = getattr(proc, 'pid', None)
+    valid_pid = isinstance(pid, int) and pid > 1
+    poll_fn = getattr(proc, 'poll', None)
+    kill_fn = getattr(proc, 'kill', None)
+    term_fn = getattr(proc, 'terminate', None)
+    wait_fn = getattr(proc, 'wait', None)
+
+    if IS_WIN:
+        if valid_pid:
+            try:
+                subprocess.run(
+                    ['taskkill', '/F', '/T', '/PID', str(pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                    **no_window_kwargs(),
+                )
+            except (OSError, subprocess.SubprocessError):
+                pass
+        try:
+            still_alive = (poll_fn() is None) if callable(poll_fn) else True
+            if still_alive and callable(kill_fn):
+                kill_fn()
+                if callable(wait_fn):
+                    try:
+                        wait_fn(timeout=0.5)
+                    except (TypeError, subprocess.SubprocessError):
+                        pass
+        except OSError:
+            pass
+        return
+
+    if valid_pid and hasattr(os, 'killpg'):
+        own_pgid = os.getpgrp() if hasattr(os, 'getpgrp') else -1
+        if pid != os.getpid() and pid != own_pgid:
+            sent_group = False
+            try:
+                os.killpg(pid, signal.SIGTERM)
+                sent_group = True
+            except ProcessLookupError:
+                pass
+            except OSError:
+                pass
+            if sent_group:
+                deadline = time.monotonic() + max(0.0, grace_sec)
+                while time.monotonic() < deadline:
+                    if callable(poll_fn):
+                        try:
+                            poll_fn()
+                        except OSError:
+                            pass
+                    try:
+                        os.killpg(pid, 0)
+                    except ProcessLookupError:
+                        sent_group = False
+                        break
+                    except OSError:
+                        break
+                    time.sleep(0.02)
+                if sent_group:
+                    try:
+                        os.killpg(pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+    try:
+        still_alive = (poll_fn() is None) if callable(poll_fn) else False
+        if still_alive:
+            if callable(term_fn):
+                term_fn()
+            if callable(wait_fn):
+                try:
+                    wait_fn(timeout=max(0.05, grace_sec))
+                except subprocess.TimeoutExpired:
+                    if callable(kill_fn):
+                        kill_fn()
+                    try:
+                        wait_fn(timeout=0.5)
+                    except (TypeError, subprocess.SubprocessError):
+                        pass
+                except TypeError:
+                    pass
+    except OSError:
+        pass
+
+
+_ORIG_POPEN_INIT = subprocess.Popen.__init__
+
+
+def reveal(path: str | Path | None) -> bool:
+    """Show `path` in the system file manager (Explorer on Windows, Finder on macOS).
+
+    If `path` is a file (such as an `.ipa` or `romfs.img`), opens its parent folder with the
+    file selected; if `path` is a folder that contains `romfs.img`, opens that folder with
+    `romfs.img` selected; otherwise opens the folder itself.
+    """
+    if not path:
+        return False
+    p = Path(str(path)).expanduser()
+    if not p.exists():
+        if p.parent.is_dir():
+            p = p.parent
+        else:
+            return False
+    if p.is_dir() and (p / 'romfs.img').is_file():
+        target = (p / 'romfs.img').resolve()
+        select_item = True
+    else:
+        target = p.resolve()
+        select_item = target.is_file() or target.suffix.lower() in ('.framework', '.app')
+
+    if IS_WIN:
+        norm = os.path.normpath(str(target))
+        if select_item:
+            try:
+                import ctypes
+                shell32 = ctypes.windll.shell32
+                shell32.ILCreateFromPathW.argtypes = [ctypes.c_wchar_p]
+                shell32.ILCreateFromPathW.restype = ctypes.c_void_p
+                shell32.SHOpenFolderAndSelectItems.argtypes = [
+                    ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_ulong
+                ]
+                shell32.SHOpenFolderAndSelectItems.restype = ctypes.c_long
+                shell32.ILFree.argtypes = [ctypes.c_void_p]
+                shell32.ILFree.restype = None
+                ctypes.windll.ole32.CoInitialize(None)
+                pidl = shell32.ILCreateFromPathW(norm)
+                if pidl:
+                    try:
+                        hr = shell32.SHOpenFolderAndSelectItems(pidl, 0, None, 0)
+                        if hr == 0:
+                            return True
+                    finally:
+                        shell32.ILFree(pidl)
+            except Exception:
+                pass
+            try:
+                subprocess.Popen(['explorer.exe', f'/select,{norm}'])
+                return True
+            except OSError:
+                pass
+        folder_norm = os.path.normpath(str(target.parent if select_item else target))
+        if hasattr(os, 'startfile'):
+            try:
+                os.startfile(folder_norm)  # type: ignore[attr-defined]
+                return True
+            except OSError:
+                pass
+    elif IS_MAC:
+        try:
+            cmd = ['/usr/bin/open', '-R', str(target)] if select_item else ['/usr/bin/open', str(target)]
+            subprocess.Popen(cmd)
+            return True
+        except OSError:
+            pass
+
+    try:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        open_dir = target.parent if select_item else target
+        return bool(QDesktopServices.openUrl(QUrl.fromLocalFile(str(open_dir))))
+    except Exception:
+        return False
+
+
+def hide_console_for_children() -> None:
+    """Stop *every* child this process starts from opening a console window (Windows only).
+
+    Called once at start-up. Per-call `creationflags` cannot be added everywhere: the build runs
+    the repository's own Python scripts as children, and those scripts start clang, git, lld and
+    zip themselves — dozens of call sites in files this front end does not own. A windowed app has
+    no console, so each of those children got a fresh black window, and on a handheld the report
+    was "a command-line window appears, shows nothing, and the install stops moving" — the window
+    was git's, and it was stealing the foreground while the download ran behind it.
+
+    A child created with CREATE_NO_WINDOW still gets a console, just no window, and its own
+    children inherit that invisible console — which is why patching at the boundary is enough to
+    cover the whole tree.
+
+    A caller that passes its own `creationflags` keeps them: DETACHED_PROCESS and
+    CREATE_NEW_CONSOLE mean something, and silently overriding them would break that intent.
+    """
+    if not IS_WIN:
+        return
+    original = subprocess.Popen.__init__
+
+    def patched(self, args, *a, **k):        # noqa: ANN001 - mirrors Popen.__init__
+        first = ''
+        if isinstance(args, (list, tuple)) and args:
+            first = os.path.basename(str(args[0])).lower()
+        elif isinstance(args, str):
+            first = os.path.basename(args.split()[0] if args.split() else '').lower()
+        if first not in ('explorer', 'explorer.exe') and not k.get('creationflags') and not k.get('startupinfo'):
+            k['creationflags'] = subprocess.CREATE_NO_WINDOW
+        original(self, args, *a, **k)
+
+    subprocess.Popen.__init__ = patched       # type: ignore[method-assign]

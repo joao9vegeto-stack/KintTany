@@ -1,0 +1,169 @@
+[
+ {
+  "id": "rosetta.intel",
+  "kind": "rosetta",
+  "source": "scripts/build_ipa_from_nsp.py",
+  "fragment": "is an Intel one running under Rosetta",
+  "text": "[RED] this Python (/usr/local/bin/python3) is an Intel one running under Rosetta, and the tools it starts would run as Intel code too: run the script with an arm64 Python (/usr/bin/python3, or Homebrew's in /opt/homebrew)"
+ },
+ {
+  "id": "translator.run",
+  "kind": "translator",
+  "source": "scripts/build_ipa_from_nsp.py",
+  "fragment": "the shader translator does not run (",
+  "text": "[RED] the shader translator does not run (exit code 137): dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate is the committed native executable; check out the repository again if it is missing or damaged"
+ },
+ {
+  "id": "translator.start",
+  "kind": "translator",
+  "source": "scripts/build_ipa_from_nsp.py",
+  "fragment": "the shader translator does not start (",
+  "text": "[RED] the shader translator does not start ([Errno 8] Exec format error: '/r/dm/gfx/tools/dmsh_xlate_bin'): /r/dm/gfx/tools/dmsh_xlate_bin"
+ },
+ {
+  "id": "zbic.missing",
+  "kind": "zbic",
+  "source": "dm/tools/nso.py",
+  "fragment": "need the zbic package",
+  "text": "[RED] text segment: ZBIC (zstd) segments need the zbic package (python3 -m pip install zbic)"
+ },
+ {
+  "id": "ios.sdk",
+  "kind": "iosSDK",
+  "source": "scripts/build_ipa_from_nsp.py",
+  "fragment": "the iOS SDK is not installed",
+  "text": "[RED] the iOS SDK is not installed: install the iOS platform in Xcode → Settings → Components, or with xcodebuild -downloadPlatform iOS"
+ },
+ {
+  "id": "clt.selected",
+  "kind": "cltSelected",
+  "source": "scripts/build_ipa_from_nsp.py",
+  "fragment": "the selected developer folder is the Command Line Tools",
+  "text": "[RED] the selected developer folder is the Command Line Tools (/Library/Developer/CommandLineTools), which have no iOS SDK: select Xcode with sudo xcode-select -s /Applications/Xcode.app"
+ },
+ {
+  "id": "metal.other",
+  "kind": "otherMetal",
+  "source": "dm/gfx/tools/own_compilers.py",
+  "fragment": "Metal compiler is not the one the shaders were tested with",
+  "text": "[RED] this Mac's Metal compiler is not the one the shaders were tested with (dm/gfx/tools/dmsh_chain.lock): metal_macosx Apple metal version 32023.883 (metalfe-32023.883.5) (tested: Apple metal version 32023.922 (metalfe-32023.922.4)). Untested compilers are unsupported (GitHub issue #242). Install Xcode 27.2 (macOS 26.6 or later) and its Metal toolchain (xcodebuild -downloadComponent MetalToolchain), or set ALLOW_OTHER_METAL = True (--allow-other-metal) to build with this one anyway"
+ },
+ {
+  "id": "shaders.regression",
+  "kind": "shaderRegression",
+  "source": "scripts/build_ipa_from_nsp.py",
+  "fragment": "a change to the translation chain broke them",
+  "text": "[RED] 3 shaders that translated in b-1a2b3c fail in b-4d5e6f: a change to the translation chain broke them (list: /w/logs/shader_regressions.log). Please report it at https://github.com/seedds/nxnative/issues with that list; ALLOW_SHADER_REGRESSIONS = True (--allow-shader-regressions) packs the app without those shaders"
+ },
+ {
+  "id": "nsp.damaged",
+  "kind": "damagedNSP",
+  "source": "dm/tools/nx_extract/Program.cs",
+  "fragment": "files fail the NCA's hash check",
+  "text": "[RED] hash check failed: ExeFS/main\n[RED] the NSP is damaged: 1 files fail the NCA's hash check (an incomplete copy or a broken download); copy or download it again, or pass --allow-damaged to write them as read\n[RED] nx_extract exit code 3 (full output: /w/logs/extract.log)"
+ },
+ {
+  "id": "nup.damaged",
+  "kind": "damagedNSP",
+  "source": "scripts/build_ipa_from_nsp.py",
+  "fragment": "Pack again from a good copy of the game (--allow-damaged packs these files as they are)",
+  "text": "[RED] v131072: 3 file(s) whose bytes do not start as their names promise (a .zs file that is not a zstd stream), so the game files are damaged:\n  Tex/CmnTex_Map_Soil_FairyFountain_Floor_D_Nrm.bntx.zs (216,015 bytes, starts 00000000)\nPack again from a good copy of the game (--allow-damaged packs these files as they are)"
+ },
+ {
+  "id": "arm32.program",
+  "kind": "a32Program",
+  "source": "scripts/build_ipa_from_nsp.py",
+  "fragment": "is a 32-bit ARM program",
+  "game": "Some Game",
+  "text": "[RED] Some Game (0100ABCD00000000) is a 32-bit ARM program (main.npdm: the 64-bit instruction flag is clear): Apple silicon cannot run 32-bit ARM code, and this repository runs a game's own AArch64 code, so it cannot be ported"
+ },
+ {
+  "id": "keys.missing",
+  "kind": "keys",
+  "source": "scripts/build_ipa_from_nsp.py",
+  "fragment": "no such file: {keys}",
+  "text": "[RED] no such file: /Volumes/Keys/prod.keys"
+ },
+ {
+  "id": "games.several",
+  "kind": "severalGames",
+  "source": "scripts/build_ipa_from_nsp.py",
+  "fragment": "more than one game in the folder",
+  "text": "[RED] more than one game in the folder: 0100000000010000, 01006F8002326000; keep one game per folder, or name the one to pack with --title-id / TITLE_ID (a cartridge dump that holds two games)"
+ },
+ {
+  "id": "games.noTitleID",
+  "kind": "noTitleID",
+  "source": "scripts/build_ipa_from_nsp.py",
+  "fragment": "no game package with a readable content meta in",
+  "text": "[RED] no game package with a readable content meta in /Users/x/Games/Zelda",
+  "folder": "/Users/x/Games/Zelda"
+ },
+ {
+  "id": "keys.old",
+  "kind": "keysOld",
+  "source": "dm/tools/nx_extract/Program.cs",
+  "fragment": "the keys are older than the game",
+  "text": "[RED] Game [0100000000010000][v0].nsp: prod.keys has no master_key_13 (master key 13, which came with firmware 19.0.0): the keys are older than the game; dump prod.keys again from a console on firmware 19.0.0 or later"
+ },
+ {
+  "id": "disk.low",
+  "kind": "diskFull",
+  "source": "scripts/build_ipa_from_nsp.py",
+  "fragment": "GB free on the volume of {work}",
+  "text": "[RED] less than 40 GB free on the volume of /Volumes/NX/Zelda/0100F2C0115B6000_build",
+  "gb": "40"
+ },
+ {
+  "id": "disk.full",
+  "kind": "diskFull",
+  "source": "errno",
+  "fragment": "No space left on device",
+  "text": "[RED] OSError: [Errno 28] No space left on device"
+ },
+ {
+  "id": "pso.low",
+  "kind": "psoDiskFull",
+  "source": "dm/gfx/tools/pso_offline.py",
+  "fragment": "metal-tt needs about {need / 2**30:.0f} GB",
+  "text": "[RED] pso_offline: 0.4 GB free on the volume of /Volumes/Games/0100F2C0115B6000_build/pso/work, metal-tt needs about 3 GB for 33858 bases: free some space and run again",
+  "gb": "3"
+ },
+ {
+  "id": "pso.merge",
+  "kind": "psoDiskFull",
+  "source": "dm/gfx/tools/pso_offline.py",
+  "fragment": "GB free before merging; need at least",
+  "text": "[RED] pso_offline: 0.7 GB free before merging; need at least 2.5 GB",
+  "gb": "2.5"
+ },
+ {
+  "id": "pso.failed",
+  "kind": "psoDiskFull",
+  "source": "dm/gfx/tools/pso_offline.py",
+  "fragment": "when it failed: likely out of disk space",
+  "text": "[RED] pso_offline: metal-tt failed for applegpu_g18p (exit 1) (0.3 GB free on the volume of /Volumes/Games/0100F2C0115B6000_build/pso/work when it failed: likely out of disk space): compiler output\n[RED] pso_offline exit code 1"
+ },
+ {
+  "id": "icloud.detritus",
+  "kind": "cloudFolder",
+  "source": "codesign",
+  "fragment": "resource fork, Finder information, or similar detritus not allowed",
+  "text": "CodeSign /Users/x/Library/Mobile\\ Documents/com~apple~CloudDocs/Downloads/0100152000022000_build/xcode-derived-data/Build/Products/Release-iphoneos/DmIOS.app (in target 'DmIOS' from project 'DmIOS')\n/Users/x/Library/Mobile Documents/com~apple~CloudDocs/Downloads/0100152000022000_build/xcode-derived-data/Build/Products/Release-iphoneos/DmIOS.app: resource fork, Finder information, or similar detritus not allowed\nCommand CodeSign failed with a nonzero exit code"
+ },
+ {
+  "id": "profile.stale",
+  "kind": "staleProfile",
+  "source": "scripts/build_ipa_from_nsp.py",
+  "fragment": "cached provisional profile describes",
+  "text": "[RED] cached provisional profile describes v0, but inputs select v983040. Preserving the existing profile at /Volumes/Games/0100BEE017FC0000_build/profile. Use --profile-out with a new empty folder to survey this update, or explicitly select an available registered version with --package. Refusing to silently pack an older version",
+  "folder": "/Volumes/Games/0100BEE017FC0000_build/profile"
+ },
+ {
+  "id": "volume.swap",
+  "kind": "volumeFormat",
+  "source": "errno45",
+  "fragment": "Operation not supported",
+  "text": "Traceback (most recent call last):\n  File \"/Users/x/nxnative/engine/dm/mac/pack_app.py\", line 223, in replace_app\n    err = ctypes.get_errno(); raise OSError(err, os.strerror(err), str(out))\nOSError: [Errno 45] Operation not supported: '/Volumes/Games HFS/0100F2C0115B6000.app'"
+ }
+]

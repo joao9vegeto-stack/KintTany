@@ -1,0 +1,99 @@
+import XCTest
+import SwiftUI
+@testable import NX2Apple
+@testable import NXCore
+import NXModel
+@testable import NXLauncher
+
+/// When a build notification is posted and what it says (issue #64). Nothing here touches the notification center.
+@MainActor final class BuildNotificationsTests: IsolatedDefaultsTestCase {
+    private func en(_ key: String) -> String { L10n.string(key, .en) }
+
+    func testOnlyAFinishedOrFailedBuildIsNotified() {
+        // The owner's rc8 report: a build that finishes in the foreground must announce itself too.
+        XCTAssertFalse(BuildNotice.shouldNotify(.stopped, enabled: true, appActive: true, hasBundleID: true), "a stop is silent")
+        XCTAssertTrue(BuildNotice.shouldNotify(.finished, enabled: true, appActive: true, hasBundleID: true), "success announces in the foreground")
+        XCTAssertTrue(BuildNotice.shouldNotify(.finished, enabled: true, appActive: false, hasBundleID: true), "success announces in the background")
+        XCTAssertFalse(BuildNotice.shouldNotify(.finished, enabled: false, appActive: false, hasBundleID: true), "disabled stays quiet")
+        XCTAssertFalse(BuildNotice.shouldNotify(.finished, enabled: true, appActive: false, hasBundleID: false), "no bundle ID stays quiet")
+    }
+    func testNotificationsAreOnUntilSwitchedOff() {
+        let saved = UserDefaults.standard.object(forKey: BuildNotice.defaultsKey)
+        defer { UserDefaults.standard.set(saved, forKey: BuildNotice.defaultsKey) }
+        UserDefaults.standard.removeObject(forKey: BuildNotice.defaultsKey)
+        XCTAssertTrue(BuildNotice.enabled)
+        UserDefaults.standard.set(false, forKey: BuildNotice.defaultsKey)
+        XCTAssertFalse(BuildNotice.enabled)
+    }
+
+    func testTheTextNamesTheGameAndTheTarget() {
+        let mac = BuildNotice.text(.finished, game: "Metroid Dread", target: "mac-app", device: nil, en)
+        XCTAssertEqual(mac.title, "Metroid Dread is built")
+        XCTAssertEqual(mac.body, "For this Mac, in your library")
+        XCTAssertEqual(BuildNotice.text(.finished, game: "Hades", target: "ios", device: nil, en).body, "For iOS")
+        XCTAssertEqual(BuildNotice.text(.finished, game: "Hades", target: "ios", device: "Jo’s iPhone", en).body, "Installed on Jo’s iPhone")
+        let failed = BuildNotice.text(.failed(reason: "Extract · exit code 3"), game: "Hades", target: "ios", device: nil, en)
+        XCTAssertEqual(failed.title, "Hades couldn’t be built")
+        XCTAssertEqual(failed.body, "For iOS\nExtract · exit code 3")
+        let zh = BuildNotice.text(.failed(reason: ""), game: "Hades", target: "mac-app", device: nil) { L10n.string($0, .zh) }
+        XCTAssertTrue(zh.title.contains("Hades") && !zh.title.contains("notify.") && !zh.body.contains("notify."), zh.title)
+    }
+
+    func testAFailedBuildEndsWithAFailureNotice() {
+        var failed = Stage(id: 2, name: "Mac shaders")
+        failed.state = .failed
+        failed.detail = "exit code 1"
+        // `done` stays false for a failure: the note or a failed stage tells it
+        XCTAssertEqual(BuildNotice.ended(stopped: false, running: false, done: false, note: "nxb: error", stages: []), .failed(reason: "nxb: error"))
+        XCTAssertEqual(BuildNotice.ended(stopped: false, running: false, done: false, note: "", stages: [failed]), .failed(reason: "Mac shaders · exit code 1"))
+        XCTAssertEqual(BuildNotice.ended(stopped: false, running: false, done: true, note: "Mac app ready", stages: []), .finished)
+        XCTAssertEqual(BuildNotice.ended(stopped: true, running: false, done: false, note: "Stopped", stages: []), .stopped)
+    }
+
+    func testNothingHasEndedWhileTheChainGoesOn() {
+        let done = Stage(id: 1, name: "Extract", state: .done)
+        XCTAssertNil(BuildNotice.ended(stopped: false, running: true, done: false, note: "", stages: [done]), "still running")
+        XCTAssertNil(BuildNotice.ended(stopped: false, running: true, done: true, note: "", stages: [done]), "the Mac target sets done before running goes false")
+        XCTAssertNil(BuildNotice.ended(stopped: false, running: false, done: false, note: "", stages: [done]), "the iPhone chain between its script and the install")
+    }
+
+    func testTheFailureReasonIsTheBuildsOwnLastWord() {
+        var stage = Stage(id: 3, name: "Extract")
+        stage.state = .failed
+        stage.detail = "exit code 3"
+        XCTAssertEqual(BuildNotice.failureReason(note: "", stages: [Stage(id: 1, name: "Survey", state: .done), stage]), "Extract · exit code 3")
+        XCTAssertEqual(BuildNotice.failureReason(note: "Build failed: no Program NCA", stages: [stage]), "Build failed: no Program NCA")
+        XCTAssertEqual(BuildNotice.failureReason(note: "", stages: []), "")
+        // A script stage keeps its English name; the notice names it in the launcher's language (#1115)
+        var check = Stage(id: 4, name: "check v655360 files")
+        check.state = .failed
+        XCTAssertEqual(BuildNotice.failureReason(note: "", stages: [check]) { L10n.string($0, .zh) }, "检查 v655360 文件")
+    }
+
+    // MARK: Visual QA (matched by --filter testRenderLauncherForVisualQA)
+
+    @MainActor func testRenderLauncherForVisualQANotificationSetting() throws {
+        guard let directory = ProcessInfo.processInfo.environment["NX_LAUNCHER_CAPTURE_DIR"] else { throw XCTSkip("Set NX_LAUNCHER_CAPTURE_DIR to capture native views") }
+        let output = URL(fileURLWithPath: directory)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        NSApplication.shared.setActivationPolicy(.accessory)
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("nxnative-notify-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let modelStores = LauncherStores(defaults: testDefaults); let model = modelStores.build
+        model.lang = CaptureLanguage.current(.en)
+        MainActor.assumeIsolated { modelStores.dependencies.checked = true }
+        MainActor.assumeIsolated { modelStores.dependencies.deps = [Dep(id: "test", name: "Xcode", hint: "", present: true, installCmd: [])] }
+        let library = GameLibrary(file: temporary.appendingPathComponent("preview.json"))
+        let host = NSHostingView(rootView: LauncherView(stores: modelStores, library: library, initialPage: .settings, performStartupChecks: false))
+        let window = OffscreenWindow(size: NSSize(width: 1440, height: 1500), styleMask: [.titled, .closable, .resizable])
+        window.contentView = host
+        window.orderFront(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        host.layoutSubtreeIfNeeded()
+        let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+        try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent("settings-notify.png"))
+        window.orderOut(nil)
+    }
+}

@@ -1,0 +1,256 @@
+import Foundation
+
+/// What the shell app's real launcher applies to start one game's engine: the environment (set with overwrite, before
+/// the engine reads anything), the `dm_main` arguments and the framework to load. Computed from a `LaunchableGame` and
+/// the app's locations, mirroring `boot_env()` in `dm/ios/Sources/main.m` and the table in `docs/launcher-c-plan.md`
+/// ("Environment at game start"). Pure: the only side effect is `createFolders()`, called explicitly.
+public struct EngineLaunchPlan: Equatable, Sendable {
+    /// Set with overwrite, before the engine reads anything.
+    public var environment: [String: String]
+    /// `dm_main` argv: `["dmhost", "<framework>/dm", <manifest modules...>]`.
+    public var arguments: [String]
+    /// `<framework>/<manifest.framework_executable>`.
+    public var frameworkExecutable: URL
+    /// `manifest.image_marker`: the symbol or section that tells the loader which image is the game's.
+    public var imageMarker: String
+    /// `Documents/log.txt`, the engine log the per-game app also writes.
+    public var logURL: URL
+    /// `Documents`.
+    public var workingDirectory: URL
+    /// The save and temp folders.
+    public var foldersToCreate: [URL]
+    /// `Documents/games/<title ID>/`: where per-game `save/`, `temp/`, and `env.txt` live.
+    public var gameDirectory: URL
+    /// Display title for generating a readable `env.txt` header when missing.
+    public var gameTitle: String
+
+    public init(environment: [String: String], arguments: [String], frameworkExecutable: URL, imageMarker: String,
+                logURL: URL, workingDirectory: URL, foldersToCreate: [URL],
+                gameDirectory: URL? = nil, gameTitle: String = "") {
+        self.environment = environment
+        self.arguments = arguments
+        self.frameworkExecutable = frameworkExecutable
+        self.imageMarker = imageMarker
+        self.logURL = logURL
+        self.workingDirectory = workingDirectory
+        self.foldersToCreate = foldersToCreate
+        self.gameDirectory = gameDirectory ?? foldersToCreate.first?.deletingLastPathComponent() ?? workingDirectory
+        self.gameTitle = gameTitle
+    }
+
+    /// `envFileText` is the shared `Documents/env.txt`. `gameEnvFileText` is the game's own `Documents/games/<title ID>/env.txt`
+    /// (#557), read from `game.appFolder` when it is nil. A key in the game's file wins over the shared file, and the launch
+    /// environment (the player's settings, the paths above) wins over both. The game's own `mods/` folder sets
+    /// `DM_ROMFS_OVERLAY` (`GameMods`) when the game's env file does not, and it wins over the shared file. The order is: launch
+    /// environment, game env.txt, shell defaults, game mods folder, shared env.txt, framework dm/env.txt.
+    /// The framework file carries build-time defaults such as CPU BC decoding for older GPUs (#719). Automatic `DM_PSO_BUNDLE`
+    /// discovery is a fallback after all env files, so an explicit archive path or `off` can override it.
+    public static func make(game: LaunchableGame, appResources: URL, documents: URL, envFileText: String?, gameEnvFileText: String? = nil,
+                            fileManager fm: FileManager = .default) -> EngineLaunchPlan {
+        let manifest = game.manifest, fw = game.frameworkURL, gdir = game.appFolder
+        func isDirectory(_ url: URL) -> Bool {
+            var isDir: ObjCBool = false
+            return fm.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
+        }
+        var env: [String: String] = [:]
+
+        let perGameProfile = gdir.appendingPathComponent("profile.tsv")
+        env["DM_PROFILE"] = (fm.fileExists(atPath: perGameProfile.path) ? perGameProfile : fw.appendingPathComponent(manifest.profile)).path
+        if let romfs = game.romfsURL ?? DataLocator.romfs(in: game.dataURL, manifest: manifest, fm)?.romfs {
+            env["DM_ROMFS"] = romfs.path
+        }
+        let save = gdir.appendingPathComponent("save", isDirectory: true), temp = gdir.appendingPathComponent("temp", isDirectory: true)
+        env["DM_SAVE"] = save.path
+        env["DM_TEMP"] = temp.path
+        env["DM_NVN_SHMAP"] = fw.appendingPathComponent(manifest.shaderMap).path
+        func isUsableOverrideDirectory(_ url: URL) -> Bool {
+            guard ExternalShaders.isUsableOverride(at: url, fileManager: fm) else { return false }
+            // An empty folder is accepted as a player test override (EngineLaunchPlanTests:58).
+            let entries = (try? fm.contentsOfDirectory(atPath: url.path))?
+                .filter { !ExternalShaders.isIncompleteEntry($0) && !$0.hasPrefix(".") } ?? []
+            if entries.isEmpty { return true }
+            // If the folder is non-empty, ensure it matches the game's expected chain or graphics API.
+            let expectedChain = manifest.chain
+            let explicitAPI = manifest.gfxAPI.flatMap { $0.isEmpty ? nil : $0 }
+            let expectedAPI: String?
+            if let explicitAPI {
+                expectedAPI = explicitAPI
+            } else if expectedChain.hasPrefix("b-") {
+                expectedAPI = "nvn"
+            } else {
+                expectedAPI = nil
+            }
+            func matchesChainOrAPI(in root: URL) -> Bool {
+                switch expectedAPI {
+                case "vulkan":
+                    return ExternalShaders.hasCompleteTree(at: root.appendingPathComponent("vk", isDirectory: true), fileManager: fm)
+                case "gl":
+                    return ExternalShaders.hasCompleteTree(at: root.appendingPathComponent("gl", isDirectory: true), fileManager: fm)
+                default:
+                    if !expectedChain.isEmpty {
+                        let chainDir = root.appendingPathComponent(expectedChain, isDirectory: true)
+                        let chainImg = root.appendingPathComponent(expectedChain + ".img")
+                        if ExternalShaders.hasCompleteTree(at: chainDir, fileManager: fm) || fm.fileExists(atPath: chainImg.path) {
+                            return true
+                        }
+                        if explicitAPI == nil {
+                            if ExternalShaders.hasCompleteTree(at: root.appendingPathComponent("vk", isDirectory: true), fileManager: fm)
+                                || ExternalShaders.hasCompleteTree(at: root.appendingPathComponent("gl", isDirectory: true), fileManager: fm) {
+                                return true
+                            }
+                        }
+                        return false
+                    }
+                    return true
+                }
+            }
+            if matchesChainOrAPI(in: url) { return true }
+            for name in entries where name.count >= 2 && name.hasPrefix("p") && name.dropFirst().allSatisfy({ $0.isASCII && $0.isNumber }) {
+                let progRoot = url.appendingPathComponent(name, isDirectory: true)
+                if matchesChainOrAPI(in: progRoot) { return true }
+            }
+            return false
+        }
+
+        let ownMSL = gdir.appendingPathComponent("msl", isDirectory: true)
+        let dataMSL = game.dataURL.appendingPathComponent("msl", isDirectory: true)
+        let fwMSL = fw.appendingPathComponent("msl", isDirectory: true)
+        let resolvedMSL: URL?
+        if game.usesEmbeddedShaderTrailer {
+            resolvedMSL = nil
+        } else if isUsableOverrideDirectory(ownMSL) {
+            resolvedMSL = ownMSL
+        } else if isUsableOverrideDirectory(dataMSL) {
+            resolvedMSL = dataMSL
+        } else if let shaderURL = game.shaderResourcesURL {
+            resolvedMSL = shaderURL
+        } else if isDirectory(fwMSL) {
+            resolvedMSL = fwMSL
+        } else {
+            resolvedMSL = fwMSL
+        }
+        if let resolvedMSL {
+            env["DM_MSL_DIR"] = resolvedMSL.path
+        }
+        let ownPSO = gdir.appendingPathComponent("pso", isDirectory: true), fwPSO = fw.appendingPathComponent("pso", isDirectory: true)
+        let dataAOC = game.dataURL.appendingPathComponent("aoc", isDirectory: true), ownAOC = gdir.appendingPathComponent("aoc", isDirectory: true)
+        if isDirectory(dataAOC) { env["DM_AOC_DIR"] = dataAOC.path } else if isDirectory(ownAOC) { env["DM_AOC_DIR"] = ownAOC.path }
+        env["DM_CHEATS"] = gdir.appendingPathComponent("cheats", isDirectory: true).path
+        env["DM_FONT_DIR"] = appResources.appendingPathComponent("dm/font", isDirectory: true).path
+        if let cloud = game.cloudSavesURL { env["DM_SAVE_SYNC"] = cloud.path }
+        // The shell already showed its own settings, the per-game launcher screen stays out of the way.
+        env["DM_LAUNCHER"] = "0"
+        for (key, value) in game.environment where !game.shellFallbackKeys.contains(key) { env[key] = value }
+
+        var fromFile: [String] = []
+        let ownText = gameEnvFileText ?? fm.contents(atPath: gdir.appendingPathComponent("env.txt").path).flatMap { String(data: $0, encoding: .utf8) }
+        func apply(_ text: String?) {
+            for (key, value) in parseEnvFile(text ?? "") where env[key] == nil {
+                env[key] = value
+                fromFile.append(key)
+            }
+        }
+        apply(ownText)
+        for key in game.shellFallbackKeys where env[key] == nil {
+            if let value = game.environment[key] { env[key] = value }
+        }
+        for (key, value) in game.shellEnvironment where env[key] == nil { env[key] = value }
+        if env["DM_ROMFS_OVERLAY"] == nil,
+           let overlay = GameMods.overlay(in: gdir.appendingPathComponent("mods", isDirectory: true), titleID: game.titleID, fm) {
+            env["DM_ROMFS_OVERLAY"] = overlay
+        }
+        apply(envFileText)
+        apply(fm.contents(atPath: fw.appendingPathComponent("dm/env.txt").path).flatMap { String(data: $0, encoding: .utf8) })
+        env["DM_ENV_FILE_KEYS"] = fromFile.joined(separator: " ")
+        if env["DM_PSO_BUNDLE"] == nil {
+            if isDirectory(ownPSO) { env["DM_PSO_BUNDLE"] = ownPSO.path } else if isDirectory(fwPSO) { env["DM_PSO_BUNDLE"] = fwPSO.path }
+        }
+
+        return EngineLaunchPlan(
+            environment: env,
+            arguments: ["dmhost", fw.appendingPathComponent("dm", isDirectory: true).path] + manifest.modules,
+            frameworkExecutable: fw.appendingPathComponent(manifest.frameworkExecutable),
+            imageMarker: manifest.imageMarker,
+            logURL: documents.appendingPathComponent("log.txt"),
+            workingDirectory: documents,
+            foldersToCreate: [save, temp],
+            gameDirectory: gdir,
+            gameTitle: game.name)
+    }
+
+    /// Readable per-game `env.txt` template with every setting commented out by default so in-app settings remain unlocked.
+    public static func defaultGameEnvTemplate(title: String, titleID: String) -> String {
+        let safeTitle = title
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeID = titleID
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let headerTitle = safeTitle.isEmpty ? safeID : "\(safeTitle) (\(safeID))"
+        return [
+            "# NX2Apple per-game environment overrides for \(headerTitle)",
+            "# Remove the leading \"# \" on a line to override the in-app setting.",
+            "# Keys set here win over the shared Documents/env.txt and the UI controls.",
+            "#",
+            "# Language code (default: en-US)",
+            "# DM_LANG=en-US",
+            "#",
+            "# Frame-rate counter on screen (0 = off, 1 = on)",
+            "# DM_SHOW_FPS=0",
+            "#",
+            "# Apple Metal performance HUD (0 = off, 1 = on)",
+            "# DM_METAL_HUD=0",
+            "#",
+            "# Frame-rate cap (0 = game's own limit, 30, 60, 120)",
+            "# DM_FPS_TARGET=60",
+            "#",
+            "# Operation mode (0 = handheld, 1 = console)",
+            "# DM_OPMODE=0",
+            "#",
+            "# Picture fit in landscape (fit or fill)",
+            "# DM_PICTURE_FIT=fit",
+            "#",
+            "# Spatial upscaling for scaled pictures (off or metalfx)",
+            "# DM_PRESENT_UPSCALE=off",
+            "#",
+            "# Fixed 3D render scale factor (0.5 to 1.0)",
+            "# DM_RENDER_SCALE=1.0",
+            "#",
+            "# Audio mix mode (0 = exclusive, 1 = mix with other apps)",
+            "# DM_AUDIO_MIX=0",
+            "#",
+            "# Controller rumble (0 = off, 1 = on)",
+            "# DM_RUMBLE=1",
+            ""
+        ].joined(separator: "\n")
+    }
+
+    /// Creates the save and temp folders (and their parents) when they are missing, and seeds a commented per-game `env.txt`
+    /// only if one does not already exist. The temp folder is kept out of the backup, the save folder stays in it (`BackupExclusion`, #618).
+    public func createFolders(fileManager fm: FileManager = .default) throws {
+        for url in foldersToCreate {
+            try fm.createDirectory(at: url, withIntermediateDirectories: true)
+            if !GameDeletion.isSave(url.lastPathComponent) { BackupExclusion.exclude(url) }
+        }
+        try fm.createDirectory(at: gameDirectory, withIntermediateDirectories: true)
+        let envURL = gameDirectory.appendingPathComponent("env.txt")
+        if !fm.fileExists(atPath: envURL.path) {
+            let template = Self.defaultGameEnvTemplate(title: gameTitle, titleID: gameDirectory.lastPathComponent)
+            try Data(template.utf8).write(to: envURL, options: .atomic)
+        }
+    }
+
+    /// `KEY=VALUE` lines in order: `#` starts a comment line, blank lines and lines without `=` or with an empty key
+    /// are skipped, whitespace around a line is trimmed (as `boot_env` reads `env.txt`).
+    public static func parseEnvFile(_ text: String) -> [(key: String, value: String)] {
+        var result: [(key: String, value: String)] = []
+        for raw in text.components(separatedBy: .newlines) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty, !line.hasPrefix("#"), let eq = line.firstIndex(of: "="), eq != line.startIndex else { continue }
+            result.append((key: String(line[..<eq]), value: String(line[line.index(after: eq)...])))
+        }
+        return result
+    }
+}

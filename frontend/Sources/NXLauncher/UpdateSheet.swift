@@ -1,0 +1,203 @@
+import SwiftUI
+import NXCore
+import NXModel
+import NXLauncher
+
+/// "A new version is out", with what it changes, shown when the app opens or Check for updates finds
+/// one. The app already had the update machinery (AppUpdateStore.checkForUpdate / performUpdate); what it lacked
+/// was a reason to press the button: the status line said a tag name and nothing else, and a user who
+/// was working fine had no way to tell whether the new version mattered to them.
+///
+/// The notes come from the release body, which this project writes in both languages (see
+/// docs/RELEASE-NOTES-GUIDE.md). The sheet does not try to translate them; it shows the lines that
+/// match the interface language and falls back to the whole body when it cannot tell them apart.
+/// ReleaseNotes turns them into blocks with links, and this file only styles those.
+package struct UpdateSheet: View {
+    @ObservedObject var updates: AppUpdateStore
+    /// The store of the running build: the open sheet follows it, so the button is back when the build ends.
+    @ObservedObject private var build: BuildStore
+    @EnvironmentObject private var pad: PadFocus
+    @StateObject private var scroll = LauncherScrollPosition()
+    @EnvironmentObject var loc: Localizer
+    @Environment(\.dismiss) private var dismiss
+
+    package init(updates: AppUpdateStore, build: BuildStore) {
+        self.updates = updates
+        self.build = build
+    }
+
+    /// The orange line above the buttons: a refusal the store reported, or else the reason the main button is off
+    /// while a build runs.
+    static func note(blocked: String?, buildRunning: Bool, waitForBuild: String) -> String? {
+        blocked ?? (buildRunning ? waitForBuild : nil)
+    }
+
+    private var update: AppUpdate.Release? { updates.update }
+
+    package var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(loc.t("update.title"))
+                    .font(.manrope(24, .heavy)).tracking(-0.5)
+                Text(String(format: loc.t("update.fromTo"), updates.version, update?.tag ?? ""))
+                    .font(.manrope(13)).foregroundStyle(LauncherPalette.secondaryText)
+            }
+            .padding(.horizontal, 28).padding(.top, 26).padding(.bottom, 18)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let notes = update?.notes, !notes.isEmpty {
+                        let blocks = ReleaseNotes.blocks(from: ReleaseNotes.markdown(notes, for: loc.lang))
+                        ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
+                            blockView(block, first: index == 0)
+                        }
+                    } else {
+                        Text(loc.t("update.noNotes")).font(.manrope(13)).foregroundStyle(LauncherPalette.secondaryText)
+                    }
+                }
+                .padding(.horizontal, 28).padding(.bottom, 20)
+                .background(LauncherScrollProbe(scroll: scroll))
+            }
+            .frame(maxHeight: 340)
+            .focusable()
+            .padTarget("update.notes", scope: "update", radius: 0, vertical: scroll.move)
+
+            if let blocked = Self.note(blocked: updates.blocked, buildRunning: build.running, waitForBuild: loc.t("app.waitForBuild")) {
+                Text(blocked).font(.manrope(12.5))
+                    .foregroundStyle(updates.blocked != nil ? LauncherPalette.building : LauncherPalette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 28).padding(.bottom, 12)
+            }
+            Divider().opacity(0.3)
+            HStack(spacing: 12) {
+                if let u = update {
+                    Link(loc.t("update.openPage"), destination: URL(string: "https://github.com/LNPANDY/NX2Apple/releases/tag/\(u.tag)")!)
+                        .font(.manrope(12.5))
+                        .padTarget("update.page", scope: "update", radius: 0) {
+                            if let url = URL(string: "https://github.com/LNPANDY/NX2Apple/releases/tag/\(u.tag)") { NSWorkspace.shared.open(url) }
+                        }
+                }
+                Spacer(minLength: 8)
+                Button(loc.t("update.later")) { dismiss() }
+                    .buttonStyle(LauncherSecondaryButtonStyle())
+                    .keyboardShortcut(.cancelAction)
+                    .padTarget("update.cancel", scope: "update") { dismiss() }
+                Button {
+                    install()
+                } label: {
+                    updateButtonLabel
+                }
+                .buttonStyle(.plain)
+                .disabled((updates.busy && updates.downloadProgress == nil) || build.running)
+                .allowsHitTesting(!updates.busy && !build.running)
+                .accessibilityValue(updates.downloadProgress.map { "\(Int((min(max($0, 0), 1) * 100).rounded()))%" } ?? "")
+                .keyboardShortcut(.defaultAction)
+                .padTarget("update.install", scope: "update", focusColor: LauncherPalette.onCream, enabled: !updates.busy && !build.running, activate: install)
+            }
+            .padding(.horizontal, 28).padding(.vertical, 16)
+        }
+        .padScope("update", pad)
+        .frame(width: 560)
+        .background(LauncherPalette.background)
+        .launcherAppearance()
+        .tint(LauncherPalette.accent)
+    }
+
+    private func install() {
+        guard !updates.busy, !build.running else { return }
+        if updates.staged != nil { if updates.install(relaunch: true) { dismiss() } } else { updates.performUpdate() }
+    }
+
+    @ViewBuilder private var updateButtonLabel: some View {
+        let baseTitle = loc.t(updates.staged != nil ? "app.restartNow" : "update.now")
+        if let progress = updates.downloadProgress {
+            let clamped = min(max(progress, 0), 1)
+            let pct = "\(Int((clamped * 100).rounded()))%"
+            let sizing = ZStack {
+                Text(baseTitle).font(.manrope(13.5, .bold))
+                Text("100%").font(.manrope(13.5, .bold)).monospacedDigit()
+            }
+            .opacity(0)
+            .padding(.horizontal, 20).padding(.vertical, 9)
+
+            sizing
+                .overlay {
+                    GeometryReader { geo in
+                        let filledWidth = geo.size.width * clamped
+                        ZStack {
+                            Capsule().fill(LauncherPalette.ink(0.08))
+                            Text(pct)
+                                .font(.manrope(13.5, .bold)).monospacedDigit()
+                                .foregroundStyle(LauncherPalette.text)
+                            ZStack {
+                                Capsule().fill(LauncherPalette.cream)
+                                Text(pct)
+                                    .font(.manrope(13.5, .bold)).monospacedDigit()
+                                    .foregroundStyle(LauncherPalette.onCream)
+                            }
+                            .frame(width: geo.size.width, height: geo.size.height)
+                            .mask {
+                                HStack(spacing: 0) {
+                                    Rectangle().frame(width: filledWidth)
+                                    Spacer(minLength: 0)
+                                }
+                                .frame(width: geo.size.width, height: geo.size.height)
+                            }
+                        }
+                        .clipShape(Capsule())
+                    }
+                }
+        } else {
+            Text(baseTitle)
+                .font(.manrope(13.5, .bold)).foregroundStyle(LauncherPalette.onCream)
+                .padding(.horizontal, 20).padding(.vertical, 9)
+                .background(LauncherPalette.cream, in: Capsule())
+        }
+    }
+
+    @ViewBuilder private func blockView(_ block: ReleaseNotes.Block, first: Bool) -> some View {
+        switch block {
+        case .heading(let text):
+            Text(Self.styled(text, size: 12.5, weight: .bold))
+                .foregroundStyle(LauncherPalette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, first ? 0 : 14)
+        case .bullet(let text):
+            // A hanging indent: the bullet is its own column, so wrapped lines align with the text.
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("\u{2022}").font(.manrope(13)).foregroundStyle(LauncherPalette.secondaryText).frame(width: 10, alignment: .center)
+                Text(Self.styled(text, size: 13))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.leading, 2)
+        case .paragraph(let text):
+            Text(Self.styled(text, size: 13))
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 3)
+        }
+    }
+
+    /// The launcher's look on a parsed line: Manrope, bold and italic runs, code in the monospaced face on a
+    /// faint background, links in the accent colour. Links open in the default browser (SwiftUI's openURL).
+    static func styled(_ text: AttributedString, size: CGFloat, weight: Font.Weight = .regular) -> AttributedString {
+        var out = text
+        for run in text.runs {
+            let intent = run.inlinePresentationIntent ?? []
+            var font = Font.manrope(size, intent.contains(.stronglyEmphasized) ? .bold : weight)
+            if intent.contains(.emphasized) { font = font.italic() }
+            if intent.contains(.code) {
+                font = .mono(size - 1, intent.contains(.stronglyEmphasized) ? .bold : .regular)
+                out[run.range].backgroundColor = LauncherPalette.ink(0.10)
+            }
+            out[run.range].font = font
+            if run.link != nil {
+                out[run.range].foregroundColor = LauncherPalette.accent
+                out[run.range].underlineStyle = .single
+            }
+        }
+        return out
+    }
+}

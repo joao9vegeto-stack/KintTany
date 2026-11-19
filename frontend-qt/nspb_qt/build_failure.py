@@ -1,0 +1,293 @@
+"""The NSP script's early stops, turned into hints (the SwiftUI app's BuildFailure.swift).
+
+The script prints a `[RED]` line and exits 1 for each stop (a BuildError), and the window used to show the
+last line of the log. The classifier reads the whole log tail: for a damaged NSP the last line is only
+"nx_extract exit code 3" and the message is above it. No Qt in here, so the tests run anywhere.
+
+TABLE is the same table as BuildFailure.swift's (a test compares the two). frontend/Tests/Fixtures/
+build_failures.json holds the script's real message for every row, and a test checks that each fragment is
+still in the engine's script, so a sync that rewords a message fails there.
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+
+ROSETTA = 'rosetta'
+TRANSLATOR = 'translator'
+ZBIC = 'zbic'
+IOS_SDK = 'iosSDK'
+CLT_SELECTED = 'cltSelected'
+OTHER_METAL = 'otherMetal'
+SHADER_REGRESSION = 'shaderRegression'
+DAMAGED_NSP = 'damagedNSP'
+A32_PROGRAM = 'a32Program'
+KEYS = 'keys'
+SEVERAL_GAMES = 'severalGames'
+NO_TITLE_ID = 'noTitleID'
+KEYS_OLD = 'keysOld'
+DISK_FULL = 'diskFull'
+PSO_DISK_FULL = 'psoDiskFull'
+CLOUD_FOLDER = 'cloudFolder'
+VOLUME_FORMAT = 'volumeFormat'
+STALE_PROFILE = 'staleProfile'
+METAL_TOOLCHAIN = 'metalToolchain'
+PROFILE_UPDATE_MISMATCH = 'profileUpdateMismatch'
+APP_ID_LIMIT = 'appIDLimit'
+FREE_APPLE_ID_LIMIT = 'freeAppleIdLimit'
+WIN_PREREQ = 'winPrereq'
+NO_IOS_SHADERS = 'noIOSShaders'
+UNKNOWN = 'unknown'
+
+# (id, kind, regular expression searched in the log)
+TABLE: list[tuple[str, str, str]] = [
+    ('rosetta.intel', ROSETTA, r'is an Intel one running under Rosetta'),
+    ('translator.run', TRANSLATOR, r'the shader translator does not run'),
+    ('translator.start', TRANSLATOR, r'the shader translator does not start'),
+    ('zbic.missing', ZBIC, r'need the zbic package'),
+    ('ios.sdk', IOS_SDK, r'the iOS SDK is not installed'),
+    ('clt.selected', CLT_SELECTED, r'the selected developer folder is the Command Line Tools'),
+    ('metal.other', OTHER_METAL, r'Metal compiler is not the one the shaders were tested with'),
+    ('shaders.regression', SHADER_REGRESSION, r'a change to the translation chain broke them'),
+    ('nsp.damaged', DAMAGED_NSP, r"files fail the NCA's hash check"),
+    ('nup.damaged', DAMAGED_NSP, r'Pack again from a good copy of the game'),
+    ('arm32.program', A32_PROGRAM, r'is a 32-bit ARM program'),
+    ('keys.missing', KEYS, r'(?m)^\[RED\] no such file: '),
+    ('keys.old', KEYS_OLD, r'the keys are older than the game'),
+    ('profile.stale', STALE_PROFILE, r'cached provisional profile describes'),
+    ('games.several', SEVERAL_GAMES, r'more than one game in the folder'),
+    ('games.noTitleID', NO_TITLE_ID, r'no (?:NSP|game package) with a readable (?:title ID|content meta) in '),
+    ('disk.low', DISK_FULL, r'less than [0-9]+ GB free on the volume of '),
+    ('pso.low', PSO_DISK_FULL, r'pso_offline: [0-9.]+ GB free on the volume of [^\n]+, metal-tt needs about [0-9.]+ GB for [0-9]+ bases:'),
+    ('pso.merge', PSO_DISK_FULL, r'pso_offline: [0-9.]+ GB free before merging; need at least [0-9.]+ GB'),
+    ('pso.failed', PSO_DISK_FULL, r'pso_offline: metal-tt failed[^\n]+when it failed: likely out of disk space'),
+    ('disk.full', DISK_FULL, r'No space left on device'),
+    ('icloud.detritus', CLOUD_FOLDER, r'resource fork, Finder information, or similar detritus not allowed'),
+    ('volume.swap', VOLUME_FORMAT, r"\[Errno 45\] Operation not supported: '[^']*\.app'"),
+]
+
+# The script's override for a stop, offered as "Build anyway". The others cannot be built around.
+OVERRIDE_FLAGS = {
+    OTHER_METAL: '--allow-other-metal',
+    SHADER_REGRESSION: '--allow-shader-regressions',
+    DAMAGED_NSP: '--allow-damaged',
+}
+
+KINDS = [ROSETTA, TRANSLATOR, ZBIC, IOS_SDK, CLT_SELECTED, OTHER_METAL, SHADER_REGRESSION, DAMAGED_NSP, A32_PROGRAM,
+         KEYS, SEVERAL_GAMES, NO_TITLE_ID, KEYS_OLD, DISK_FULL, PSO_DISK_FULL, CLOUD_FOLDER, VOLUME_FORMAT, STALE_PROFILE]
+
+# Additional Qt failure classifications for high-frequency Xcode MetalToolchain, update/profile mismatch, and free Apple ID signing limits.
+APP_ID_LIMIT_PATTERN = (
+    r'(?i)(?:maximum App ID limit|(?:create|register) (?:up to|more than) 10 App IDs'
+    r'|10 App IDs[^\n]{0,30}7[- ]day|Reached the maximum number of[^\n]{0,40}App IDs|MaximumAppIDLimitReached'
+    r'|(?:DVTPortal\w*|IDEProvisioning\w*|DVTProvisioning\w*|resultCode)\b[^\n]{0,80}(?<!\d)9120(?!\d)'
+    r'|(?:App ID|bundle identifier|provisioning|development team|Communication with Apple|Apple Developer|register bundle)'
+    r'[^\n]{0,160}(?:\(\s*9120\s*\)|(?:\bcode\b|\berror\b|resultCode)\s*[=:]?\s*9120(?!\d))'
+    r'|(?:\(\s*9120\s*\)|(?:\bcode\b|\berror\b|resultCode)\s*[=:]?\s*9120(?!\d))'
+    r'[^\n]{0,160}(?:App ID|bundle identifier|provisioning|development team|Communication with Apple|Apple))'
+)
+_APP_ID_RESET = re.compile(
+    r'(?i)(?:expires?|frees? up|available(?: again)?|resets?|try again|until)\s+(?:on|after|at)?\s*'
+    r'(\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:\s*(?:UTC|GMT|Z|[+-]\d{2}:?\d{2}))?)?'
+    r'|(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?'
+    r'|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2},?\s+\d{4}'
+    r'(?:\s+(?:at\s+)?\d{1,2}:\d{2}(?:\s*[AP]M)?(?:\s*(?:UTC|GMT))?)?)'
+)
+
+EXTRA_KINDS = [
+    WIN_PREREQ, METAL_TOOLCHAIN, PROFILE_UPDATE_MISMATCH, APP_ID_LIMIT, FREE_APPLE_ID_LIMIT, NO_IOS_SHADERS
+]
+EXTRA_TABLE: list[tuple[str, str, str]] = [
+    (
+        'win.prereq',
+        WIN_PREREQ,
+        r'(?:missing on this PC:|0x[Cc]0000135|STATUS_DLL_NOT_FOUND|(?:vcruntime140(?:_1)?|msvcp140)\.dll|Visual C\+\+ 2015-2022 Redistributable|0x[Cc]000007[Bb]|32-bit/64-bit DLL mismatch|Metal Developer Tools for Windows is too old|no Windows tool for `xcrun -sdk iphoneos (?:metal|metallib)`|spirv-cross(?:\.exe)? is missing|spirv-cross: lock [0-9a-f]+ / actual missing)',
+    ),
+    (
+        'metal.toolchain',
+        METAL_TOOLCHAIN,
+        r'(?:downloadComponent MetalToolchain|missing Metal Toolchain|cannot execute tool [\'"]?metal[\'"]?|the Metal compiler does not run)',
+    ),
+    (
+        'profile.updateMismatch',
+        PROFILE_UPDATE_MISMATCH,
+        r'(?:no NSP for update [^\n]+the game profile needs these versions:|not the versions the profile registers|game profile [^\n]+(?:registers [^\n]+with its update in the folder|has no build for v\d+)|the version to pack \(-p / PACKAGE\) is not in the folder|requested version v?\d+ is not in the input folder)',
+    ),
+    (
+        'signing.appIDLimit',
+        APP_ID_LIMIT,
+        APP_ID_LIMIT_PATTERN,
+    ),
+    (
+        'appleid.freeLimit',
+        FREE_APPLE_ID_LIMIT,
+        r'(?i)(?:maximum number of (?:provisioned iOS devices|installed apps|provisioning profiles|apps for free development profiles)|free developer account[^\n]*3 apps|code -36607)',
+    ),
+    (
+        'shaders.noIOS',
+        NO_IOS_SHADERS,
+        r'(?:no (?:iOS|Mac) shader libraries in |no stamped Mac shader outputs in [^\n]+: dmsh_build\.py did not finish a full build)',
+    ),
+]
+# The Swift app has four more rows that no log line sets (a drive that is gone, a signing team, a device transfer):
+# they belong to the Mac launcher's install on a device and to /Volumes, which this front end does not have.
+# cloudFolder is a row of the table, so it is here, but the check that stops a build before it starts is the Mac launcher's.
+# volumeFormat is a row of the table too: the Mac app step is the Mac launcher's, and so is the check before the build.
+# The engine's online sync has two more (engine.py's ENGINE_OFFLINE and ENGINE_SYNC): no log line of the script sets them either.
+
+_A32_NAME = re.compile(r'^(?:\[RED\] )?(.+?) \([0-9A-Fa-f]{16}\) is a 32-bit ARM program', re.M)
+
+
+@dataclass(frozen=True)
+class Failure:
+    kind: str
+    game: str | None = None   # a32Program: the game, when the message names it
+    detail: str | None = None   # diskFull, psoDiskFull: the GB the script says it needs. noTitleID: the folder it names
+
+    title_ids: tuple[str, ...] = ()   # base games on a cartridge, when the engine offers --title-id
+
+    @property
+    def what_key(self) -> str:
+        return f'fail.{self.kind}.what'
+
+    @property
+    def next_key(self) -> str:
+        return f'fail.{self.kind}.next'
+
+    @property
+    def flag(self) -> str | None:
+        return OVERRIDE_FLAGS.get(self.kind)
+
+
+def _win_prereq_detail(log: str) -> str | None:
+    if re.search(r'0x[Cc]000007[Bb]|32-bit/64-bit DLL mismatch', log):
+        return 'Microsoft Visual C++ 2015-2022 Redistributable (x64, 0xC000007B)'
+    if m := re.search(
+        r'missing ((?:vcruntime140(?:_1)?|msvcp140)\.dll(?:,\s*(?:vcruntime140(?:_1)?|msvcp140)\.dll)*)',
+        log,
+        re.I,
+    ):
+        return f'Microsoft Visual C++ 2015-2022 Redistributable (x64) ({m.group(1)})'
+    if re.search(
+        r'0x[Cc]0000135|STATUS_DLL_NOT_FOUND|(?:vcruntime140(?:_1)?|msvcp140)\.dll|Visual C\+\+ 2015-2022 Redistributable',
+        log,
+    ):
+        return 'Microsoft Visual C++ 2015-2022 Redistributable (x64)'
+    if 'Metal Developer Tools for Windows is too old' in log:
+        return 'Metal Developer Tools 6.2 for Windows'
+    if 'no Windows tool for `xcrun -sdk iphoneos' in log:
+        return 'Metal Developer Tools for Windows (metal.exe / metallib.exe)'
+    if re.search(r'spirv-cross(?:\.exe)? is missing|spirv-cross: lock [0-9a-f]+ / actual missing', log):
+        return 'spirv-cross.exe'
+    if m := re.search(r'missing on this PC:\s*\n((?:[ \t]+[^\n]+\n?)+)', log):
+        names: list[str] = []
+        for raw in m.group(1).splitlines():
+            line = re.sub(r'^[ \t•\-]+', '', raw).strip()
+            if not line or line.startswith('('):
+                continue
+            name = line.split(':', 1)[0].strip()
+            if name and name not in names:
+                names.append(name)
+        if names:
+            return ', '.join(names)
+    return None
+
+
+def _detail(kind: str, log: str) -> str | None:
+    if kind == DISK_FULL:   # "less than 40 GB free on the volume of /Volumes/X/..."
+        m = re.search(r'less than ([0-9]+) GB free', log)
+        return m.group(1) if m else None
+    if kind == PSO_DISK_FULL:
+        m = re.search(r'pso_offline: [^\n]+(?:metal-tt needs about|before merging; need at least) ([0-9.]+) GB', log)
+        return m.group(1) if m else None
+    if kind == STALE_PROFILE:   # "... Preserving the existing profile at /path. Use --profile-out ..."
+        m = re.search(r'Preserving the existing profile at ([^\n]+?)\. (?:Use|Refusing)', log)
+        return m.group(1) if m else None
+    if kind == NO_TITLE_ID:   # "no game package with a readable content meta in /path" (engines before c78d7375: "no NSP with a readable title ID in /path")
+        m = re.search(r'(?m)no (?:NSP|game package) with a readable (?:title ID|content meta) in (.+)$', log)
+        return m.group(1).strip() if m else None
+    if kind == APP_ID_LIMIT:
+        return app_id_limit_reset(log)
+    if kind == WIN_PREREQ:
+        return _win_prereq_detail(log)
+    if kind == NO_IOS_SHADERS:
+        m = re.search(
+            r'(?:no (?:iOS|Mac) shader libraries in [^\n]+?|dmsh_build\.py did not finish a full build)\s+—\s+([^\n]+)',
+            log,
+        )
+        return m.group(1).strip() if m else None
+    return None
+
+
+def app_id_limit_reset(log: str) -> str | None:
+    """Extracts the date when the oldest App ID slot frees up, when the signing log names it."""
+    m = _APP_ID_RESET.search(log)
+    if not m:
+        return None
+    val = m.group(1).strip(' \t\r\n.')
+    return val or None
+
+
+def _selectable_titles(log: str) -> tuple[str, ...]:
+    prefix = '[RED] more than one game in the folder: '
+    line = next((s for s in reversed(log.splitlines()) if s.startswith(prefix)), '')
+    names, _, hint = line.partition(';')
+    if '--title-id' not in hint:
+        return ()
+    ids = tuple(names[len(prefix):].split(', '))
+    if len(ids) < 2 or len(set(ids)) != len(ids) or not all(re.fullmatch(r'[0-9A-F]{13}000', s) for s in ids):
+        return ()
+    return ids
+
+
+def classify(log: str, keys_readable: bool | None = None) -> Failure:
+    """UNKNOWN when no row matches: the caller then keeps showing the last line of the log.
+
+    keys_readable: what the window knows of the keys file (False = gone or unreadable). The script's own line for a missing
+    file is a row of the table, and nx_extract says nothing of its own about a file it cannot read."""
+    for _id, kind, pattern in (*TABLE, *EXTRA_TABLE):
+        if re.search(pattern, log):
+            if kind == SEVERAL_GAMES:
+                return Failure(kind, title_ids=_selectable_titles(log))
+            m = _A32_NAME.search(log) if kind == A32_PROGRAM else None
+            name = m.group(1).strip() if m else None
+            return Failure(kind, None if name in (None, '', '?') else name, _detail(kind, log))
+    if keys_readable is False:
+        return Failure(KEYS)
+    return Failure(UNKNOWN)
+
+
+def arguments(args: list[str], flag: str | None) -> list[str]:
+    """The build arguments with the one-off override added: exactly one `--allow-*`, or none."""
+    rest = [a for a in args if not a.startswith('--allow-')]
+    return rest + [flag] if flag and flag.startswith('--allow-') else rest
+
+
+class OverrideState:
+    """"Build anyway": nothing is armed until the confirmation, and the arm serves one build only."""
+
+    def __init__(self) -> None:
+        self.confirming: Failure | None = None
+        self._armed: str | None = None
+
+    def request(self, failure: Failure | None) -> bool:
+        """Ask for confirmation (the window shows the dialog). False for a stop that has no override."""
+        if failure is None or failure.flag is None:
+            return False
+        self.confirming = failure
+        return True
+
+    def cancel(self) -> None:
+        self.confirming = None
+
+    def confirm(self) -> bool:
+        if self.confirming is None:
+            return False
+        self._armed = self.confirming.flag
+        self.confirming = None
+        return True
+
+    def take(self) -> str | None:
+        """The flag the next build runs with, once."""
+        flag, self._armed = self._armed, None
+        return flag

@@ -1,11 +1,11 @@
-blank_issues_enabled: true
+blank_issues_enabled: false
 contact_links:
-  - name: A graphical app to pack and play games
-    url: https://github.com/LNPANDY/NX2Apple
-    about: NX2Apple, a community project with a Mac app that packs your games, keeps a library and starts them with their settings. Graphical front ends are separate projects; please don't open an issue or PR for a new one here.
-  - name: Building, packing and playing
-    url: https://github.com/seedds/nxnative/blob/main/README.md
-    about: How to pack an IPA or a Mac app, where saves and logs are, and the known issues.
-  - name: Development, porting a game and debugging
-    url: https://github.com/seedds/nxnative/blob/main/docs/development.md
-    about: The internals, the script's options, building by hand, and how to port another game.
+  - name: Questions and ideas
+    url: https://github.com/LNPANDY/NX2Apple/discussions
+    about: Ask how something works in Q&A, or suggest and talk over an idea in Ideas. Bugs stay as issues, with the forms here.
+  - name: A game crashes, freezes, runs slowly or looks wrong (seedds/nxnative)
+    url: https://github.com/seedds/nxnative/issues
+    about: NX2Apple packs and starts games with the nxnative engine. Go there for a game that crashes, freezes, hangs, runs slowly, looks or sounds wrong, or whose controls misbehave once it runs. Also go there for how the engine itself works. Engine fixes and game profiles are submitted there as a pull request, we take no engine patches here.
+  - name: Install and build instructions (README)
+    url: https://github.com/LNPANDY/NX2Apple#readme
+    about: How to install the app, what you need on disk, how to build and install a game, and the games that are known to work.

@@ -1,0 +1,61 @@
+# 参与贡献
+
+提 issue 要附什么、提 pull request 的规则和补丁队列见 [CONTRIBUTING.md](CONTRIBUTING.md)。在终端里手动构建（工具、`prod.keys`、IPA）见 [BUILDING.zh-CN.md](BUILDING.zh-CN.md)。游戏本身出问题（崩溃、卡死、变慢、画面或声音不对、手柄操作异常）请提到 [seedds/nxnative](https://github.com/seedds/nxnative/issues)，不要提在这里。下面是帮忙补充游戏。
+
+## 帮忙补充游戏
+
+每款新游戏都需要单独的 bring-up：profile（build ID、内存布局、纹理槽位）、必要时的 shader 读取器、
+以及补丁点。游戏的 profile 属于引擎代码，引擎在 [seedds/nxnative](https://github.com/seedds/nxnative)。**三种帮忙方式，都有用：**
+
+- **报告一款能跑的游戏** —— 如果你让验证清单之外的游戏跑起来了，开 issue 附上 title ID、更新版本和
+  你做的步骤，它会变成一个别人也能用的 profile。
+- **把新游戏的 profile 或引擎修复提交到 seedds/nxnative。** 我们不再在这里接收 nxnative 引擎的补丁。请直接向 seedds/nxnative 提 pull request，并遵循他们的 [CONTRIBUTING.md](https://github.com/seedds/nxnative/blob/main/CONTRIBUTING.md)。外部人员在 `patches/` 中新增或修改文件的 PR 会被关闭，并附上指向 nxnative 的说明。
+- **提交缺失的着色器** —— 如果游戏能跑但首次使用某个效果时卡顿，说明它的 shader 变体不在映射表里。
+  宿主可以导出找不到的部分（`DM_NVN_SHDUMP=<dir>`）。附上它们，我们把它加进 `shader_map.tsv`，
+  所有人都受益。
+
+## 提 pull request
+
+提 pull request 的基本规则（一个 PR 一项改动、PR 模板、截图，以及引擎的改动要提交到 seedds/nxnative）见[英文版](CONTRIBUTING.md#a-pull-request)。下面是外部贡献者的 PR 如何处理。
+
+### 修复、功能和想法
+
+修复无需事先询问，直接提交即可。
+
+功能可以直接以 pull request 的形式提交。它需要一个描述该想法的 issue，请在维护者第一次回复后的 48 小时内写好。合并前需要一位维护者认可这个想法。如果始终没有人写这个 issue，PR 会被关闭，并附一条说明，之后可以重新打开。PR 不会因为缺少 issue 而在提交时就被关闭。
+
+想在写代码之前先聊聊想法，请用 [Discussions](https://github.com/LNPANDY/NX2Apple/discussions)。
+
+### 你的 PR 会怎样
+
+来自外部的 pull request 不会自动合并。一位维护者会试用 CI 为这个 PR 构建的应用，也就是 Build Mac app 这次运行的 `NX2Apple-macOS-arm64` 构建产物。同一位维护者也会审查代码。谁先看到，谁来决定。
+
+如果维护者不想要某项改动，会尽早说明，解释原因，并关闭该 PR。他们可以保留其中一部分，并把你列为共同作者。
+
+PR 如果等待作者回复满 30 天，会被关闭，并附一条说明，之后可以重新打开。
+
+### PR 何时合并
+
+以下对所有 PR 都适用。来自外部的 PR 还要经过上面的维护者检查，检查之前绝不合并。
+
+每个修复都通过 PR 提交。修复在 CI 通过后合并，不需要批准。
+
+维护者提出的、尚未处理的“要求修改”审查会阻止合并。普通的审查评论不会阻止。推送修复后，提出要求的维护者会再次审查，批准或撤回该要求。每位维护者清除自己的异议。如果两位维护者对某个异议有分歧，由 Andy（[@LNPANDY](https://github.com/LNPANDY)）决定。
+
+维护者（v0lumehi 和 LNPANDY）的功能在 48 小时后合并。来自外部的功能不会靠等待合并，要在维护者认可想法、试用应用并审查代码之后才合并。
+
+维护者的 `patches/` 补丁在合并时取 `main` 上 `patches/series` 的下一个空闲编号。执行合并的人负责重新编号，并在 PR 中注明。来自外部的补丁不再接收。
+
+## 给 AI 代理和其他工具
+
+### 简短、平实的文字
+
+维护者要能在 30 秒内看懂一个 issue 或 PR。你写的每一段正文和评论都适用这条规则。
+
+- 开头写一个不超过三行的摘要：哪里出了问题、为什么、PR 做了什么或 issue 想要什么。读者只看这里也能抓住重点。
+- 一句话只讲一件事，不超过 20 个词。一个段落不超过三句。用列表，不要写成一大段。
+- 用平实的话。不要写你尝试的经过，不要写耗时或机器负载，正文里不要有很长的因果链。
+- 正文控制在 150 词以内。证据放在下面的 `<details><summary>Details</summary> ... </details>` 里：完整的原因分析、日志和堆栈、已运行测试的清单、命令。
+- 没检查或没能运行的内容，只清楚地说一次。
+- PR 不重复它的 issue。链接过去，只补充新的内容。
+

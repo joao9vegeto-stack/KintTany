@@ -1,0 +1,477 @@
+import SwiftUI
+
+/// One game's settings: what it is and its state, then the setting groups, game data, cloud saves and the reset.
+/// The library supplies the scrolling container. Values come in through `detail` and leave through `actions`.
+public struct GameDetailView: View {
+    public let detail: GameDetail
+    public var actions: ShellActions
+    /// Off where the screen shows the primary action already, as beside the library's hero.
+    public var showsPrimaryAction: Bool
+    /// Off where the game's cover and title are already in view, as beside the library's hero.
+    public var showsHeader: Bool
+    /// The parent Form owns scrolling, section backgrounds and separators.
+    public var nativeSections: Bool
+    @Environment(\.shellAskDelete) private var askDelete
+    @Environment(\.shellAskRestoreBackup) private var askRestoreBackup
+    @Environment(\.shellAskHomeScreen) private var askHomeScreen
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var localRestoreBackup = false
+    @State private var localHomeScreen = false
+    public init(detail: GameDetail, actions: ShellActions = ShellActions(), showsPrimaryAction: Bool = true, showsHeader: Bool = true, nativeSections: Bool = false) {
+        self.detail = detail
+        self.actions = actions
+        self.showsPrimaryAction = showsPrimaryAction
+        self.showsHeader = showsHeader
+        self.nativeSections = nativeSections
+    }
+    private var sectionRowIDs: [[String]] {
+        detail.sections.map { $0.rows.map(\.id) }
+    }
+    public var body: some View {
+        Group {
+            if nativeSections { contents } else {
+                VStack(alignment: .leading, spacing: 30) { contents }
+            }
+        }
+        .foregroundStyle(.white)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: sectionRowIDs)
+        .sheet(isPresented: $localRestoreBackup) {
+            if let backup = detail.latestSaveBackup {
+                RestoreSaveBackupView(game: detail.game, backup: backup, restore: {
+                    localRestoreBackup = false
+                    actions.onRestoreSaveBackup(detail.id)
+                }, cancel: {
+                    localRestoreBackup = false
+                })
+                .presentationDetents([.medium])
+                .presentationBackground(ShellPalette.background)
+            }
+        }
+        .sheet(isPresented: $localHomeScreen) {
+            ScrollView {
+                AddToHomeScreenView(
+                    game: detail.game,
+                    supportsFloatingGuide: actions.onAddToHomeScreenWithGuide != nil,
+                    prepareFloatingGuide: { actions.onPrepareHomeScreenGuide?(detail.id) },
+                    cancelPreparedFloatingGuide: { actions.onCancelPreparedHomeScreenGuide?() },
+                    saveAndOpen: { floatingGuide in
+                        if let withGuide = actions.onAddToHomeScreenWithGuide {
+                            return await withGuide(detail.id, floatingGuide)
+                        }
+                        return await actions.onAddToHomeScreen?(detail.id) ?? false
+                    },
+                    copyURL: { actions.onCopyShortcutURL?(detail.id) },
+                    close: { localHomeScreen = false }
+                )
+            }
+            .presentationDetents([.medium, .large])
+            .presentationBackground(ShellPalette.background)
+        }
+    }
+    @ViewBuilder private var contents: some View {
+        if showsHeader || showsPrimaryAction {
+            header.listRowBackground(Color.clear).listRowSeparator(.hidden)
+        }
+        ForEach(detail.sections) { section in
+            group(section.title) {
+                // The button mapping is one row here and opens a card of its own, as a long choice list does.
+                if section.id == PadMappingRows.sectionID {
+                    PadMappingEntryRow(gameID: detail.id, rows: section.rows, targetID: "set.row.padMapping")
+                } else {
+                    ForEach(section.rows) { row in
+                        // Equatable on its row: a change re-renders the changed row only, not every row of the game.
+                        SettingControl(gameID: detail.id, row: row) { actions.onChange(detail.id, row.id, $0) }.equatable()
+                        if row.id != section.rows.last?.id { divider }
+                    }
+                }
+            }
+        }
+        group(ShellStrings.text("Game data")) {
+            SourceRow(symbol: "folder",
+                      title: detail.dataSource.isEmpty ? ShellStrings.text("No data selected") : detail.dataSource,
+                      note: detail.dataNote) {
+                GameSettingsGlassButton(title: ShellStrings.text("Choose…")) { actions.onPickGameData(detail.id) }.accessibilityLabel(ShellStrings.text("Choose game data…"))
+                    .shellTarget("set.data") { actions.onPickGameData(detail.id) }
+                if !detail.dataSource.isEmpty && !detail.dataFromShell {
+                    GameSettingsGlassButton(title: ShellStrings.text("Use app data")) { actions.onUseAppData(detail.id) }.shellTarget("set.appdata") { actions.onUseAppData(detail.id) }
+                }
+            }
+            divider
+            HStack {
+                Image(systemName: "square.stack.3d.up").foregroundStyle(.secondary)
+                Spacer(minLength: 12)
+                Text(detail.dlc.isEmpty ? ShellStrings.text("No additional content") : detail.dlc)
+                    .foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+            }
+            .frame(maxWidth: .infinity, minHeight: 32)
+            .accessibilityElement(children: .combine)
+        }
+        group(ShellStrings.text("Cloud saves")) {
+            SourceRow(symbol: detail.cloudSaves == nil ? "icloud.slash" : "icloud",
+                      title: detail.cloudSaves ?? ShellStrings.text("Off"),
+                      note: detail.cloudNote.isEmpty ? ShellStrings.text("Choose the same iCloud Drive folder you use on your Mac.") : detail.cloudNote) {
+                GameSettingsGlassButton(title: ShellStrings.text("Choose folder…")) { actions.onPickCloudSaves(detail.id) }.shellTarget("set.cloud") { actions.onPickCloudSaves(detail.id) }
+                if detail.cloudCanUseShell {
+                    GameSettingsGlassButton(title: ShellStrings.text("Use Settings folder")) { actions.onUseShellCloud(detail.id) }.shellTarget("set.cloud.shell") { actions.onUseShellCloud(detail.id) }
+                }
+                if detail.cloudSaves != nil {
+                    GameSettingsGlassButton(title: ShellStrings.text("Turn off")) { actions.onDisableCloudSaves(detail.id) }.accessibilityLabel(ShellStrings.text("Turn off cloud saves"))
+                        .shellTarget("set.cloud.off") { actions.onDisableCloudSaves(detail.id) }
+                }
+            }
+            if let backup = detail.latestSaveBackup, !backup.isEmpty {
+                divider
+                GameSettingsGlassButton(title: ShellStrings.text("Restore backup…")) {
+                    requestRestoreBackup(backup)
+                }
+                .accessibilityIdentifier("cloud.restoreBackup")
+                .shellTarget("set.cloud.restore") {
+                    requestRestoreBackup(backup)
+                }
+            }
+        }
+        if !detail.game.version.isEmpty {
+            if nativeSections {
+                Section { versionRow }
+            } else {
+                versionRow
+            }
+        }
+        if askHomeScreen != nil || actions.supportsHomeScreen {
+            if nativeSections {
+                Section { homeScreenButton }
+            } else {
+                homeScreenButton
+            }
+        }
+        VStack(alignment: .leading, spacing: 10) {
+            GameSettingsGlassButton(title: ShellStrings.text("Reset to tested defaults")) { actions.onResetDefaults(detail.id) }
+                .accessibilityIdentifier("set.reset")
+                .disabled(!detail.hasModifiedSettings)
+                .shellTarget("set.reset", enabled: detail.hasModifiedSettings) { actions.onResetDefaults(detail.id) }
+            Text(ShellStrings.text("Brings back the settings this game was tested with."))
+                .shellText(12.5).foregroundStyle(.white.opacity(0.45)).fixedSize(horizontal: false, vertical: true)
+        }
+        if let askDelete {
+            // Last and apart from the rest: the one action here that removes something. It only asks, the question names what goes.
+            VStack(alignment: .leading, spacing: 10) {
+                GameSettingsGlassButton(title: ShellStrings.text("Delete game…"), destructive: true) { askDelete(detail.game) }
+                    .accessibilityIdentifier("set.delete")
+                    .shellTarget("set.delete") { askDelete(detail.game) }
+                Text(ShellStrings.text("Deletes the game’s data on this device. You choose whether its saves go too."))
+                    .shellText(12.5).foregroundStyle(.white.opacity(0.45)).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var versionRow: some View {
+        LabeledContent(ShellStrings.text("Version"), value: detail.game.version)
+            .accessibilityIdentifier("detail.version")
+    }
+
+    private func requestHomeScreen() {
+        if let askHomeScreen {
+            askHomeScreen(detail.game)
+        } else {
+            localHomeScreen = true
+        }
+    }
+
+    private var homeScreenButton: some View {
+        Button(action: requestHomeScreen) {
+            Label(ShellStrings.text("Add to Home Screen…"), systemImage: "plus.square")
+        }
+        .accessibilityIdentifier("set.homeScreen")
+        .shellTarget("set.homeScreen", action: requestHomeScreen)
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if showsHeader {
+            HStack(alignment: .center, spacing: 16) {
+                CoverView(game: detail.game, radius: 8).frame(width: 112, height: 63)
+                VStack(alignment: .leading, spacing: 6) {
+
+                    Text(detail.game.title).shellText(24, .heavy, relativeTo: .title).tracking(-0.6)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityAddTraits(.isHeader).accessibilityIdentifier("detail.title")
+                    AlertStateChip(state: detail.game.state)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if detail.game.isSwitch2 {   // #696: the manifest's console
+                        ConsoleBadge().accessibilityIdentifier("detail.switch2")
+                        Text(ShellStrings.text("A Switch 2 game. It needs a lot of memory and may not start on every device."))
+                            .shellText(12.5).foregroundStyle(.white.opacity(0.62)).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            }
+            if showsPrimaryAction {
+                if !detail.game.state.explanation.isEmpty {
+                    Text(detail.game.state.explanation).shellText(14).foregroundStyle(.white.opacity(0.72))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                GameStateView(game: detail.game, actions: actions, showsExplanation: false)
+            }
+        }
+    }
+
+    @ViewBuilder private var divider: some View {
+        if !nativeSections { Rectangle().fill(.white.opacity(0.06)).frame(height: 1) }
+    }
+
+    @ViewBuilder private func group<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        if nativeSections { Section { content() } header: { Text(title) } }
+        else { SettingsGroup(title: title, content: content) }
+    }
+
+    private func requestRestoreBackup(_ backup: String) {
+        if let askRestoreBackup {
+            askRestoreBackup(detail.game, backup)
+        } else {
+            localRestoreBackup = true
+        }
+    }
+}
+
+/// A titled card of rows, for the game settings and the shell settings alike.
+struct SettingsGroup<Content: View>: View {
+    let title: String
+    private let content: Content
+    init(title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeading(title: title)
+            VStack(alignment: .leading, spacing: 14) { content }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .shellCard()
+        }
+    }
+}
+
+private struct GameSettingsGlassButton: View {
+    let title: String
+    var destructive = false
+    let action: () -> Void
+    var body: some View {
+        Button(role: destructive ? .destructive : nil, action: action) {
+            Text(title).frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.glass)
+        .controlSize(.large)
+        .tint(destructive ? DeleteStyle.red : .white)
+        .foregroundStyle(destructive ? DeleteStyle.red : .white)
+    }
+}
+
+/// Where something comes from (game data, a cloud folder) and the buttons that change it.
+struct SourceRow<Buttons: View>: View {
+    let symbol: String
+    let title: String
+    let note: String
+    @ViewBuilder let buttons: () -> Buttons
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(title).font(.body).fixedSize(horizontal: false, vertical: true)
+                    if !note.isEmpty {
+                        Text(note).font(.subheadline).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            } icon: { Image(systemName: symbol) }
+            .labelStyle(SettingsRowLabelStyle())
+            // The buttons share the card's width in equal parts, or stack full width when their labels do not fit.
+            GlassEffectContainer(spacing: 10) {
+                ViewThatFits(in: .horizontal) {
+                    EqualRow(spacing: 10) { buttons() }
+                    VStack(spacing: 10) { buttons() }
+                }
+            }
+        }
+    }
+}
+
+struct SettingControl: View, Equatable {
+    let gameID: String
+    let row: SettingRow
+    var targetPrefix = "set.row."
+    let change: (String) -> Void
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.gameID == rhs.gameID && lhs.row == rhs.row && lhs.targetPrefix == rhs.targetPrefix
+    }
+    var body: some View {
+        NativeGameSettingControl(row: row, targetPrefix: targetPrefix, change: change)
+    }
+}
+
+/// The Mac's segmented choice, across the whole card: a dim track, equal segments, the chosen value in cream. Each inner
+/// array is one line of segments. A focus target per option, `targetPrefix` plus the option's ID.
+struct SegmentedChoice: View {
+    let label: String
+    let rows: [[SettingOption]]
+    let value: String
+    let targetPrefix: String
+    var enabled = true
+    let change: (String) -> Void
+    @Environment(\.shellIgnoresPress) private var ignoresPress
+    var body: some View {
+        VStack(spacing: 2) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, options in
+                EqualRow(spacing: 2) {
+                    ForEach(options) { option in
+                        let chosen = value == option.id
+                        // The system's echo of a controller button picks nothing (the shell's focus took the button).
+                        Button { if !ignoresPress() { change(option.id) } } label: {
+                            Text(option.label).shellText(13.5, chosen ? .bold : .medium).lineLimit(1)
+                                .padding(.horizontal, 14).frame(maxWidth: .infinity, minHeight: 40)
+                                .foregroundStyle(chosen ? .black : .white.opacity(0.75))
+                                .background(chosen ? ShellPalette.cream : .clear, in: RoundedRectangle(cornerRadius: 8))
+                                .contentShape(RoundedRectangle(cornerRadius: 8))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(label + ", " + option.label)
+                        .accessibilityAddTraits(chosen ? .isSelected : [])
+                        .shellTarget(targetPrefix + option.id, enabled: enabled, radius: 8) { change(option.id) }
+                    }
+                }
+            }
+        }
+        .padding(3)
+        .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 11))
+        .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(.white.opacity(0.08)))
+    }
+}
+
+/// Says that a row shows the shell settings' choice, because the game has none of its own.
+struct FromSettingsMark: View {
+    var body: some View {
+        Text(ShellStrings.text("From Settings")).shellType(ShellType.note).foregroundStyle(ShellPalette.cream.opacity(0.75))
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// Children side by side in equal widths that fill the row. Its ideal width is the widest child times the count, so
+/// a `ViewThatFits` can fall back when the labels would not fit at equal widths.
+struct EqualRow: Layout {
+    var spacing: CGFloat
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let gaps = spacing * CGFloat(max(0, subviews.count - 1))
+        let natural = (sizes.map(\.width).max() ?? 0) * CGFloat(subviews.count) + gaps
+        let width = proposal.width.map { $0.isFinite ? $0 : natural } ?? natural
+        let cell = subviews.isEmpty ? 0 : (width - gaps) / CGFloat(subviews.count)
+        let height = subviews.map { $0.sizeThatFits(ProposedViewSize(width: cell, height: nil)).height }.max() ?? 0
+        return CGSize(width: width, height: height)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard !subviews.isEmpty else { return }
+        let cell = (bounds.width - spacing * CGFloat(subviews.count - 1)) / CGFloat(subviews.count)
+        for (index, subview) in subviews.enumerated() {
+            subview.place(at: CGPoint(x: bounds.minX + CGFloat(index) * (cell + spacing), y: bounds.minY),
+                          proposal: ProposedViewSize(width: cell, height: bounds.height))
+        }
+    }
+}
+
+/// Small choices stay in place: native segments when labels fit, native menus otherwise.
+struct NativeChoiceControl: View {
+    let row: SettingRow
+    var menuOnly = false
+    var inline = false
+    let targetPrefix: String
+    let change: (String) -> Void
+    @Environment(\.shellIgnoresPress) private var ignoresPress
+    @State private var width: CGFloat?
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        if case .choice(let options) = row.kind {
+            let segmented = Self.usesSegmentedControl(
+                options: options,
+                menuOnly: menuOnly,
+                inline: inline,
+                width: width,
+                textScale: ChoicePresentation.textScale(typeSize)
+            )
+            VStack(alignment: .leading, spacing: 8) {
+                if inline {
+                    LabeledContent {
+                        choiceControl(options: options, segmented: segmented)
+                    } label: {
+                        ChangedSettingLabel(row: row)
+                    }
+                } else {
+                    Text(row.label).shellType(ShellType.settingLabel)
+                        .fixedSize(horizontal: false, vertical: true)
+                    choiceControl(options: options, segmented: segmented)
+                }
+                if !row.note.isEmpty {
+                    Text(row.note).shellType(ShellType.note).foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .disabled(!row.enabled)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+            .shellTarget("\(targetPrefix)\(row.id)", enabled: row.enabled) { advance(options) }
+        }
+    }
+
+    @ViewBuilder
+    private func choiceControl(options: [SettingOption], segmented: Bool) -> some View {
+        if segmented {
+            NativeCreamSegmentedControl(
+                options: options,
+                value: row.value,
+                inline: inline,
+                accessibilityLabel: row.label,
+                accessibilityIdentifier: "setting.\(row.id)",
+                change: change
+            )
+        } else {
+            picker(options)
+                .pickerStyle(.menu)
+                .tint(ShellPalette.cream)
+                .accessibilityIdentifier("setting.\(row.id)")
+        }
+    }
+
+    /// Resolves whether to render as segmented control, keeping the first layout pass (`width == nil`) consistent with
+    /// `ChoicePresentation` so inline pickers never flash `.menu` before the geometry pass arrives.
+    nonisolated static func usesSegmentedControl(
+        options: [SettingOption],
+        menuOnly: Bool,
+        inline: Bool,
+        width: CGFloat?,
+        textScale: CGFloat
+    ) -> Bool {
+        guard !menuOnly else { return false }
+        if inline, let width, width * 0.65 < 200 { return false }
+        let availableWidth = inline ? width.map { $0 * 0.65 } : width
+        return ChoicePresentation.resolve(labels: options.map(\.label), width: availableWidth, textScale: textScale) == .segmented
+    }
+
+    private func picker(_ options: [SettingOption]) -> some View {
+        Picker(row.label, selection: Binding(get: { row.value }, set: { if !ignoresPress() { change($0) } })) {
+            ForEach(options) { option in Text(option.label).tag(option.id) }
+        }
+        .labelsHidden()
+        .accessibilityLabel(row.label)
+    }
+
+    /// The whole row is the focus target, whatever the control is (segments, a menu, a long language list): a menu picker did not report a
+    /// frame the focus graph could reach, so the game language was skipped (#1026).
+    private func advance(_ options: [SettingOption]) {
+        if let next = Self.nextValue(options, after: row.value) { change(next) }
+    }
+
+    // Controller activation advances the native picker without opening a separate page.
+    nonisolated static func nextValue(_ options: [SettingOption], after value: String) -> String? {
+        guard !options.isEmpty else { return nil }
+        let index = options.firstIndex { $0.id == value } ?? -1
+        return options[(index + 1) % options.count].id
+    }
+}
