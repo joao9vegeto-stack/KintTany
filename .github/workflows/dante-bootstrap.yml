@@ -117,6 +117,8 @@ jobs:
           cp "$RUNNER_TEMP/NX2Apple/.github/workflows/build-mac-app.yml" .github/workflows/build-mac-app.yml
           cp "$RUNNER_TEMP/NX2Apple/.github/workflows/sync-upstream.yml" .github/workflows/sync-upstream.yml
           cp "$RUNNER_TEMP/NX2Apple/.github/workflows/build-qt.yml" .github/workflows/build-qt.yml
+          cp "$RUNNER_TEMP/NX2Apple/.github/workflows/tests.yml" .github/workflows/tests.yml
+          cp "$RUNNER_TEMP/NX2Apple/.github/workflows/release-notes.yml" .github/workflows/release-notes.yml
           rm -rf migration
 
           test "$(cat .upstream-ref)" = "$PINNED_NXNATIVE_SHA"
@@ -128,6 +130,8 @@ jobs:
           test -f .github/workflows/build-mac-app.yml
           test -f .github/workflows/sync-upstream.yml
           test -f .github/workflows/build-qt.yml
+          test -f .github/workflows/tests.yml
+          test -f .github/workflows/release-notes.yml
           echo "Official NX2Apple snapshot: $NX2APPLE_SHA"
           echo "Official nxnative pin: $PINNED_NXNATIVE_SHA"
 
@@ -153,6 +157,7 @@ jobs:
           python3 -c 'import lz4.block, capstone, unicorn; print("NSO decode prerequisites installed")'
           GITHUB_REPOSITORY=LNPANDY/NX2Apple python3 -m unittest discover tools/tests
           python3 -m unittest discover -s frontend-qt/tests
+          python3 -m unittest discover -s .github/scripts/tests
           python3 -m compileall -q engine/scripts engine/dm/tools engine/dm/games engine/dm/mac
           bash -n engine/dm/ios/tools/build_ipa.sh
           test -f engine/dm/ios/Sources/main.m
