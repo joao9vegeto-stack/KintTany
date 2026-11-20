@@ -53,6 +53,11 @@ jobs:
           test "$(cat .upstream-ref)" = "ee998ae6d73d5960671ec837ea2ae4a8a0489fec"
           test "$(git -C engine rev-list --count ee998ae6d73d5960671ec837ea2ae4a8a0489fec..HEAD)" -ge 12
 
+      - name: Reconcile new iOS HUD glue and Switch language catalog entries
+        run: |
+          set -euo pipefail
+          python3 .github/migrations/dante_fix_compat.py
+
       - name: Preserve iOS shell and graphic compatibility features
         run: |
           set -euo pipefail
@@ -88,7 +93,7 @@ jobs:
           test "$(git branch --show-current)" = "Dante2iOS"
           git config user.name "dante2ios-upstream-integration"
           git config user.email "dante2ios-upstream-integration@users.noreply.github.com"
-          git add .upstream-ref patches/ README.md frontend/README.md frontend-qt/README.md
+          git add .upstream-ref patches/ README.md frontend/README.md frontend-qt/README.md frontend/l10n/ frontend-ios/Sources/ShellUI/Resources/Localizable.xcstrings frontend-ios/Sources/ShellHost/Resources/Localizable.xcstrings tools/tests/launcher_texts.txt
           git diff --cached --check -- .upstream-ref patches/series patches/fork_env_switches.tsv README.md frontend/README.md frontend-qt/README.md
           if git diff --cached --quiet; then
             echo "Already fully aligned; nothing to push."
