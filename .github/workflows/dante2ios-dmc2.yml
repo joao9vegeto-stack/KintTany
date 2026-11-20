@@ -266,6 +266,27 @@ jobs:
           PY
           grep -Fq 'up_big_src((uint64_t)t->mem, t->L.size, &mo, 1)' engine/dm/gfx/nvn/nvn_mtl.m
           echo "NVN GPU deswizzle source call matches four-argument API."
+          # Actual SDK6 movie-shutdown crash, proven by symbol lookup:
+          # nn::audio::FlushAudioOutBuffers at sdk+0x93600 (fault at +0x93684).
+          python3 - <<'PY'
+          from pathlib import Path
+          h = Path('engine/dm/host/hle_audio.c').read_text()
+          signature = '_ZN2nn5audio20FlushAudioOutBuffersEPNS0_8AudioOutE'
+          guard = 'HLE_FORCE("' + signature + '"'
+          assert h.count(guard) == 1, 'missing or duplicate forced AudioOut flush hook'
+          body = h.split(guard,1)[1].split('static void au_close(',1)[0]
+          for expected in ('Result, h_au_Flush, void *g)',
+                           'pthread_mutex_lock(&g_aos_lock);',
+                           'aout *a = ao_find_locked(g);',
+                           'if (was_started) au_stop_locked(a, NULL);',
+                           'else au_release_pending(a);',
+                           'null_start(a);',
+                           'au_request_start(a);',
+                           'pthread_mutex_unlock(&g_aos_lock);',
+                           'return RES_OK;'):
+              assert expected in body, f'broken movie AudioOut flush hook: {expected}'
+          print('DMC2 movie shutdown FlushAudioOutBuffers hook and audio queue lifecycle verified.')
+          PY
           # Reject wrong-scope controller patches before fetching the NSP workspace.
           python3 - <<'PY'
           from pathlib import Path

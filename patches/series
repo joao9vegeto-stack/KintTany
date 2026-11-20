@@ -57,3 +57,4 @@
 0067-ios-a-game-framework-s-copies-are-clones-of-the.patch
 0070-dante2ios-nxnative-93c76c1cbf41-trim-idle-metal.patch
 0071-ios-implement-saved-hud-bridge-for-multi-game-sh.patch
+0072-dante2ios-flush-audioout-after-movie-stop.patch

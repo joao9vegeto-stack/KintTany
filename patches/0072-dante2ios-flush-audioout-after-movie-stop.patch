@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Dante2iOS integration <dante2ios-integration@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 15:25:00 +0000
+Subject: [PATCH] host: flush movie AudioOut through host queue instead of missing audout proxy
+
+Upstream-Status: pending
+Reason: DMC2 segfaults at SDK6 FlushAudioOutBuffers sdk+0x93684 on movie stop (native proxy never initialized by host AudioOut HLE)
+Issue: DMC2 iPhone log 2026-11-20 after nn::movie decoder Stop / audio #1 Stop
+
+---
+ dm/host/hle_audio.c | 23 +++++++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/dm/host/hle_audio.c b/dm/host/hle_audio.c
+--- a/dm/host/hle_audio.c
++++ b/dm/host/hle_audio.c
+@@ -853,2 +853,25 @@
+ HLE_FORCE("_ZN2nn5audio12StopAudioOutEPNS0_8AudioOutE", "stop playback", void, h_au_Stop, void *g) { au_stop_at(g, dm_bigstack_caller(__builtin_return_address(0))); }
++// A stopped movie still calls FlushAudioOutBuffers during teardown. Its native SDK
++// implementation dereferences the audout service proxy, which the host intentionally
++// does not create (DMC2, SDK 6, sdk+0x93684). Route the flush to the host queue.
++// Reclaim all pending buffers to the released queue as the real service does.
++// When flushing an active output, stop consumers before changing the queue, then
++// restore playback; the queue and the async AudioUnit start are serialized by g_aos_lock.
++HLE_FORCE("_ZN2nn5audio20FlushAudioOutBuffersEPNS0_8AudioOutE", "flush buffers through the host AudioOut queue, without the missing native audout service",
++          Result, h_au_Flush, void *g) {
++    pthread_mutex_lock(&g_aos_lock);
++    aout *a = ao_find_locked(g);
++    if (!a) { pthread_mutex_unlock(&g_aos_lock); return RES_OK; }
++    au_note(a, "FlushAudioOutBuffers", dm_bigstack_caller(__builtin_return_address(0)));
++    int was_started = atomic_load_explicit(&a->state, memory_order_acquire) == STATE_STARTED;
++    if (was_started) au_stop_locked(a, NULL);
++    else au_release_pending(a);
++    if (was_started) {
++        atomic_store_explicit(&a->state, STATE_STARTED, memory_order_release);
++        null_start(a);
++        au_request_start(a);
++    }
++    pthread_mutex_unlock(&g_aos_lock);
++    return RES_OK;
++}
+ static void au_close(void *g, void *lr) {
+-- 
+2.47.0
