@@ -31,7 +31,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/BladesTime"
           test "$(cat .upstream-ref)" = "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb"
-          python3 -m py_compile blades/drive_chunks.py blades/colab/source_archive.py blades/colab/prepare_linux.py blades/colab/run_colab.py blades/scripts/prepare_actions.py blades/scripts/build_shared.py
+          python3 -m py_compile blades/drive_chunks.py blades/colab/source_archive.py blades/colab/prepare_linux.py blades/colab/run_colab.py blades/scripts/prepare_actions.py blades/scripts/build_shared.py blades/colab/transfer_ipa.py
           python3 -m unittest discover -s blades/tests -p "test_*.py" -v
           python3 - <<'PY'
           from pathlib import Path
