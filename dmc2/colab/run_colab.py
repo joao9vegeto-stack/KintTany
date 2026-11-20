@@ -188,8 +188,20 @@ def build_work_archive(work: Path, destination: Path) -> None:
 def install_linux_dependencies(root: Path) -> None:
     print("[Dante2iOS] Verificando dependências locais do Colab...")
 
-    apt_commands = ("zstd", "git", "curl", "cmake", "ninja", "pkg-config")
-    missing_commands = [name for name in apt_commands if shutil.which(name) is None]
+    # On Ubuntu/Colab the executable is `ninja`, but the APT package is
+    # `ninja-build`. Passing `ninja` to apt-get fails with exit status 100.
+    apt_command_packages = {
+        "zstd": "zstd",
+        "git": "git",
+        "curl": "curl",
+        "cmake": "cmake",
+        "ninja": "ninja-build",
+        "pkg-config": "pkg-config",
+    }
+    missing_commands = [
+        package for executable, package in apt_command_packages.items()
+        if shutil.which(executable) is None
+    ]
 
     def apt_package_installed(name: str) -> bool:
         result = subprocess.run(
@@ -205,8 +217,14 @@ def install_linux_dependencies(root: Path) -> None:
         print("[Dante2iOS] Instalando pacotes ausentes:", ", ".join(missing_apt))
         subprocess.run(["apt-get", "update", "-qq"], check=True)
         subprocess.run([
-            "apt-get", "install", "-y", "-qq", *missing_apt,
-        ], check=True)
+            "apt-get", "install", "-y", "--no-install-recommends", *missing_apt,
+        ], check=True, env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"})
+        missing_after_install = [
+            exe for exe in apt_command_packages if shutil.which(exe) is None
+        ]
+        if missing_after_install:
+            fail("APT completed but required executables are still missing: "
+                 + ", ".join(missing_after_install))
     else:
         print("[Dante2iOS] Dependências APT já instaladas; pulando apt-get update/install.")
 

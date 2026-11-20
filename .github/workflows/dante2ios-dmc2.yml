@@ -46,6 +46,19 @@ jobs:
               assert p in content, name
           assert 'dmc2/handoff.json' in Path('dmc2/colab/run_colab.py').read_text()
           assert 'DM_COPY_ROMFS' in Path('dmc2/scripts/build_shared.py').read_text()
+          import ast
+          installer = ast.parse(Path("dmc2/colab/run_colab.py").read_text())
+          dep = next(n for n in installer.body if isinstance(n, ast.FunctionDef)
+                     and n.name == "install_linux_dependencies")
+          mapping = next(n for n in dep.body if isinstance(n, ast.Assign)
+                         and any(isinstance(t, ast.Name) and t.id == "apt_command_packages"
+                                 for t in n.targets))
+          packages = ast.literal_eval(mapping.value)
+          assert packages["ninja"] == "ninja-build", packages
+          assert packages["zstd"] == "zstd", packages
+          assert all(isinstance(k, str) and isinstance(v, str)
+                     for k, v in packages.items())
+          print("Colab Ubuntu APT mapping: ninja -> ninja-build; zstd -> zstd.")
           print('Validated source identity, iOS26 shell, and pipeline syntax.')
           PY
       - name: Require a real Colab handoff before beginning a game build
