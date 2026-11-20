@@ -71,6 +71,14 @@ jobs:
           test -f engine/dm/games/profile_guess.py
           test -d frontend-ios/Sources
           test -f patches/0001-ios-game-data-folder.patch
+          # Keep the imported SpkIOSzero sources intact as non-active reference material.
+          test -f legacy/spkioszero/README.md
+          test -d legacy/spkioszero/colab
+          test -d legacy/spkioszero/game-profile
+          test -d legacy/spkioszero/ios-overrides
+          # Every supported backport must remain in the patch series, not the ignored engine tree.
+          test -f patches/series
+          test -f patches/fork_env_switches.tsv
 
       - name: Compile Swift iOS shell against Xcode 27
         run: |
