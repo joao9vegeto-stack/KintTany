@@ -95,6 +95,24 @@ jobs:
           python3 tools/engine.py sync
           python3 tools/engine.py stale
           test -f engine/scripts/build_ipa_from_nsp.py
+          # Validate the actual patched NXNative AST *before* restoring ~3 GB
+          # of Colab RomFS data or building an Apple Silicon host. This
+          # catches the NameError from an accidental options-arg deletion.
+          python3 - <<'PY'
+          import ast
+          from pathlib import Path
+          src = Path("engine/scripts/build_ipa_from_nsp.py").read_text()
+          root = ast.parse(src)
+          funcs = {node.name: node for node in root.body if isinstance(node, ast.FunctionDef)}
+          assert "layer_shaders" in funcs and "build_vk_shaders" in funcs
+          params = [p.arg for p in funcs["layer_shaders"].args.args]
+          assert "options" in params and "from_seed" in params, (
+              "NXNative layer_shaders must retain options=() after the fast-refresh patch")
+          assert any(isinstance(n, ast.Starred) and isinstance(n.value, ast.Name)
+                     and n.value.id == "options" for n in ast.walk(funcs["layer_shaders"])), (
+              "NXNative layer_shaders no longer uses the options argument")
+          print("NXNative patched Vulkan Metal shader compiler argument contract OK")
+          PY
           bash -n engine/dm/ios/tools/build_ipa.sh
           bash -n frontend-ios/Shell/build_shell.sh
       - name: Restore verified Colab workspace and external RomFS using 6 x 64 MiB HTTP Ranges

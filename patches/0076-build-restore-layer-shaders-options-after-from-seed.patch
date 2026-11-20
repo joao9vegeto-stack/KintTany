@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: KintTany port maintainer <patches@localhost>
+Date: Fri, 20 Nov 2026 19:02:00 -0300
+Subject: [PATCH] Build: preserve layer shader options alongside seeded builds
+
+The fast-refresh patch 0053 replaced the layer_shaders(options=()) argument
+with from_seed=False but left *options in its command invocation. For real
+Vulkan games that produce captured SPIR-V the first Metal shader compilation
+fails with NameError: name 'options' is not defined (BladesTime run
+44824077665). Restore the original optional command-argument contract and
+keep the seed flag as a separate keyword parameter. Vulkan keeps an empty
+options tuple; OpenGL callers may pass fixed-function options.
+
+Upstream-Status: fork-only
+Reason: Fix the shader translation NameError after genuine BladesTime Dagor Vulkan capture
+Issue: joao9vegeto-stack/KintTany BladesTime run 44824077665
+---
+ scripts/build_ipa_from_nsp.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/scripts/build_ipa_from_nsp.py b/scripts/build_ipa_from_nsp.py
+--- a/scripts/build_ipa_from_nsp.py
++++ b/scripts/build_ipa_from_nsp.py
+@@ -3015,4 +3015,4 @@
+ 
+-def layer_shaders(py, repo, api, name, roots, sh, key, logs, env, mac, from_seed=False):
++def layer_shaders(py, repo, api, name, roots, sh, key, logs, env, mac, options=(), from_seed=False):
+     """What build_vk_shaders and build_gl_shaders share: dm/gfx/tools/<api>_shaders.py on the roots → sh/<api>/ for the Mac and, unless mac (a Mac-only build), sh/ios/<api>/ for the iPhone.
+     Returns the folder the host (DM_MSL_DIR) or build_ipa.sh (MSL_IOS) takes the libraries from. key: the inputs' fingerprint (None never reuses). The iOS libraries' key is sh/ios/<api>.key,
+-- 
+2.56.0

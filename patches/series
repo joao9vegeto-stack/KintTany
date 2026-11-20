@@ -61,3 +61,4 @@
 0073-vulkan-dagor-khr-physical-device-queries.patch
 0074-vulkan-dagor-trace-physical-device-enumeration.patch
 0075-vulkan-dagor-required-shader-draw-parameters.patch
+0076-build-restore-layer-shaders-options-after-from-seed.patch
