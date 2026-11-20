@@ -1,0 +1,148 @@
+name: Dante2iOS DMC2 - Colab handoff to iOS 26
+on:
+  push:
+    branches: [Dante2iOS]
+    paths:
+      - "dmc2/**"
+      - ".github/workflows/dante2ios-dmc2.yml"
+permissions:
+  contents: read
+concurrency:
+  group: dante2ios-dmc2-build
+  cancel-in-progress: false
+jobs:
+  build-dmc2:
+    if: github.ref == 'refs/heads/Dante2iOS'
+    runs-on: xcode-27
+    timeout-minutes: 360
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+    steps:
+      - name: Checkout Dante2iOS source commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Select Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - name: Validate DMC2 pipeline Python and iOS 26 settings
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/Dante2iOS"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 -m py_compile dmc2/colab/source_archive.py dmc2/colab/prepare_linux.py dmc2/colab/run_colab.py dmc2/scripts/prepare_actions.py dmc2/scripts/build_shared.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('.upstream-ref').read_text().strip()
+          assert p == 'b526a50b85e4cfa3142c111e1ad491d9fd11f0eb'
+          assert 'iOS: "26.0"' in Path('frontend-ios/Shell/project-shell.yml').read_text()
+          for name in ('dmc2/colab/run_colab.py', 'dmc2/colab/prepare_linux.py',
+                       'dmc2/scripts/prepare_actions.py', 'dmc2/scripts/build_shared.py'):
+              content = Path(name).read_text()
+              assert '01007CF00D5BA000' in content, name
+              assert 'v1114112' not in content and '01007EF00011E000' not in content, name
+              assert p in content, name
+          assert 'dmc2/handoff.json' in Path('dmc2/colab/run_colab.py').read_text()
+          assert 'DM_COPY_ROMFS' in Path('dmc2/scripts/build_shared.py').read_text()
+          print('Validated source identity, iOS26 shell, and pipeline syntax.')
+          PY
+      - name: Require a real Colab handoff before beginning a game build
+        id: handoff
+        run: |
+          if test -f dmc2/handoff.json; then
+            echo "ready=yes" >> "$GITHUB_OUTPUT"
+            echo "DMC2 handoff present; beginning build."
+          else
+            echo "ready=no" >> "$GITHUB_OUTPUT"
+            echo "Validation only: no NSP preparation handoff was submitted."
+          fi
+      - name: Check title ID, base-only version and Drive handoff checksums
+        if: steps.handoff.outputs.ready == 'yes'
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, re, uuid
+          from pathlib import Path
+          d=json.loads(Path('dmc2/handoff.json').read_text())
+          assert d.get('project') == d.get('branch') == 'Dante2iOS'
+          assert d.get('title_id') == '01007CF00D5BA000' and d.get('package_version') == 'v0'
+          assert d.get('engine_pin') == Path('.upstream-ref').read_text().strip()
+          assert d.get('source_ref') == 'Dante2iOS'
+          assert re.fullmatch(r'[0-9a-f]{40}', d.get('source_commit',''))
+          uuid.UUID(d['request_id'])
+          p=d.get('prepared',{})
+          assert p.get('project') == 'Dante2iOS' and p.get('title_id') == d['title_id']
+          assert p.get('engine_pin') == d['engine_pin']
+          assert p.get('graphics') in ('nvn','vulkan','gl')
+          assert p.get('input_package_count') == 1
+          assert p.get('input_update_count') == 0 and p.get('input_dlc_count') == 0
+          assert d.get('game_data',{}).get('aoc') == [] and p.get('aoc_images') == []
+          for f in (d.get('work_archive',{}), d.get('game_data',{}).get('romfs',{})):
+              assert f.get('id') and int(f.get('size',0)) > 0
+              assert re.fullmatch(r'[0-9a-f]{64}', f.get('sha256',''))
+          if p['graphics']=='nvn':
+              assert re.fullmatch(r'[0-9a-f]{64}', p.get('shader_package_key') or '')
+          print('DMC2 base-only Colab manifest accepted:', d['request_id'])
+          PY
+      - name: Install Xcode Apple host dependencies
+        if: steps.handoff.outputs.ready == 'yes'
+        run: |
+          set -euo pipefail
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version
+          brew install xcodegen zstd glslang
+          command -v dotnet >/dev/null || brew install --cask dotnet-sdk
+          python3 -m pip install --disable-pip-version-check lz4 'capstone>=5,<6' fonttools zbic backports.zstd google-api-python-client google-auth
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphoneos metal --version
+      - name: Materialize pinned engine with all existing fork patches
+        if: steps.handoff.outputs.ready == 'yes'
+        run: |
+          set -euo pipefail
+          python3 tools/engine.py check
+          python3 tools/engine.py sync
+          python3 tools/engine.py relink
+          test "$(cat .upstream-ref)" = "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb"
+          test -f engine/dm/ios/tools/build_ipa.sh
+          test -f frontend-ios/Shell/build_shell.sh
+          bash -n engine/dm/ios/tools/build_ipa.sh
+          bash -n frontend-ios/Shell/build_shell.sh
+      - name: Download and verify prepared Colab workspace and external RomFS
+        if: steps.handoff.outputs.ready == 'yes'
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          python3 dmc2/scripts/prepare_actions.py \
+            --handoff "$GITHUB_WORKSPACE/dmc2/handoff.json" \
+            --destination "$RUNNER_TEMP/dmc2"
+      - name: Compile game framework and iOS 26 Shared Shell IPA
+        if: steps.handoff.outputs.ready == 'yes'
+        run: |
+          set -euo pipefail
+          python3 dmc2/scripts/build_shared.py \
+            --nx2apple-root "$GITHUB_WORKSPACE" \
+            --prepared-json "$RUNNER_TEMP/dmc2/actions-input.json" \
+            --output "$RUNNER_TEMP/dmc2-output"
+      - name: Publish DMC2 IPA with provenance report
+        if: steps.handoff.outputs.ready == 'yes'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Dante2iOS-DMC2-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/dmc2-output/Dante2iOS-DMC2.ipa
+            ${{ runner.temp }}/dmc2-output/build-report.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve diagnostics if the game build fails
+        if: failure() && steps.handoff.outputs.ready == 'yes'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Dante2iOS-DMC2-failure-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/dmc2/work/logs/
+            ${{ runner.temp }}/dmc2-output/build-report.json
+          if-no-files-found: warn
+          retention-days: 14
