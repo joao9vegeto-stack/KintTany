@@ -225,6 +225,24 @@ jobs:
             exit 1
           fi
           grep -Fq 'if (atomic_load(&g_teardown_park)) teardown_exit_locked(t);' engine/dm/host/hle_thread.c
+          # The Vulkan backend is linked into the iOS game host, including
+          # NVN games. All referenced helpers must exist at file scope.
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('engine/dm/gfx/vk/hle_vk.m').read_text()
+          for fn in ('static void sh_read_resources(', 'static void sh_parse_line(',
+                     'static VkPipeline cpipe_make(', 'static id<MTLBuffer> fan_convert(',
+                     'static void fan_draw_converted('):
+              assert fn in text, f'missing Vulkan host helper: {fn}'
+          body = text.split('static void sh_load(void) {', 1)[1].split('static const shinfo *sh_find(', 1)[0]
+          assert 'sh_read_resources(s, res);' not in body, 'stray Vulkan table parser left in sh_load'
+          assert 'if (!strncmp(stage, "geomvp:", 7))' not in body, 'stray stage context in sh_load'
+          helper = text.split('static void sh_parse_line(char *line, int *cap) {',1)[1].split('static void sh_load(void) {',1)[0]
+          assert 'sh_read_resources(s, res);' in helper
+          assert 'if (!strncmp(stage, "geomvp:", 7))' in helper
+          assert 'if (!strncmp(stage, "comp", 4))' in helper
+          print('Vulkan host helper and parser scope validated before downloading game data.')
+          PY
           test -z "$(git status --porcelain -- '*.md')"
           test "$(cat .upstream-ref)" = "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb"
           test -f engine/dm/ios/tools/build_ipa.sh

@@ -2414,7 +2414,7 @@ index d247131..e2cfffe 100644
  // Pipeline caches hold nothing: the game's initial data is NVIDIA's binary cache (Super Mario Galaxy's data/database/vulkan/*.cache), and Metal keeps its own
  VK(vkCreatePipelineCache, VkResult, VkDevice d, const VkPipelineCacheCreateInfo *ci, const VkAllocationCallbacks *a, VkPipelineCache *out) {
      (void)d; (void)ci; (void)a; *out = zalloc(sizeof **out); return VK_SUCCESS;
-@@ -1322,50 +1352,10 @@ static VkPipeline pipe_make(const VkGraphicsPipelineCreateInfo *ci) {
+@@ -1322,50 +1352,43 @@ static VkPipeline pipe_make(const VkGraphicsPipelineCreateInfo *ci) {
  }
  VKB(vkCreateGraphicsPipelines, VkResult, VkDevice d, VkPipelineCache c, uint32_t n, const VkGraphicsPipelineCreateInfo *ci, const VkAllocationCallbacks *a, VkPipeline *out) {
      (void)d; (void)c; (void)a; dev_init();
@@ -2422,39 +2422,40 @@ index d247131..e2cfffe 100644
 +    for (uint32_t i = 0; i < n; i++) { out[i] = pipe_make(&ci[i]); vk_live_add(out[i], dtor_pipe); }   // a pipeline Metal refuses is still handed out: its draws are skipped
      return VK_SUCCESS;
  }
--// A compute pipeline uses the shader's full local size; reducing it would change gl_LocalInvocationID.
--static VkPipeline cpipe_make(const VkComputePipelineCreateInfo *ci) {
--    VkPipeline p = zalloc(sizeof *p); pipe_layout_hold(p, ci->layout);
--    const VkPipelineShaderStageCreateInfo *st = &ci->stage; VkShaderModule m = st->module;
--    strlcpy(p->keys, m->key, sizeof p->keys);
--    if (st->stage != VK_SHADER_STAGE_COMPUTE_BIT || !m->fn || !m->si || !m->si->comp) {
--        LOG("[vk] [RED] compute pipeline: shader %s is not a compute shader of the library", m->key); return p;
--    }
--    p->cs = m->si; p->wg = MTLSizeMake(m->si->wg[0], m->si->wg[1], m->si->wg[2]);
--    if (!argbuf_ok(p->cs)) {
--        LOG("[vk] [RED] compute pipeline %s refused: argument buffers require Metal Tier2 (device %s)", m->key,
--            g_ab_tier == MTLArgumentBuffersTier2 ? "Tier2" : "Tier1"); return p;
--    }
--    @autoreleasepool {
--        id<MTLFunction> fn = spec_fn(m->fn, st->pSpecializationInfo); NSError *err = nil;
--        if (fn) p->cpso = [g_dev newComputePipelineStateWithFunction:fn error:&err];
--        if (!p->cpso) { LOG("[vk] [RED] cannot build the compute pipeline (%s): %s", m->key, err ? err.localizedDescription.UTF8String : "no function"); return p; }
--        NSUInteger n = p->wg.width * p->wg.height * p->wg.depth;
--        if (n > p->cpso.maxTotalThreadsPerThreadgroup) {
--            LOG("[vk] [RED] compute pipeline %s refused: local size %lux%lux%lu exceeds the %lu threads per threadgroup Metal allows", m->key,
--                (unsigned long)p->wg.width, (unsigned long)p->wg.height, (unsigned long)p->wg.depth, (unsigned long)p->cpso.maxTotalThreadsPerThreadgroup);
--            p->cpso = nil; return p;
--        }
--        if (!ab_init(p, ST_COMP, fn, p->cs)) { p->cpso = nil; ab_free(p); LOG("[vk] [RED] compute pipeline %s refused: argument-buffer initialization failed", m->key); return p; }
--        g_n_pso++; OLOG("compute pipeline %s, local size %lux%lux%lu", m->key, (unsigned long)p->wg.width, (unsigned long)p->wg.height, (unsigned long)p->wg.depth);
--    }
--    return p;
--}
--VKB(vkCreateComputePipelines, VkResult, VkDevice d, VkPipelineCache c, uint32_t n, const VkComputePipelineCreateInfo *ci, const VkAllocationCallbacks *a, VkPipeline *out) {
--    (void)d; (void)c; (void)a; dev_init();
+ // A compute pipeline uses the shader's full local size; reducing it would change gl_LocalInvocationID.
+ static VkPipeline cpipe_make(const VkComputePipelineCreateInfo *ci) {
+     VkPipeline p = zalloc(sizeof *p); pipe_layout_hold(p, ci->layout);
+     const VkPipelineShaderStageCreateInfo *st = &ci->stage; VkShaderModule m = st->module;
+     strlcpy(p->keys, m->key, sizeof p->keys);
+     if (st->stage != VK_SHADER_STAGE_COMPUTE_BIT || !m->fn || !m->si || !m->si->comp) {
+         LOG("[vk] [RED] compute pipeline: shader %s is not a compute shader of the library", m->key); return p;
+     }
+     p->cs = m->si; p->wg = MTLSizeMake(m->si->wg[0], m->si->wg[1], m->si->wg[2]);
+     if (!argbuf_ok(p->cs)) {
+         LOG("[vk] [RED] compute pipeline %s refused: argument buffers require Metal Tier2 (device %s)", m->key,
+             g_ab_tier == MTLArgumentBuffersTier2 ? "Tier2" : "Tier1"); return p;
+     }
+     @autoreleasepool {
+         id<MTLFunction> fn = spec_fn(m->fn, st->pSpecializationInfo); NSError *err = nil;
+         if (fn) p->cpso = [g_dev newComputePipelineStateWithFunction:fn error:&err];
+         if (!p->cpso) { LOG("[vk] [RED] cannot build the compute pipeline (%s): %s", m->key, err ? err.localizedDescription.UTF8String : "no function"); return p; }
+         NSUInteger n = p->wg.width * p->wg.height * p->wg.depth;
+         if (n > p->cpso.maxTotalThreadsPerThreadgroup) {
+             LOG("[vk] [RED] compute pipeline %s refused: local size %lux%lux%lu exceeds the %lu threads per threadgroup Metal allows", m->key,
+                 (unsigned long)p->wg.width, (unsigned long)p->wg.height, (unsigned long)p->wg.depth, (unsigned long)p->cpso.maxTotalThreadsPerThreadgroup);
+             p->cpso = nil; return p;
+         }
+         if (!ab_init(p, ST_COMP, fn, p->cs)) { p->cpso = nil; ab_free(p); LOG("[vk] [RED] compute pipeline %s refused: argument-buffer initialization failed", m->key); return p; }
+         g_n_pso++; OLOG("compute pipeline %s, local size %lux%lux%lu", m->key, (unsigned long)p->wg.width, (unsigned long)p->wg.height, (unsigned long)p->wg.depth);
+     }
+     return p;
+ }
+ VKB(vkCreateComputePipelines, VkResult, VkDevice d, VkPipelineCache c, uint32_t n, const VkComputePipelineCreateInfo *ci, const VkAllocationCallbacks *a, VkPipeline *out) {
+     (void)d; (void)c; (void)a; dev_init();
 -    for (uint32_t i = 0; i < n; i++) out[i] = cpipe_make(&ci[i]);   // as for graphics: a pipeline Metal refuses is handed out, and its dispatches are skipped
--    return VK_SUCCESS;
--}
++    for (uint32_t i = 0; i < n; i++) { out[i] = cpipe_make(&ci[i]); vk_live_add(out[i], dtor_pipe); }   // all live pipelines are tracked for teardown
+     return VK_SUCCESS;
+ }
 -VKB(vkDestroyPipeline, void, VkDevice d, VkPipeline p, const VkAllocationCallbacks *a) {
 -    (void)d; (void)a;
 -    if (!p) return;
@@ -2467,38 +2468,38 @@ index d247131..e2cfffe 100644
  
  // ---------- Command buffers: recording ----------
  enum { C_BRP = 1, C_ERP, C_PIPE, C_SETS, C_VB, C_IB, C_VP, C_SC, C_DRAWI, C_COPYB, C_COPYB2I, C_DRAW, C_PUSH, C_COPYI, C_COPYI2B, C_QRESET, C_QTS, C_QBEGIN, C_QEND, C_CLEARI, C_STENCIL,
-@@ -1978,34 +1968,8 @@ static int fan_scan_passes(uint32_t op) {   // commands that never end a render
+@@ -1978,34 +1968,36 @@ static int fan_scan_passes(uint32_t op) {   // commands that never end a render
      }
      return 0;
  }
--static id<MTLBuffer> fan_convert(id<MTLCommandBuffer> cb, const fan_job *jobs, uint32_t n, uint64_t size) {
--    if (!n) return nil;
--    static id<MTLComputePipelineState> ps; static int failed;
--    if (!ps && !failed) {
--        NSError *e = nil; id<MTLLibrary> lib = host_msl_lib(g_dev, nil, "vk_fan", &e);
--        id<MTLFunction> fn = [lib newFunctionWithName:@"vk_fan"];
--        ps = fn ? [g_dev newComputePipelineStateWithFunction:fn error:&e] : nil;
--        if (!ps) { failed = 1; LOG("[vk] [RED] cannot build the triangle fan conversion (indexed fans are not drawn): %s", e.localizedDescription.UTF8String); }
--    }
--    if (!ps) return nil;
--    id<MTLBuffer> out = size <= g_dev.maxBufferLength ? [g_dev newBufferWithLength:size options:MTLResourceStorageModeShared] : nil;
--    if (!out) { RED1("cannot allocate triangle fan indices (%llu bytes)", (unsigned long long)size); return nil; }
--    id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
--    [ce setComputePipelineState:ps];
--    for (uint32_t i = 0; i < n; i++) {
--        const fan_job *j = &jobs[i];
--        [ce setBuffer:mem_buf(j->ib->mem) offset:0 atIndex:0]; [ce setBuffer:out offset:j->at + 32 atIndex:1]; [ce setBuffer:out offset:j->at atIndex:2];
--        [ce setBytes:&j->p length:sizeof j->p atIndex:3];
--        NSUInteger threads = j->p.restart ? 1 : j->p.count - 2;   // restart compacts the runs without crossing a marker
--        [ce dispatchThreads:MTLSizeMake(threads, 1, 1) threadsPerThreadgroup:MTLSizeMake(MIN(threads, ps.threadExecutionWidth), 1, 1)];
--    }
--    [ce endEncoding];
--    return out;
--}
--static void fan_draw_converted(rs_t *s, id<MTLBuffer> out, uint64_t at) {
--    [s->re drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexType:MTLIndexTypeUInt32 indexBuffer:out indexBufferOffset:at + 32
--                  indirectBuffer:out indirectBufferOffset:at];
--}
+ static id<MTLBuffer> fan_convert(id<MTLCommandBuffer> cb, const fan_job *jobs, uint32_t n, uint64_t size) {
+     if (!n) return nil;
+     static id<MTLComputePipelineState> ps; static int failed;
+     if (!ps && !failed) {
+         NSError *e = nil; id<MTLLibrary> lib = host_msl_lib(g_dev, nil, "vk_fan", &e);
+         id<MTLFunction> fn = [lib newFunctionWithName:@"vk_fan"];
+         ps = fn ? [g_dev newComputePipelineStateWithFunction:fn error:&e] : nil;
+         if (!ps) { failed = 1; LOG("[vk] [RED] cannot build the triangle fan conversion (indexed fans are not drawn): %s", e.localizedDescription.UTF8String); }
+     }
+     if (!ps) return nil;
+     id<MTLBuffer> out = size <= g_dev.maxBufferLength ? [g_dev newBufferWithLength:size options:MTLResourceStorageModeShared] : nil;
+     if (!out) { RED1("cannot allocate triangle fan indices (%llu bytes)", (unsigned long long)size); return nil; }
+     id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
+     [ce setComputePipelineState:ps];
+     for (uint32_t i = 0; i < n; i++) {
+         const fan_job *j = &jobs[i];
+         [ce setBuffer:mem_buf(j->ib->mem) offset:0 atIndex:0]; [ce setBuffer:out offset:j->at + 32 atIndex:1]; [ce setBuffer:out offset:j->at atIndex:2];
+         [ce setBytes:&j->p length:sizeof j->p atIndex:3];
+         NSUInteger threads = j->p.restart ? 1 : j->p.count - 2;   // restart compacts the runs without crossing a marker
+         [ce dispatchThreads:MTLSizeMake(threads, 1, 1) threadsPerThreadgroup:MTLSizeMake(MIN(threads, ps.threadExecutionWidth), 1, 1)];
+     }
+     [ce endEncoding];
+     return out;
+ }
+ static void fan_draw_converted(rs_t *s, id<MTLBuffer> out, uint64_t at) {
+     [s->re drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexType:MTLIndexTypeUInt32 indexBuffer:out indexBufferOffset:at + 32
+                   indirectBuffer:out indirectBufferOffset:at];
+ }
 +static id<MTLComputePipelineState> g_fan_ps;
 +static int g_fan_failed;
  // Converts the indexed fans from command h up to the end of the stretch of the pass the encoder about to start covers, into one buffer, in one compute pass
