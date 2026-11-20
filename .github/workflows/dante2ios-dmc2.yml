@@ -11,6 +11,34 @@ concurrency:
   group: dante2ios-dmc2-build
   cancel-in-progress: false
 jobs:
+
+  validate-linux-engine:
+    name: Verify pinned NXNative patch materialization on Colab-like Linux
+    if: github.ref == 'refs/heads/Dante2iOS'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out the exact published Dante2iOS source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Match Colab Python 3.13
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.13"
+      - name: Sync on Linux without requiring check before engine exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -V
+          git --version
+          test "$(cat .upstream-ref)" = "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb"
+          python3 tools/engine.py sync
+          python3 tools/engine.py stale
+          test -f engine/scripts/build_ipa_from_nsp.py
+          test -f engine/dm/games/profile_guess.py
+          echo "Colab-like Linux engine is synchronized and stamped."
   build-dmc2:
     if: github.ref == 'refs/heads/Dante2iOS'
     runs-on: xcode-27
@@ -44,6 +72,13 @@ jobs:
               assert '01007CF00D5BA000' in content, name
               assert 'v1114112' not in content and '01007EF00011E000' not in content, name
               assert p in content, name
+          colab = Path('dmc2/colab/run_colab.py').read_text()
+          assert 'engine_command("sync")' in colab
+          assert 'engine_command("stale")' in colab
+          assert 'engine.py"), "check"' not in colab
+          assert 'engine-command' not in colab
+          assert 'engine-sync.log' not in colab or 'engine-{command}.log' in colab
+          print('Colab bootstrap: sync then stale, cached engine recovery enabled.')
           assert 'dmc2/handoff.json' in Path('dmc2/colab/run_colab.py').read_text()
           assert 'DM_COPY_ROMFS' in Path('dmc2/scripts/build_shared.py').read_text()
           import ast

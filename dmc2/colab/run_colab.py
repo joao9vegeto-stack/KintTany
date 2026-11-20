@@ -331,17 +331,58 @@ def prepare(args, api=None) -> dict:
         fail("DMC2 must have exactly one base NSP and no update or DLC")
     install_linux_dependencies(root)
     nx = root / "NX2Apple"
-    if (nx / ".upstream-ref").is_file() and (nx / ".upstream-ref").read_text().strip() != ENGINE_PIN:
+    checkout_ready = ((nx / ".git").exists()
+                      and (nx / "tools" / "engine.py").is_file()
+                      and (nx / ".upstream-ref").is_file())
+    if checkout_ready and (nx / ".upstream-ref").read_text().strip() != ENGINE_PIN:
+        # Only the engine checkout is re-cloned: never remove input-packages,
+        # keys, prepared work/, existing RomFS or Drive checkpoints.
+        print("[Dante2iOS] Pin changed; replacing only the stale engine checkout.", flush=True)
         shutil.rmtree(nx)
-    if not (nx / ".upstream-ref").is_file():
-        shutil.rmtree(nx, ignore_errors=True)
+        checkout_ready = False
+    if not checkout_ready:
+        if nx.exists():
+            shutil.rmtree(nx)
+        print("[Dante2iOS] Cloning the fork's pinned engine/patch sources...", flush=True)
         subprocess.run(["git", "clone", "--depth", "1", "--branch", BRANCH,
                         f"https://github.com/{REPO}.git", str(nx)], check=True)
-        subprocess.run([sys.executable, str(nx / "tools/engine.py"), "check"], cwd=nx, check=True)
-        subprocess.run([sys.executable, str(nx / "tools/engine.py"), "sync"], cwd=nx, check=True)
-        subprocess.run([sys.executable, str(nx / "tools/engine.py"), "relink"], cwd=nx, check=True)
     if (nx / ".upstream-ref").read_text().strip() != ENGINE_PIN:
-        fail("Dante2iOS upstream pin differs from the validated DMC2 build pin")
+        fail("Dante2iOS checkout points to another NXNative commit")
+
+    # engine.py check builds an extra scratch worktree before materialization.
+    # On the Colab Python 3.13/Linux runtime it can return 1 with no engine/
+    # produced. Sync itself applies every patch; 'stale' validates the resulting
+    # pin, patch-series digest and generated commit. Avoid repeating an
+    # expensive pre-sync check, and heal partial previous attempts.
+    engine_tool = nx / "tools" / "engine.py"
+    def engine_command(command: str, accepted=(0,)) -> int:
+        argv = [sys.executable, str(engine_tool), command]
+        print("[Dante2iOS] +", " ".join(argv), flush=True)
+        result = subprocess.run(argv, cwd=nx, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True,
+                                encoding="utf-8", errors="replace", check=False)
+        if result.stdout:
+            print(result.stdout, end="" if result.stdout.endswith("\n") else "\n", flush=True)
+        (root / f"engine-{command}.log").write_text(
+            result.stdout + f"\nexit={result.returncode}\n", encoding="utf-8")
+        if result.returncode not in accepted:
+            fail(f"NXNative engine {command} failed (exit {result.returncode}). "
+                 f"Diagnostic: {root / ('engine-' + command + '.log')}\n"
+                 + result.stdout[-5000:])
+        return result.returncode
+
+    if engine_command("stale", accepted=(0, 1)) == 1:
+        print("[Dante2iOS] Engine not yet materialized or stale: "
+              "syncing all fork patches now, without touching game input cache.", flush=True)
+        engine_command("sync")
+    else:
+        print("[Dante2iOS] Exact NXNative engine + fork patch queue already materialized; reusing.", flush=True)
+    engine_command("stale")
+    if not (nx / "engine" / "scripts" / "build_ipa_from_nsp.py").is_file():
+        fail("engine sync was stamped but the real build_ipa_from_nsp.py is missing")
+    if not (nx / "engine" / "dm" / "games" / "profile_guess.py").is_file():
+        fail("engine sync is missing the provisional game profile generator")
+    print("[Dante2iOS] Engine materialized and verified.", flush=True)
     work = root / "work"
     prep = run_preparation(argparse.Namespace(nx2apple_root=nx, nsp_dir=Path(source["package_dir"]),
         keys=Path(source["keys_path"]), work_dir=work))
