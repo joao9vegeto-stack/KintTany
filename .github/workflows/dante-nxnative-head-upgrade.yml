@@ -1,117 +1,75 @@
-name: Dante2iOS | nxnative HEAD gated migration
-
+name: Dante2iOS | full nxnative HEAD rebase and verification
 on:
   push:
     branches: [Dante2iOS]
     paths:
       - ".github/workflows/dante-nxnative-head-upgrade.yml"
   workflow_dispatch:
-
 permissions:
   contents: write
-
 concurrency:
-  group: dante2ios-nxnative-head-migration
+  group: dante2ios-nxnative-full-rebase
   cancel-in-progress: false
-
 jobs:
-  migrate:
+  rebase-and-verify:
     if: github.ref == 'refs/heads/Dante2iOS'
     runs-on: xcode-27
     timeout-minutes: 120
     steps:
-      - name: Checkout protected branch
+      - name: Check out only Dante2iOS
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: Dante2iOS
           fetch-depth: 0
 
-      - name: Use tested Python 3.12 toolchain
+      - name: Use verified Python 3.12
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
-      - name: Probe every official patch against selected nxnative HEAD
-        id: probe
-        env:
-          TARGET: 14f54e4c18e2a97905c3481e5e5c4d7764c272f2
+      - name: Rebase every patch onto pinned nxnative HEAD
         run: |
           set -euo pipefail
-          # Materialize every original intermediate patch preimage first so git am -3 can three-way merge.
-          python3 tools/engine.py sync
-          set +e
-          python3 tools/engine.py bump --to "$TARGET" --dry 2>&1 | tee /tmp/dante-nxnative-probe.log
-          status=${PIPESTATUS[0]}
-          set -e
-          echo "result=$status" >> "$GITHUB_OUTPUT"
-          echo "## Dante2iOS engine migration probe" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Target nxnative: \`$TARGET\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Dry-run exit code: \`$status\`" >> "$GITHUB_STEP_SUMMARY"
-          if [[ "$status" != "0" ]]; then
-            echo "- **Full HEAD rebase was blocked; no full bump published.** An independent backport stage will test safe subsets." >> "$GITHUB_STEP_SUMMARY"
-          fi
-          exit 0
+          python3 .github/migrations/dante_full_rebase.py --target ee998ae6d73d5960671ec837ea2ae4a8a0489fec 2>&1 | tee /tmp/dante-full-nxnative-rebase.log
 
-      - name: Preserve detailed conflict report
+      - name: Preserve exact conflict and merge report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: dante-nxnative-head-probe
-          path: /tmp/dante-nxnative-probe.log
+          name: dante-nxnative-full-rebase-report
+          path: |
+            /tmp/dante-full-nxnative-rebase.log
+            /tmp/dante-full-nxnative-rebase.json
           if-no-files-found: warn
 
-      - name: Apply independent, conservative nxnative backports if full bump conflicts
-        if: steps.probe.outputs.result != '0'
-        id: backports
+      - name: Rebuild all fork patches from scratch at the new upstream pin
         run: |
           set -euo pipefail
-          python3 migration/dante_nxnative_backports.py --target 14f54e4c18e2a97905c3481e5e5c4d7764c272f2
+          python3 tools/engine.py check
+          python3 tools/engine.py sync
+          python3 tools/engine.py relink
+          test "$(cat .upstream-ref)" = "ee998ae6d73d5960671ec837ea2ae4a8a0489fec"
+          test "$(git -C engine rev-list --count ee998ae6d73d5960671ec837ea2ae4a8a0489fec..HEAD)" -ge 12
 
-      - name: Register documented switches used by accepted backports
-        if: steps.backports.outputs.count != '' && steps.backports.outputs.count != '0'
+      - name: Preserve iOS shell and graphic compatibility features
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import subprocess
-          pin = "14f54e4c18e2a97905c3481e5e5c4d7764c272f2"
-          upstream = subprocess.check_output(["git", "-C", "engine", "show", pin + ":docs/env_switches.tsv"], text=True)
-          found = {s.split("\t", 1)[0]: s for s in upstream.splitlines()[1:] if "\t" in s}
-          fork = Path("patches/fork_env_switches.tsv")
-          original = fork.read_text(encoding="utf-8")
-          rows = {s.split("\t", 1)[0]: s for s in original.splitlines()[1:] if "\t" in s}
-          for name in ("DM_NVN_UPLOAD_IDLE_MS",):
-              used = subprocess.run(["git", "-C", "engine", "grep", "-q", name, "HEAD", "--", "dm/gfx/nvn/nvn_mtl.m"]).returncode == 0
-              if used and name not in rows:
-                  if name not in found:
-                      raise RuntimeError("Missing authoritative upstream definition: " + name)
-                  rows[name] = found[name]
-                  print("Registered upstream-backed switch:", name)
-          fork.write_text("name\tclass\tmeaning\n" + "".join(rows[k] + "\n" for k in sorted(rows)), encoding="utf-8")
+          root=Path("engine")
+          checks={
+              "dynamic shell frameworks":("dm/ios/tools/build_ipa.sh","DM_FRAMEWORK_ONLY"),
+              "shared runtime profiles":("dm/host/hle_profile.c","dm_profile"),
+              "recycled NVN render targets":("dm/gfx/nvn/nvn_mtl.m","DM_NVN_RT_RECYCLE"),
+              "iOS controller mapping":("dm/ios/Sources/DmGamepad.m","DM_PAD_MAP")
+          }
+          for label,(file,key) in checks.items():
+              if key not in (root/file).read_text(errors="replace"):
+                  raise SystemExit("Missing downstream integration: "+label+": "+file)
+              print("PRESERVED: "+label,flush=True)
           PY
 
-      - name: Verify all backports reapply over the exact original pinned base
-        if: steps.backports.outputs.count != '' && steps.backports.outputs.count != '0'
-        run: |
-          set -euo pipefail
-          python3 tools/engine.py check
-          python3 tools/engine.py sync
-          python3 tools/engine.py relink
-
-      - name: Migrate only when the official queue is conflict-free
-        if: steps.probe.outputs.result == '0'
-        env:
-          TARGET: 14f54e4c18e2a97905c3481e5e5c4d7764c272f2
-        run: |
-          set -euo pipefail
-          python3 tools/engine.py bump --to "$TARGET"
-          python3 tools/engine.py check
-          python3 tools/engine.py sync
-          python3 tools/engine.py relink
-
-      - name: Run complete tool, UI, and workflow tests
-        if: steps.probe.outputs.result == '0' || steps.backports.outputs.count != '' && steps.backports.outputs.count != '0'
+      - name: Full engine tooling tests and iOS Swift build and tests
         run: |
           set -euo pipefail
           python3 -m pip install --disable-pip-version-check --only-binary=:all: 'lz4==4.4.5' 'capstone==5.0.9' 'unicorn==2.1.4'
@@ -120,26 +78,19 @@ jobs:
           python3 -m unittest discover -s .github/scripts/tests
           python3 -m compileall -q engine/scripts engine/dm/tools engine/dm/games engine/dm/mac
           bash -n engine/dm/ios/tools/build_ipa.sh
-          (cd frontend-ios && swift build)
+          (cd frontend-ios && swift build && swift test)
 
-      - name: Commit verified engine upgrade exclusively on Dante2iOS
-        if: steps.probe.outputs.result == '0' || steps.backports.outputs.count != '' && steps.backports.outputs.count != '0'
+      - name: Publish verified full rebase exclusively to Dante2iOS
         run: |
           set -euo pipefail
           test "$(git branch --show-current)" = "Dante2iOS"
-          git config user.name "dante2ios-engine-upgrade"
-          git config user.email "dante2ios-engine-upgrade@users.noreply.github.com"
+          git config user.name "dante2ios-upstream-integration"
+          git config user.email "dante2ios-upstream-integration@users.noreply.github.com"
           git add .upstream-ref patches/ README.md frontend/README.md frontend-qt/README.md
+          git diff --cached --check -- .upstream-ref patches/series patches/fork_env_switches.tsv README.md frontend/README.md frontend-qt/README.md
           if git diff --cached --quiet; then
-            echo "Engine upgrade required no changes."
+            echo "Already fully aligned; nothing to push."
             exit 0
           fi
-          # Patch mail files contain intentional diff whitespace (including Makefile TABs).
-          # Validate metadata here; engine.py check already validated every exported patch.
-          git diff --cached --check -- .upstream-ref README.md frontend/README.md frontend-qt/README.md patches/series patches/fork_env_switches.tsv
-          if [[ "${{ steps.probe.outputs.result }}" == "0" ]]; then
-            git commit -m "Dante2iOS: verify full nxnative engine HEAD rebase"
-          else
-            git commit -m "Dante2iOS: integrate verified independent nxnative engine backports"
-          fi
+          git commit -m "Dante2iOS: verified full nxnative upstream rebase"
           git push origin HEAD:Dante2iOS
