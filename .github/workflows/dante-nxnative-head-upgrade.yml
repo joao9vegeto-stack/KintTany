@@ -44,7 +44,7 @@ jobs:
           echo "- Target nxnative: \`$TARGET\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Dry-run exit code: \`$status\`" >> "$GITHUB_STEP_SUMMARY"
           if [[ "$status" != "0" ]]; then
-            echo "- **No engine changes were published.** Conflicts must be resolved against the 56-patch queue." >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Full HEAD rebase was blocked; no full bump published.** An independent backport stage will test safe subsets." >> "$GITHUB_STEP_SUMMARY"
           fi
           exit 0
 
@@ -55,6 +55,21 @@ jobs:
           name: dante-nxnative-head-probe
           path: /tmp/dante-nxnative-probe.log
           if-no-files-found: warn
+
+      - name: Apply independent, conservative nxnative backports if full bump conflicts
+        if: steps.probe.outputs.result != '0'
+        id: backports
+        run: |
+          set -euo pipefail
+          python3 migration/dante_nxnative_backports.py --target 14f54e4c18e2a97905c3481e5e5c4d7764c272f2
+
+      - name: Verify all backports reapply over the exact original pinned base
+        if: steps.backports.outputs.count != '' && steps.backports.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          python3 tools/engine.py check
+          python3 tools/engine.py sync
+          python3 tools/engine.py relink
 
       - name: Migrate only when the official queue is conflict-free
         if: steps.probe.outputs.result == '0'
@@ -68,7 +83,7 @@ jobs:
           python3 tools/engine.py relink
 
       - name: Run complete tool, UI, and workflow tests
-        if: steps.probe.outputs.result == '0'
+        if: steps.probe.outputs.result == '0' || steps.backports.outputs.count != '' && steps.backports.outputs.count != '0'
         run: |
           set -euo pipefail
           python3 -m pip install --disable-pip-version-check --only-binary=:all: 'lz4==4.4.5' 'capstone==5.0.9' 'unicorn==2.1.4'
@@ -80,7 +95,7 @@ jobs:
           (cd frontend-ios && swift build)
 
       - name: Commit verified engine upgrade exclusively on Dante2iOS
-        if: steps.probe.outputs.result == '0'
+        if: steps.probe.outputs.result == '0' || steps.backports.outputs.count != '' && steps.backports.outputs.count != '0'
         run: |
           set -euo pipefail
           test "$(git branch --show-current)" = "Dante2iOS"
