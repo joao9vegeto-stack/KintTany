@@ -5,8 +5,11 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
+import platform
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -52,6 +55,73 @@ def check_linux_prerequisites() -> None:
 
 
 
+def ensure_linux_native_extractor(engine: Path, cache_root: Path, module) -> Path:
+    """Publish the repo's real LibHac nx_extract for Linux; the committed binary is macOS-only.
+
+    Never replace engine/dm/tools/nx_extract_bin/nx_extract: it is the locked
+    universal Mach-O needed later by the Apple GitHub Actions build.
+    """
+    arch = platform.machine().lower()
+    runtime_id = {"x86_64": "linux-x64", "amd64": "linux-x64",
+                  "aarch64": "linux-arm64", "arm64": "linux-arm64"}.get(arch)
+    require(runtime_id is not None, f"unsupported Linux CPU architecture: {arch}")
+    expected_sha = module.nx_extract_source_sha(engine)
+    target = (cache_root / "native-tools" / runtime_id / expected_sha / "nx_extract")
+    cache_root.mkdir(parents=True, exist_ok=True)
+
+    def check_extractor(path: Path) -> bool:
+        if not path.is_file():
+            return False
+        try:
+            status = subprocess.run([str(path), "--source-sha"], capture_output=True,
+                                    text=True, timeout=60, check=False)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return status.returncode == 0 and status.stdout.strip() == expected_sha
+
+    if check_extractor(target):
+        print(f"[Dante2iOS] Reusing verified Linux nx_extract: {target}", flush=True)
+        return target
+
+    require(shutil.which("dotnet") is not None, "dotnet 10 SDK is missing")
+    for exe in ("clang", "gcc"):
+        require(shutil.which(exe) is not None, f"NativeAOT requires {exe}; install Linux dependencies")
+    project = engine / "dm" / "tools" / "nx_extract" / "nx_extract.csproj"
+    require(project.is_file(), f"nx_extract C# project is missing: {project}")
+    target_dir = target.parent
+    output_dir = target_dir / "publish"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        "dotnet", "publish", str(project), "--configuration", "Release",
+        "--runtime", runtime_id, "--self-contained", "true",
+        "--nologo", "--verbosity", "minimal",
+        "--artifacts-path", str(target_dir / "artifacts"),
+        "--output", str(output_dir),
+    ]
+    print(f"[Dante2iOS] Building real NXNative LibHac nx_extract as Linux NativeAOT "
+          f"({runtime_id}, source {expected_sha}); keeping the macOS binary intact.", flush=True)
+    log_file = target_dir / "dotnet-publish.log"
+    with log_file.open("w", encoding="utf-8") as log:
+        proc = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT,
+                              text=True, check=False)
+    if proc.returncode:
+        tail = log_file.read_text(encoding="utf-8", errors="replace")[-6500:]
+        require(False, f"Linux NativeAOT publish failed ({proc.returncode}), "
+                f"log {log_file}:\\n{tail}")
+    built = output_dir / "nx_extract"
+    require(check_extractor(built),
+            f"Linux nx_extract did not run with the expected embedded source hash "
+            f"{expected_sha}; see {log_file}")
+    # Reuse an already-verified artifact on next run. The temporary binary
+    # is never pushed to GitHub, does not alter the macOS engine, and is
+    # independent of NSP contents / secrets.
+    import os
+    os.replace(built, target)
+    require(check_extractor(target), f"installed Linux nx_extract is invalid: {target}")
+    print(f"[Dante2iOS] Linux nx_extract passed --source-sha: {expected_sha}", flush=True)
+    return target
+
+
 def run_preparation(args) -> dict:
     """Run nxnative's real NSP scan, provisional profile survey, extraction, rewrite and offline shader phase."""
     nx, nsp_dir, keys, work = (args.nx2apple_root.resolve(), args.nsp_dir.resolve(),
@@ -61,6 +131,11 @@ def run_preparation(args) -> dict:
     require(nsp_dir.is_dir() and keys.is_file(), "missing base NSP or prod.keys")
     module = load_builder(engine)
     check_linux_prerequisites()
+    linux_nx_extract = ensure_linux_native_extractor(engine, nx.parent, module)
+    # NXNative's builder resolves repo / NX_EXTRACT in its own module.
+    # An absolute Linux path replaces only the executable selected here.
+    # The committed universal macOS executable remains untouched for Actions.
+    module.NX_EXTRACT = str(linux_nx_extract)
     files = module.files_with_suffix(nsp_dir, ".nsp", ".xci")
     require(len(files) == 1 and files[0].suffix.lower() == ".nsp",
             f"expected one base NSP only, found {[p.name for p in files]}")

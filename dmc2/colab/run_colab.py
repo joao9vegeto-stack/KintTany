@@ -195,6 +195,8 @@ def install_linux_dependencies(root: Path) -> None:
         "git": "git",
         "curl": "curl",
         "cmake": "cmake",
+        "clang": "clang",
+        "gcc": "gcc",
         "ninja": "ninja-build",
         "pkg-config": "pkg-config",
     }
@@ -210,7 +212,7 @@ def install_linux_dependencies(root: Path) -> None:
         )
         return result.returncode == 0 and result.stdout.strip() == "installed"
 
-    apt_packages = ("build-essential", "libssl-dev")
+    apt_packages = ("build-essential", "libssl-dev", "zlib1g-dev")
     missing_packages = [name for name in apt_packages if not apt_package_installed(name)]
     missing_apt = list(dict.fromkeys([*missing_commands, *missing_packages]))
     if missing_apt:

@@ -50,6 +50,41 @@ jobs:
           print('Colab builder imported from:', module.__file__)
           PY
           echo "Colab-like Linux engine and actual builder module are verified."
+      - name: Install dotnet 10 and NativeAOT Linux prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq clang zlib1g-dev
+          curl -fsSL https://dot.net/v1/dotnet-install.sh -o "$RUNNER_TEMP/dmc2-dotnet-install.sh"
+          bash "$RUNNER_TEMP/dmc2-dotnet-install.sh" --channel 10.0 --install-dir "$RUNNER_TEMP/dmc2-dotnet"
+          echo "$RUNNER_TEMP/dmc2-dotnet" >> "$GITHUB_PATH"
+      - name: Publish and execute actual Linux nx_extract from pinned C# sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet --list-sdks
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from dmc2.colab.prepare_linux import load_builder, ensure_linux_native_extractor
+          engine = Path("engine").resolve()
+          builder = load_builder(engine)
+          mac_binary = engine / builder.NX_EXTRACT
+          before_stat = mac_binary.stat()
+          runtime_tool = ensure_linux_native_extractor(engine, Path(os.environ["RUNNER_TEMP"]), builder)
+          assert runtime_tool.is_file(), runtime_tool
+          builder.NX_EXTRACT = str(runtime_tool)
+          assert builder.find_nx_extract(engine, os.environ.copy()).resolve() == runtime_tool.resolve()
+          assert mac_binary.stat().st_size == before_stat.st_size
+          assert mac_binary.stat().st_mtime_ns == before_stat.st_mtime_ns
+          # This is an actual execution, not only a file existence check.
+          print("Linux nx_extract ran and passed source lock:", builder.nx_extract_source_sha(engine))
+          # Exercise the cache/reuse branch as well.
+          assert ensure_linux_native_extractor(engine, Path(os.environ["RUNNER_TEMP"]), builder) == runtime_tool
+          PY
+          git -C engine diff --exit-code -- dm/tools/nx_extract_bin/nx_extract
+          echo "Linux NativeAOT extractor built, executed and verified; macOS extractor untouched."
   build-dmc2:
     if: github.ref == 'refs/heads/Dante2iOS'
     runs-on: xcode-27
@@ -103,6 +138,12 @@ jobs:
           packages = ast.literal_eval(mapping.value)
           assert packages["ninja"] == "ninja-build", packages
           assert packages["zstd"] == "zstd", packages
+          assert packages["clang"] == "clang", packages
+          assert packages["gcc"] == "gcc", packages
+          prep = Path("dmc2/colab/prepare_linux.py").read_text()
+          assert "ensure_linux_native_extractor" in prep
+          assert 'module.NX_EXTRACT = str(linux_nx_extract)' in prep
+          assert '"--source-sha"' in prep
           assert all(isinstance(k, str) and isinstance(v, str)
                      for k, v in packages.items())
           print("Colab Ubuntu APT mapping: ninja -> ninja-build; zstd -> zstd.")
