@@ -51,6 +51,22 @@ def main():
             raise RuntimeError("Localization could not be verified: "+locale)
         path.write_text(raw,encoding="utf-8")
     print("Added the two Switch language labels across all ten frontend locales.",flush=True)
+    # The pinned engine now exposes Polish and Thai. This RomFS fixture
+    # has tags for the former five languages only; the two newly introduced
+    # codes are deliberately retained because the RomFS index cannot
+    # distinguish them yet (the test below already documents this policy).
+    swift_test=ROOT/"frontend-ios/Tests/ShellHostTests/RomfsLanguagesTests.swift"
+    test_source=swift_test.read_text(encoding="utf-8")
+    old_expected='        let language = try #require(langRow(narrowed))\n        #expect(language.options?.map { $0[0] } == ["en-US", "ja", "fr", "zh-Hant", "zh-Hans"])'
+    new_expected='        let language = try #require(langRow(narrowed))\n        #expect(language.options?.map { $0[0] } == ["en-US", "ja", "fr", "zh-Hant", "zh-Hans", "pl", "th"])'
+    if old_expected in test_source:
+        if test_source.count(old_expected)!=1:
+            raise RuntimeError("Ambiguous pinned-engine Swift language fixture")
+        swift_test.write_text(test_source.replace(old_expected,new_expected),encoding="utf-8")
+        print("Updated Swift fallback fixture to preserve new Polish/Thai options.",flush=True)
+    elif new_expected not in test_source:
+        raise RuntimeError("Swift RomFS fallback assertion changed; manual review required")
+
     cmd(sys.executable,"tools/l10n_shell_catalogs.py")
     cmd(sys.executable,"tools/tests/test_launcher_texts.py","--write")
     # Under the shared iOS shell, Metal HUD is enabled process-wide before
