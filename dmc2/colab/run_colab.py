@@ -355,15 +355,16 @@ def prepare(args, api=None) -> dict:
     # pin, patch-series digest and generated commit. Avoid repeating an
     # expensive pre-sync check, and heal partial previous attempts.
     engine_tool = nx / "tools" / "engine.py"
-    def engine_command(command: str, accepted=(0,)) -> int:
-        argv = [sys.executable, str(engine_tool), command]
+    def engine_command(command: str, *options: str, accepted=(0,)) -> int:
+        argv = [sys.executable, str(engine_tool), command, *options]
         print("[Dante2iOS] +", " ".join(argv), flush=True)
         result = subprocess.run(argv, cwd=nx, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True,
                                 encoding="utf-8", errors="replace", check=False)
         if result.stdout:
             print(result.stdout, end="" if result.stdout.endswith("\n") else "\n", flush=True)
-        (root / f"engine-{command}.log").write_text(
+        log_suffix = "".join("-" + option.removeprefix("--") for option in options)
+        (root / f"engine-{command}{log_suffix}.log").write_text(
             result.stdout + f"\nexit={result.returncode}\n", encoding="utf-8")
         if result.returncode not in accepted:
             fail(f"NXNative engine {command} failed (exit {result.returncode}). "
@@ -378,11 +379,27 @@ def prepare(args, api=None) -> dict:
     else:
         print("[Dante2iOS] Exact NXNative engine + fork patch queue already materialized; reusing.", flush=True)
     engine_command("stale")
-    if not (nx / "engine" / "scripts" / "build_ipa_from_nsp.py").is_file():
-        fail("engine sync was stamped but the real build_ipa_from_nsp.py is missing")
-    if not (nx / "engine" / "dm" / "games" / "profile_guess.py").is_file():
-        fail("engine sync is missing the provisional game profile generator")
-    print("[Dante2iOS] Engine materialized and verified.", flush=True)
+    required_builder_files = (
+        nx / "engine" / "scripts" / "build_ipa_from_nsp.py",
+        nx / "engine" / "dm" / "games" / "profile_guess.py",
+    )
+    missing_builder_files = [p for p in required_builder_files if not p.is_file()]
+    if missing_builder_files:
+        # A stale stamp alone is not sufficient after a partial checkout,
+        # interrupted disk write, or manual cleanup. Retry only engine/;
+        # preserve the NSP, extracted game files, keys and work cache.
+        print("[Dante2iOS] Engine stamp exists, but builder files are absent: "
+              + ", ".join(map(str, missing_builder_files)), flush=True)
+        print("[Dante2iOS] Repairing materialized engine with sync --force ...", flush=True)
+        engine_command("sync", "--force")
+        engine_command("stale")
+        missing_builder_files = [p for p in required_builder_files if not p.is_file()]
+        if missing_builder_files:
+            fail("NXNative builder is still missing after forced sync: "
+                 + ", ".join(map(str, missing_builder_files))
+                 + ". See " + str(root / "engine-sync-force.log"))
+    print("[Dante2iOS] Engine materialized and verified: "
+          + str(required_builder_files[0]), flush=True)
     work = root / "work"
     prep = run_preparation(argparse.Namespace(nx2apple_root=nx, nsp_dir=Path(source["package_dir"]),
         keys=Path(source["keys_path"]), work_dir=work))

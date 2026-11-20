@@ -38,7 +38,18 @@ jobs:
           python3 tools/engine.py stale
           test -f engine/scripts/build_ipa_from_nsp.py
           test -f engine/dm/games/profile_guess.py
-          echo "Colab-like Linux engine is synchronized and stamped."
+          python3 - <<'PY'
+          from pathlib import Path
+          from dmc2.colab.prepare_linux import load_builder
+          builder = Path('engine/scripts/build_ipa_from_nsp.py')
+          assert builder.is_file(), builder
+          module = load_builder(Path('engine'))
+          assert callable(module.parse_args)
+          assert callable(module.main)
+          assert callable(module.build_sources)
+          print('Colab builder imported from:', module.__file__)
+          PY
+          echo "Colab-like Linux engine and actual builder module are verified."
   build-dmc2:
     if: github.ref == 'refs/heads/Dante2iOS'
     runs-on: xcode-27
@@ -74,6 +85,7 @@ jobs:
               assert p in content, name
           colab = Path('dmc2/colab/run_colab.py').read_text()
           assert 'engine_command("sync")' in colab
+          assert 'engine_command("sync", "--force")' in colab
           assert 'engine_command("stale")' in colab
           assert 'engine.py"), "check"' not in colab
           assert 'engine-command' not in colab
