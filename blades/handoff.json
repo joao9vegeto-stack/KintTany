@@ -102,5 +102,12 @@
       "provisional_heap_and_region_checks_skipped_on_linux"
     ]
   },
-  "created_utc": "2026-11-20T21:09:53.566034+00:00"
+  "created_utc": "2026-11-20T21:09:53.566034+00:00",
+  "retry": {
+    "parent_run_id": 44818026792,
+    "attempt": 2,
+    "reason": "Dagor Vulkan host initialization queried missing KHR 1.1 physical-device APIs before SPIR-V capture",
+    "engine_patch": "0073-vulkan-dagor-khr-physical-device-queries.patch",
+    "patch_commit": "441f63e5b718bc749ede111fbca4e808166f42c0"
+  }
 }
