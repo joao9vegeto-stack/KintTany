@@ -11,7 +11,11 @@ class DagorVulkanPatchTests(unittest.TestCase):
     def test_series_includes_patch_once(self):
         names = (ROOT / "patches/series").read_text().splitlines()
         self.assertEqual(names.count(PATCH), 1)
-        self.assertEqual(names[-1], PATCH)
+        # A later diagnostic or compatibility patch may follow this one.
+        self.assertIn(PATCH, names)
+        trace = "0074-vulkan-dagor-trace-physical-device-enumeration.patch"
+        self.assertEqual(names.count(trace), 1)
+        self.assertLess(names.index(PATCH), names.index(trace))
 
     def test_promoted_physical_device_queries_registered(self):
         data = (ROOT / "patches" / PATCH).read_text()
