@@ -218,6 +218,13 @@ jobs:
           python3 tools/engine.py check
           python3 tools/engine.py sync
           python3 tools/engine.py stale
+          # Reject regression discovered in the actual Xcode C compilation.
+          test -f engine/dm/host/hle_thread.c
+          if grep -En 'det_wait|guest_deadline' engine/dm/host/hle_thread.c; then
+            echo "::error::Unresolved wait variables in patched hle_thread.c"
+            exit 1
+          fi
+          grep -Fq 'if (atomic_load(&g_teardown_park)) teardown_exit_locked(t);' engine/dm/host/hle_thread.c
           test -z "$(git status --porcelain -- '*.md')"
           test "$(cat .upstream-ref)" = "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb"
           test -f engine/dm/ios/tools/build_ipa.sh
@@ -256,8 +263,10 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: Dante2iOS-DMC2-failure-${{ github.run_number }}
+          # Include the actual clang and Xcode diagnostic log in failure artifacts.
           path: |
             ${{ runner.temp }}/dmc2/work/logs/
+            ${{ runner.temp }}/dmc2/work/ipa/build/ios/pkg/build-framework.log
             ${{ runner.temp }}/dmc2-output/build-report.json
           if-no-files-found: warn
           retention-days: 14

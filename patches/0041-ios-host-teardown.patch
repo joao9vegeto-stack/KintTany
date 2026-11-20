@@ -4157,21 +4157,13 @@ index 2c7b26c..2a6e258 100644
  static thr_t *pick(int kind, uint64_t a) {
      thr_t *b = NULL;
      for (thr_t *t = g_wait; t; t = t->next) {
-@@ -352,9 +376,17 @@ static int64_t block(thr_t *t, int kind, int64_t ns) {
+@@ -352,9 +376,11 @@ static int64_t block(thr_t *t, int kind, int64_t ns) {
      if (ns > 0) { clock_gettime(CLOCK_REALTIME, &dl); dl.tv_sec += ns / 1000000000; dl.tv_nsec += ns % 1000000000;
                    if (dl.tv_nsec >= 1000000000) { dl.tv_sec++; dl.tv_nsec -= 1000000000; } }
      while (!t->woke) {
--        int rc = g_cond_wait(&t->cv, ns > 0 ? &dl : NULL);
--        if (rc == ETIMEDOUT && !t->woke) { wait_unlink(t); t->wkind = 0; return R_TIMEOUT; }
-+        int rc;
-+        if (det_wait) {
-+            uint64_t now = guest_ns();
-+            if (now >= guest_deadline) { wait_unlink(t); t->wkind = 0; return R_TIMEOUT; }
-+            (void)(guest_deadline - now);
-+            rc = g_cond_wait(&t->cv, NULL);
-+        } else rc = ns > 0 ? g_cond_wait(&t->cv, &dl) : g_cond_wait(&t->cv, NULL);
+         int rc = g_cond_wait(&t->cv, ns > 0 ? &dl : NULL);
 +        if (atomic_load(&g_teardown_park)) teardown_exit_locked(t);
-+        if (rc == ETIMEDOUT && !t->woke && (!det_wait || guest_ns() >= guest_deadline)) { wait_unlink(t); t->wkind = 0; return R_TIMEOUT; }
+         if (rc == ETIMEDOUT && !t->woke) { wait_unlink(t); t->wkind = 0; return R_TIMEOUT; }
      }
 +    if (atomic_load(&g_teardown_park)) teardown_exit_locked(t);
      return t->wres;
