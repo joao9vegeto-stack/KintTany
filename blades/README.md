@@ -24,3 +24,21 @@ The game base is title `0100CFA00CC74000` (v0); the update version is discovered
 - No original base/update NSP, keys or external RomFS embedded in the IPA.
 - Do not trigger a game build just by editing scripts; only an authenticated handoff commit starts it.
 - Do not touch `Dante2iOS` or other branches. No fabricated profile, shader list, update version or successful game-boot claim.
+
+## Drive download transport — same as KaKaRoTiOS
+
+Both Colab (`blades/colab/source_archive.py`, `blades/colab/run_colab.py`) and Actions
+(`blades/scripts/prepare_actions.py`) import `blades/drive_chunks.py`.
+
+- Large files: 6 concurrent HTTP `Range: bytes=start-end` workers, **64 MiB each**.
+  Each worker validates exact HTTP 206 `Content-Range`, payload length, and retries
+  its own failed range up to 5 times. `os.pwrite` writes by offset safely.
+- Strict Range probe. A server that ignores Range falls back to the Google API downloader,
+  fetching **32 MiB chunks** with up to 10 retries.
+- Completed local files are reused only when the full content matches the supplied
+  size and SHA-256/Google Drive MD5. New files are atomically promoted from `.part`
+  after final full-file verification. Interrupted worker requests retry per range.
+- Colab verifies the base/update NSP and prod.keys from Drive; Actions verifies the
+  prepared workspace archive and external merged RomFS. Uploads are resumable 64 MiB.
+- This is **download/chunk retry**, not durable cross-session reuse of incomplete
+  `.part` files: a newly launched Colab session still needs a completed Drive checkpoint.

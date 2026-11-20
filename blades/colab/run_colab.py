@@ -87,41 +87,13 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+# Use the identical chunked downloader for Colab recovery and source transfers.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from drive_chunks import download_drive_file as _download_chunks
+
+
 def download_drive_file(api, item: dict, destination: Path) -> dict:
-    from googleapiclient.http import MediaIoBaseDownload
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    expected = int(item.get("size") or 0)
-    if destination.is_file() and expected and destination.stat().st_size == expected:
-        print(f"[BladesTime] Reusing {item.get('name', item['id'])}: {expected:,} bytes already present.")
-        return
-    temp = destination.with_suffix(destination.suffix + ".part")
-    request = api.files().get_media(fileId=item["id"], supportsAllDrives=True)
-    digest, total = hashlib.sha256(), 0
-    started = time.monotonic()
-    with temp.open("wb") as stream:
-        downloader = MediaIoBaseDownload(stream, request, chunksize=CHUNK)
-        done = False
-        while not done:
-            status, done = downloader.next_chunk()
-            if status:
-                print(f"  {item['name']}: {status.progress() * 100:.1f}%", flush=True)
-    with temp.open("rb") as stream:
-        for block in iter(lambda: stream.read(16 * 1024 * 1024), b""):
-            digest.update(block)
-            total += len(block)
-    expected = int(item.get("size") or 0)
-    if expected and total != expected:
-        temp.unlink(missing_ok=True)
-        fail(f"Drive size mismatch for {item['name']}: expected {expected}, got {total}")
-    temp.replace(destination)
-    elapsed = max(time.monotonic() - started, 0.001)
-    print(
-        f"[BladesTime] Download verified: {item.get('name', item['id'])} — "
-        f"{total:,} bytes ({total / 1024**3:.2f} GiB) in {elapsed:.1f}s "
-        f"({total / elapsed / 1024**2:.1f} MiB/s).",
-        flush=True,
-    )
-    return {"name": item["name"], "id": item["id"], "size": total, "sha256": digest.hexdigest()}
+    return _download_chunks(api, item, destination)
 
 
 def upload_drive_file(api, path: Path, parent_id: str, name: str) -> dict:
@@ -481,14 +453,8 @@ def recover(args, api=None) -> dict | None:
         if len(items) != 1:
             continue
         path = Path("/content/bladestime-handoff.json")
-        tmp = path.with_suffix(".part")
-        req = api.files().get_media(fileId=items[0]["id"], supportsAllDrives=True)
-        with tmp.open("wb") as out:
-            dl = MediaIoBaseDownload(out, req, chunksize=1024*1024)
-            done = False
-            while not done:
-                _, done = dl.next_chunk()
-        tmp.replace(path)
+        # Handoff recovery uses the same chunk/MD5-verified transfer.
+        download_drive_file(api, items[0], path)
         try:
             d = json.loads(path.read_text())
         except (ValueError, OSError):

@@ -31,7 +31,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/BladesTime"
           test "$(cat .upstream-ref)" = "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb"
-          python3 -m py_compile blades/colab/source_archive.py blades/colab/prepare_linux.py blades/colab/run_colab.py blades/scripts/prepare_actions.py blades/scripts/build_shared.py
+          python3 -m py_compile blades/drive_chunks.py blades/colab/source_archive.py blades/colab/prepare_linux.py blades/colab/run_colab.py blades/scripts/prepare_actions.py blades/scripts/build_shared.py
           python3 - <<'PY'
           from pathlib import Path
           import re, json, uuid
@@ -66,7 +66,7 @@ jobs:
           xcodebuild -version
           brew install xcodegen zstd glslang
           command -v dotnet >/dev/null || brew install --cask dotnet-sdk
-          python3 -m pip install --disable-pip-version-check lz4 'capstone>=5,<6' fonttools zbic backports.zstd google-api-python-client google-auth
+          python3 -m pip install --disable-pip-version-check lz4 'capstone>=5,<6' fonttools zbic backports.zstd google-api-python-client google-auth requests
           xcrun --sdk iphoneos metal --version
       - name: Materialize NXNative from pinned patches
         shell: bash
@@ -79,7 +79,7 @@ jobs:
           test -f engine/scripts/build_ipa_from_nsp.py
           bash -n engine/dm/ios/tools/build_ipa.sh
           bash -n frontend-ios/Shell/build_shell.sh
-      - name: Restore SHA-256 verified Colab handoff from Drive
+      - name: Restore verified Colab workspace and external RomFS using 6 x 64 MiB HTTP Ranges
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: |

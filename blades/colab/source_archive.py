@@ -36,57 +36,14 @@ def list_children(api, parent_id: str) -> list[dict]:
             return files
 
 
+# Shared with Actions: six 64 MiB HTTP Range workers, verified cache, and 32 MiB fallback.
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from drive_chunks import download_drive_file as _download_chunks
+
+
 def download_drive_file(api, item: dict, destination: Path) -> None:
-    from googleapiclient.http import MediaIoBaseDownload
-
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    expected = int(item.get("size") or 0)
-    expected_md5 = str(item.get("md5Checksum") or "").lower()
-    if destination.is_file() and expected and destination.stat().st_size == expected:
-        if expected_md5:
-            digest = hashlib.md5()
-            with destination.open("rb") as stream:
-                for block in iter(lambda: stream.read(16 * 1024 * 1024), b""):
-                    digest.update(block)
-            if digest.hexdigest().lower() == expected_md5:
-                print(f"[BladesTime] Reutilizando {item['name']}: {expected:,} bytes verificados (MD5 Drive).")
-                return
-        else:
-            print(f"[BladesTime] Reutilizando {item['name']}: {expected:,} bytes (tamanho conferido).")
-            return
-    partial = destination.with_suffix(destination.suffix + ".part")
-    request = api.files().get_media(fileId=item["id"], supportsAllDrives=True)
-    started = time.monotonic()
-    with partial.open("wb") as output:
-        downloader = MediaIoBaseDownload(output, request, chunksize=CHUNK)
-        done = False
-        while not done:
-            status, done = downloader.next_chunk()
-            if status:
-                print(f"[BladesTime] Drive {item['name']}: {status.progress() * 100:.1f}%")
-    if expected and partial.stat().st_size != expected:
-        partial.unlink(missing_ok=True)
-        fail(f"tamanho incorreto ao baixar {item['name']} do Drive.")
-    if partial.stat().st_size == 0:
-        partial.unlink(missing_ok=True)
-        fail(f"o arquivo {item['name']} baixado do Drive está vazio.")
-    if expected_md5:
-        check = hashlib.md5()
-        with partial.open("rb") as stream:
-            for block in iter(lambda: stream.read(16 * 1024 * 1024), b""):
-                check.update(block)
-        if check.hexdigest().lower() != expected_md5:
-            partial.unlink(missing_ok=True)
-            fail(f"Drive MD5 mismatch after download: {item['name']}")
-    partial.replace(destination)
-    elapsed = max(time.monotonic() - started, 0.001)
-    size = destination.stat().st_size
-    print(
-        f"[BladesTime] Download concluído: {item['name']} — {size:,} bytes "
-        f"({size / 1024**3:.2f} GiB), {elapsed:.1f}s, "
-        f"{size / elapsed / 1024**2:.1f} MiB/s."
-    )
-
+    _download_chunks(api, item, destination)
 
 
 TITLE_ID = "0100CFA00CC74000"
