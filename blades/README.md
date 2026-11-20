@@ -42,3 +42,5 @@ Both Colab (`blades/colab/source_archive.py`, `blades/colab/run_colab.py`) and A
   prepared workspace archive and external merged RomFS. Uploads are resumable 64 MiB.
 - This is **download/chunk retry**, not durable cross-session reuse of incomplete
   `.part` files: a newly launched Colab session still needs a completed Drive checkpoint.
+
+Run the offline transport tests without contacting Google Drive: `python3 -m unittest discover -s blades/tests -v`. The game workflow executes them before installing expensive build prerequisites.
