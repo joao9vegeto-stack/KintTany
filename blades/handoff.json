@@ -1,0 +1,106 @@
+{
+  "format": 1,
+  "project": "BladesTime",
+  "branch": "BladesTime",
+  "request_id": "93a19dcd-6291-438b-8fe4-3255d32bbc46",
+  "title_id": "0100CFA00CC74000",
+  "package_version": "v262144",
+  "source_ref": "BladesTime",
+  "source_files": {
+    "base": {
+      "id": "1Xj8-gmznW5Pk6fnnqjsH4wZAfmAl065U",
+      "name": "Blades of Time [0100CFA00CC74000][v0].nsp",
+      "size": 2891806032,
+      "sha256": "aaa1d5b00655c4fff298e7f6cae12b5feec5b36fea2b419cfbef36dd2086a6c3"
+    },
+    "update": {
+      "id": "1HzAcKAyJTDJ9kVTPoyvOuJVSpExyv-3j",
+      "name": "update.nsp",
+      "size": 655754688,
+      "sha256": "cd55cbf5997179612c878e85ef7d8b96491991982c50535406ed5e058106bcf5"
+    }
+  },
+  "engine_pin": "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb",
+  "source_commit": "69f9e4d32f4e1ba796d7a95f5cf39d542b291889",
+  "drive_output_folder_id": "16EVYM9PX_TM4OHM47PmxZQR-HT_jnU2z",
+  "drive_output_folder_url": "https://drive.google.com/drive/folders/16EVYM9PX_TM4OHM47PmxZQR-HT_jnU2z",
+  "work_archive": {
+    "name": "blades-work.tar.zst",
+    "id": "11uXlMtOaTqs1dun3ryptECKnGCkNc8iI",
+    "size": 34506577,
+    "sha256": "f2c3369d5dd94f93d690238af28306849aa4df0a2c36d9cc0a9a03751b5333f5"
+  },
+  "game_data": {
+    "folder_id": "18N6GkHoR7NveJsqByqC9opCbN8CzqSEu",
+    "folder_url": "https://drive.google.com/drive/folders/18N6GkHoR7NveJsqByqC9opCbN8CzqSEu",
+    "romfs": {
+      "name": "romfs.img",
+      "id": "18ME-1NDybrTBQud6yEWVO7SxlW6X71Bu",
+      "size": 2994104987,
+      "sha256": "1da3904ba4ec53b18b10a8979c794a9002c02fe61e5566aa5c4350d82be3dc0f"
+    },
+    "shader_romfs": [],
+    "aoc": [],
+    "romfs_relative_path": "extract/v262144/RomFS.img"
+  },
+  "prepared": {
+    "format": 1,
+    "project": "BladesTime",
+    "branch": "BladesTime",
+    "title_id": "0100CFA00CC74000",
+    "package_version": "v262144",
+    "source_ref": "BladesTime",
+    "engine_pin": "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb",
+    "input_package_count": 2,
+    "input_nsp_count": 2,
+    "input_update_count": 1,
+    "base_content_version": 0,
+    "update_content_version": 262144,
+    "input_dlc_count": 0,
+    "provisional": true,
+    "profile_relative_dir": "profile",
+    "graphics": "vulkan",
+    "modules": [
+      "main",
+      "sdk"
+    ],
+    "shader_package_key": null,
+    "shader_chain": "0724088d3779",
+    "shader_split_stage": "metal_deferred",
+    "source_capture_flags": [
+      "vk_capture"
+    ],
+    "mac_host_stages": [
+      "vk_capture"
+    ],
+    "jit_required": false,
+    "linux_ue_decode_complete": false,
+    "shader_versions": [
+      "v262144"
+    ],
+    "romfs_relative_path": "extract/v262144/RomFS.img",
+    "romfs_id_relative_path": "extract/v262144/RomFS.img.id",
+    "aoc_images": [],
+    "aoc_title_ids": {},
+    "dlc_present": false,
+    "romfs_size": 2994104987,
+    "prepared_stages": [
+      "real_content_metadata_scan",
+      "provisional_profile_survey_if_required",
+      "base_plus_update_romfs_merge",
+      "aarch64_rewrite",
+      "gl_vk_shader_translation_deferred"
+    ],
+    "deferred_stages": [
+      "vk_capture",
+      "ios_metal_shader_compile",
+      "game_framework_build",
+      "shared_shell_xcode_build",
+      "adhoc_sign_and_ipa_pack"
+    ],
+    "limitations": [
+      "provisional_heap_and_region_checks_skipped_on_linux"
+    ]
+  },
+  "created_utc": "2026-11-20T21:09:53.566034+00:00"
+}
