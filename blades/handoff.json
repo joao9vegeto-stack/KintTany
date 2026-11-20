@@ -104,10 +104,10 @@
   },
   "created_utc": "2026-11-20T21:09:53.566034+00:00",
   "retry": {
-    "parent_run_id": 44824077665,
-    "attempt": 6,
-    "reason": "Retain layer_shaders options alongside from_seed to fix NameError after 8 real SPIR-V modules captured",
-    "engine_patch": "0076-build-restore-layer-shaders-options-after-from-seed.patch",
-    "patch_commit": "7f2884f065c1aac40172427e1e9c6cf5a8724d8c"
+    "parent_run_id": 44825004525,
+    "attempt": 7,
+    "reason": "Reproduce iPhone SquirrelFunction<> fatal after splash movie and 720p viewport in 1080p swapchain; use DM_DBG DM_FS and bounded Vulkan viewport telemetry, preserve real capture logs",
+    "engine_patch": "0077-vulkan-dagor-log-viewport-scissor-size.patch",
+    "patch_commit": "effeb911ad7257abc473f4f0306b03ffc4dde986"
   }
 }
