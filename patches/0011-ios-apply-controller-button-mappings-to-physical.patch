@@ -7,11 +7,11 @@ Upstream-Status: forwarded seedds/nxnative#955 (on #386, patch 0009)
 Reason: the iOS host ignores DM_PAD_MAP, so the shell's button mapping (global and per game) never reaches physical controllers. The Mac host applies it already
 Issue: LNPANDY/NX2Apple#494
 ---
- dm/ios/Sources/DmGamepad.m | 6 ++++++
- 1 file changed, 6 insertions(+)
+ dm/ios/Sources/DmGamepad.m | 14 +++++++++-----
+ 1 file changed, 9 insertions(+), 5 deletions(-)
 
 diff --git a/dm/ios/Sources/DmGamepad.m b/dm/ios/Sources/DmGamepad.m
-index 46a33d5..3a1b524 100644
+index 55a9fe2..8238a54 100644
 --- a/dm/ios/Sources/DmGamepad.m
 +++ b/dm/ios/Sources/DmGamepad.m
 @@ -29,6 +29,7 @@
@@ -22,7 +22,7 @@ index 46a33d5..3a1b524 100644
  #include <stdatomic.h>
  #import "DmLayout.h"
  #import "DmGameMenu.h"
-@@ -565,6 +566,7 @@ - (void)refresh {   // pressed state → fill, sticks → knob position
+@@ -565,6 +566,7 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
  static pad_slots g_slots;
  static GCController *g_held[DM_PLAYERS];   // the controller of each slot, kept alive while it holds it (the slot table keys on its pointer)
  static int g_merge, g_press_to_join;
@@ -30,15 +30,20 @@ index 46a33d5..3a1b524 100644
  static int32_t axis(float v) { return (int32_t)(fmaxf(-1.f, fminf(1.f, v)) * 32767); }
  static const char *pad_name(GCController *c);
  static void npad_name(int p, char *out, size_t cap);
-@@ -588,6 +590,7 @@ static void read_pad(GCExtendedGamepad *g) {
+@@ -646,15 +648,17 @@ static BOOL pad_listen(GCController *c) {
+             if (controller && state.elementValueDidChangeHandler) read_pad(controller);
+         };
      }
-     if (cp_poll()) return;   // the controller applet's prompt has the controllers (front_ctrl_support)
-     dm_haptics_apple_controller(p, g.controller);
+-    return YES;
+-}
+-static void pad_unlisten(GCController *c) {
+-    if (c.extendedGamepad) c.extendedGamepad.valueChangedHandler = nil;
+-    else pad_live_input(c).elementValueDidChangeHandler = nil;
++    if (cp_poll()) return;   // the controller applet's prompt has the controllers (front_ctrl_support)
++    dm_haptics_apple_controller(p, g.controller);
 +    m = pad_map_apply(&g_padmap, m);
-     dm_pad_set_player(p, m, axis(g.leftThumbstick.xAxis.value), axis(g.leftThumbstick.yAxis.value), axis(g.rightThumbstick.xAxis.value), axis(g.rightThumbstick.yAxis.value));
++    dm_pad_set_player(p, m, axis(g.leftThumbstick.xAxis.value), axis(g.leftThumbstick.yAxis.value), axis(g.rightThumbstick.xAxis.value), axis(g.rightThumbstick.yAxis.value));
  }
- // Home and Capture: without this iOS takes them as system gestures (Home opens the Games overlay, Capture a screenshot); the app gives them no function
-@@ -595,6 +598,9 @@ static void read_pad(GCExtendedGamepad *g) {
  static const char *pad_name(GCController *c) { return c.vendorName.UTF8String ?: "?"; }
  static void npad_name(int p, char *out, size_t cap) { uint32_t id = dm_player_npad(p); if (id == 0x20) snprintf(out, cap, "handheld"); else snprintf(out, cap, "%u", id); }
  static void pads_start(void) {

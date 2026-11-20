@@ -17,7 +17,7 @@ Issue: LNPANDY/NX2Apple
  dm/gfx/nvn/msl_mount.c               | 260 ++++++++++++
  dm/gfx/nvn/nvn_mtl.m                 |  46 ++-
  dm/gfx/tests/t_shmap_warm.m          |  78 ++++
- dm/gfx/vk/hle_vk.m                   |  83 +++-
+ dm/gfx/vk/hle_vk.m                   |  89 +++--
  dm/host/hle_lifecycle.c              |   2 +
  dm/host/romfs_identity.h             |  10 +-
  dm/host/romfs_image.h                | 119 +++++-
@@ -29,17 +29,17 @@ Issue: LNPANDY/NX2Apple
  dm/tools/romfs.py                    |  69 +++-
  dm/tools/romfs_image.py              | 577 ++++++++++++++++++++++++++-
  dm/tools/tests/test_msl_trailer.py   | 491 +++++++++++++++++++++++
- 17 files changed, 1921 insertions(+), 114 deletions(-)
+ 17 files changed, 1918 insertions(+), 123 deletions(-)
  create mode 100644 dm/gfx/msl_mount.h
  create mode 100644 dm/gfx/nvn/msl_mount.c
  create mode 100644 dm/tools/tests/test_msl_trailer.py
 
 diff --git a/dm/gfx/gl/hle_gl.m b/dm/gfx/gl/hle_gl.m
-index f524db1..b5a67d2 100644
+index c8b8ef1..f9ce576 100644
 --- a/dm/gfx/gl/hle_gl.m
 +++ b/dm/gfx/gl/hle_gl.m
-@@ -26,9 +26,13 @@
- #include <CommonCrypto/CommonDigest.h>
+@@ -27,9 +27,13 @@
+ #include <ctype.h>
  #include <mach/mach.h>
  #include "../../host/host_image.h"
 +#include "../msl_mount.h"
@@ -52,7 +52,7 @@ index f524db1..b5a67d2 100644
  
  int mtl_fps_target(void);
  int mtl_link_active(void); int mtl_link_wait_tick(int vsyncs, uint64_t timeout_ns);   // nvn_mtl.m
-@@ -162,53 +166,91 @@
+@@ -167,53 +171,91 @@ typedef struct { char name[48]; uint16_t slot; uint32_t size; } shblk;
  typedef struct { char key[17]; int frag, ub_slot, ub_size, arg_slot, nargs, na, nu, nt, nb; shattr *a; shuni *u; shsamp *t; shblk *b; } shinfo;
  static shinfo *g_sh; static int g_nsh;
  static int sh_cmp(const void *a, const void *b) { int c = memcmp(((const shinfo *)a)->key, ((const shinfo *)b)->key, 16); return c ? c : ((const shinfo *)a)->frag - ((const shinfo *)b)->frag; }
@@ -185,7 +185,7 @@ index f524db1..b5a67d2 100644
  }
  static const shinfo *sh_find(const char *key, int frag) { shinfo k; memcpy(k.key, key, 16); k.frag = frag; return g_nsh ? bsearch(&k, g_sh, g_nsh, sizeof *g_sh, sh_cmp) : NULL; }
  
-@@ -2825,7 +2867,7 @@ static void note_miss(const char *name) {
+@@ -3333,7 +3375,7 @@ EGL(eglGetProcAddress, void *, const char *name) {
  }
  
  void dm_gl_teardown(void) { @autoreleasepool {
@@ -194,7 +194,7 @@ index f524db1..b5a67d2 100644
      dm_gl_drain();
      pass_end();
      g_cb = nil;
-@@ -2880,6 +2922,7 @@ void dm_gl_teardown(void) { @autoreleasepool {
+@@ -3388,6 +3430,7 @@ void dm_gl_teardown(void) { @autoreleasepool {
      g_frames = 0;
  
      g_lib = nil; g_util = nil;
@@ -503,7 +503,7 @@ index 0000000..4167f1c
 +    pthread_mutex_unlock(&g_msl_tr_mu);
 +}
 diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
-index bcb1eb2..be2d7f0 100644
+index 8d65353..83d7d72 100644
 --- a/dm/gfx/nvn/nvn_mtl.m
 +++ b/dm/gfx/nvn/nvn_mtl.m
 @@ -41,6 +41,7 @@
@@ -514,7 +514,7 @@ index bcb1eb2..be2d7f0 100644
  #include "dmsh_chain.h"   // DMSH_CHAIN: the translation chain version of the B shader library expected by this source tree, one for every game (beside this file, tools/dmsh_chain.py --header)
  #include "game_profile.h"   // game profile constants (profile id, the profile's switches)
  // Texture slot table per stage: 0-127 the combined handles (nvnCommandBufferBindTexture), 128-255 the separate texture binds (NVN_SEPTEX_SLOT0, nvn_obj.h)
-@@ -6511,13 +6512,25 @@ static int clear_rect_zero(int i) {
+@@ -6625,13 +6626,25 @@ static const img_ent *msl_image_file(NSString *path, romfs_img **img) {
      *img = m;
      return m ? msl_image_find(m, path.lastPathComponent.UTF8String) : NULL;
  }
@@ -543,7 +543,7 @@ index bcb1eb2..be2d7f0 100644
  }
  static NSString *exe_rel(const char *rel) {
      char buf[4096]; uint32_t n = sizeof buf;
-@@ -6553,10 +6566,13 @@ static void shmap_read(void) {
+@@ -6667,10 +6680,13 @@ static void shmap_read(void) {
      g_shmap_path = path;
      const char *m = getenv("DM_MSL_DIR");
      // Library directory = <DM_MSL_DIR or default cache>/b-<translation chain version>: the version comes from dm/gfx/nvn/dmsh_chain.h (tools/dmsh_chain.py), one for every game; a host built from an old source tree only accepts libraries of the old version
@@ -558,7 +558,7 @@ index bcb1eb2..be2d7f0 100644
          else MLOG("[RED] shader library %s (a folder or a .img file) does not exist: translation chain version %s of this source tree has not been built yet (dm/gfx/tools/dmsh_build.py)", g_msl_dir.UTF8String, DMSH_CHAIN);
      }
      // The library's stamp (inputs.tsv, written by a full dmsh_build.py run): the game and the digest of the profile inputs it was built from. The chain version is the same for every
-@@ -6752,14 +6768,20 @@ static void pso_user_record(const char *fmt, ...) {
+@@ -6867,14 +6883,20 @@ static NSString *lib_digest(const void *p, size_t n) {
  // The library is tagged with its digest (lib_tag), from the mapped bytes
  static id<MTLLibrary> lib_from_file(NSString *path, NSError **err) {
      int fd = open(path.fileSystemRepresentation, O_RDONLY); struct stat st;
@@ -581,7 +581,7 @@ index bcb1eb2..be2d7f0 100644
      }
      if (fd < 0 || fstat(fd, &st) || st.st_size <= 0) { if (fd >= 0) close(fd); if (err) *err = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"cannot open %@", path]}]; return nil; }
      size_t len = (size_t)st.st_size; void *m = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0); close(fd);
-@@ -11029,8 +11051,13 @@ static int pre_later_take(PreLater *l, int wait) {
+@@ -11158,8 +11180,13 @@ static int pre_later_take(PreLater *l, int wait) {
  // their bases cannot be made yet, so the stamp names one such file (pre_device_stamp) and a later start builds them once it is there. g_pre_nolib_file: the first one seen in this
  // run, a name in the library, under g_pre_fail_lock
  static _Atomic int g_pre_nolib; static NSString *g_pre_nolib_file;
@@ -597,7 +597,7 @@ index bcb1eb2..be2d7f0 100644
  // 1 (and the file noted) when the library lacks <key><suffix>
  static int pre_lib_absent(NSString *key, NSString *suffix) {
      NSString *name = [key stringByAppendingString:suffix];
-@@ -19857,10 +19884,11 @@ void dm_gfx_teardown(void) { @autoreleasepool {
+@@ -20006,10 +20033,11 @@ void dm_gfx_teardown(void) { @autoreleasepool {
  
      romfs_img *mimg = atomic_exchange(&g_msl_img, NULL);
      if (mimg) romfs_image_close(mimg);
@@ -700,10 +700,10 @@ index 5caa8ab..3935568 100644
      printf("%d checks, %d failed\n", g_checks, g_failed);
      return g_failed != 0;
 diff --git a/dm/gfx/vk/hle_vk.m b/dm/gfx/vk/hle_vk.m
-index d2e84ca..ac01f17 100644
+index e2cfffe..f8f5ae3 100644
 --- a/dm/gfx/vk/hle_vk.m
 +++ b/dm/gfx/vk/hle_vk.m
-@@ -23,9 +23,13 @@
+@@ -25,9 +25,13 @@
  #include <CommonCrypto/CommonDigest.h>
  #include <CoreFoundation/CoreFoundation.h>
  #include "../../host/host_image.h"
@@ -717,10 +717,11 @@ index d2e84ca..ac01f17 100644
  
  int mtl_fps_target(void);   // nvn_mtl.m: 60, or 30 when the frame rate is halved
  int mtl_link_active(void); int mtl_link_wait_tick(int vsyncs, uint64_t timeout_ns);   // nvn_mtl.m: whether the display link presents, and the wait for its ticks
-@@ -155,32 +159,66 @@ static MTLClearColor fmt_clear_color(const fmt_t *f, const VkClearColorValue *v)
+@@ -195,36 +199,64 @@ static int is_arg(char k) { return k && strchr("UBTS", k); }
  static shinfo *g_sh; static int g_nsh;
  static id<MTLLibrary> g_lib;
  static int sh_cmp(const void *a, const void *b) { return memcmp(((const shinfo *)a)->key, ((const shinfo *)b)->key, 16); }
+-static void sh_read_resources(shinfo *s, char *res) {
 +static void sh_parse_line(char *line, int *cap) {
 +    if (line[0] == '#' || line[0] == '\n' || line[0] == '\r' || !line[0]) return;
 +    char *rest = line, *key = strsep(&rest, "\t"), *stage = strsep(&rest, "\t"), *res = strsep(&rest, "\t\r\n");   // strsep keeps the empty resource field of a shader without resources
@@ -728,12 +729,18 @@ index d2e84ca..ac01f17 100644
 +    if (g_nsh == *cap) { *cap = *cap ? *cap * 2 : 128; shinfo *q = realloc(g_sh, (size_t)*cap * sizeof *g_sh); if (!q) die("[vk] out of memory for the shader table"); g_sh = q; }
 +    shinfo *s = &g_sh[g_nsh++]; memset(s, 0, sizeof *s);
 +    memcpy(s->key, key, 16); s->frag = !strcmp(stage, "frag");
-+    for (char *t = res ? strtok(res, " ") : NULL; t; t = strtok(NULL, " ")) {
-+        char k; unsigned st, b, sl, n = 1;
+     for (char *t = res ? strtok(res, " ") : NULL; t; t = strtok(NULL, " ")) {
+         char k; unsigned st, b, sl, n = 1;
+-        int got = sscanf(t, "%c:%u.%u=%u*%u", &k, &st, &b, &sl, &n), ab = got >= 1 && k && strchr("UBTSoq", k);
+-        unsigned id = got >= 3 ? b : 0;   // older argument-buffer tables used a binding as the ID
+-        const char *at = strchr(t, '@');
+-        int id_ok = !at || (got >= 4 && is_arg(k) && sscanf(at + 1, "%u", &id) == 1 && id <= UINT16_MAX);
+-        if (got < 4 || !id_ok || !n || n > 4096 || (!ab && sl + n > 31) || s->nres == 24) { LOG("[vk] [RED] cannot parse a resource entry of shader table %s: %s", s->key, t); continue; }
+-        s->res[s->nres++] = (shres){k, (uint8_t)st, (uint8_t)sl, (uint16_t)n, (uint16_t)b, (uint16_t)id};
 +        if (sscanf(t, "%c:%u.%u=%u*%u", &k, &st, &b, &sl, &n) < 4 || !n || sl + n > 31 || s->nres == 24) { LOG("[vk] [RED] cannot parse a resource entry of shader table %s: %s", s->key, t); continue; }
 +        s->res[s->nres++] = (shres){k, (uint8_t)st, (uint8_t)sl, (uint8_t)n, (uint16_t)b};
-+    }
-+}
+     }
+ }
  static void sh_load(void) {
      const char *d = getenv("DM_MSL_DIR"); char p[1024];
 -    if (!d) { LOG("[vk] [RED] DM_MSL_DIR not set: the Vulkan shader library cannot be found"); return; }
@@ -748,10 +755,11 @@ index d2e84ca..ac01f17 100644
 -        if (g_nsh == cap) { cap = cap ? cap * 2 : 128; shinfo *q = realloc(g_sh, cap * sizeof *g_sh); if (!q) die("[vk] out of memory for the shader table"); g_sh = q; }
 -        shinfo *s = &g_sh[g_nsh++]; memset(s, 0, sizeof *s);
 -        memcpy(s->key, key, 16); s->frag = !strcmp(stage, "frag");
--        for (char *t = res ? strtok(res, " ") : NULL; t; t = strtok(NULL, " ")) {
--            char k; unsigned st, b, sl, n = 1;
--            if (sscanf(t, "%c:%u.%u=%u*%u", &k, &st, &b, &sl, &n) < 4 || !n || sl + n > 31 || s->nres == 24) { LOG("[vk] [RED] cannot parse a resource entry of shader table %s: %s", s->key, t); continue; }
--            s->res[s->nres++] = (shres){k, (uint8_t)st, (uint8_t)sl, (uint8_t)n, (uint16_t)b};
+-        if (!strncmp(stage, "comp", 4)) {
+-            s->comp = 1;
+-            if (sscanf(stage + 4, ":%hu,%hu,%hu", &s->wg[0], &s->wg[1], &s->wg[2]) != 3 || !s->wg[0] || !s->wg[1] || !s->wg[2]) {
+-                LOG("[vk] [RED] shader table %s: compute stage without a local size (%s)", s->key, stage); s->comp = 0;
+-            }
 +    FILE *f = NULL;
 +    if (d && *d) {
 +        snprintf(p, sizeof p, "%s/vk/vk_shaders.tsv", d);
@@ -768,7 +776,7 @@ index d2e84ca..ac01f17 100644
 +            if (d && *d) LOG("[vk] [RED] cannot open %s (run dm/gfx/tools/vk_shaders.py first)", p);
 +            else LOG("[vk] [RED] DM_MSL_DIR not set and DM_ROMFS has no vk/vk_shaders.tsv trailer");
 +            return;
-         }
++        }
 +        char *cur = (char *)tbuf;
 +        while (cur && *cur) {
 +            char *nl = strchr(cur, '\n');
@@ -777,14 +785,9 @@ index d2e84ca..ac01f17 100644
 +            cur = nl ? nl + 1 : NULL;
 +        }
 +        free(tbuf);
-     }
--    fclose(f);
--    qsort(g_sh, g_nsh, sizeof *g_sh, sh_cmp);   // looked up by key (Super Mario Galaxy creates over 3,000 modules at boot)
--    snprintf(p, sizeof p, "%s/vk/vk_shaders.metallib", d);
++    }
 +    qsort(g_sh, (size_t)g_nsh, sizeof *g_sh, sh_cmp);   // looked up by key (Super Mario Galaxy creates over 3,000 modules at boot)
-     NSError *err = nil;
--    g_lib = [g_dev newLibraryWithURL:[NSURL fileURLWithPath:@(p)] error:&err];
--    if (!g_lib) LOG("[vk] [RED] shader library failed to load %s: %s", p, err.localizedDescription.UTF8String);
++    NSError *err = nil;
 +    if (d && *d) snprintf(p, sizeof p, "%s/vk/vk_shaders.metallib", d);
 +    if (d && *d && !access(p, F_OK)) {
 +        g_lib = [g_dev newLibraryWithURL:[NSURL fileURLWithPath:@(p)] error:&err];
@@ -800,12 +803,23 @@ index d2e84ca..ac01f17 100644
 +            LOG("[vk] [RED] shader library failed to open %s", p);
 +        } else {
 +            LOG("[vk] [RED] DM_MSL_DIR not set and DM_ROMFS has no vk/vk_shaders.metallib trailer");
-+        }
-+    }
+         }
+         if (!strncmp(stage, "geomvp:", 7)) {
+             unsigned loc;
+@@ -232,12 +264,6 @@ static void sh_load(void) {
+         }
+         sh_read_resources(s, res);
+     }
+-    fclose(f);
+-    qsort(g_sh, g_nsh, sizeof *g_sh, sh_cmp);   // looked up by key (Super Mario Galaxy creates over 3,000 modules at boot)
+-    snprintf(p, sizeof p, "%s/vk/vk_shaders.metallib", d);
+-    NSError *err = nil;
+-    g_lib = [g_dev newLibraryWithURL:[NSURL fileURLWithPath:@(p)] error:&err];
+-    if (!g_lib) LOG("[vk] [RED] shader library failed to load %s: %s", p, err.localizedDescription.UTF8String);
  }
  static const shinfo *sh_find(const char *key) { shinfo k; memcpy(k.key, key, 16); return g_nsh ? bsearch(&k, g_sh, g_nsh, sizeof *g_sh, sh_cmp) : NULL; }
  
-@@ -1963,7 +2001,7 @@ static void vk_set_free_cb(const void *value, void *context) {
+@@ -2831,7 +2857,7 @@ static void vk_set_free_cb(const void *value, void *context) {
  }
  
  void dm_vk_teardown(void) { @autoreleasepool {
@@ -814,7 +828,7 @@ index d2e84ca..ac01f17 100644
      dm_vk_drain();
  
      pthread_mutex_lock(&g_sets_mu);
-@@ -1993,6 +2031,7 @@ void dm_vk_teardown(void) { @autoreleasepool {
+@@ -2861,6 +2887,7 @@ void dm_vk_teardown(void) { @autoreleasepool {
      atomic_store(&g_n_resume, 0);
      g_fan_ps = nil; g_fan_failed = 0;
      g_lib = nil;

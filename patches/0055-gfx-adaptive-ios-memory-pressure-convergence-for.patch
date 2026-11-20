@@ -18,7 +18,7 @@ Issue: none
  create mode 100644 dm/gfx/tests/t_rt_recycle_policy.c
 
 diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
-index be2d7f0..cd2fc1b 100644
+index 83d7d72..016136c 100644
 --- a/dm/gfx/nvn/nvn_mtl.m
 +++ b/dm/gfx/nvn/nvn_mtl.m
 @@ -40,6 +40,7 @@
@@ -125,7 +125,7 @@ index be2d7f0..cd2fc1b 100644
  }
  @interface NvRecycledHeap : NSObject { @public id<MTLHeap> heap; } @end
  @implementation NvRecycledHeap
-@@ -504,7 +573,9 @@ - (void)dealloc { rh_wait(heap); atomic_fetch_sub(&g_image_heap_n, 1); }
+@@ -504,7 +573,9 @@ static id<MTLHeap> rh_heap(uint64_t size, MTLStorageMode sm, MTLCPUCacheMode cm,
      *reused = 0;
      if (!size) return nil;
      int on = sw_on(rh_mode());
@@ -136,7 +136,7 @@ index be2d7f0..cd2fc1b 100644
      void *got = NULL;
      if (on) {
          os_unfair_lock_lock(&g_rh_lk);
-@@ -515,11 +586,11 @@ - (void)dealloc { rh_wait(heap); atomic_fetch_sub(&g_image_heap_n, 1); }
+@@ -515,11 +586,11 @@ static id<MTLHeap> rh_heap(uint64_t size, MTLStorageMode sm, MTLCPUCacheMode cm,
              if (h.storageMode != sm || h.cpuCacheMode != cm) continue;   // (a placed texture takes its heap's hazard tracking: a placement heap reports untracked, a descriptor default)
              best = i;
          }
@@ -145,7 +145,7 @@ index be2d7f0..cd2fc1b 100644
          os_unfair_lock_unlock(&g_rh_lk);
      }
      if (got) { *reused = 1; atomic_fetch_add(&g_rh_reused, 1); return CFBridgingRelease(got); }
--    MTLHeapDescriptor *hd = [MTLHeapDescriptor new]; hd.type = MTLHeapTypePlacement; hd.size = on ? size + size / 8 : size;
+-    MTLHeapDescriptor *hd = [MTLHeapDescriptor new]; hd.type = MTLHeapTypePlacement; hd.size = on ? size + MIN(size / 8, (uint64_t)RH_SLACK) : size;
 +    MTLHeapDescriptor *hd = [MTLHeapDescriptor new]; hd.type = MTLHeapTypePlacement; hd.size = on ? rh_alloc_size(size, p.exact_alloc) : size;
      hd.storageMode = sm; hd.cpuCacheMode = cm; hd.hazardTrackingMode = hm;
      id<MTLHeap> h = [g_dev newHeapWithDescriptor:hd];
@@ -209,7 +209,7 @@ index be2d7f0..cd2fc1b 100644
  }
  
  void mtl_init(void) {
-@@ -19700,6 +19792,12 @@ void dm_gfx_teardown(void) { @autoreleasepool {
+@@ -19849,6 +19941,12 @@ void dm_gfx_teardown(void) { @autoreleasepool {
      atomic_fetch_add(&g_defer_gen, 1);
      mtl_present_discard(1);
      dispatch_group_wait(bg_group(), DISPATCH_TIME_FOREVER);
@@ -222,7 +222,7 @@ index be2d7f0..cd2fc1b 100644
  
      if (g_q) {
          if (on_sub_thread()) { up_flush(); rec_drain(); }
-@@ -19946,6 +20044,12 @@ void dm_gfx_teardown(void) { @autoreleasepool {
+@@ -20095,6 +20193,12 @@ void dm_gfx_teardown(void) { @autoreleasepool {
      for (unsigned i = 0; i < g_rh_n; i++) if (g_rh[i].heap) CFRelease(g_rh[i].heap);
      free(g_rh); g_rh = NULL; g_rh_n = g_rh_cap = 0; g_rh_bytes = 0;
      os_unfair_lock_unlock(&g_rh_lk);
@@ -301,10 +301,10 @@ index 0000000..c569dbd
 +
 +#endif
 diff --git a/dm/gfx/tests/Makefile b/dm/gfx/tests/Makefile
-index 0c799cc..81cb970 100644
+index aec06c3..c5bc8bb 100644
 --- a/dm/gfx/tests/Makefile
 +++ b/dm/gfx/tests/Makefile
-@@ -653,6 +653,8 @@ t_image_alias: t_image_alias.m $(MTL_T_DEP)
+@@ -671,6 +671,8 @@ t_image_alias: t_image_alias.m $(MTL_T_DEP)
  check_t_image_alias: t_image_alias
  	DM_NVN_ENC_THREAD=0 MTL_DEBUG_LAYER=1 ./t_image_alias
  	DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_image_alias
@@ -314,7 +314,7 @@ index 0c799cc..81cb970 100644
  	clang $(CFLAGS) -fobjc-arc -o $@ t_rt_recycle.m $(MTL_T_SRC) $(FW)
  .PHONY: check_t_rt_recycle
 diff --git a/dm/gfx/tests/t_rt_recycle.m b/dm/gfx/tests/t_rt_recycle.m
-index a33a338..09a15c3 100644
+index 69d4b18..242ddd8 100644
 --- a/dm/gfx/tests/t_rt_recycle.m
 +++ b/dm/gfx/tests/t_rt_recycle.m
 @@ -166,6 +166,93 @@ int main(void) { @autoreleasepool {

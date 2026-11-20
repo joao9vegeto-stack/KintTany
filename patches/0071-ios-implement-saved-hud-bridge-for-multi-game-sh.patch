@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Dante2iOS integration <dante2ios-integration@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 02:53:36 +0000
+Subject: [PATCH] ios: implement saved HUD bridge for multi-game shell
+
+Upstream-Status: pending
+Reason: Implement the shell equivalent of nxnative's new front_ios saved-choice HUD bridge; preserve per-game HUD isolation
+Issue: seedds/nxnative@ee998ae6d73d5960671ec837ea2ae4a8a0489fec
+
+---
+ dm/ios/framework/ShellGlue.m | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/dm/ios/framework/ShellGlue.m b/dm/ios/framework/ShellGlue.m
+index 37c7bef..949c478 100644
+--- a/dm/ios/framework/ShellGlue.m
++++ b/dm/ios/framework/ShellGlue.m
+@@ -75,6 +75,13 @@ int front_ios_boot_ok(void) { return g_boot_ok; }
+ const char *front_ios_boot_message(void) { return NULL; }
+ const char *front_ios_device_check(void) { return NULL; }   // main.m checks the GPU for the games (no BC textures, seedds#704) when Play is pressed, the shell does its own device handling: NULL = supported
+ // The shell found the data before Play (DataLocator, EngineLaunchPlan): DM_ROMFS is set and the game view only checks it is still there
++// The shared shell enables Metal's HUD before UIKit starts and gates it per-game.
++// When Play has not opted into DM_METAL_HUD, disable just the game layer.
++bool front_ios_hud_enabled_from_saved_choice(void) {
++    const char *per_layer = getenv("DM_HUD_PER_LAYER");
++    return per_layer && strcmp(per_layer, "0") != 0;
++}
++
+ int dm_locate_game_data(void) {
+     const char *r = getenv("DM_ROMFS"); struct stat st;
+     if (r && !stat(r, &st)) return 1;

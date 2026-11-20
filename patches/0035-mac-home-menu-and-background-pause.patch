@@ -45,7 +45,7 @@ index 8fa01c0..166bd87 100644
  #include <math.h>
  
  enum { PAD_OFF, PAD_DPAD, PAD_LEFT_STICK, PAD_RIGHT_STICK, PAD_TOUCH };
-@@ -322,6 +323,21 @@ static void controller_reset_motion(DMController *d) {
+@@ -322,6 +323,21 @@ GCController *front_controllers_quit_buttons(int *home, int *a, int *b) {
      }
      return holder;
  }

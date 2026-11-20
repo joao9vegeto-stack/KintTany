@@ -8,19 +8,21 @@ Upstream-Status: forwarded seedds/nxnative#2953
 Reason: Tool tests fail on upstream main: the mesh target selection test lacks dmsh_rewrite
 Issue: LNPANDY/NX2Apple#1448
 ---
- dm/tools/tests/test_shader_toolchain_cache.py | 2 +-
- 1 file changed, 1 insertion(+), 1 deletion(-)
+ dm/tools/tests/test_shader_toolchain_cache.py | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/dm/tools/tests/test_shader_toolchain_cache.py b/dm/tools/tests/test_shader_toolchain_cache.py
-index 2d41114..7b4cdef 100644
+index b8a5f4d..420c821 100644
 --- a/dm/tools/tests/test_shader_toolchain_cache.py
 +++ b/dm/tools/tests/test_shader_toolchain_cache.py
-@@ -319,7 +319,7 @@ class TargetSelection(unittest.TestCase):
+@@ -320,8 +320,8 @@ class TargetSelection(unittest.TestCase):
                          return p.read_bytes() if p.is_file() else None
                      ns: dict[str, Any] = dict(os=os, json=json, subprocess=subprocess, out=td, w=td, TARGETS=targets,
                                IOSOUT=str(ios) if 'ios' in targets else None, MESH_STATS=collections.Counter(),
 -                              MTL=types.SimpleNamespace(compile=compile_target), dmsh_mesh=types.SimpleNamespace(compose=compose),
+-                              dmsh_rewrite=dmsh_rewrite, output=output, commit=mock.Mock())
 +                              MTL=types.SimpleNamespace(compile=compile_target), dmsh_mesh=types.SimpleNamespace(compose=compose), dmsh_rewrite=types.SimpleNamespace(raw_noinline=lambda src, _kind: src),
-                               output=output, commit=mock.Mock())
++                              output=output, commit=mock.Mock())
                      exec(compile(ast.Module(body=[function], type_ignores=[]), '<mesh targets>', 'exec'), ns)
                      ns['mesh_finish'](('vertex', 'geometry'))
+                     compose.assert_called_once_with('vertex source', 'geometry source', [36])
