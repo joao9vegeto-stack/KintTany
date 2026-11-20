@@ -104,10 +104,10 @@
   },
   "created_utc": "2026-11-20T21:09:53.566034+00:00",
   "retry": {
-    "parent_run_id": 44822975454,
-    "attempt": 5,
-    "reason": "Dagor's actual v262144 game requires VK_KHR_shader_draw_parameters to select the Vulkan physical device; announce this Vulkan 1.1 extension",
-    "engine_patch": "0075-vulkan-dagor-required-shader-draw-parameters.patch",
-    "patch_commit": "0d3287e1e75e5251a3a8a8ff1e35a28b04e386f4"
+    "parent_run_id": 44824077665,
+    "attempt": 6,
+    "reason": "Retain layer_shaders options alongside from_seed to fix NameError after 8 real SPIR-V modules captured",
+    "engine_patch": "0076-build-restore-layer-shaders-options-after-from-seed.patch",
+    "patch_commit": "7f2884f065c1aac40172427e1e9c6cf5a8724d8c"
   }
 }
