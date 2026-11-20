@@ -70,3 +70,11 @@ resources are staged and verified as real Metal libraries too.
 
 The user still needs to run Colab and then Actions to verify actual game data;
 this change has not yet been tested against the private NSPs.
+
+## Fail-fast Colab validation
+
+Before downloading gigabytes of NSP data, the `run_colab.prepare` entrypoint
+compiles every Linux/Mac Python stage and runs the host-stage regression tests
+without requiring Google Drive credentials or a game runtime. This catches
+syntax or routing mistakes while leaving the cached NSPs and rewritten
+content intact.

@@ -285,6 +285,24 @@ def install_linux_dependencies(root: Path) -> None:
 
 
 def prepare(args, api=None) -> dict:
+    # Fail early on a code error: never spend Colab disk/network on multi-GB
+    # NSP downloads before checking the exact source of the handoff stages.
+    checkout = Path(__file__).resolve().parents[2]
+    code = [
+        checkout / "blades/port_stages.py",
+        checkout / "blades/colab/prepare_linux.py",
+        checkout / "blades/colab/source_archive.py",
+        checkout / "blades/drive_chunks.py",
+        checkout / "blades/scripts/mac_capture.py",
+        checkout / "blades/scripts/build_shared.py",
+        checkout / "blades/scripts/prepare_actions.py",
+    ]
+    subprocess.run([sys.executable, "-m", "py_compile", *map(str, code)], check=True)
+    subprocess.run([sys.executable, "-m", "unittest", "discover",
+                    "-s", str(checkout / "blades/tests"),
+                    "-p", "test_port_stages.py", "-v"], check=True)
+    print("[BladesTime] Source and Linux/Mac handoff regressions verified "
+          "before NSP download.", flush=True)
     for module_name, name in (("googleapiclient.discovery", "google-api-python-client"),
                               ("google.auth", "google-auth"), ("requests", "requests")):
         try:
