@@ -134,6 +134,16 @@ jobs:
             ${{ runner.temp }}/blades-output/build-report.json
           if-no-files-found: error
           retention-days: 14
+      - name: Preserve Dagor guest-script and Vulkan viewport diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: BladesTime-capture-diagnostics-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/blades/work/logs/vk_capture.log
+            ${{ runner.temp }}/blades/work/logs/vk_shaders.log
+          if-no-files-found: warn
+          retention-days: 14
       - name: Preserve failure diagnostics
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

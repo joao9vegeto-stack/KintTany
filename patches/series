@@ -62,3 +62,4 @@
 0074-vulkan-dagor-trace-physical-device-enumeration.patch
 0075-vulkan-dagor-required-shader-draw-parameters.patch
 0076-build-restore-layer-shaders-options-after-from-seed.patch
+0077-vulkan-dagor-log-viewport-scissor-size.patch

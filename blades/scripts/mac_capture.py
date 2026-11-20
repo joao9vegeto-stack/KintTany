@@ -64,8 +64,8 @@ def complete(builder, engine: Path, version: Path, patched: Path,
             engine, dirs, prep["package_version"], patched, work, env, logs, profile)
     if "vk_capture" in stages:
         # Give Dagor's Vulkan initialization detailed logs if another API is missing.
-        env = dict(env, DM_VK_LOG="1")
-        print("[BladesTime] Mac host: Vulkan runtime shader capture (DM_VK_LOG=1).", flush=True)
+        env = dict(env, DM_VK_LOG="1", DM_DBG="1", DM_FS="1")
+        print("[BladesTime] Mac host: Vulkan capture with Vulkan/guest-debug/filesystem diagnostics.", flush=True)
         capture_root = builder.capture_shaders(
             engine, version, patched, work, env, logs, profile, "vk")
     if "gl_capture" in stages:
