@@ -65,7 +65,9 @@ def validate_workspace(d, work, nx, builder, gp):
         fail("engine pin mismatch")
     prep = json.loads((work / "bladestime-linux-prep.json").read_text())
     for key in ("title_id", "package_version", "engine_pin", "graphics", "shader_chain",
-                "shader_package_key", "modules", "provisional"):
+                "shader_package_key", "modules", "provisional", "shader_split_stage",
+                "mac_host_stages", "source_capture_flags", "shader_versions",
+                "jit_required", "linux_ue_decode_complete"):
         if prep.get(key) != d.get(key):
             fail(f"Linux/Actions prepared mismatch: {key}")
     version = work / "extract" / d["package_version"]
@@ -88,11 +90,14 @@ def validate_workspace(d, work, nx, builder, gp):
             if not (patched / (name + suffix)).is_file():
                 fail(f"module rewrite missing: {name}{suffix}")
     if prep["graphics"] == "nvn":
-        key = prep.get("shader_package_key") or ""
-        if not re.fullmatch(r"[0-9a-f]{64}", key):
-            fail("NVN shader key missing")
-        if builder.package_key(work / "shader" / "pkg") != key:
-            fail("NVN shader package content mismatch")
+        if prep["shader_split_stage"] == "linux_complete":
+            key = prep.get("shader_package_key") or ""
+            if not re.fullmatch(r"[0-9a-f]{64}", key):
+                fail("Linux NVN shader key missing")
+            if builder.package_key(work / "shader" / "pkg") != key:
+                fail("Linux-completed NVN shader package failed checksum verification")
+        elif prep["shader_split_stage"] != "mac_pending" or not prep.get("mac_host_stages") or prep.get("shader_package_key") is not None:
+            fail("NVN split pending without a real native-host capture dependency")
     if (work / "aoc").exists() and list((work / "aoc").glob("*.img")):
         fail("unexpected Blades of Time DLC")
     return profile, version, romfs, patched, prep
@@ -119,14 +124,48 @@ def stage_nvn_shader_payload(ios: Path, framework: Path, chain: str) -> dict:
     with destination.open("rb") as inp:
         for chunk in iter(lambda: inp.read(1024 * 1024), b""):
             digest.update(chunk)
-    result = {
-        "path": f"msl/{source.name}",
-        "bytes": destination.stat().st_size,
-        "sha256": digest.hexdigest(),
-        "library_source": str(source),
-    }
+    record = {"path": f"msl/{source.name}",
+              "bytes": destination.stat().st_size,
+              "sha256": digest.hexdigest()}
+    result = dict(record, files=[record], library_source=str(source))
     print("[BladesTime] Bundled compiled NVN shaders into framework:", result, flush=True)
     return result
+
+
+def stage_layer_shader_payload(ios: Path, framework: Path, graphics: str) -> dict:
+    """Bundle the *actual* Metal shader files for GL/Vulkan titles."""
+    if graphics not in ("gl", "vulkan"):
+        fail(f"unexpected layer graphics {graphics!r}")
+    folder = "gl" if graphics == "gl" else "vk"
+    lib = "gl_shaders.metallib" if graphics == "gl" else "vk_shaders.metallib"
+    origin = ios / folder
+    primary = origin / lib
+    if not primary.is_file() or primary.stat().st_size < 32:
+        fail(f"{graphics} iOS Metal shader library missing: {primary}")
+    target = framework / "msl" / folder
+    if target.exists():
+        shutil.rmtree(target)
+    shutil.copytree(origin, target)
+    files = []
+    for source in sorted(origin.rglob("*")):
+        if not source.is_file():
+            continue
+        suffix = source.relative_to(origin)
+        if ".." in suffix.parts or source.suffix.lower() == ".mtl4a":
+            fail(f"unsafe shader asset or incompatible Metal 4 archive: {source}")
+        dest = target / suffix
+        if not dest.is_file() or source.stat().st_size != dest.stat().st_size:
+            fail(f"shader data truncated while staging {source}")
+        sha = hashlib.sha256()
+        with dest.open("rb") as stream:
+            for part in iter(lambda: stream.read(4 * 1024 * 1024), b""):
+                sha.update(part)
+        files.append({"path": f"msl/{folder}/{suffix.as_posix()}",
+                      "bytes": dest.stat().st_size, "sha256": sha.hexdigest()})
+    main = next((x for x in files if x["path"] == f"msl/{folder}/{lib}"), None)
+    if main is None:
+        fail(f"Metal library vanished from the staged {graphics} folder")
+    return dict(main, files=files, library_source=str(primary))
 
 
 def main() -> None:
@@ -178,34 +217,41 @@ def main() -> None:
         gfx = facts["graphics"][0]
         if gfx != prepared["graphics"]:
             fail("graphics backend drift between Colab and Actions")
-        for key in ("glslc_capture", "vk_capture", "gl_capture", "ue_decode",
-                    "oodle_packs", "ue_legacy"):
-            if facts.get(key, (False, ""))[0]:
-                fail(f"graphics requires a game-owned runtime capture/decoder ({key}). "
-                     "No capture or extra shader results were fabricated.")
+        # The Mac runner operates strictly on the Colab-prepared workspace.
+        # Only actual native shader captures/decoders run here, and an NVN
+        # shader split is reused unless Mac-only capture inputs were needed.
+        from mac_capture import complete, finish_jit_if_needed
+        package_key, extra_roots = complete(
+            builder, engine, version, patched, work, env, logs,
+            profile, prep, py, facts)
         if gfx == "nvn":
             builder.check_metal(py, engine, env)
             gpus = builder.ios_gpus("none", profile)
             pulling = builder.ios_wants_pulling(profile, gpus, False, env)
-            ios = builder.build_shaders(py, engine, work / "shader", xlate, env, logs,
-                                        profile, pkg_key=prep["shader_package_key"],
-                                        mac=False, seen=None, pull=pulling)
+            ios = builder.build_shaders(
+                py, engine, work / "shader", xlate, env, logs, profile,
+                pkg_key=package_key, mac=False, seen=None, pull=pulling)
             chain_lib = ios / f"b-{actual_chain}"
             if not (chain_lib.is_dir() or Path(str(chain_lib) + ".img").is_file()):
                 fail("NVN iOS Metal shader library missing")
         elif gfx == "gl":
-            ios = builder.build_gl_shaders(py, engine,
-                [builder.rfs.source(version), version / "ExeFS/main"],
-                work / "shader", env, logs, profile,
-                mac=False, provisional=bool(prep["provisional"]),
+            ios = builder.build_gl_shaders(
+                py, engine,
+                [builder.rfs.source(version), version / "ExeFS/main", *extra_roots],
+                work / "shader", env, logs, profile, mac=False,
+                provisional=bool(prep["provisional"]),
                 fixed=bool(facts.get("gl_fixed", (False, ""))[0]))
         elif gfx == "vulkan":
-            ios = builder.build_vk_shaders(py, engine,
-                [builder.rfs.source(version), version / "ExeFS/main"],
+            ios = builder.build_vk_shaders(
+                py, engine,
+                [builder.rfs.source(version), version / "ExeFS/main", *extra_roots],
                 work / "shader", env, logs, profile,
                 mac=False, provisional=bool(prep["provisional"]))
         else:
-            fail(f"unsupported graphics API: {gfx}")
+            fail(f"unsupported graphics backend: {gfx}")
+        # NXNative runs JIT host capture after shader compilation.
+        finish_jit_if_needed(builder, engine, version, patched, work, env,
+                             logs, profile, prep, py)
         control = builder.languages_control(version)
         display_name = nacp.name(control) or "Blades of Time"
         display_version = nacp.version(version / "control.nacp") or "1.0.0"
@@ -246,9 +292,9 @@ def main() -> None:
         # The framework-only builder removes msl/, but the iOS Shell requires
         # it unless a DMMSLTR1 trailer was appended to the external RomFS.
         # Never declare an IPA successful with only shader_map.tsv.
-        if gfx != "nvn":
-            fail("Blades of Time must use the NVN backend for this handoff")
-        shader_payload = stage_nvn_shader_payload(ios, fw, actual_chain)
+        shader_payload = (
+            stage_nvn_shader_payload(ios, fw, actual_chain) if gfx == "nvn"
+            else stage_layer_shader_payload(ios, fw, gfx))
         if any(fw.rglob("*.mtl4a")):
             fail("iOS26 IPA must not embed Metal 4 PSO archives")
         if (fw / "pso").is_dir() and any((fw / "pso").iterdir()):
@@ -283,9 +329,10 @@ def main() -> None:
         installed = sorted((app / "Frameworks").glob("*.framework"))
         if not any(x.name == framework_name for x in installed):
             fail("Blades of Time framework not embedded in shell")
-        bundled_shader = app / "Frameworks" / framework_name / shader_payload["path"]
-        if not bundled_shader.is_file() or bundled_shader.stat().st_size != shader_payload["bytes"]:
-            fail(f"Xcode dropped the NVN Metal shader image: {bundled_shader}")
+        for item in shader_payload["files"]:
+            bundled_shader = app / "Frameworks" / framework_name / item["path"]
+            if not bundled_shader.is_file() or bundled_shader.stat().st_size != item["bytes"]:
+                fail(f"Xcode dropped a compiled Metal shader asset: {bundled_shader}")
         for f in installed:
             run(["xattr", "-cr", str(f)])
             run(["codesign", "--force", "--sign", "-", "--timestamp=none", str(f)])
@@ -302,17 +349,20 @@ def main() -> None:
                     f"Payload/DmShell.app/Frameworks/{framework_name}/{exe}"]
             if not all(x in paths for x in must):
                 fail("IPA missing app or framework executable")
-            shader_entry = f"Payload/DmShell.app/Frameworks/{framework_name}/{shader_payload['path']}"
-            if shader_entry not in paths:
-                fail(f"IPA missing mandatory iOS game shader image: {shader_entry}")
-            if archive.getinfo(shader_entry).file_size != shader_payload["bytes"]:
-                fail("shaders in the IPA were truncated")
-            shader_checksum = hashlib.sha256()
-            with archive.open(shader_entry) as compiled:
-                for chunk in iter(lambda: compiled.read(1024 * 1024), b""):
-                    shader_checksum.update(chunk)
-            if shader_checksum.hexdigest() != shader_payload["sha256"]:
-                fail("shaders embedded in IPA differ from validated Metal libraries")
+            # NVN ships one image, GL/Vulkan ship a resource directory.
+            # Verify the exact compiled file bytes inside the signed IPA.
+            for item in shader_payload["files"]:
+                shader_entry = f"Payload/DmShell.app/Frameworks/{framework_name}/{item['path']}"
+                if shader_entry not in paths:
+                    fail(f"IPA missing mandatory Metal shader: {shader_entry}")
+                if archive.getinfo(shader_entry).file_size != item["bytes"]:
+                    fail(f"IPA Metal asset truncated: {shader_entry}")
+                shader_hash = hashlib.sha256()
+                with archive.open(shader_entry) as compiled:
+                    for chunk in iter(lambda: compiled.read(4 * 1024 * 1024), b""):
+                        shader_hash.update(chunk)
+                if shader_hash.hexdigest() != item["sha256"]:
+                    fail(f"IPA shader bytes differ from compiled library: {shader_entry}")
             prohibited = [x for x in paths if x.lower().endswith((".nsp", "/prod.keys",
                  "/romfs.img", ".mtl4a")) or "/aoc/" in x.lower()]
             if prohibited:
@@ -327,7 +377,10 @@ def main() -> None:
                 "size_bytes": shader_payload["bytes"],
                 "sha256": shader_payload["sha256"],
                 "verified_in_ipa": True,
+                "files": shader_payload["files"],
             },
+            "linux_shader_split_stage": prep["shader_split_stage"],
+            "mac_host_stages": prep["mac_host_stages"],
             "ipa": ipa.name, "ipa_size_bytes": ipa.stat().st_size,
             "ios_deployment_target": "26.0",
             "romfs_in_ipa": False, "dlc_count": 0, "update_count": 1,
