@@ -128,6 +128,16 @@ jobs:
           print('Colab bootstrap: sync then stale, cached engine recovery enabled.')
           assert 'dmc2/handoff.json' in Path('dmc2/colab/run_colab.py').read_text()
           assert 'DM_COPY_ROMFS' in Path('dmc2/scripts/build_shared.py').read_text()
+          assert 'builder.configure_dotnet(env)' not in Path('dmc2/scripts/build_shared.py').read_text()
+          assert '"DM_SHOW_FPS": "YES"' in Path('dmc2/scripts/build_shared.py').read_text()
+          import re as _re
+          pat = _re.compile(r'https://(?:github[.]com/seedds/nxnative/(?:blob|tree)|raw[.]githubusercontent[.]com/seedds/nxnative)/([0-9a-f]{40})/')
+          for page in ('GAMES.it.md','GAMES.md','GAMES.zh-CN.md',
+                       'README.de.md','README.fr.md','README.it.md',
+                       'README.sv.md','README.zh-CN.md'):
+              urls = pat.findall(Path(page).read_text(encoding='utf-8'))
+              assert urls and all(sha == p for sha in urls), (page, urls[:3])
+          print('All eight NXNative doc pages match the pinned upstream commit.')
           import ast
           installer = ast.parse(Path("dmc2/colab/run_colab.py").read_text())
           dep = next(n for n in installer.body if isinstance(n, ast.FunctionDef)
@@ -202,9 +212,13 @@ jobs:
         if: steps.handoff.outputs.ready == 'yes'
         run: |
           set -euo pipefail
+          # Repair pinned doc links before applying the full patch-queue check.
+          # All eight known stale pages are also fixed in this source commit.
+          python3 tools/engine.py relink
           python3 tools/engine.py check
           python3 tools/engine.py sync
-          python3 tools/engine.py relink
+          python3 tools/engine.py stale
+          test -z "$(git status --porcelain -- '*.md')"
           test "$(cat .upstream-ref)" = "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb"
           test -f engine/dm/ios/tools/build_ipa.sh
           test -f frontend-ios/Shell/build_shell.sh

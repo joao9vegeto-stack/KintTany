@@ -128,7 +128,6 @@ def main() -> None:
     (work / "ipa").mkdir(exist_ok=True)
     py = sys.executable
     env = builder.tool_env()
-    builder.configure_dotnet(env)
     env.update({"DM_GAME": TITLE_ID, "DM_ROOT": str(work),
                 "WORK": str(work / "tmp"), "IOS_PULL": "1"})
     if prepared.get("provisional"):
@@ -194,7 +193,7 @@ def main() -> None:
             "DM_XCODE_DERIVED_DATA": str(work / "xcode-derived-data"),
             "DM_TEAM_ID": "0000000000", "DM_LANG": language,
             "CONTROL": str(control), "AOC": "", "DM_COPY_ROMFS": "NO",
-            "DM_PSO_GPUS": "none", "DM_SHOW_FPS": "1",
+            "DM_PSO_GPUS": "none", "DM_SHOW_FPS": "YES",
             "DM_FRAMEWORK_ONLY": str(fw_root), "IOS_PULL": "1",
         })
         if icon.is_file():
