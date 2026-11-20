@@ -432,7 +432,7 @@ def prepare(args, api=None) -> dict:
     print("RomFS:", romfs_record["size"], "bytes")
     print("Prepared archive:", archive_record["size"], "bytes")
     print("Recovery folder:", handoff["drive_output_folder_url"])
-    print("Execute a célula final para publicar apenas blades/handoff.json e disparar o Actions.")
+    print("O notebook publica este handoff automaticamente na próxima fase.")
     return handoff
 
 
@@ -488,7 +488,10 @@ def dispatch(args) -> None:
     d = json.loads(path.read_text())
     if d.get("project") != "BladesTime" or d.get("branch") != BRANCH or d.get("title_id") != TITLE_ID:
         fail("Handoff pertence a outro projeto ou jogo")
-    token = getpass.getpass("Fine-grained GitHub PAT (Contents: Read and write; acesso apenas a KintTany): ").strip()
+    # Colab notebook getpass must execute in the notebook kernel, not a child process.
+    token = os.environ.get("BLADES_GITHUB_TOKEN", "").strip()
+    if not token:
+        token = getpass.getpass("Fine-grained GitHub PAT (Contents: Read and write; KintTany): ").strip()
     if not token:
         fail("GitHub token vazio")
     url = f"https://api.github.com/repos/{REPO}/contents/blades/handoff.json"
