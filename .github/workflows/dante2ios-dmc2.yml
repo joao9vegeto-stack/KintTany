@@ -243,6 +243,8 @@ jobs:
           assert 'if (!strncmp(stage, "comp", 4))' in helper
           print('Vulkan host helper and parser scope validated before downloading game data.')
           PY
+          grep -Fq 'up_big_src((uint64_t)t->mem, t->L.size, &mo, 1)' engine/dm/gfx/nvn/nvn_mtl.m
+          echo "NVN GPU deswizzle source call matches four-argument API."
           test -z "$(git status --porcelain -- '*.md')"
           test "$(cat .upstream-ref)" = "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb"
           test -f engine/dm/ios/tools/build_ipa.sh
