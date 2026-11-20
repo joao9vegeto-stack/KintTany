@@ -14,7 +14,7 @@ The game base is title `0100CFA00CC74000` (v0); the update version is discovered
 
 The uploaded and tested Dante notebook `Dante2iOS_DMC2_LinuxNativeAOT.ipynb` is the cell-by-cell source of `blades/colab/BladesTime.ipynb`; the port preserves its 13-cell order, the top GitHub-to-Drive transfer cell, Linux NativeAOT recovery and the final handoff dispatch.
 
-1. Run **cells 2, 4, 6, 8, 10 and 12**, like the Dante original. Authenticate Google Drive, check out **only BladesTime**, recover a previously uploaded handoff if present, otherwise download exactly two NSPs (base v0 + update with content-meta-discovered version) from **botime** and run NXNative preparation.
+1. Run **cells 3, 5, 7, 9, 11 and 13**, counting Markdown (cell 2 is IPA transfer, to run only after Actions succeeds), like the Dante original. Authenticate Google Drive, check out **only BladesTime**, recover a previously uploaded handoff if present, otherwise download exactly two NSPs (base v0 + update with content-meta-discovered version) from **botime** and run NXNative preparation.
 2. Colab downloads large inputs with **six 64 MiB concurrent ranges**, verifies Drive metadata and SHA-256, and uploads external `romfs.img`, workspace and handoff with resumable chunks. It preserves game cache on retries and never includes original NSP/keys in the IPA.
 3. Inspect the handoff gate: base version zero, actual update version greater than zero, 2 packages, 1 update, 0 DLCs, graphics profile, external RomFS/workspace.
 4. Cell 12 submits **only `blades/handoff.json`** to branch `BladesTime`. This triggers only `.github/workflows/bladestime.yml`, one xcode-27 game build, real compiled iOS shaders and thin IPA.

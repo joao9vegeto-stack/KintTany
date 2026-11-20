@@ -16,6 +16,10 @@ class DanteNotebookParity(unittest.TestCase):
         nb = json.loads((ROOT / "blades/colab/BladesTime.ipynb").read_text())
         self.assertEqual(nb["nbformat"], 4)
         self.assertEqual(len(nb["cells"]), 13)
+        intro = "".join(nb["cells"][0]["source"])
+        self.assertIn("3 (autenticar Drive)", intro)
+        self.assertIn("13 (disparar um Actions)", intro)
+        self.assertIn("célula 2 de transferência", intro)
         self.assertEqual([i for i,c in enumerate(nb["cells"]) if c["cell_type"] == "code"],
                          [1,2,4,6,8,10,12])
         for i,c in enumerate(nb["cells"]):
