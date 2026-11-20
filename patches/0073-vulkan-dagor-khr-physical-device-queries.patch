@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: KintTany port maintainer <patches@localhost>
+Date: Fri, 20 Nov 2026 18:28:00 -0300
+Subject: [PATCH] Vulkan: implement missing KHR physical-device queries for Dagor
+
+Dagor (Blades of Time) resolves Vulkan 1.1 physical-device query functions
+via VK_KHR_get_physical_device_properties2. The host implemented some, but
+returned NULL for three queried functions. The game aborted video/Vulkan
+initialization before generating a single SPIR-V module.
+
+Route these promoted KHR names to the same Vulkan core handlers. Reuse the
+established Tegra limits and format capabilities, and provide an empty
+sparse-image query because sparse images are unsupported.
+
+Upstream-Status: fork-only
+Reason: BladesTime Vulkan host capture in run 44818026792 traps with no SPIR-V after missing KHR function lookups
+Issue: joao9vegeto-stack/KintTany BladesTime run 44818026792
+---
+ dm/gfx/vk/hle_vk.m | 20 +++++++++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/dm/gfx/vk/hle_vk.m b/dm/gfx/vk/hle_vk.m
+--- a/dm/gfx/vk/hle_vk.m
++++ b/dm/gfx/vk/hle_vk.m
+@@ -472,6 +472,15 @@
+     if (!*n) return;
+     *n = 1; p[0] = (VkQueueFamilyProperties){VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT, 16, 64, {1, 1, 1}};   // every VkQueue is the same serial Metal queue
+ }
++// Dagor asks for the 1.1 physical-device API under its KHR extension name.
++// The lookup layer maps KHR -> core; the core entry point must be registered.
++VK(vkGetPhysicalDeviceQueueFamilyProperties2, void, VkPhysicalDevice pd, uint32_t *n, VkQueueFamilyProperties2 *p) {
++    if (!p) { h_vkGetPhysicalDeviceQueueFamilyProperties(pd, n, NULL); return; }
++    if (!*n) return;
++    uint32_t count = 1;
++    h_vkGetPhysicalDeviceQueueFamilyProperties(pd, &count, &p[0].queueFamilyProperties);
++    *n = count;  // preserve the caller's sType and pNext
++}
+ // Apple Metal's read-write texture format tiers: tier 1 supports R32 float/uint/sint, and tier 2 adds the formats below.
+ // https://developer.apple.com/documentation/metal/mtlreadwritetexturetier/tier1
+ // https://developer.apple.com/documentation/metal/mtlreadwritetexturetier/tier2
+@@ -509,6 +518,11 @@
+     p->optimalTilingFeatures = t;
+     p->linearTilingFeatures = f->kind == K_COLOR || f->kind == K_INT ? t : 0;
+ }
++// Promoted VK_KHR_get_physical_device_properties2 format-property query.
++VK(vkGetPhysicalDeviceFormatProperties2, void, VkPhysicalDevice pd, VkFormat format, VkFormatProperties2 *p) {
++    h_vkGetPhysicalDeviceFormatProperties(pd, format, &p->formatProperties);
++    // Do not overwrite sType or a caller-provided pNext extension chain.
++}
+ VK(vkGetPhysicalDeviceImageFormatProperties, VkResult, VkPhysicalDevice pd, VkFormat format, VkImageType type, VkImageTiling tiling, VkImageUsageFlags usage,
+    VkImageCreateFlags flags, VkImageFormatProperties *p) {
+     (void)pd; const fmt_t *f = fmt_of(format);
+@@ -531,6 +545,12 @@
+             ((VkExternalImageFormatProperties *)x)->externalMemoryProperties = (VkExternalMemoryProperties){0};
+     return h_vkGetPhysicalDeviceImageFormatProperties(pd, i->format, i->type, i->tiling, i->usage, i->flags, &p->imageFormatProperties);
+ }
++// The backend has no sparse-image implementation; a valid empty response is
++// safer than returning a null function pointer from vkGetInstanceProcAddr.
++VK(vkGetPhysicalDeviceSparseImageFormatProperties2, void, VkPhysicalDevice pd, const VkPhysicalDeviceSparseImageFormatInfo2 *i,
++   uint32_t *n, VkSparseImageFormatProperties2 *p) {
++    (void)pd; (void)i; (void)p; *n = 0;
++}
+ VK(vkGetImageSparseMemoryRequirements, void, VkDevice d, VkImage i, uint32_t *n, VkSparseImageMemoryRequirements *r) { (void)d; (void)i; (void)r; *n = 0; }
+ 
+ // ---------- Surface ----------
+
+-- 
+2.56.0
