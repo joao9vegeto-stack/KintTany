@@ -10,15 +10,17 @@ The game base is title `0100CFA00CC74000` (v0); the update version is discovered
 - NSP base and `update.nsp` (distinct file IDs, SHA-256 computed in Colab)
 - `prod.keys` remains outside repository/IPA.
 
-## Procedure — one code cell, Dante-style handoff
+## Procedure — exact 13-cell Dante2iOS notebook, adapted for Blades of Time
 
-1. Open `blades/colab/BladesTime.ipynb` and run its **only code cell**, with `PREPARAR + ACTIONS` selected. It authenticates Drive, downloads base+update from `botime` using six 64-MiB parallel chunks (when supported), reads actual update content meta, performs NXNative Linux survey/extraction/ARM64 rewrite and offline shader handling. An unsupported Oodle/capture stage fails clearly rather than fabricating a successful game build.
-2. Preparation uploads the external `games/0100CFA00CC74000/romfs.img`, compressed workspace and integrity manifest to `botime/BladesTime_BoTime_*`, excluding NSP and keys.
-3. **Within that same execution**, the Colab prompts for a fine-grained PAT with Contents Read/Write, creates only `blades/handoff.json` in the BladesTime branch and triggers only `.github/workflows/bladestime.yml`. When recovering after successful upload, select `RECUPERAR UPLOAD + ACTIONS`, still from the same code cell. Duplicate request IDs are rejected.
-4. One xcode-27 Actions job checks hashes, retrieves the workspace and external RomFS in parallel chunks, compiles a real Metal shader image, embeds it and verifies it inside the thin iOS 26 IPA.
-5. **After** Actions succeeds, choose `TRANSFERIR IPA PARA DRIVE` in the same cell. It selects the latest successful exact BladesTime workflow, verifies the artifact ZIP, IPA SHA-256 and build report, and uploads the IPA and provenance to `botime/ipa`.
-6. Sideload the generated IPA and place its external merged `romfs.img` in the game's Documents data folder. Only an iPhone test can validate gameplay.
+The uploaded and tested Dante notebook `Dante2iOS_DMC2_LinuxNativeAOT.ipynb` is the cell-by-cell source of `blades/colab/BladesTime.ipynb`; the port preserves its 13-cell order, the top GitHub-to-Drive transfer cell, Linux NativeAOT recovery and the final handoff dispatch.
 
+1. Run **cells 2, 4, 6, 8, 10 and 12**, like the Dante original. Authenticate Google Drive, check out **only BladesTime**, recover a previously uploaded handoff if present, otherwise download exactly two NSPs (base v0 + update with content-meta-discovered version) from **botime** and run NXNative preparation.
+2. Colab downloads large inputs with **six 64 MiB concurrent ranges**, verifies Drive metadata and SHA-256, and uploads external `romfs.img`, workspace and handoff with resumable chunks. It preserves game cache on retries and never includes original NSP/keys in the IPA.
+3. Inspect the handoff gate: base version zero, actual update version greater than zero, 2 packages, 1 update, 0 DLCs, graphics profile, external RomFS/workspace.
+4. Cell 12 submits **only `blades/handoff.json`** to branch `BladesTime`. This triggers only `.github/workflows/bladestime.yml`, one xcode-27 game build, real compiled iOS shaders and thin IPA.
+5. **Only after successful Actions**, run **cell 1** at the top to find the exact BladesTime workflow and IPA artifact. It verifies the artifact ZIP SHA-256 (when GitHub supplies one), checks the archive and IPA identity, and uploads it to **botime/ipa** with provenances recorded on Drive.
+
+The extra `blades/colab/transfer_ipa.py` remains available as an optional CLI transfer utility; the notebook itself uses the faithful original transfer cell rather than that wrapper.
 
 ## Invariants
 
