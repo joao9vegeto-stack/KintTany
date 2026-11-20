@@ -63,6 +63,29 @@ jobs:
           set -euo pipefail
           python3 migration/dante_nxnative_backports.py --target 14f54e4c18e2a97905c3481e5e5c4d7764c272f2
 
+      - name: Register documented switches used by accepted backports
+        if: steps.backports.outputs.count != '' && steps.backports.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          pin = "14f54e4c18e2a97905c3481e5e5c4d7764c272f2"
+          upstream = subprocess.check_output(["git", "-C", "engine", "show", pin + ":docs/env_switches.tsv"], text=True)
+          found = {s.split("\t", 1)[0]: s for s in upstream.splitlines()[1:] if "\t" in s}
+          fork = Path("patches/fork_env_switches.tsv")
+          original = fork.read_text(encoding="utf-8")
+          rows = {s.split("\t", 1)[0]: s for s in original.splitlines()[1:] if "\t" in s}
+          for name in ("DM_NVN_UPLOAD_IDLE_MS",):
+              used = subprocess.run(["git", "-C", "engine", "grep", "-q", name, "HEAD", "--", "dm/gfx/nvn/nvn_mtl.m"]).returncode == 0
+              if used and name not in rows:
+                  if name not in found:
+                      raise RuntimeError("Missing authoritative upstream definition: " + name)
+                  rows[name] = found[name]
+                  print("Registered upstream-backed switch:", name)
+          fork.write_text("name\tclass\tmeaning\n" + "".join(rows[k] + "\n" for k in sorted(rows)), encoding="utf-8")
+          PY
+
       - name: Verify all backports reapply over the exact original pinned base
         if: steps.backports.outputs.count != '' && steps.backports.outputs.count != '0'
         run: |
