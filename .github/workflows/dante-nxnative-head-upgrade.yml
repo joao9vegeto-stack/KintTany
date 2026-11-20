@@ -134,6 +134,12 @@ jobs:
             echo "Engine upgrade required no changes."
             exit 0
           fi
-          git diff --cached --check
-          git commit -m "Dante2iOS: rebase official engine queue onto nxnative HEAD"
+          # Patch mail files contain intentional diff whitespace (including Makefile TABs).
+          # Validate metadata here; engine.py check already validated every exported patch.
+          git diff --cached --check -- .upstream-ref README.md frontend/README.md frontend-qt/README.md patches/series patches/fork_env_switches.tsv
+          if [[ "${{ steps.probe.outputs.result }}" == "0" ]]; then
+            git commit -m "Dante2iOS: verify full nxnative engine HEAD rebase"
+          else
+            git commit -m "Dante2iOS: integrate verified independent nxnative engine backports"
+          fi
           git push origin HEAD:Dante2iOS
