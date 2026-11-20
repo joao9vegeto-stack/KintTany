@@ -422,6 +422,20 @@ def prepare(args, api=None) -> dict:
     game_id = create_folder(api, TITLE_ID, create_folder(api, "games", output_id))
     print("[BladesTime] Enviando RomFS externa (a IPA não a incorporará).")
     romfs_record = upload_drive_file(api, romfs, game_id, "romfs.img")
+    # NXNative may require shader content from more than one program version.
+    # Keep *every* needed merged image available to the Mac host, without
+    # copying any NSP, key or extra RomFS into the eventual iOS IPA.
+    shader_romfs = []
+    for shader_version in prep["shader_versions"]:
+        if shader_version == prep["package_version"]:
+            continue
+        if re.fullmatch(r"v[0-9]+", shader_version) is None:
+            fail(f"Unexpected shader version marker: {shader_version!r}")
+        other = work / "extract" / shader_version / "RomFS.img"
+        if not other.is_file() or other.stat().st_size <= 0:
+            fail(f"NXNative source shader RomFS missing: {other}")
+        item = upload_drive_file(api, other, game_id, f"romfs-{shader_version}.img")
+        shader_romfs.append({"version": shader_version, **item})
     archive = root / "blades-work.tar.zst"
     build_work_archive(work, archive)
     archive_record = upload_drive_file(api, archive, pipeline_id, archive.name)
@@ -437,7 +451,7 @@ def prepare(args, api=None) -> dict:
         "work_archive": archive_record, "game_data": {
             "folder_id": game_id,
             "folder_url": f"https://drive.google.com/drive/folders/{game_id}",
-            "romfs": romfs_record, "aoc": [],
+            "romfs": romfs_record, "shader_romfs": shader_romfs, "aoc": [],
             "romfs_relative_path": prep["romfs_relative_path"],
         },
         "prepared": prep, "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -452,6 +466,8 @@ def prepare(args, api=None) -> dict:
     print("[BladesTime] Extract/merge/rewrite already saved on Drive; "
           "the Mac runner will handle only required native capture/Metal/Xcode.", flush=True)
     print("RomFS:", romfs_record["size"], "bytes")
+    print("Additional shader-version RomFS images:", len(shader_romfs),
+          "(verified on Drive, never included in IPA)")
     print("Prepared archive:", archive_record["size"], "bytes")
     print("Recovery folder:", handoff["drive_output_folder_url"])
     print("O notebook publica este handoff automaticamente na próxima fase.")

@@ -119,6 +119,29 @@ def main() -> None:
     if not identity.is_file():
         fail("RomFS identity sidecar missing")
     download_drive_file(api, d["game_data"]["romfs"], romfs)
+    # Base/update shader inputs may span more than the selected packed
+    # version. RomFS images are transferred externally, never inside the IPA.
+    expected_extra = set(real["shader_versions"]) - {version}
+    extras = d["game_data"].get("shader_romfs", [])
+    if not isinstance(extras, list) or len(extras) != len(expected_extra):
+        fail("incomplete additional shader-version RomFS handoff")
+    if {x.get("version") for x in extras} != expected_extra:
+        fail("extra shader input versions disagree with verified Linux manifest")
+    for item in extras:
+        source_version = item["version"]
+        if not re.fullmatch(r"v[0-9]+", source_version):
+            fail("unsafe source-version marker")
+        extra_romfs = work / "extract" / source_version / "RomFS.img"
+        extra_identity = work / "extract" / source_version / "RomFS.img.id"
+        if not extra_identity.is_file():
+            fail(f"extra shader-version RomFS identity missing: {source_version}")
+        download_drive_file(api, item, extra_romfs)
+        extra_meta = json.loads(extra_identity.read_text())
+        if (extra_meta.get("title") != TITLE_ID.lower()
+                or extra_meta.get("version") != source_version
+                or extra_meta.get("bytes") != item.get("size")
+                or extra_meta.get("sha256") != item.get("sha256")):
+            fail(f"extra shader RomFS provenance failed: {source_version}")
     record = json.loads(identity.read_text())
     image = d["game_data"]["romfs"]
     if record.get("title") != TITLE_ID.lower() or record.get("version") != version:

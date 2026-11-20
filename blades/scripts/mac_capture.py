@@ -40,8 +40,8 @@ def complete(builder, engine: Path, version: Path, patched: Path,
         if not isinstance(marker, str) or not re.fullmatch(r"v[0-9]+", marker):
             fail(f"invalid shader version in Colab manifest: {marker!r}")
         candidate = work / "extract" / marker
-        if not (candidate / "ExeFS/main").is_file():
-            fail(f"Colab did not extract required shader input: {marker}")
+        if not (candidate / "ExeFS/main").is_file() or not (candidate / "RomFS.img").is_file():
+            fail(f"Colab/Drive did not provide complete shader input {marker} (ExeFS and RomFS)")
         dirs[marker] = candidate
     if prep.get("package_version") not in dirs:
         fail("packed update version is not among extracted shader inputs")

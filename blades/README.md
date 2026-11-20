@@ -78,3 +78,13 @@ compiles every Linux/Mac Python stage and runs the host-stage regression tests
 without requiring Google Drive credentials or a game runtime. This catches
 syntax or routing mistakes while leaving the cached NSPs and rewritten
 content intact.
+
+## Multi-version shader inputs
+
+Some NXNative profiles need shaders from both the base and an updated game
+version. The Colab uploads any additional required shader-version RomFS
+images separately with their own SHA-256 and provenance, next to the packed
+external `romfs.img`. Actions restores **exactly** those images (by version)
+before native capture or the dependent shader split, but never includes
+these extra images in the IPA. The cached work archive continues excluding
+all giant RomFS images.
