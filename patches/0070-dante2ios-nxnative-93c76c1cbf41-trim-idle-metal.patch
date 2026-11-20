@@ -1,0 +1,281 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: dante2ios-upstream-backport
+ <dante2ios-upstream-backport@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 00:32:16 +0000
+Subject: [PATCH] Dante2iOS: nxnative 93c76c1cbf41 - Trim idle Metal staging
+ buffers on opt in
+
+Upstream-Status: pending
+Reason: Isolated nxnative runtime fix: Trim idle Metal staging buffers on opt in; full HEAD rebase remains blocked by shared-shell conflicts
+Issue: seedds/nxnative@93c76c1cbf4121f2609f24eaa0d2cafec9bb04c7
+
+---
+ dm/gfx/nvn/nvn_mtl.m         |  82 +++++++++++++++++++++++++-
+ dm/gfx/tests/Makefile        |   8 +++
+ dm/gfx/tests/t_upload_idle.m | 110 +++++++++++++++++++++++++++++++++++
+ 3 files changed, 198 insertions(+), 2 deletions(-)
+ create mode 100644 dm/gfx/tests/t_upload_idle.m
+
+diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
+index f6272a6..9b1a9ec 100644
+--- a/dm/gfx/nvn/nvn_mtl.m
++++ b/dm/gfx/nvn/nvn_mtl.m
+@@ -1763,6 +1763,7 @@ static uint64_t g_alloc_frame, g_alloc_shared, g_alloc_shares; static int g_allo
+ int mtl_wait(uint64_t fence, uint64_t timeout_ns);
+ static int mtl_wait_at(uint64_t fence, uint64_t timeout_ns, int site);
+ static void up_flush(void);
++static void up_idle_release(void);
+ // The upload batch belongs only to the submit thread (the thread that called mtl_sub_begin): the batch's encoder cannot be used across threads. Every entry point asserts current thread == submit thread,
+ // and on mismatch prints the stack and aborts on the spot - so that 'another thread touched the batch' is exposed deterministically on Mac too, not by timing (real iOS device stuck at the main menu: the present thread flushed the submit thread's batch via q_cb).
+ static pthread_t g_sub_thread; static _Atomic int g_sub_thread_set;
+@@ -1815,6 +1816,7 @@ void mtl_sub_begin(void) {
+     if (g_cb) MDIE("submit re-entered");
+     if (!atomic_load(&g_sub_thread_set) || !pthread_equal(g_sub_thread, pthread_self())) nvn_dirty_own_thread();
+     g_sub_thread = pthread_self(); atomic_store(&g_sub_thread_set, 1);
++    up_idle_release();
+     atomic_store(&g_last_commit_error, 0);
+     g_sub_pool = objc_autoreleasePoolPush();
+     atomic_store(&g_sub_open, g_fence + 1); atomic_thread_fence(memory_order_seq_cst);   // before any pool lookup of this submission (pool_gone_release); only this thread moves g_fence
+@@ -3511,6 +3513,75 @@ static __strong id<MTLBuffer> g_up_slot_blk[3], g_up_slot_over[3]; static unsign
+ static size_t g_up_slot_want[3], g_up_batch_bytes; static int g_up_over_used;
+ static int up_reuse(void) { static int on = -1; if (on < 0) { const char *e = getenv("DM_NVN_UPLOAD_REUSE"); on = !e || atoi(e); } return on; }
+ static int up_retained(id<MTLBuffer> b, unsigned slot) { return b && (b == g_up_slot_blk[slot] || b == g_up_slot_over[slot]); }
++static size_t up_slot_block_size(size_t demand) {
++    size_t want = UP_SLOT_BLOCK;
++    while (want < demand) want <<= 1;
++    return want;
++}
++
++// Idle trimming is opt-in. An explicit 0 still reports the cache for A/B runs.
++static int g_up_idle_report;
++static uint64_t up_idle_period(void) {
++    static int64_t ns = -1;
++    if (ns < 0) {
++        const char *e = getenv("DM_NVN_UPLOAD_IDLE_MS");
++        g_up_idle_report = e && *e;
++        char *end;
++        int64_t ms = g_up_idle_report ? strtoll(e, &end, 10) : 0;
++        ns = ms > 0 && ms <= INT64_MAX / 1000000 && !*end ? ms * 1000000 : 0;
++    }
++    return (uint64_t)ns;
++}
++typedef struct {
++    uint64_t used_ns, overflow_ns, window_ns;
++    size_t peak;
++} up_idle_slot;
++static up_idle_slot g_up_idle_slot[3];
++static uint64_t g_up_idle_n, g_up_idle_bytes, g_up_blocks_new;
++
++static void up_idle_drop(__strong id<MTLBuffer> *block) {
++    if (!*block) return;
++    g_up_idle_n++;
++    g_up_idle_bytes += (*block).length;
++    res_remove(*block);
++    *block = nil;
++}
++
++static void up_idle_release(void) {
++    uint64_t idle = up_idle_period();
++    if (!g_up_idle_report || g_up_cb) return;
++    uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC);
++    uint64_t before = g_up_idle_n;
++    for (unsigned s = 0; idle && s < 3; s++) {
++        // Only the upload batch uses these blocks. Its feedback handler clears busy after GPU completion.
++        up_idle_slot *age = &g_up_idle_slot[s];
++        if (!age->used_ns || atomic_load(&g_up_alloc_busy[s])) continue;
++        if (now - age->used_ns >= idle) {
++            up_idle_drop(&g_up_slot_blk[s]);
++            up_idle_drop(&g_up_slot_over[s]);
++            g_up_slot_want[s] = 0;
++            *age = (up_idle_slot){0};
++            continue;
++        }
++        if (g_up_slot_over[s] && now - age->overflow_ns >= idle) up_idle_drop(&g_up_slot_over[s]);
++        if (now - age->window_ns >= idle) {
++            if (g_up_slot_blk[s].length > up_slot_block_size(age->peak)) up_idle_drop(&g_up_slot_blk[s]);
++            g_up_slot_want[s] = age->peak;
++            age->peak = 0;
++            age->window_ns = now;
++        }
++    }
++    // Commit the removals before this submission can allocate more GPU memory.
++    if (g_up_idle_n != before) res_commit();
++    static uint64_t said_ns;
++    if (!said_ns || now - said_ns >= 30000000000ull || (!before && g_up_idle_n)) {
++        said_ns = now;
++        size_t held = 0;
++        for (unsigned s = 0; s < 3; s++) held += g_up_slot_blk[s].length + g_up_slot_over[s].length;
++        MLOG("upload staging: slots hold %zu MiB; %llu blocks allocated, %llu trimmed (%llu MiB total)", held >> 20,
++             (unsigned long long)g_up_blocks_new, (unsigned long long)g_up_idle_n, (unsigned long long)(g_up_idle_bytes >> 20));
++    }
++}
+ typedef struct {
+     __unsafe_unretained id<MTLBuffer> src;
+     size_t off, row, image;
+@@ -3602,6 +3673,13 @@ static void up_flush(void) {
+     // (nvnQueueFinish on any thread, up_begin on another) waited for that submission: hand it over now (from PR #141, which found the nvnQueueFinish half)
+     if (!g_cb) rec_publish();
+     if (up_reuse()) g_up_slot_want[slot] = MAX(g_up_slot_want[slot], g_up_batch_bytes);
++    if (g_up_batch_bytes && up_idle_period()) {
++        up_idle_slot *age = &g_up_idle_slot[slot];
++        age->used_ns = clock_gettime_nsec_np(CLOCK_MONOTONIC);
++        if (g_up_over_used) age->overflow_ns = age->used_ns;
++        if (!age->window_ns) age->window_ns = age->used_ns;
++        age->peak = MAX(age->peak, g_up_batch_bytes);
++    }
+     g_up_cb = nil;
+     up_diag();
+     g_nup_blits = 0;
+@@ -3631,7 +3709,7 @@ static void up_begin(void) {
+ 
+ // Diagnostic readout (low frequency; printed only when the block switch count changed and ≥ 1 second since the last line, at most 200 lines per game): how many times an upload batch ran out of staging block and switched blocks midway; GPU allocated, residency set object count, deferred-release queue length.
+ // If the old block is not retired on a switch it stays in the residency set and can never be freed, and "GPU allocated" climbs one block at a time with the switch count
+-static uint64_t g_up_blocks_new, g_up_swaps, g_up_swap_bytes; static NSHashTable *g_up_old;   // g_up_old: old blocks switched out (weak references); the diagnostic line counts how many are still alive
++static uint64_t g_up_swaps, g_up_swap_bytes; static NSHashTable *g_up_old;   // g_up_old: old blocks switched out (weak references); the diagnostic line counts how many are still alive
+ static void up_diag(void) { @autoreleasepool {
+     // Weak-table enumeration autoreleases the buffers it finds. Do not keep
+     // completed batches alive until the whole rendering submission ends.
+@@ -3659,7 +3737,7 @@ static id<MTLBuffer> up_alloc(size_t n, size_t *off) {
+     if (!g_up_block && need <= UP_BLOCK_SIZE) {   // first allocation of the batch: the slot's own block, grown to the next power of two that holds it (a movie frame re-uploaded every frame, 8 MB in Link's Awakening)
+         __strong id<MTLBuffer> *sb = &g_up_slot_blk[g_up_cur_slot];
+         size_t demand = up_reuse() ? MAX(need, g_up_slot_want[g_up_cur_slot]) : need;
+-        size_t want = UP_SLOT_BLOCK; while (want < demand) want <<= 1;
++        size_t want = up_slot_block_size(demand);
+         if (*sb && (*sb).length < want) { defer_obj_release(*sb); *sb = nil; }   // the slot's previous batch has finished (up_begin waited for it)
+         if (!*sb) { *sb = [g_dev newBufferWithLength:want options:MTLResourceStorageModePrivate]; if (!*sb) MDIE("failed to create the swizzled-upload staging block %#zx", want); res_add(*sb); g_up_blocks_new++; }
+         g_up_block = *sb; g_up_block_size = (*sb).length; g_up_block_off = 0;
+diff --git a/dm/gfx/tests/Makefile b/dm/gfx/tests/Makefile
+index 81cb970..18f1e7d 100644
+--- a/dm/gfx/tests/Makefile
++++ b/dm/gfx/tests/Makefile
+@@ -389,6 +389,14 @@ check_t_cpu_storage: RUN_ENV = MTL_DEBUG_LAYER=1
+ t_initial_uncached: t_initial_uncached.m $(MTL_T_DEP)
+ 	clang $(CFLAGS) -fobjc-arc -o $@ t_initial_uncached.m $(MTL_T_SRC) $(FW)
+ check_t_initial_uncached: RUN_ENV = MTL_DEBUG_LAYER=1
++t_upload_idle: t_upload_idle.m $(MTL_T_DEP)
++	clang $(CFLAGS) -fobjc-arc -o $@ t_upload_idle.m $(MTL_T_SRC) $(FW)
++.PHONY: check_t_upload_idle
++check_t_upload_idle: t_upload_idle
++	env -u DM_NVN_UPLOAD_IDLE_MS DM_NVN_UPLOAD_REUSE=1 MTL_DEBUG_LAYER=1 ./t_upload_idle
++	DM_NVN_UPLOAD_IDLE_MS=0 DM_NVN_UPLOAD_REUSE=1 MTL_DEBUG_LAYER=1 ./t_upload_idle
++	DM_NVN_UPLOAD_IDLE_MS=2000 DM_NVN_UPLOAD_REUSE=1 DM_NVN_ENC_THREAD=0 MTL_DEBUG_LAYER=1 ./t_upload_idle
++	DM_NVN_UPLOAD_IDLE_MS=2000 DM_NVN_UPLOAD_REUSE=1 DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_upload_idle
+ t_upload_slots: t_upload_slots.m $(MTL_T_DEP)
+ 	clang $(CFLAGS) -fobjc-arc -o $@ t_upload_slots.m $(MTL_T_SRC) $(FW)
+ .PHONY: check_t_upload_slots
+diff --git a/dm/gfx/tests/t_upload_idle.m b/dm/gfx/tests/t_upload_idle.m
+new file mode 100644
+index 0000000..0d64307
+--- /dev/null
++++ b/dm/gfx/tests/t_upload_idle.m
+@@ -0,0 +1,110 @@
++// Exercise idle trimming through mtl_sub_begin, including an expired slot with pending GPU work.
++#include "../nvn/nvn_mtl.m"
++void *front_metal_layer(void) { return NULL; }
++module_t *module_of(const void *p) { (void)p; return NULL; }
++module_t *g_mod; int g_nmod;
++void svc_thread_dump(void) {}
++uint64_t now_ns(void) { return bp_now(); }
++
++static int checks, failed;
++#define CHECK(c, msg) do { checks++; if (!(c)) { failed++; fprintf(stderr, "FAIL: %s\n", msg); } } while (0)
++enum { EDGE = 256, LARGE = 24 << 20, MAX_COPIES = 16 };
++static unsigned copies;
++static id<MTLBuffer> output;
++
++static void copy_upload(size_t size) {
++    size_t off;
++    id<MTLBuffer> block = up_alloc(size, &off);
++    CHECK(block.length >= off + size, "staging allocation fits");
++    [g_up_ce fillBuffer:block range:NSMakeRange(off, EDGE) value:(uint8_t)(copies + 1)];
++    [g_up_ce barrierAfterEncoderStages:MTLStageBlit beforeEncoderStages:MTLStageBlit visibilityOptions:MTL4VisibilityOptionDevice];
++    enc_b_copy_buffer(g_up_ce, block, off, output, copies++ * EDGE, EDGE);
++}
++
++static void upload_batch(size_t size, unsigned count) {
++    up_begin();
++    for (unsigned i = 0; i < count; i++) copy_upload(size);
++    up_flush();
++}
++
++static void finish(void) {
++    CHECK(mtl_wait(mtl_sub_commit(), 5000000000ull), "submission completes");
++    CHECK(!mtl_last_commit_error(), "GPU has no submission error");
++    up_wait_zero(&g_up_pending, WS_DIAG);
++}
++
++int main(void) { @autoreleasepool {
++    mtl_init();
++    uint64_t idle = up_idle_period();
++    const char *env = getenv("DM_NVN_UPLOAD_IDLE_MS");
++    CHECK(idle == (env ? strtoull(env, NULL, 10) * 1000000 : 0), "idle period matches the setting, defaulting to zero");
++    output = [g_dev newBufferWithLength:MAX_COPIES * EDGE options:MTLResourceStorageModeShared];
++    memset(output.contents, 0, output.length);
++    res_add(output);
++
++    id<MTLSharedEvent> gate = [g_dev newSharedEvent];
++    [g_q4 waitForEvent:gate value:1];
++    mtl_sub_begin();
++    for (unsigned s = 0; s < 3; s++) upload_batch(LARGE, 2);
++    mtl_sub_commit();
++    id<MTLBuffer> primary[3], overflow[3];
++    uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC), expired = now - MAX(idle, 2000000000ull);
++    for (unsigned s = 0; s < 3; s++) {
++        primary[s] = g_up_slot_blk[s];
++        overflow[s] = g_up_slot_over[s];
++        CHECK(primary[s].length == UP_BLOCK_SIZE && overflow[s].length == UP_BLOCK_SIZE, "burst fills both retained blocks");
++        g_up_idle_slot[s].used_ns = expired;
++    }
++    mtl_sub_begin();
++    for (unsigned s = 0; s < 3; s++) {
++        CHECK(atomic_load(&g_up_alloc_busy[s]), "upload is still pending behind the gate");
++        CHECK(g_up_slot_blk[s] == primary[s] && g_up_slot_over[s] == overflow[s] &&
++              [g_res containsAllocation:primary[s]] && [g_res containsAllocation:overflow[s]], "expired pending slot keeps both blocks resident");
++    }
++    gate.signaledValue = 1;
++    finish();
++
++    if (idle) {
++        // Close the burst's demand window, then populate the next window with actual small uploads.
++        now = clock_gettime_nsec_np(CLOCK_MONOTONIC);
++        for (unsigned s = 0; s < 3; s++) {
++            g_up_idle_slot[s].used_ns = now;
++            g_up_idle_slot[s].overflow_ns = now;
++            g_up_idle_slot[s].window_ns = expired;
++        }
++        mtl_sub_begin();
++        for (unsigned s = 0; s < 3; s++) upload_batch(EDGE, 1);
++        finish();
++        g_up_idle_slot[1].overflow_ns = expired;
++        g_up_idle_slot[1].window_ns = expired;
++    }
++    g_up_idle_slot[0].used_ns = expired;
++    mtl_sub_begin();
++    if (idle) {
++        CHECK(!g_up_slot_blk[0] && !g_up_slot_over[0] && !g_up_slot_want[0], "fully idle slot clears its old size and both blocks");
++        CHECK(!g_up_slot_blk[1] && !g_up_slot_over[1] && g_up_slot_want[1] == EDGE, "active slot drops unused overflow and shrinks to the recent peak");
++        for (unsigned s = 0; s < 2; s++)
++            CHECK(![g_res containsAllocation:primary[s]] && ![g_res containsAllocation:overflow[s]], "trimmed buffers leave Metal residency before new work");
++        CHECK(g_up_slot_blk[2] == primary[2] && g_up_slot_over[2] == overflow[2], "recent slot keeps both blocks");
++        CHECK(g_up_idle_n == 4 && g_up_idle_bytes == 4u * UP_BLOCK_SIZE, "trimming counts actual retired blocks and their sizes");
++        __weak id<MTLBuffer> retired = primary[0];
++        primary[0] = nil;
++        CHECK(!retired, "completed staging is released before the next render fence");
++        upload_batch(EDGE, 1);
++        upload_batch(EDGE, 1);
++        CHECK(g_up_slot_blk[0].length == UP_SLOT_BLOCK && g_up_slot_blk[1].length == UP_SLOT_BLOCK, "first small upload recreates only a minimum-size primary");
++    } else {
++        CHECK(!g_up_idle_n && g_up_slot_blk[0] == primary[0] && g_up_slot_over[0] == overflow[0] &&
++              [g_res containsAllocation:primary[0]] && [g_res containsAllocation:overflow[0]], "zero keeps both completed blocks resident after expiry");
++    }
++    finish();
++
++    const uint8_t *bytes = output.contents;
++    for (unsigned i = 0; i < copies; i++) {
++        unsigned j = 0;
++        while (j < EDGE && bytes[i * EDGE + j] == i + 1) j++;
++        CHECK(j == EDGE, "every upload reads back its data");
++    }
++    printf("t_upload_idle: %d checks, %d failed; %llu blocks trimmed\n", checks, failed, (unsigned long long)g_up_idle_n);
++    return failed != 0;
++} }
