@@ -100,4 +100,7 @@ jobs:
             exit 0
           fi
           git commit -m "Dante2iOS: verified full nxnative upstream rebase"
+          # Run unmodified NX2Apple release-fixture checks against their upstream origin.
+          # Keep the full Git pre-push hooks enabled, never bypass or skip them.
+          export GITHUB_REPOSITORY=LNPANDY/NX2Apple
           git push origin HEAD:Dante2iOS
