@@ -104,10 +104,10 @@
   },
   "created_utc": "2026-11-20T21:09:53.566034+00:00",
   "retry": {
-    "parent_run_id": 44818026792,
-    "attempt": 2,
-    "reason": "Dagor Vulkan host initialization queried missing KHR 1.1 physical-device APIs before SPIR-V capture",
-    "engine_patch": "0073-vulkan-dagor-khr-physical-device-queries.patch",
-    "patch_commit": "441f63e5b718bc749ede111fbca4e808166f42c0"
+    "parent_run_id": 44821228580,
+    "attempt": 3,
+    "reason": "Diagnostic of Dagor VK_ERROR_INCOMPATIBLE_DRIVER: report physical device count/features after patch 0073",
+    "engine_patch": "0074-vulkan-dagor-trace-physical-device-enumeration.patch",
+    "patch_commit": "8da3f8f24b8f3558c67a19428ad1fcda02e6eaaf"
   }
 }
