@@ -46,7 +46,9 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/engine.py check
-          python3 tools/engine.py sync
+          # The rebase leaves a deliberately modified engine/ HEAD; sync --force
+          # makes a local backup before rebuilding from the new 57-patch queue.
+          python3 tools/engine.py sync --force
           python3 tools/engine.py relink
           test "$(cat .upstream-ref)" = "ee998ae6d73d5960671ec837ea2ae4a8a0489fec"
           test "$(git -C engine rev-list --count ee998ae6d73d5960671ec837ea2ae4a8a0489fec..HEAD)" -ge 12
