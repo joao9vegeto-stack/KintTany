@@ -130,6 +130,27 @@ jobs:
           assert 'DM_COPY_ROMFS' in Path('dmc2/scripts/build_shared.py').read_text()
           assert 'builder.configure_dotnet(env)' not in Path('dmc2/scripts/build_shared.py').read_text()
           assert '"DM_SHOW_FPS": "YES"' in Path('dmc2/scripts/build_shared.py').read_text()
+          # Unit-test the shader payload handoff before any expensive download.
+          from tempfile import TemporaryDirectory
+          import hashlib
+          from dmc2.scripts.build_shared import stage_nvn_shader_payload
+          with TemporaryDirectory() as tmp:
+              root = Path(tmp)
+              ios = root / 'shader' / 'ios'
+              ios.mkdir(parents=True)
+              fake = ios / 'b-testchain.img'
+              fake.write_bytes(b'compiled-test-shader' * 128)
+              fw = root / 'DmGame.framework'
+              staged = stage_nvn_shader_payload(ios, fw, 'testchain')
+              dest = fw / staged['path']
+              assert dest.read_bytes() == fake.read_bytes()
+              assert staged['sha256'] == hashlib.sha256(fake.read_bytes()).hexdigest()
+              assert staged['bytes'] == fake.stat().st_size
+              assert staged['path'] == 'msl/b-testchain.img'
+          code = Path('dmc2/scripts/build_shared.py').read_text()
+          assert 'shader_entry not in paths' in code
+          assert 'shaders embedded in IPA differ' in code
+          print('Compiled NVN shader transfer: source -> framework -> IPA guard tested.')
           import re as _re
           pat = _re.compile(r'https://(?:github[.]com/seedds/nxnative/(?:blob|tree)|raw[.]githubusercontent[.]com/seedds/nxnative)/([0-9a-f]{40})/')
           for page in ('GAMES.it.md','GAMES.md','GAMES.zh-CN.md',

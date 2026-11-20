@@ -26,4 +26,12 @@ The previously used shared parent Drive folder is **19HXEJCK-26NfBVKeUP3wqFxMFpo
 
 If a game-owned shader decoder, Mac host runtime capture or JIT capture is required, the initial Linux route **fails with diagnostics**. No placeholder shader maps, fake profiles, fake IPA, or unsupported 60 FPS guarantee are produced. A **provisional** profile and a successful IPA build do not imply the game boots: actual iPhone logs are required for bring-up.
 
+### Critical iOS shader and RomFS packaging checks
+
+- **Do not use the original 31 MB IPA from run 44700530368.** It contains `shader_map.tsv`, but it does not contain `msl/b-0724088d3779.img`. The Shared Shell marks the data as needing an update even if the RomFS file is valid when its game shaders are missing.
+- The Actions finalizer now bundles the *real iPhone Metal compilation output*, `shader/ios/b-<chain>.img`, inside `DmGame01007CF00D5BA000.framework/msl/` **before** signing. It tests file existence, size and SHA-256 at the framework, Xcode app, and published IPA layers. No RomFS, NSP or keys are added to the IPA.
+- To provide the external RomFS in the **actual DmShell application Documents container**, use `Documents/games/01007CF00D5BA000/romfs.img`. Alternatively, place it directly inside `Documents/romfs.img` for the Shell's identity-based automatic claim, or use the game's **Choose folder** setting to select the directory containing it.
+- The correct Colab-generated `romfs.img` has exactly **1,889,696,967 bytes**, SHA-256 `17c022b7ef22e11b765d78cf0041c6edcb8903e076e053395f80ea024601fa7a`, and starts with `DMROMFS1`. A generic unpacked Switch RomFS or a different `romfs.img` will not match the compiled manifest's identity. The Shell does not require a separate `RomFS.img.id` file on the phone.
+- The IPA build report states its embedded shader asset checksum and required RomFS identity. A successful build does not prove gameplay; install and collect the **in-game** log once the Shell reports Play available.
+
 The initial scripts-only commit triggers a **validation-only** DMC2 run (no handoff, so no attempted IPA build). Only after a real Colab preparation and subsequent handoff commit does Actions attempt the full build. A successful game build can then be copied to Drive with the notebook's transfer cell.

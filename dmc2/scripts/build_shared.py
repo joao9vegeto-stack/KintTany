@@ -9,6 +9,7 @@ build_ipa.sh with DM_FRAMEWORK_ONLY, then builds the Shared Shell.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -96,6 +97,37 @@ def validate_workspace(d, work, nx, builder, gp):
     if (work / "aoc").exists() and list((work / "aoc").glob("*.img")):
         fail("unexpected DMC2 DLC")
     return profile, version, romfs, patched, prep
+
+
+
+def stage_nvn_shader_payload(ios: Path, framework: Path, chain: str) -> dict:
+    """Keep the real compiled Metal libraries inside the thin framework.
+
+    DM_FRAMEWORK_ONLY intentionally leaves shaders out of the framework. The
+    Shared Shell will not launch a game without a matching msl/b-<chain>.img
+    (or an external DMMSLTR1 trailer). Colab uploaded the base RomFS only.
+    The shader image must therefore be copied into the signed framework.
+    """
+    source = ios / f"b-{chain}.img"
+    if not source.is_file() or source.stat().st_size <= 32:
+        fail(f"compiled iOS shader image is missing/empty: {source}")
+    destination = framework / "msl" / source.name
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+    if destination.stat().st_size != source.stat().st_size:
+        fail("the framework shader image is truncated")
+    digest = hashlib.sha256()
+    with destination.open("rb") as inp:
+        for chunk in iter(lambda: inp.read(1024 * 1024), b""):
+            digest.update(chunk)
+    result = {
+        "path": f"msl/{source.name}",
+        "bytes": destination.stat().st_size,
+        "sha256": digest.hexdigest(),
+        "library_source": str(source),
+    }
+    print("[Dante2iOS] Bundled compiled NVN shaders into framework:", result, flush=True)
+    return result
 
 
 def main() -> None:
@@ -212,6 +244,12 @@ def main() -> None:
         for rel in (exe, "profile.tsv", "dm/shader_map.tsv"):
             if not (fw / rel).is_file():
                 fail(f"missing framework component {rel}")
+        # The framework-only builder removes msl/, but the iOS Shell requires
+        # it unless a DMMSLTR1 trailer was appended to the external RomFS.
+        # Never declare an IPA successful with only shader_map.tsv.
+        if gfx != "nvn":
+            fail("DMC2 must use the NVN backend for this handoff")
+        shader_payload = stage_nvn_shader_payload(ios, fw, actual_chain)
         if any(fw.rglob("*.mtl4a")):
             fail("iOS26 IPA must not embed Metal 4 PSO archives")
         if (fw / "pso").is_dir() and any((fw / "pso").iterdir()):
@@ -246,6 +284,9 @@ def main() -> None:
         installed = sorted((app / "Frameworks").glob("*.framework"))
         if not any(x.name == framework_name for x in installed):
             fail("DMC2 framework not embedded in shell")
+        bundled_shader = app / "Frameworks" / framework_name / shader_payload["path"]
+        if not bundled_shader.is_file() or bundled_shader.stat().st_size != shader_payload["bytes"]:
+            fail(f"Xcode dropped the NVN Metal shader image: {bundled_shader}")
         for f in installed:
             run(["xattr", "-cr", str(f)])
             run(["codesign", "--force", "--sign", "-", "--timestamp=none", str(f)])
@@ -262,6 +303,17 @@ def main() -> None:
                     f"Payload/DmShell.app/Frameworks/{framework_name}/{exe}"]
             if not all(x in paths for x in must):
                 fail("IPA missing app or framework executable")
+            shader_entry = f"Payload/DmShell.app/Frameworks/{framework_name}/{shader_payload['path']}"
+            if shader_entry not in paths:
+                fail(f"IPA missing mandatory iOS game shader image: {shader_entry}")
+            if archive.getinfo(shader_entry).file_size != shader_payload["bytes"]:
+                fail("shaders in the IPA were truncated")
+            shader_checksum = hashlib.sha256()
+            with archive.open(shader_entry) as compiled:
+                for chunk in iter(lambda: compiled.read(1024 * 1024), b""):
+                    shader_checksum.update(chunk)
+            if shader_checksum.hexdigest() != shader_payload["sha256"]:
+                fail("shaders embedded in IPA differ from validated Metal libraries")
             prohibited = [x for x in paths if x.lower().endswith((".nsp", "/prod.keys",
                  "/romfs.img", ".mtl4a")) or "/aoc/" in x.lower()]
             if prohibited:
@@ -271,6 +323,12 @@ def main() -> None:
             "package_version": PACKAGE_VERSION, "engine_pin": ENGINE_PIN,
             "graphics": gfx, "provisional_profile": prep["provisional"],
             "shader_chain": actual_chain, "framework": framework_name,
+            "shader_payload": {
+                "ipa_path": f"Frameworks/{framework_name}/{shader_payload['path']}",
+                "size_bytes": shader_payload["bytes"],
+                "sha256": shader_payload["sha256"],
+                "verified_in_ipa": True,
+            },
             "ipa": ipa.name, "ipa_size_bytes": ipa.stat().st_size,
             "ios_deployment_target": "26.0",
             "romfs_in_ipa": False, "dlc_count": 0, "update_count": 0,
