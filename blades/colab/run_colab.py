@@ -429,6 +429,10 @@ def prepare(args, api=None) -> dict:
     upload_drive_file(api, path, output_id, "handoff.json")
     print("[BladesTime] PREPARAÇÃO E UPLOAD VERIFICADOS.")
     print("Title ID:", TITLE_ID, "| graphics:", prep["graphics"], "| provisional:", prep["provisional"])
+    print("Linux shader stage:", prep["shader_split_stage"],
+          "| Native-only Mac stages:", ", ".join(prep["mac_host_stages"]) or "none")
+    print("[BladesTime] Extract/merge/rewrite already saved on Drive; "
+          "the Mac runner will handle only required native capture/Metal/Xcode.", flush=True)
     print("RomFS:", romfs_record["size"], "bytes")
     print("Prepared archive:", archive_record["size"], "bytes")
     print("Recovery folder:", handoff["drive_output_folder_url"])

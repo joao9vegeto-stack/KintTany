@@ -48,3 +48,25 @@ Both Colab (`blades/colab/source_archive.py`, `blades/colab/run_colab.py`) and A
   `.part` files: a newly launched Colab session still needs a completed Drive checkpoint.
 
 Run the offline transport tests without contacting Google Drive: `python3 -m unittest discover -s blades/tests -v`. The game workflow executes them before installing expensive build prerequisites.
+
+## Linux-first shader handoff and native-only macOS capture
+
+The successful ARM64 rewrite from the user test is preserved. The previous
+generic `required_host_capture` stop is now an explicit, verified handoff
+checkpoint that identifies the exact shader dependencies, instead of claiming
+a shader split completed when it has not.
+
+Colab performs NSP decryption, Base+Update RomFS merge, real NXNative provisional
+profile, AArch64 rewrite, offline NVN shader split when possible and Linux UE
+LZ4/zlib decoding without the game-owned Oodle decoder. All inputs are cached
+and the output is uploaded by verified Drive chunks.
+
+Actions uses the prepared work and runs **only** the native Apple Silicon host
+captures or Oodle/IoStore/JIT work actually requested by NXNative source
+detection. A Mac NVN shader split happens **only** when its missing inputs
+require native Mac capture first; complete Linux splits are reused by hash.
+Metal translation, Xcode, signing and IPA packing follow. GL/Vulkan shader
+resources are staged and verified as real Metal libraries too.
+
+The user still needs to run Colab and then Actions to verify actual game data;
+this change has not yet been tested against the private NSPs.

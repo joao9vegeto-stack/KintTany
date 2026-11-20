@@ -31,7 +31,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/BladesTime"
           test "$(cat .upstream-ref)" = "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb"
-          python3 -m py_compile blades/drive_chunks.py blades/colab/source_archive.py blades/colab/prepare_linux.py blades/colab/run_colab.py blades/scripts/prepare_actions.py blades/scripts/build_shared.py blades/colab/transfer_ipa.py
+          python3 -m py_compile blades/port_stages.py blades/scripts/mac_capture.py blades/drive_chunks.py blades/colab/source_archive.py blades/colab/prepare_linux.py blades/colab/run_colab.py blades/scripts/prepare_actions.py blades/scripts/build_shared.py blades/colab/transfer_ipa.py
           python3 -m unittest discover -s blades/tests -p "test_*.py" -v
           python3 - <<'PY'
           from pathlib import Path
@@ -55,9 +55,22 @@ jobs:
               assert re.fullmatch(r'[0-9a-f]{64}',item['sha256'])
           assert d['game_data']['aoc'] == [] and p['aoc_images'] == []
           assert p['graphics'] in ('nvn','gl','vulkan')
+          assert isinstance(p['source_capture_flags'], list)
+          assert isinstance(p['mac_host_stages'], list)
+          assert isinstance(p['shader_versions'], list) and p['shader_versions']
+          assert isinstance(p['jit_required'], bool)
+          assert isinstance(p['linux_ue_decode_complete'], bool)
           if p['graphics'] == 'nvn':
-              assert re.fullmatch(r'[0-9a-f]{64}',p.get('shader_package_key') or '')
-          print('BladesTime metadata verified:', d['title_id'], d['package_version'])
+              if p['shader_split_stage'] == 'linux_complete':
+                  assert re.fullmatch(r'[0-9a-f]{64}',p.get('shader_package_key') or '')
+              else:
+                  assert p['shader_split_stage'] == 'mac_pending'
+                  assert p['shader_package_key'] is None and p['mac_host_stages']
+          else:
+              assert p['shader_split_stage'] == 'metal_deferred'
+              assert p['shader_package_key'] is None
+          print('BladesTime metadata verified:', d['title_id'], d['package_version'],
+                'Linux shader work:', p['shader_split_stage'], 'Mac-only:', p['mac_host_stages'])
           PY
       - name: Install host requirements
         shell: bash
@@ -86,7 +99,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 blades/scripts/prepare_actions.py --handoff "$GITHUB_WORKSPACE/blades/handoff.json" --destination "$RUNNER_TEMP/blades"
-      - name: Build compiled Metal shaders, signed framework and thin IPA
+      - name: Run necessary Apple Silicon captures, compile Metal and sign thin IPA
         run: |
           set -euo pipefail
           python3 blades/scripts/build_shared.py --nx2apple-root "$GITHUB_WORKSPACE" --prepared-json "$RUNNER_TEMP/blades/actions-input.json" --output "$RUNNER_TEMP/blades-output"

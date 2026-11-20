@@ -104,7 +104,9 @@ def main() -> None:
     real = json.loads(recorded.read_text())
     for field in ("project", "title_id", "package_version", "engine_pin",
                   "graphics", "shader_package_key", "shader_chain", "modules",
-                  "romfs_relative_path", "romfs_id_relative_path", "provisional"):
+                  "romfs_relative_path", "romfs_id_relative_path", "provisional",
+                   "shader_split_stage", "source_capture_flags", "mac_host_stages",
+                   "shader_versions", "jit_required", "linux_ue_decode_complete"):
         if prep.get(field) != real.get(field):
             fail(f"Drive handoff and workspace disagree on {field}")
     relative = PurePosixPath(real["romfs_relative_path"])
@@ -125,11 +127,21 @@ def main() -> None:
         fail("RomFS metadata mismatch")
     if real.get("provisional") and not (work / "profile" / TITLE_ID / "game.tsv").is_file():
         fail("provisional game.tsv not preserved in workspace")
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from port_stages import require_valid_stage_list
+    host_stages = require_valid_stage_list(real.get("mac_host_stages"))
+    shader_stage = real.get("shader_split_stage")
     if real["graphics"] == "nvn":
-        if not re.fullmatch(r"[0-9a-f]{64}", real.get("shader_package_key") or ""):
-            fail("NVN shader package key not recorded")
-        if not (work / "shader" / "pkg").is_dir():
-            fail("NVN shader package absent")
+        if shader_stage == "linux_complete":
+            if not re.fullmatch(r"[0-9a-f]{64}", real.get("shader_package_key") or ""):
+                fail("completed Linux NVN shader split key missing")
+            if not (work / "shader" / "pkg").is_dir():
+                fail("completed Linux NVN shader package absent")
+        elif shader_stage != "mac_pending" or not host_stages or real.get("shader_package_key") is not None:
+            fail("NVN shader split is neither complete nor delegated to real native host")
+    elif shader_stage != "metal_deferred" or real.get("shader_package_key") is not None:
+        fail("GL/Vulkan shader checkpoint is inconsistent")
     manifest = {
         "project": "BladesTime", "branch": "BladesTime",
         "request_id": d["request_id"], "title_id": TITLE_ID,
@@ -138,6 +150,10 @@ def main() -> None:
         "work_dir": str(work), "romfs_path": str(romfs),
         "romfs_id_path": str(identity), "shader_chain": real["shader_chain"],
         "shader_package_key": real.get("shader_package_key"),
+        "shader_split_stage": shader_stage, "source_capture_flags": real["source_capture_flags"],
+        "mac_host_stages": host_stages, "jit_required": real["jit_required"],
+        "shader_versions": real["shader_versions"],
+        "linux_ue_decode_complete": real["linux_ue_decode_complete"],
         "modules": real["modules"], "provisional": real["provisional"],
         "romfs_relative_path": real["romfs_relative_path"],
         "romfs_id_relative_path": real["romfs_id_relative_path"],
