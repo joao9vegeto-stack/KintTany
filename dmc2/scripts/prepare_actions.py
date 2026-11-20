@@ -7,6 +7,7 @@ import hashlib
 import http.client
 import json
 import os
+import re
 import shutil
 import subprocess
 import tarfile
