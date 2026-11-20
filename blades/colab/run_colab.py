@@ -347,6 +347,19 @@ def prepare(args, api=None) -> dict:
         print("[BladesTime] Cloning the fork's pinned engine/patch sources...", flush=True)
         subprocess.run(["git", "clone", "--depth", "1", "--branch", BRANCH,
                         f"https://github.com/{REPO}.git", str(nx)], check=True)
+    else:
+        # A resumed Colab may have the game cache from an older BladesTime commit.
+        # Refresh only the source checkout, preserving input NSPs, keys and work/.
+        subprocess.run(["git", "-C", str(nx), "fetch", "--depth", "1",
+                        "origin", BRANCH], check=True)
+        cached_head = subprocess.check_output(
+            ["git", "-C", str(nx), "rev-parse", "HEAD"], text=True).strip()
+        remote_head = subprocess.check_output(
+            ["git", "-C", str(nx), "rev-parse", "FETCH_HEAD"], text=True).strip()
+        if cached_head != remote_head:
+            print(f"[BladesTime] Refreshing source {cached_head[:12]} -> {remote_head[:12]} "
+                  "without deleting source game cache.", flush=True)
+            subprocess.run(["git", "-C", str(nx), "reset", "--hard", "FETCH_HEAD"], check=True)
     if (nx / ".upstream-ref").read_text().strip() != ENGINE_PIN:
         fail("BladesTime checkout points to another NXNative commit")
 
