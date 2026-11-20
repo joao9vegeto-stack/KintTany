@@ -60,3 +60,4 @@
 0072-dante2ios-flush-audioout-after-movie-stop.patch
 0073-vulkan-dagor-khr-physical-device-queries.patch
 0074-vulkan-dagor-trace-physical-device-enumeration.patch
+0075-vulkan-dagor-required-shader-draw-parameters.patch
