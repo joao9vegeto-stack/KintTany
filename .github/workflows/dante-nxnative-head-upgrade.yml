@@ -76,6 +76,24 @@ jobs:
               print("PRESERVED: "+label,flush=True)
           PY
 
+      - name: Prove macOS pinned-language assertions match the full upstream table
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import importlib.util
+          spec=importlib.util.spec_from_file_location("nacp",Path("engine/dm/tools/nacp.py"))
+          nacp=importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(nacp)
+          langs=[code for code,name in nacp.LANGUAGES]
+          assert len(langs)==18 and langs[-2:]==["pl","th"],langs
+          t=Path("frontend/Tests/NX2AppleTests/LaunchOptionsTests.swift").read_text()
+          m=Path("frontend/Tests/NX2AppleTests/MacAppLanguageTests.swift").read_text()
+          assert "XCTAssertEqual(langs.count, 18)" in t
+          assert '["en-US", "ja", "fr", "zh-Hant", "zh-Hans", "pl", "th"]' in m
+          print("Mac launcher tests agree with all 18 languages.",flush=True)
+          PY
+
       - name: Full engine tooling tests and iOS Swift build and tests
         run: |
           set -euo pipefail
@@ -93,7 +111,7 @@ jobs:
           test "$(git branch --show-current)" = "Dante2iOS"
           git config user.name "dante2ios-upstream-integration"
           git config user.email "dante2ios-upstream-integration@users.noreply.github.com"
-          git add .upstream-ref patches/ README.md frontend/README.md frontend-qt/README.md frontend/l10n/ frontend-ios/Sources/ShellUI/Resources/Localizable.xcstrings frontend-ios/Sources/ShellHost/Resources/Localizable.xcstrings tools/tests/launcher_texts.txt frontend-ios/Tests/ShellHostTests/RomfsLanguagesTests.swift
+          git add .upstream-ref patches/ README.md frontend/README.md frontend-qt/README.md frontend/l10n/ frontend-ios/Sources/ShellUI/Resources/Localizable.xcstrings frontend-ios/Sources/ShellHost/Resources/Localizable.xcstrings tools/tests/launcher_texts.txt frontend-ios/Tests/ShellHostTests/RomfsLanguagesTests.swift frontend/Tests/NX2AppleTests/LaunchOptionsTests.swift frontend/Tests/NX2AppleTests/MacAppLanguageTests.swift
           git diff --cached --check -- .upstream-ref patches/series patches/fork_env_switches.tsv README.md frontend/README.md frontend-qt/README.md
           if git diff --cached --quiet; then
             echo "Already fully aligned; nothing to push."

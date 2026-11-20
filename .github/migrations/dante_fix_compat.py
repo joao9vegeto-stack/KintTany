@@ -67,6 +67,28 @@ def main():
     elif new_expected not in test_source:
         raise RuntimeError("Swift RomFS fallback assertion changed; manual review required")
 
+    # Mac launcher tests run inside the protected pre-push hook, after the
+    # first CI suite. Keep both expectations aligned with nxnative LANGUAGES.
+    mac_languages=ROOT/"frontend/Tests/NX2AppleTests/MacAppLanguageTests.swift"
+    ms=mac_languages.read_text(encoding="utf-8")
+    old_mac='        XCTAssertEqual(language.options?.map { $0[0] }, ["en-US", "ja", "fr", "zh-Hant", "zh-Hans"])'
+    new_mac='        XCTAssertEqual(language.options?.map { $0[0] }, ["en-US", "ja", "fr", "zh-Hant", "zh-Hans", "pl", "th"])'
+    if ms.count(old_mac)==1:
+        ms=ms.replace(old_mac,new_mac)
+        mac_languages.write_text(ms,encoding="utf-8")
+    elif ms.count(new_mac)!=1:
+        raise RuntimeError("MacAppLanguageTests pinned-engine fallback assertion unexpectedly changed")
+    mac_opts=ROOT/"frontend/Tests/NX2AppleTests/LaunchOptionsTests.swift"
+    ops=mac_opts.read_text(encoding="utf-8")
+    old_count="        XCTAssertEqual(langs.count, 16)"
+    new_count="        XCTAssertEqual(langs.count, 18)"
+    if ops.count(old_count)==1:
+        ops=ops.replace(old_count,new_count)
+        mac_opts.write_text(ops,encoding="utf-8")
+    elif ops.count(new_count)!=1:
+        raise RuntimeError("LaunchOptionsTests language count unexpectedly changed")
+    print("Mac launcher language checks now cover all 18 upstream languages.",flush=True)
+
     cmd(sys.executable,"tools/l10n_shell_catalogs.py")
     cmd(sys.executable,"tools/tests/test_launcher_texts.py","--write")
     # Under the shared iOS shell, Metal HUD is enabled process-wide before
