@@ -455,10 +455,10 @@ def recover(args, api=None) -> dict | None:
     from googleapiclient.http import MediaIoBaseDownload
     api = api or drive_api()
     game_folders = [x for x in list_children(api, args.drive_folder_id)
-                    if x["name"].casefold() == "blades"
+                    if x["name"].casefold() == "botime"
                     and x.get("mimeType") == "application/vnd.google-apps.folder"]
     if len(game_folders) != 1:
-        fail("A pasta blades não foi encontrada na pasta compartilhada.")
+        fail("A pasta botime não foi encontrada na pasta compartilhada.")
     run_folders = [x for x in list_children(api, game_folders[0]["id"])
                    if x.get("mimeType") == "application/vnd.google-apps.folder"
                    and x["name"].startswith("BladesTime_BoTime_")]
@@ -486,6 +486,8 @@ def recover(args, api=None) -> dict | None:
                 and d.get("title_id") == TITLE_ID and d.get("package_version") == p.get("package_version")
                 and bool(re.fullmatch(r"v[1-9][0-9]*", d.get("package_version", "")))
                 and p.get("input_package_count") == 2 and p.get("input_update_count") == 1
+                and d.get("source_files", {}).get("base", {}).get("id") == "1Xj8-gmznW5Pk6fnnqjsH4wZAfmAl065U"
+                and d.get("source_files", {}).get("update", {}).get("id") == "1HzAcKAyJTDJ9kVTPoyvOuJVSpExyv-3j"
                 and d.get("engine_pin") == ENGINE_PIN
                 and d.get("work_archive", {}).get("id")
                 and d.get("game_data", {}).get("romfs", {}).get("id")
