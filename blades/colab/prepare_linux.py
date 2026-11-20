@@ -152,13 +152,21 @@ def run_preparation(args) -> dict:
     package_version = f"v{update_version}"
     print(f"[BladesTime] Package metadata validated: base {TITLE_ID} v0 + update {package_version}", flush=True)
     import game as game_profiles
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from port_stages import source_flags, deferred_mac_stages
 
     # Colab/Linux has no Xcode/Metal; defer only those operations. Never fake an
     # extraction, a rewrite, a shader split or a required capture.
     original_run, original_split = module.run, module.split_shaders
     split = {}
+    deferred = {"stage": None}
+    ue_linux = {"completed": False}
     class FinishedLinux(Exception):
         pass
+    class NeedsMacHost(Exception):
+        def __init__(self, stage: str):
+            super().__init__(stage)
+            self.stage = stage
     def intercepted_run(command, log=None, *extra, **kw):
         parts = [str(x) for x in command] if isinstance(command, (tuple, list)) else [str(command)]
         if any(x.replace("\\", "/").endswith("dm/ios/tools/build_ipa.sh") for x in parts):
@@ -167,7 +175,8 @@ def run_preparation(args) -> dict:
         return original_run(command, log, *extra, **kw)
     def split_record(*a, **kw):
         oodle = kw.get("oodle", a[9] if len(a) > 9 else None)
-        require(oodle is None, "This game requires an Apple Silicon Mac Oodle shader host; cannot pretend the Linux split completed.")
+        if oodle is not None:
+            raise NeedsMacHost("oodle_packs")
         key = original_split(*a, **kw)
         split["key"] = key
         return key
@@ -176,11 +185,52 @@ def run_preparation(args) -> dict:
         out.mkdir(parents=True, exist_ok=True)
         print("[BladesTime] Tradução Metal/iOS adiada para Actions.")
         return out
-    def required_host_capture(*a, **kw):
-        raise module.BuildError(
-            "Blades of Time requires a runtime shader/JIT/Unreal capture on Apple Silicon. "
-            "The prepared Linux route cannot claim a successful offline capture; "
-            "inspect the provisional survey and implement the Mac phase for this graphics backend.")
+    def need_mac(stage):
+        def capture(*a, **kw):
+            if stage == "shader_capture":
+                api = kw.get("api", a[-1] if a else "")
+                stage_name = {"vk": "vk_capture", "gl": "gl_capture"}.get(api)
+                if stage_name is None:
+                    raise module.BuildError(f"Unknown runtime shader capture backend: {api!r}")
+                raise NeedsMacHost(stage_name)
+            raise NeedsMacHost(stage)
+        return capture
+
+    def ue_decode_linux(repo, dirs, pkg_ver, patched, workspace, env, logs, g):
+        """Use actual NXNative UE pak reader on Linux; only Oodle/IoStore needs Mac."""
+        sys.path.insert(0, str(engine / "dm/gfx/tools"))
+        import uepak
+        for version, game_dir in dirs.items():
+            target = game_dir / "ue_shaders"
+            stamp = module.ue_stamp(game_dir)
+            if (target / "stamp").is_file() and (target / "stamp").read_text() == stamp:
+                print(f"[BladesTime] UE shaders {version}: Linux decoder cache reused.", flush=True)
+                continue
+            rom = module.rfs.source(game_dir)
+            if uepak.io_shader_tocs(str(rom)):
+                raise NeedsMacHost("ue_decode")
+            job = workspace / "tmp" / f"ue_linux_{version}"
+            module.rmtree(job)
+            try:
+                listing, n_oodle = uepak.job(str(rom), str(game_dir / "ExeFS/main"), str(job), decode=None)
+            except ValueError as exc:
+                raise module.BuildError(f"UE shader package could not be read on Linux: {exc}") from exc
+            if not listing:
+                raise module.BuildError("Unreal paks contain no shader code archive; refusing an empty shader build")
+            if n_oodle:
+                print(f"[BladesTime] Parsed UE shader archives on Linux; "
+                      f"{n_oodle:,} shaders need the game's Oodle decoder on Mac.", flush=True)
+                raise NeedsMacHost("ue_decode")
+            out = game_dir / "ue_shaders.partial"
+            module.rmtree(out)
+            uepak.finish(str(job), str(out))
+            (out / "stamp").write_text(stamp)
+            module.swap_in(out, target)
+            module.rmtree(job)
+            print(f"[BladesTime] Real UE LZ4/zlib decode on Linux: "
+                  f"{sum(x['shaders'] for x in listing):,} shaders ({version}).", flush=True)
+        ue_linux["completed"] = True
+
     module.check_prereqs = lambda *a, **kw: check_linux_prerequisites()
     module.check_metal = lambda *a, **kw: None
     module.run = intercepted_run
@@ -188,9 +238,13 @@ def run_preparation(args) -> dict:
     module.build_shaders = defer_metal
     module.build_vk_shaders = defer_metal
     module.build_gl_shaders = defer_metal
-    for name in ("capture_glslc", "capture_shaders", "decode_ue_shaders", "capture_jit"):
-        if hasattr(module, name):
-            setattr(module, name, required_host_capture)
+    for fn, kind in (("capture_glslc", "glslc_capture"),
+                     ("capture_shaders", "shader_capture"),
+                     ("capture_jit", "jit_capture")):
+        if hasattr(module, fn):
+            setattr(module, fn, need_mac(kind))
+    if hasattr(module, "decode_ue_shaders"):
+        module.decode_ue_shaders = ue_decode_linux
     module.HEAP_CHECK = False
     work.mkdir(parents=True, exist_ok=True)
     parsed = module.parse_args([
@@ -205,6 +259,11 @@ def run_preparation(args) -> dict:
         raise SystemExit("[BladesTime] builder ended without entering the Xcode-only boundary.")
     except FinishedLinux:
         pass
+    except NeedsMacHost as pending:
+        deferred["stage"] = pending.stage
+        print(f"[BladesTime] Checkpoint real: Linux extraiu/reescreveu os módulos. "
+              f"Apenas {pending.stage} depende de Apple Silicon; "
+              "o trabalho foi preservado para o handoff.", flush=True)
     finally:
         try:
             module.PROG.close(ok=True)
@@ -233,13 +292,35 @@ def run_preparation(args) -> dict:
     sources = module.build_sources(engine, version_dir, modules)
     gfx = sources["graphics"][0]
     require(gfx in ("nvn", "gl", "vulkan"), f"unsupported graphics backend: {gfx}")
-    if gfx == "nvn":
-        key = split.get("key")
-        require(isinstance(key, str) and re.fullmatch(r"[0-9a-f]{64}", key),
-                "NVN shader split did not produce a reusable package key")
-        require((work / "shader" / "pkg").is_dir(), "offline NVN shader package missing")
-    else:
-        key = None
+    flags = source_flags(sources)
+    jit = bool(module.uses_jit(exefs))
+    mac_stages = deferred_mac_stages(sources, jit=jit,
+                                     linux_ue_complete=ue_linux["completed"])
+    if bool(deferred["stage"]) != bool(mac_stages):
+        require(False, f"Source-detected Mac dependencies {mac_stages} do not match "
+                f"the captured Linux boundary {deferred['stage']!r}")
+    key = split.get("key") if gfx == "nvn" else None
+    if gfx == "nvn" and key is None:
+        require(bool(mac_stages and deferred["stage"] != "jit_capture"),
+                "NVN shader split was not completed and no prior Mac-only dependency explains why")
+    if key is not None:
+        require(re.fullmatch(r"[0-9a-f]{64}", key) is not None
+                and (work / "shader" / "pkg").is_dir(),
+                "Linux NVN shader split key or package is invalid")
+    shader_stage = ("linux_complete" if gfx == "nvn" and key else
+                    "mac_pending" if gfx == "nvn" else "metal_deferred")
+    versions = list(profile.words("shader_versions"))
+    if (work / "profile" / TITLE_ID / "game.tsv").exists() and package_version not in versions:
+        versions.append(package_version)
+    if not versions:
+        versions = [package_version]
+    shader_versions = sorted(set(versions))
+    for ver in shader_versions:
+        require((work / "extract" / ver / "ExeFS" / "main").is_file(),
+                f"required shader input version {ver} is not extracted")
+    print(f"[BladesTime] Linux: shader_stage={shader_stage}, "
+          f"Mac-only={mac_stages}, source_flags={flags}, "
+          f"shader_versions={shader_versions}", flush=True)
     require(not list((work / "aoc").glob("*.img")) if (work / "aoc").is_dir() else True,
             "no-DLC Blades of Time unexpectedly produced AOC images")
     result = {
@@ -252,14 +333,22 @@ def run_preparation(args) -> dict:
         "profile_relative_dir": "profile",
         "graphics": gfx, "modules": modules,
         "shader_package_key": key, "shader_chain": module.chain_of(engine),
+        "shader_split_stage": shader_stage, "source_capture_flags": flags,
+        "mac_host_stages": mac_stages, "jit_required": jit,
+        "linux_ue_decode_complete": ue_linux["completed"],
+        "shader_versions": shader_versions,
         "romfs_relative_path": f"extract/{package_version}/RomFS.img",
         "romfs_id_relative_path": f"extract/{package_version}/RomFS.img.id",
         "aoc_images": [], "aoc_title_ids": {}, "dlc_present": False,
         "romfs_size": romfs.stat().st_size,
         "prepared_stages": ["real_content_metadata_scan", "provisional_profile_survey_if_required",
             "base_plus_update_romfs_merge", "aarch64_rewrite",
-            "offline_nvn_shader_split" if gfx == "nvn" else "gl_vk_shader_translation_deferred"],
-        "deferred_stages": ["ios_metal_shader_compile", "game_framework_build",
+            "offline_nvn_shader_split" if shader_stage == "linux_complete" else
+            "mac_shader_split_waiting_for_capture" if shader_stage == "mac_pending"
+            else "gl_vk_shader_translation_deferred"],
+        "deferred_stages": mac_stages +
+            (["mac_shader_split_after_capture"] if shader_stage == "mac_pending" else []) +
+            ["ios_metal_shader_compile", "game_framework_build",
             "shared_shell_xcode_build", "adhoc_sign_and_ipa_pack"],
         "limitations": ["provisional_heap_and_region_checks_skipped_on_linux"],
     }
