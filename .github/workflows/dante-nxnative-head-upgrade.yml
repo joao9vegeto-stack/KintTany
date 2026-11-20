@@ -31,9 +31,13 @@ jobs:
         env:
           TARGET: 14f54e4c18e2a97905c3481e5e5c4d7764c272f2
         run: |
-          set -uo pipefail
+          set -euo pipefail
+          # Materialize every original intermediate patch preimage first so git am -3 can three-way merge.
+          python3 tools/engine.py sync
+          set +e
           python3 tools/engine.py bump --to "$TARGET" --dry 2>&1 | tee /tmp/dante-nxnative-probe.log
           status=${PIPESTATUS[0]}
+          set -e
           echo "result=$status" >> "$GITHUB_OUTPUT"
           echo "## Dante2iOS engine migration probe" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
