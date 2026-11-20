@@ -21,7 +21,7 @@ Issue: joao9vegeto-stack/KintTany BladesTime iPhone log and screenshot 2026-11-2
 diff --git a/dm/gfx/vk/hle_vk.m b/dm/gfx/vk/hle_vk.m
 --- a/dm/gfx/vk/hle_vk.m
 +++ b/dm/gfx/vk/hle_vk.m
-@@ -1486,6 +1486,17 @@
+@@ -1486,11 +1486,31 @@
  VK(vkCmdBindIndexBuffer, void, VkCommandBuffer cb, VkBuffer b, VkDeviceSize o, VkIndexType t) { c_ib *c = rec(cb, C_IB, sizeof *c); c->b = b; c->o = o; c->t = t; }
  VK(vkCmdSetViewport, void, VkCommandBuffer cb, uint32_t first, uint32_t n, const VkViewport *v) {
      if (!n || first >= MAX_VIEWPORTS || n > MAX_VIEWPORTS - first) return;
@@ -38,8 +38,6 @@ diff --git a/dm/gfx/vk/hle_vk.m b/dm/gfx/vk/hle_vk.m
 +    }
      c_vp *c = rec(cb, C_VP, sizeof *c + n * sizeof *v);
      c->first = first; c->n = n; memcpy(c->v, v, n * sizeof *v);
- }
-@@ -1491,6 +1502,15 @@
  }
  VK(vkCmdSetScissor, void, VkCommandBuffer cb, uint32_t first, uint32_t n, const VkRect2D *r) {
      if (!n || first >= MAX_VIEWPORTS || n > MAX_VIEWPORTS - first) return;
