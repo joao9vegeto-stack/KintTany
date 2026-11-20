@@ -1,0 +1,110 @@
+name: BladesTime - Blades of Time iOS 26
+on:
+  push:
+    branches: [BladesTime]
+    paths: ['blades/handoff.json']
+permissions:
+  contents: read
+concurrency:
+  group: bladestime-build-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    if: github.ref == 'refs/heads/BladesTime'
+    runs-on: xcode-27
+    timeout-minutes: 360
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+    steps:
+      - name: Checkout exact handoff commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Validate Colab identity, engine and game inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/BladesTime"
+          test "$(cat .upstream-ref)" = "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb"
+          python3 -m py_compile blades/colab/source_archive.py blades/colab/prepare_linux.py blades/colab/run_colab.py blades/scripts/prepare_actions.py blades/scripts/build_shared.py
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, json, uuid
+          d=json.loads(Path('blades/handoff.json').read_text())
+          p=d['prepared']
+          assert d['project'] == d['branch'] == d['source_ref'] == 'BladesTime'
+          assert d['title_id'] == p['title_id'] == '0100CFA00CC74000'
+          assert d['package_version'] == p['package_version']
+          assert re.fullmatch(r'v[1-9][0-9]*', d['package_version'])
+          assert p['base_content_version'] == 0
+          assert p['update_content_version'] == int(d['package_version'][1:])
+          assert p['input_package_count'] == p['input_nsp_count'] == 2
+          assert p['input_update_count'] == 1 and p['input_dlc_count'] == 0
+          assert d['engine_pin'] == p['engine_pin'] == Path('.upstream-ref').read_text().strip()
+          assert re.fullmatch(r'[0-9a-f]{40}', d['source_commit'])
+          uuid.UUID(d['request_id'])
+          for item in (d['source_files']['base'], d['source_files']['update'],
+                       d['work_archive'], d['game_data']['romfs']):
+              assert item['id'] and int(item['size']) > 0
+              assert re.fullmatch(r'[0-9a-f]{64}',item['sha256'])
+          assert d['game_data']['aoc'] == [] and p['aoc_images'] == []
+          assert p['graphics'] in ('nvn','gl','vulkan')
+          if p['graphics'] == 'nvn':
+              assert re.fullmatch(r'[0-9a-f]{64}',p.get('shader_package_key') or '')
+          print('BladesTime metadata verified:', d['title_id'], d['package_version'])
+          PY
+      - name: Install host requirements
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version
+          brew install xcodegen zstd glslang
+          command -v dotnet >/dev/null || brew install --cask dotnet-sdk
+          python3 -m pip install --disable-pip-version-check lz4 'capstone>=5,<6' fonttools zbic backports.zstd google-api-python-client google-auth
+          xcrun --sdk iphoneos metal --version
+      - name: Materialize NXNative from pinned patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/engine.py relink
+          python3 tools/engine.py check
+          python3 tools/engine.py sync
+          python3 tools/engine.py stale
+          test -f engine/scripts/build_ipa_from_nsp.py
+          bash -n engine/dm/ios/tools/build_ipa.sh
+          bash -n frontend-ios/Shell/build_shell.sh
+      - name: Restore SHA-256 verified Colab handoff from Drive
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          python3 blades/scripts/prepare_actions.py --handoff "$GITHUB_WORKSPACE/blades/handoff.json" --destination "$RUNNER_TEMP/blades"
+      - name: Build compiled Metal shaders, signed framework and thin IPA
+        run: |
+          set -euo pipefail
+          python3 blades/scripts/build_shared.py --nx2apple-root "$GITHUB_WORKSPACE" --prepared-json "$RUNNER_TEMP/blades/actions-input.json" --output "$RUNNER_TEMP/blades-output"
+      - name: Publish BladesTime IPA and report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: BladesTime-BoTime-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/blades-output/BladesTime-BoTime.ipa
+            ${{ runner.temp }}/blades-output/build-report.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: BladesTime-failure-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/blades/work/logs/
+            ${{ runner.temp }}/blades-output/build-report.json
+          if-no-files-found: warn
+          retention-days: 14
