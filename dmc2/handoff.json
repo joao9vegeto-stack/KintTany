@@ -1,0 +1,77 @@
+{
+  "format": 1,
+  "project": "Dante2iOS",
+  "branch": "Dante2iOS",
+  "request_id": "37b21842-cb42-455d-9bac-4d76ee3872b5",
+  "title_id": "01007CF00D5BA000",
+  "package_version": "v0",
+  "source_ref": "Dante2iOS",
+  "engine_pin": "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb",
+  "source_commit": "abc62095a1967d13aeb09f98c7831a8c41abbad2",
+  "drive_output_folder_id": "1y6u5Tqwjp44Sw4UkxGSvs3qgIZ1v3jd4",
+  "drive_output_folder_url": "https://drive.google.com/drive/folders/1y6u5Tqwjp44Sw4UkxGSvs3qgIZ1v3jd4",
+  "work_archive": {
+    "name": "dmc2-work.tar.zst",
+    "id": "11OxojHNSuumivzCOhTusQL-WoJQ5PTT8",
+    "size": 18942876,
+    "sha256": "4e72dd333d3ecfd51c5998addb35271c5d0d984b8e07274e5dd79e4db452bac0"
+  },
+  "game_data": {
+    "folder_id": "1OmnU_IE_b6YW_xRZGyMcrnL9p_VBdd86",
+    "folder_url": "https://drive.google.com/drive/folders/1OmnU_IE_b6YW_xRZGyMcrnL9p_VBdd86",
+    "romfs": {
+      "name": "romfs.img",
+      "id": "1QPqqG2zGtSvw2KtMS_8ENL05SUiTXmVA",
+      "size": 1889696967,
+      "sha256": "17c022b7ef22e11b765d78cf0041c6edcb8903e076e053395f80ea024601fa7a"
+    },
+    "aoc": [],
+    "romfs_relative_path": "extract/v0/RomFS.img"
+  },
+  "prepared": {
+    "format": 1,
+    "project": "Dante2iOS",
+    "branch": "Dante2iOS",
+    "title_id": "01007CF00D5BA000",
+    "package_version": "v0",
+    "source_ref": "Dante2iOS",
+    "engine_pin": "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb",
+    "input_package_count": 1,
+    "input_nsp_count": 1,
+    "input_update_count": 0,
+    "input_dlc_count": 0,
+    "provisional": true,
+    "profile_relative_dir": "profile",
+    "graphics": "nvn",
+    "modules": [
+      "main",
+      "subsdk0",
+      "sdk"
+    ],
+    "shader_package_key": "365272c7f8984170e6f604609e05643e894d70cdbb353888caaed976d7d7f7b5",
+    "shader_chain": "0724088d3779",
+    "romfs_relative_path": "extract/v0/RomFS.img",
+    "romfs_id_relative_path": "extract/v0/RomFS.img.id",
+    "aoc_images": [],
+    "aoc_title_ids": {},
+    "dlc_present": false,
+    "romfs_size": 1889696967,
+    "prepared_stages": [
+      "real_content_metadata_scan",
+      "provisional_profile_survey_if_required",
+      "base_v0_romfs_extract",
+      "aarch64_rewrite",
+      "offline_nvn_shader_split"
+    ],
+    "deferred_stages": [
+      "ios_metal_shader_compile",
+      "game_framework_build",
+      "shared_shell_xcode_build",
+      "adhoc_sign_and_ipa_pack"
+    ],
+    "limitations": [
+      "provisional_heap_and_region_checks_skipped_on_linux"
+    ]
+  },
+  "created_utc": "2026-11-20T07:16:59.400502+00:00"
+}
