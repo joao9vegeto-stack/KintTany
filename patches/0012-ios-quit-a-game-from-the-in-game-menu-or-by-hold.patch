@@ -86,65 +86,26 @@ index 8238a54..b043803 100644
  
  @interface DmGamepad : UIView
  - (void)arrange:(DmLayout)layout;
-@@ -571,52 +575,9 @@ static int32_t axis(float v) { return (int32_t)(fmaxf(-1.f, fminf(1.f, v)) * 327
- static const char *pad_name(GCController *c);
- static void npad_name(int p, char *out, size_t cap);
- static int cp_poll(void);
--static void pad_report(GCController *c, uint64_t m, float lx, float ly, float rx, float ry) {
--    int p = g_merge ? 0 : pad_slot_of(&g_slots, (__bridge const void *)c); if (p < 0 && !g_press_to_join) return;
--    if (p < 0) {   // DM_PAD_PRESS_TO_JOIN=1: it joins at its first button, a press the game also gets
--        char nb[16];
--        if (!m) return;
--        if ((p = pad_slot_take_lowest(&g_slots, (__bridge const void *)c, pad_name(c))) < 0) { LOG("controller '%s': a button pressed, but all %d players are taken", pad_name(c), DM_PLAYERS); return; }
--        g_held[p] = c; dm_motion_attach(c, p); dm_pad_players(pad_slot_mask(&g_slots));
--        npad_name(p, nb, sizeof nb); LOG("controller '%s': a button pressed: player %d (npad %s)", pad_name(c), p + 1, nb);
--    }
--    if (cp_poll()) return;   // the controller applet's prompt has the controllers (front_ctrl_support)
--    dm_haptics_apple_controller(p, c);
--    dm_pad_set_player(p, m, axis(lx), axis(ly), axis(rx), axis(ry));
--}
--// iOS presents a lone Joy-Con sideways through live input, with no extended gamepad (#2971).
--// Its direction pad is the stick and the face buttons go by position, as in SDL's Apple mapping.
--static GCControllerLiveInput *pad_live_input(GCController *c) {
--    NSString *category = c.productCategory;
--    if ([category isEqualToString:@"Nintendo Switch Joy-Con (L)"] || [category isEqualToString:@"Nintendo Switch Joy-Con (R)"]) return c.input;
--    return nil;
--}
--static id<GCDirectionPadElement> pad_live_stick(GCControllerLiveInput *input) {
--    return input.dpads[GCInputLeftThumbstick] ?: input.dpads[GCInputDirectionPad];
--}
--static BOOL pad_usable(GCController *c) {
--    if (c.extendedGamepad) return YES;
--    GCControllerLiveInput *input = pad_live_input(c);
--    return pad_live_stick(input) || input.buttons[GCInputButtonA] || input.buttons[GCInputButtonX];
--}
--static uint64_t pad_live_buttons(GCControllerLiveInput *input) {
--    uint64_t m = 0;
--    #define K(name, bit) if (input.buttons[name].pressedInput.pressed) m |= 1ull << bit
--    K(GCInputButtonX, B_A); K(GCInputButtonA, B_B); K(GCInputButtonY, B_X); K(GCInputButtonB, B_Y);
--    K(GCInputLeftShoulder, B_L); K(GCInputRightShoulder, B_R); K(GCInputLeftTrigger, B_ZL); K(GCInputRightTrigger, B_ZR);
--    K(GCInputButtonMenu, B_PLUS); K(GCInputButtonOptions, B_MINUS); K(GCInputLeftThumbstickButton, B_LS);
--    #undef K
--    return m;
--}
--static void read_pad(GCController *c) {
--    GCExtendedGamepad *g = c.extendedGamepad;
--    if (!g) {
--        GCControllerLiveInput *input = pad_live_input(c);
--        if (!input) return;
--        id<GCDirectionPadElement> stick = pad_live_stick(input);
--        pad_report(c, pad_live_buttons(input), stick.xAxis.value, stick.yAxis.value, 0, 0);
--        return;
--    }
-+static void read_pad(GCExtendedGamepad *g) {
-+    front_ios_quit_poll(); if (front_ios_quit_blocks_input()) return;   // the quit prompt has the controllers (Home held 2 s, or Quit in the in-game menu)
-+    int p = g_merge ? 0 : pad_slot_of(&g_slots, (__bridge const void *)g.controller); if (p < 0 && !g_press_to_join) return;
-     _Static_assert(DM_BTN_A == 1u << B_A && DM_BTN_B == 1u << B_B && DM_BTN_X == 1u << B_X && DM_BTN_Y == 1u << B_Y, "face button bits");
-     uint64_t m = dm_pad_face(g);   // by position, a Nintendo pad by its labels
-     #define K(btn, bit) if (btn.isPressed) m |= 1ull << bit
-@@ -653,6 +614,11 @@ static BOOL pad_listen(GCController *c) {
-     m = pad_map_apply(&g_padmap, m);
-     dm_pad_set_player(p, m, axis(g.leftThumbstick.xAxis.value), axis(g.leftThumbstick.yAxis.value), axis(g.rightThumbstick.xAxis.value), axis(g.rightThumbstick.yAxis.value));
+@@ -610,5 +613,8 @@ static void read_pad(GCController *c) {
+     return m;
+ }
++static void pad_keep_system_buttons(GCController *c);
+ static void read_pad(GCController *c) {
++    front_ios_quit_poll();
++    if (front_ios_quit_blocks_input()) return;
+     GCExtendedGamepad *g = c.extendedGamepad;
+     if (!g) {
+@@ -639,5 +645,6 @@ static BOOL pad_listen(GCController *c) {
+ static BOOL pad_listen(GCController *c) {
+     GCExtendedGamepad *g = c.extendedGamepad;
+     if (g) {
+         for (NSString *b in @[GCInputButtonHome, GCInputButtonShare]) c.physicalInputProfile.buttons[b].preferredSystemGestureState = GCSystemGestureStateDisabled;
++        pad_keep_system_buttons(c);
+         if (g.valueChangedHandler) return NO;
+@@ -660,5 +667,10 @@ static void pad_unlisten(GCController *c) {
+ static void pad_unlisten(GCController *c) {
+     if (c.extendedGamepad) c.extendedGamepad.valueChangedHandler = nil;
+     else pad_live_input(c).elementValueDidChangeHandler = nil;
  }
 +// Home and Capture: without this iOS takes them as system gestures (Home opens the Games overlay, Capture a screenshot); the app gives them no function
 +static void pad_keep_system_buttons(GCController *c) {   // Home held for 2 s opens the quit prompt (front_ios.m): iOS 27 respects the claim when the Home button setting for apps lets the app decide
@@ -152,8 +113,6 @@ index 8238a54..b043803 100644
 +    c.extendedGamepad.buttonHome.pressedChangedHandler = ^(GCControllerButtonInput *b, float v, BOOL down) { (void)b; (void)v; (void)down; front_ios_quit_poll(); };
 +}
  static const char *pad_name(GCController *c) { return c.vendorName.UTF8String ?: "?"; }
- static void npad_name(int p, char *out, size_t cap) { uint32_t id = dm_player_npad(p); if (id == 0x20) snprintf(out, cap, "handheld"); else snprintf(out, cap, "%u", id); }
- static void pads_start(void) {
 @@ -713,7 +679,7 @@ static BOOL pads_slotted(GCController *gone) {
          if (!usable || g_merge) LOG("controller %s: %s%s", gone ? "disconnected" : "connected", pad_name(c), usable ? "" : " (no supported gamepad profile: not used)");
      }
@@ -168,8 +127,8 @@ index 8238a54..b043803 100644
  bool dm_pad_layout_offered(int layout) { return layout == 0 || layout == 1 || (layout == 2 && dm_opmode() == 0); }
  void dm_pad_layout_set(int layout) { [g_view setPadLayout:layout]; }
 +void dm_gamepad_pads_read(void) {   // front_ios.m: the quit prompt closed, the game reads every controller as it is now (a button held through it counts again)
-+    if (g_merge) { for (GCController *c in GCController.controllers) if (c.extendedGamepad) read_pad(c.extendedGamepad); }
-+    else for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p].extendedGamepad) read_pad(g_held[p].extendedGamepad);
++    if (g_merge) { for (GCController *c in GCController.controllers) if (pad_usable(c)) read_pad(c); }
++    else for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p]) read_pad(g_held[p]);
 +}
  void dm_gamepad_active(void) { dispatch_async(dispatch_get_main_queue(), ^{ for (GCController *c in GCController.controllers) dm_motion_rearm(c); }); }   // On become active: motion_apple.h
  void dm_gamepad_reset(void) {   // On resign active: release everything (a key held while switching away and released in background gets no "release")

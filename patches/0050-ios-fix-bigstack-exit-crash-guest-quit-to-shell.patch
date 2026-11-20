@@ -1826,8 +1826,8 @@ index 9163adb..c8de400 100644
      [self refresh];
  }
  
-@@ -649,7 +661,7 @@ static BOOL pad_listen(GCController *c) {
-     dm_pad_set_player(p, m, axis(g.leftThumbstick.xAxis.value), axis(g.leftThumbstick.yAxis.value), axis(g.rightThumbstick.xAxis.value), axis(g.rightThumbstick.yAxis.value));
+@@ -665,7 +677,7 @@ static void pad_unlisten(GCController *c) {
+     else pad_live_input(c).elementValueDidChangeHandler = nil;
  }
  // Home and Capture: without this iOS takes them as system gestures (Home opens the Games overlay, Capture a screenshot); the app gives them no function
 -static void pad_keep_system_buttons(GCController *c) {   // Home held for 2 s opens the quit prompt (front_ios.m): iOS 27 respects the claim when the Home button setting for apps lets the app decide

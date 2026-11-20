@@ -245,6 +245,33 @@ jobs:
           PY
           grep -Fq 'up_big_src((uint64_t)t->mem, t->L.size, &mo, 1)' engine/dm/gfx/nvn/nvn_mtl.m
           echo "NVN GPU deswizzle source call matches four-argument API."
+          # Reject wrong-scope controller patches before fetching the NSP workspace.
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('engine/dm/ios/Sources/DmGamepad.m').read_text()
+          required = (
+              'static void pad_report(GCController *c,',
+              'static BOOL pad_usable(GCController *c)',
+              'static uint64_t pad_live_buttons(GCControllerLiveInput *input)',
+              'static void read_pad(GCController *c)',
+              'static BOOL pad_listen(GCController *c)',
+              'static void pad_unlisten(GCController *c)',
+              'static void pad_keep_system_buttons(GCController *c)',
+              'm = pad_map_apply(&g_padmap, m);',
+          )
+          for item in required:
+              assert item in text, f'physical controller handler missing: {item}'
+          start = text.index('static BOOL pad_listen(GCController *c) {')
+          end = text.index('static void pad_unlisten(GCController *c) {', start)
+          listen = text[start:end]
+          assert 'return YES;' in listen, 'pad_listen lost its BOOL return'
+          assert 'dm_pad_set_player(p, m,' not in listen, 'pad_listen contains misplaced report body'
+          assert 'pad_keep_system_buttons(c);' in listen
+          assert 'read_pad(c.extendedGamepad)' not in text and 'read_pad(g_held[p].extendedGamepad)' not in text
+          report = text.split('static void pad_report(GCController *c,',1)[1].split('static GCControllerLiveInput *pad_live_input',1)[0]
+          assert 'm = pad_map_apply(&g_padmap, m);' in report, 'button map not applied during report'
+          print('GameController physical, live Joy-Con, map and quit handlers validated.')
+          PY
           test -z "$(git status --porcelain -- '*.md')"
           test "$(cat .upstream-ref)" = "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb"
           test -f engine/dm/ios/tools/build_ipa.sh
