@@ -40,11 +40,15 @@ def file_hashes(path: Path):
 def download_rar(url: str, destination: Path):
     require(url.startswith("https://"), "Only HTTPS RAR download links are accepted")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.is_file() and destination.stat().st_size >= 8:
+    completed = Path(str(destination) + ".downloaded")
+    if completed.is_file() and destination.is_file():
         with destination.open("rb") as existing:
-            if any(existing.read(8).startswith(magic) for magic in RAR_MAGIC):
-                print("[BioiOSMutant] Cached RAR found:", destination)
-                return
+            header = existing.read(8)
+        if (any(header.startswith(magic) for magic in RAR_MAGIC)
+                and completed.read_text().strip() == str(destination.stat().st_size)):
+            print("[BioiOSMutant] Complete cached RAR found:", destination)
+            return
+    completed.unlink(missing_ok=True)
     # A partial file can be retried using Range. Validate the server's reply.
     for attempt in range(1, 6):
         size = destination.stat().st_size if destination.exists() else 0
@@ -83,6 +87,7 @@ def download_rar(url: str, destination: Path):
                 header = verified.read(8)
             require(any(header.startswith(m) for m in RAR_MAGIC),
                     "Link delivered HTML/other content, not a RAR; refresh the temporary URL")
+            completed.write_text(str(destination.stat().st_size))
             return
         except (requests.RequestException, OSError) as error:
             if attempt == 5:
@@ -177,6 +182,7 @@ def ingest(api, parent_folder_id: str, base_url: str, update_url: str,
                              "status": "already_on_drive"}
             print(f"[BioiOSMutant] Drive already has {name}: avoiding repeated download")
             archive.unlink(missing_ok=True)
+            Path(str(archive) + '.downloaded').unlink(missing_ok=True)
             continue
         if remote:
             require(False, f"Existing {name} lacks valid size/MD5; resolve before upload")
@@ -190,6 +196,7 @@ def ingest(api, parent_folder_id: str, base_url: str, update_url: str,
         results[kind] = upload_checked(api, destination, name)
         # Delete the RAR only after the remote NSP size and MD5 are verified.
         archive.unlink(missing_ok=True)
+        Path(str(archive) + '.downloaded').unlink(missing_ok=True)
         print(f"[BioiOSMutant] {kind} RAR removed after verified Drive upload", flush=True)
     require(len(results) == 2 and results["base"]["id"] != results["update"]["id"],
             "Both independent NSPs must be present in biotant")
