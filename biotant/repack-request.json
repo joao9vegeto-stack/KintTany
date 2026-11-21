@@ -1,0 +1,16 @@
+{
+  "branch": "BioiOSMutant",
+  "title_id": "01004BA017CD6000",
+  "source_run_id": 44880915730,
+  "source_artifact": "BioiOSMutant-Biomutant-3",
+  "source_framework": "DmGame01004BA017CD6000.framework",
+  "mode": "resources_and_resign_only",
+  "changes": [
+    "DM_FPS -> DM_FPS_TARGET (30/60, Unreal cvars + NVN pacing)",
+    "DM_PAD_MAP: A/B swap toggle"
+  ],
+  "romfs_external": true,
+  "shader_recompile": false,
+  "native_recompile": false,
+  "reason": "Fix observed 30fps lock at DM_FPS=60, add A/B invert option, preserve all compiled shaders and code."
+}
