@@ -1,0 +1,42 @@
+name: BioiOSMutant - main-only Linux rewrite
+on:
+  push:
+    branches: [BioiOSMutant]
+    paths: ['biotant/main-rewrite-request.json']
+permissions:
+  contents: read
+concurrency:
+  group: biomutant-main-linux-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  rewrite_main:
+    if: github.ref == 'refs/heads/BioiOSMutant'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout exact BioiOSMutant commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Python 3.13
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.13'
+      - name: Install Linux rewriter dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zstd
+          python3 -m pip install --disable-pip-version-check             requests google-api-python-client google-auth             lz4 "capstone>=5,<6" fonttools zbic backports.zstd
+      - name: Verify and materialize the pinned NXNative engine
+        run: |
+          python3 tools/engine.py sync
+          python3 tools/engine.py stale
+          python3 -m compileall -q biotant
+          python3 -m unittest discover -s biotant/tests -p 'test_*.py' -q
+      - name: Rewrite only private Biomutant main and upload verified results to Drive
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python3 biotant/scripts/main_rewrite_linux.py             --request biotant/main-rewrite-request.json             --workspace "${{ runner.temp }}/biomutant-main"
