@@ -21,10 +21,10 @@ def fake_macho(path, code=b"immutable compiled code" * 19, sig=b"old signature")
                          ncmds, cmdsize, 0, 0)
     section_off = 32 + cmdsize
     seg = struct.pack("<II16sQQQQiiII", 0x19, cmdsize,
-                      b"__TEXT".ljust(16, b"\\0"), 0, 0, 0,
+                      b"__TEXT".ljust(16, b"\x00"), 0, 0, 0,
                       section_off + len(code), 7, 5, 1, 0)
-    sect = struct.pack("<16s16sQQIIIIIIII", b"__text".ljust(16, b"\\0"),
-                       b"__TEXT".ljust(16, b"\\0"), 0,
+    sect = struct.pack("<16s16sQQIIIIIIII", b"__text".ljust(16, b"\x00"),
+                       b"__TEXT".ljust(16, b"\x00"), 0,
                        len(code), section_off, 2, 0, 0, 0, 0, 0, 0)
     path.write_bytes(header + seg + sect + code + sig)
 
