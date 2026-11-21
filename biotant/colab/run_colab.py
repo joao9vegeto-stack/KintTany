@@ -312,7 +312,12 @@ def prepare(args, api=None) -> dict:
         if found is None:
             subprocess.run([sys.executable, "-m", "pip", "install", "-q", name], check=True)
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from prepare_linux import run_preparation
+    # A prior, failed notebook call may have cached prepare_linux in sys.modules.
+    # Reload the latest source after the branch is updated, without removing
+    # NSPs, RomFS, partial rewrite outputs or any shader cache.
+    import prepare_linux
+    importlib.reload(prepare_linux)
+    run_preparation = prepare_linux.run_preparation
     from source_archive import prepare_source
     api = api or drive_api()
     root = Path("/content/biomutant")
