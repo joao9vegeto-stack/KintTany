@@ -97,7 +97,9 @@ class MainOffloadTests(unittest.TestCase):
             def get(self, **kwargs):
                 self.get_args = kwargs
                 return Action({"id": "owned-file", "name": path.name,
-                               "size": "0", "parents": ["owned-folder"]})
+                               "size": str(len(runner.PENDING)),
+                               "md5Checksum": __import__("hashlib").md5(runner.PENDING).hexdigest(),
+                               "parents": ["owned-folder"]})
             def update(self, **kwargs):
                 self.update_args = kwargs
                 return Action(result)
@@ -114,6 +116,37 @@ class MainOffloadTests(unittest.TestCase):
         runner.upload(api, "owned-folder", "owned-file", path, path.name)
         self.assertEqual(api.f.update_args["fileId"], "owned-file")
         self.assertNotIn("body", api.f.update_args)
+
+    def test_drive_write_probe_runs_before_rewrite(self):
+        identity = {"output_file_id": "owned-file",
+                    "folder_id": "owned-folder",
+                    "output_file_name": "main-result-abc.tar.zst"}
+        marker_md5 = __import__("hashlib").md5(runner.PENDING).hexdigest()
+        events = []
+        class Response:
+            def __init__(self, obj):
+                self.obj = obj
+            def execute(self):
+                return self.obj
+        class Api:
+            def files(self):
+                return self
+            def get(self, **kwargs):
+                events.append("get")
+                return Response({"id": "owned-file", "name": identity["output_file_name"],
+                                 "size": "0", "parents": ["owned-folder"],
+                                 "capabilities": {"canEdit": True}})
+            def update(self, **kwargs):
+                events.append("update")
+                self.file_id = kwargs["fileId"]
+                return Response({"id": "owned-file", "name": identity["output_file_name"],
+                                 "size": len(runner.PENDING), "md5Checksum": marker_md5})
+            def create(self, **kwargs):
+                raise AssertionError("Probe may not create a Drive file")
+        api = Api()
+        runner.verify_drive_output_writable(api, identity)
+        self.assertEqual(events, ["get", "update"])
+        self.assertEqual(api.file_id, "owned-file")
 
     def test_workflows_remain_isolated(self):
         linux = (ROOT / ".github/workflows/biomutant-main-linux.yml").read_text()
