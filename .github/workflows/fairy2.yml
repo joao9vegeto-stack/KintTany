@@ -1,0 +1,175 @@
+name: Fairy2iOS - Fairy Tail 2 iOS 26
+on:
+  push:
+    branches: [Fairy2iOS]
+    paths: ['fairy2/handoff.json']
+permissions:
+  contents: read
+concurrency:
+  group: fairy2-build-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    if: github.ref == 'refs/heads/Fairy2iOS'
+    runs-on: xcode-27
+    timeout-minutes: 360
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+    steps:
+      - name: Checkout exact handoff commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Install Python test imports before validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Validation imports both RAR/Drive helpers and offload regression
+          # tests. These modules must exist BEFORE unittest discovery.
+          python3 -m pip install --disable-pip-version-check requests google-api-python-client google-auth
+          python3 - <<'PY'
+          import requests
+          import googleapiclient.discovery
+          import google.auth
+          print("Fairy Tail 2 validation Python imports OK")
+          PY
+      - name: Validate Colab identity, engine and game inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/Fairy2iOS"
+          test "$(cat .upstream-ref)" = "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb"
+          python3 -m py_compile fairy2/port_stages.py fairy2/scripts/mac_capture.py fairy2/drive_chunks.py fairy2/colab/source_archive.py fairy2/colab/prepare_linux.py fairy2/colab/run_colab.py fairy2/scripts/prepare_actions.py fairy2/scripts/build_shared.py fairy2/colab/transfer_ipa.py fairy2/colab/archive_ingest.py
+          python3 -m unittest discover -s fairy2/tests -p "test_*.py" -v
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, json, uuid
+          d=json.loads(Path('fairy2/handoff.json').read_text())
+          p=d['prepared']
+          assert d['project'] == d['branch'] == d['source_ref'] == 'Fairy2iOS'
+          assert d['title_id'] == p['title_id'] == '0100B9801F872000'
+          assert d['package_version'] == p['package_version']
+          assert re.fullmatch(r'v[1-9][0-9]*', d['package_version'])
+          assert p['base_content_version'] == 0
+          assert p['update_content_version'] == int(d['package_version'][1:])
+          assert p['input_package_count'] == p['input_nsp_count'] == 18
+          assert p['input_update_count'] == 1 and p['input_dlc_count'] == 16
+          assert d['engine_pin'] == p['engine_pin'] == Path('.upstream-ref').read_text().strip()
+          assert re.fullmatch(r'[0-9a-f]{40}', d['source_commit'])
+          uuid.UUID(d['request_id'])
+          additional = d['game_data'].get('shader_romfs', [])
+          assert isinstance(additional, list)
+          assert sorted(x['version'] for x in additional) == sorted(
+              set(p['shader_versions']) - {d['package_version']})
+          for item in (d['source_files']['base'], d['source_files']['update'],
+                       *d['source_files']['dlcs'], d['work_archive'], d['game_data']['romfs'], *additional, *d['game_data']['aoc']):
+              assert item['id'] and int(item['size']) > 0
+              assert re.fullmatch(r'[0-9a-f]{64}',item['sha256'])
+          assert len(d['source_files']['dlcs']) == 16
+          assert len(d['game_data']['aoc']) == len(p['aoc_images'])
+          assert p['graphics'] in ('nvn','gl','vulkan')
+          assert isinstance(p['source_capture_flags'], list)
+          assert isinstance(p['mac_host_stages'], list)
+          assert isinstance(p['shader_versions'], list) and p['shader_versions']
+          assert isinstance(p['jit_required'], bool)
+          assert isinstance(p['linux_ue_decode_complete'], bool)
+          if p['graphics'] == 'nvn':
+              if p['shader_split_stage'] == 'linux_complete':
+                  assert re.fullmatch(r'[0-9a-f]{64}',p.get('shader_package_key') or '')
+              else:
+                  assert p['shader_split_stage'] == 'mac_pending'
+                  assert p['shader_package_key'] is None and p['mac_host_stages']
+          else:
+              assert p['shader_split_stage'] == 'metal_deferred'
+              assert p['shader_package_key'] is None
+          print('Fairy2iOS metadata verified:', d['title_id'], d['package_version'],
+                'Linux shader work:', p['shader_split_stage'], 'Mac-only:', p['mac_host_stages'])
+          PY
+      - name: Validate patch queue before expensive macOS dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/engine.py relink
+          python3 tools/engine.py check
+      - name: Install host requirements
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version
+          brew install xcodegen zstd glslang
+          command -v dotnet >/dev/null || brew install --cask dotnet-sdk
+          python3 -m pip install --disable-pip-version-check lz4 'capstone>=5,<6' fonttools zbic backports.zstd
+          xcrun --sdk iphoneos metal --version
+      - name: Materialize NXNative from pinned patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Patch queue already validated before Homebrew installation.
+          python3 tools/engine.py sync
+          python3 tools/engine.py stale
+          test -f engine/scripts/build_ipa_from_nsp.py
+          # Validate the actual patched NXNative AST *before* restoring ~3 GB
+          # of Colab RomFS data or building an Apple Silicon host. This
+          # catches the NameError from an accidental options-arg deletion.
+          python3 - <<'PY'
+          import ast
+          from pathlib import Path
+          src = Path("engine/scripts/build_ipa_from_nsp.py").read_text()
+          root = ast.parse(src)
+          funcs = {node.name: node for node in root.body if isinstance(node, ast.FunctionDef)}
+          assert "layer_shaders" in funcs and "build_vk_shaders" in funcs
+          params = [p.arg for p in funcs["layer_shaders"].args.args]
+          assert "options" in params and "from_seed" in params, (
+              "NXNative layer_shaders must retain options=() after the fast-refresh patch")
+          assert any(isinstance(n, ast.Starred) and isinstance(n.value, ast.Name)
+                     and n.value.id == "options" for n in ast.walk(funcs["layer_shaders"])), (
+              "NXNative layer_shaders no longer uses the options argument")
+          print("NXNative patched Vulkan Metal shader compiler argument contract OK")
+          PY
+          bash -n engine/dm/ios/tools/build_ipa.sh
+          bash -n frontend-ios/Shell/build_shell.sh
+      - name: Restore verified Colab workspace and external RomFS using 6 x 64 MiB HTTP Ranges
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          python3 fairy2/scripts/prepare_actions.py --handoff "$GITHUB_WORKSPACE/fairy2/handoff.json" --destination "$RUNNER_TEMP/fairy2"
+      - name: Run necessary Apple Silicon captures, compile Metal and sign thin IPA
+        run: |
+          set -euo pipefail
+          python3 fairy2/scripts/build_shared.py --nx2apple-root "$GITHUB_WORKSPACE" --prepared-json "$RUNNER_TEMP/fairy2/actions-input.json" --output "$RUNNER_TEMP/fairy2-output"
+      - name: Publish Fairy2iOS IPA and report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Fairy2iOS-FairyTail2-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/fairy2-output/Fairy2iOS-FairyTail2.ipa
+            ${{ runner.temp }}/fairy2-output/build-report.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve native shader and runtime diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Fairy2iOS-capture-diagnostics-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/fairy2/work/logs/vk_capture.log
+            ${{ runner.temp }}/fairy2/work/logs/vk_shaders.log
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Preserve failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Fairy2iOS-failure-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/fairy2/work/logs/
+            ${{ runner.temp }}/fairy2-output/build-report.json
+          if-no-files-found: warn
+          retention-days: 14
