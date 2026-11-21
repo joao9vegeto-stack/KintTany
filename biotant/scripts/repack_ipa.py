@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import plistlib
+import struct
 import subprocess
 import sys
 import tempfile
@@ -36,6 +37,59 @@ def checksum(path):
         for block in iter(lambda: f.read(4 * 1024 * 1024), b""):
             h.update(block)
     return h.hexdigest()
+
+
+def macho_text_sha(path):
+    """SHA-256 of native Mach-O executable code, ignoring re-signable blobs.
+
+    codesign --force necessarily rewrites LC_CODE_SIGNATURE bytes and can
+    modify __LINKEDIT sizes. A full-file SHA cannot stay unchanged after
+    re-signing, but the actual __TEXT,__text segment MUST stay byte-identical.
+    """
+    with Path(path).open("rb") as f:
+        header = f.read(32)
+        require(len(header) == 32 and struct.unpack_from("<I", header)[0] == 0xFEEDFACF,
+                "Expected a little-endian ARM64 Mach-O binary: " + str(path))
+        ncmds, commands_bytes = struct.unpack_from("<II", header, 16)
+        require(0 < ncmds < 1000 and 0 < commands_bytes < 1024 * 1024,
+                "Invalid Mach-O load-command region")
+        commands = f.read(commands_bytes)
+        at = 0
+        sections = []
+        for _ in range(ncmds):
+            require(at + 8 <= len(commands), "Truncated Mach-O load commands")
+            kind, size = struct.unpack_from("<II", commands, at)
+            require(size >= 8 and at + size <= len(commands),
+                    "Malformed Mach-O load command")
+            if kind == 0x19:  # LC_SEGMENT_64
+                require(size >= 72, "Malformed LC_SEGMENT_64")
+                nsects = struct.unpack_from("<I", commands, at + 64)[0]
+                require(at + 72 + nsects * 80 <= at + size,
+                        "Malformed Mach-O section inventory")
+                for i in range(nsects):
+                    entry = at + 72 + i * 80
+                    name = commands[entry:entry + 16].split(b"\\0", 1)[0]
+                    seg = commands[entry + 16:entry + 32].split(b"\\0", 1)[0]
+                    if name != b"__text" or not seg.startswith(b"__TEXT"):
+                        continue
+                    n = struct.unpack_from("<Q", commands, entry + 40)[0]
+                    off = struct.unpack_from("<I", commands, entry + 48)[0]
+                    require(0 < n < 2 ** 34 and off + n <= Path(path).stat().st_size,
+                            "Mach-O __text section out of bounds")
+                    sections.append((off, n))
+            at += size
+        require(sections, "No executable Mach-O __TEXT,__text section found")
+        h = hashlib.sha256()
+        for off, n in sorted(sections):
+            h.update(struct.pack("<Q", n))
+            f.seek(off)
+            left = n
+            while left:
+                block = f.read(min(left, 4 * 1024 * 1024))
+                require(bool(block), "Truncated Mach-O __text while hashing")
+                h.update(block)
+                left -= len(block)
+        return h.hexdigest()
 
 
 def run(*args):
@@ -162,6 +216,10 @@ def make_repack(source: Path, target: Path, report: Path):
         for label, path in important.items():
             require(path.is_file(), f"Essential file missing after extraction: {label}")
         original_hashes = {name: checksum(path) for name, path in important.items()}
+        original_code = {
+            "game_macho": macho_text_sha(framework_exec),
+            "shell_macho": macho_text_sha(shell_exec),
+        }
         old_bytes = launcher.read_bytes()
         new_json = configure_launcher(json.loads(old_bytes.decode("utf-8")))
         validate_settings(new_json)
@@ -178,7 +236,11 @@ def make_repack(source: Path, target: Path, report: Path):
             "--timestamp=none", app)
         run("codesign", "--verify", "--deep", "--strict", app)
         for label, path in important.items():
-            ensure_preserved(original_hashes[label], checksum(path), label)
+            if label in original_code:
+                ensure_preserved(original_code[label], macho_text_sha(path),
+                                 label + " Mach-O __TEXT,__text")
+            else:
+                ensure_preserved(original_hashes[label], checksum(path), label)
         # ditto recreates a standards-compliant IPA retaining symlinks and modes.
         run("ditto", "-c", "-k", "--keepParent", stage / "Payload", target)
         with zipfile.ZipFile(target) as z:
@@ -188,8 +250,12 @@ def make_repack(source: Path, target: Path, report: Path):
             again = json.loads(z.read(fw_prefix + "dm/launcher.json"))
             validate_settings(again)
             for label, path in important.items():
-                # Re-signed file must stay identical, even after ZIP packaging.
-                ensure_preserved(original_hashes[label], checksum(path), label)
+                # ZIP CRC and signing verified above. Executable code survives
+                # ad-hoc signature regeneration, although Mach-O SHA changes.
+                if label in original_code:
+                    ensure_preserved(original_code[label], macho_text_sha(path), label)
+                else:
+                    ensure_preserved(original_hashes[label], checksum(path), label)
             require(len([n for n in z.namelist() if n.endswith(".img") and
                          n.startswith(fw_prefix + "msl/")]) >= 1,
                     "Repacked IPA dropped Metal shader image")
@@ -206,7 +272,8 @@ def make_repack(source: Path, target: Path, report: Path):
             "native_macho_recompiled": False,
             "metal_recompiled": False,
             "shader_metal_file_count": len(metal),
-            "unchanged_payload_sha256": original_hashes,
+            "original_payload_sha256_before_resign": original_hashes,
+            "unchanged_macho_text_sha256": original_code,
             "settings": {
                 "fps_env": "DM_FPS_TARGET", "fps_options": ["30", "60"],
                 "ab_env": "DM_PAD_MAP", "ab_off": "",
