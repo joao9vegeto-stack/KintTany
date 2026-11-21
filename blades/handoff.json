@@ -104,10 +104,10 @@
   },
   "created_utc": "2026-11-20T21:09:53.566034+00:00",
   "retry": {
-    "parent_run_id": 44825004525,
-    "attempt": 7,
-    "reason": "Reproduce iPhone SquirrelFunction<> fatal after splash movie and 720p viewport in 1080p swapchain; use DM_DBG DM_FS and bounded Vulkan viewport telemetry, preserve real capture logs",
-    "engine_patch": "0077-vulkan-dagor-log-viewport-scissor-size.patch",
-    "patch_commit": "effeb911ad7257abc473f4f0306b03ffc4dde986"
+    "parent_run_id": 44834434210,
+    "attempt": 8,
+    "reason": "Fix actual BladesTime eShop ShopServiceAccessor::Initialize RES_FAIL -> guest abort; supply zero-owned-items offline ec manager and fit 720p Dagor viewport in both handheld and docked",
+    "engine_patch": "0078-bladestime-offline-eshop-rights-manager.patch;0079-bladestime-docked-dagor-viewport-720p.patch",
+    "patch_commit": "b75ef6987df696bb685d0200cf522c6df5f9980c"
   }
 }
