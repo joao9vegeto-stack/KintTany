@@ -29,6 +29,6 @@ jobs:
       - name: Python syntax check
         run: |
           python3 -m compileall -q biotant
-      - name: Run all tests with detailed failures (including fragmented RAR fallback)
+      - name: Run offline regressions and rewrite heartbeat syntax
         run: |
           PYTHONUNBUFFERED=1 python3 -m unittest discover -s biotant/tests -p 'test_*.py' -v
