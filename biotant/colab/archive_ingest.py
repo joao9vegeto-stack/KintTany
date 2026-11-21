@@ -400,24 +400,138 @@ def sevenzip_executable() -> str:
     return executable
 
 
+def _rar_extraction_command(name: str, executable: str, rar: Path,
+                            extraction_dir: Path) -> list[str]:
+    if name == "unrar":
+        # -p- disables interactive password prompts in unattended Colab sessions.
+        return [executable, "x", "-y", "-o+", "-p-", str(rar),
+                str(extraction_dir) + "/"]
+    if name == "unar":
+        return [executable, "-quiet", "-force-overwrite",
+                "-output-directory", str(extraction_dir), str(rar)]
+    return [executable, "x", "-y", f"-o{extraction_dir}", str(rar)]
+
+
+def _install_rar_fallback(name: str) -> str | None:
+    """Try supported Linux RAR readers only after a preinstalled reader fails."""
+    package = {"7zz": "7zip", "unrar": "unrar", "unar": "unar"}[name]
+    existing = shutil.which(name)
+    if existing:
+        return existing
+    print(f"[BioiOSMutant] Checking Linux RAR fallback: {package}", flush=True)
+    try:
+        result = subprocess.run(
+            ["apt-get", "install", "-y", "-qq", package],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, errors="replace", check=False, timeout=240)
+        if result.returncode:
+            print(f"[BioiOSMutant] Package {package} unavailable "
+                  f"(apt exit {result.returncode}); trying next reader.", flush=True)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"[BioiOSMutant] Could not install {package}: {type(exc).__name__}", flush=True)
+    return shutil.which(name)
+
+
 def extract_one_nsp(rar: Path, extraction_dir: Path, destination: Path):
-    shutil.rmtree(extraction_dir, ignore_errors=True)
-    extraction_dir.mkdir(parents=True)
-    command = [sevenzip_executable(), "x", "-y", f"-o{extraction_dir}", str(rar)]
-    subprocess.run(command, check=True)
-    candidates = [x for x in extraction_dir.rglob("*")
-                  if x.is_file() and x.suffix.lower() == ".nsp"]
-    require(len(candidates) == 1,
-            f"Archive must contain exactly one NSP, found {[x.name for x in candidates]}")
-    found = candidates[0]
-    with found.open("rb") as stream:
-        require(stream.read(4) == b"PFS0", "Extracted file does not have NSP/PFS0 magic")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.unlink(missing_ok=True)
-    shutil.move(str(found), str(destination))
-    shutil.rmtree(extraction_dir, ignore_errors=True)
-    print(f"[BioiOSMutant] NSP extracted: {destination.name} ({destination.stat().st_size:,} bytes)",
+    """Extract using 7z, then try modern 7zz/unrar/unar when a RAR codec fails.
+
+    Never delete the source RAR on an extraction error. Capture the real
+    decompressor output instead of showing only CalledProcessError status 2.
+    """
+    rar = Path(rar)
+    extraction_dir = Path(extraction_dir)
+    destination = Path(destination)
+    require(rar.is_file(), f"RAR archive is missing: {rar}")
+    with rar.open("rb") as stream:
+        magic = stream.read(8)
+    require(any(magic.startswith(signature) for signature in RAR_MAGIC),
+            f"Invalid RAR header: {rar.name}")
+    print(f"[BioiOSMutant] Extracting cached {rar.name} "
+          f"({rar.stat().st_size:,} bytes); "
+          f"free space {shutil.disk_usage(rar.parent).free / 2**30:.1f} GiB.",
           flush=True)
+
+    initial = sevenzip_executable()
+    readers = [("7zz" if Path(initial).name == "7zz" else "7z", initial)]
+    attempted_paths = set()
+    failures = []
+
+    # apt-get update is delayed until *after* the initial extraction fails.
+    apt_index_refreshed = False
+    for name in ("initial", "7zz", "unrar", "unar"):
+        if name == "initial":
+            kind, executable = readers[0]
+        else:
+            executable = shutil.which(name)
+            if not executable and not apt_index_refreshed:
+                try:
+                    subprocess.run(["apt-get", "update", "-qq"],
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   check=False, timeout=180)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+                apt_index_refreshed = True
+            executable = executable or _install_rar_fallback(name)
+            kind = name
+        if not executable or str(Path(executable).resolve()) in attempted_paths:
+            continue
+        attempted_paths.add(str(Path(executable).resolve()))
+        # A failed extractor can leave a partial NSP. Always start clean.
+        shutil.rmtree(extraction_dir, ignore_errors=True)
+        extraction_dir.mkdir(parents=True, exist_ok=True)
+        command = _rar_extraction_command(kind, executable, rar, extraction_dir)
+        print(f"[BioiOSMutant] RAR extractor {kind}: starting.", flush=True)
+        try:
+            result = subprocess.run(
+                command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, errors="replace", check=False)
+        except OSError as exc:
+            failures.append(f"{kind}: failed to execute: {exc}")
+            continue
+        output = result.stdout or ""
+        if result.returncode == 0:
+            candidates = [x for x in extraction_dir.rglob("*")
+                          if x.is_file() and not x.is_symlink()
+                          and x.suffix.lower() == ".nsp"]
+            require(len(candidates) == 1,
+                    f"RAR extracted but expected exactly one NSP; "
+                    f"found {[x.name for x in candidates]}")
+            found = candidates[0]
+            require(found.resolve().is_relative_to(extraction_dir.resolve()),
+                    "RAR NSP resolved outside the extraction directory")
+            with found.open("rb") as stream:
+                require(stream.read(4) == b"PFS0",
+                        "Extracted file does not have NSP/PFS0 magic")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.unlink(missing_ok=True)
+            shutil.move(str(found), str(destination))
+            shutil.rmtree(extraction_dir, ignore_errors=True)
+            print(f"[BioiOSMutant] NSP extracted using {kind}: "
+                  f"{destination.name} ({destination.stat().st_size:,} bytes)",
+                  flush=True)
+            return
+
+        tail = output[-8000:].strip() or "(no diagnostic output)"
+        failures.append(f"{kind}: exit {result.returncode}\n{tail}")
+        print(f"[BioiOSMutant] {kind} extraction failed (exit {result.returncode}).\n"
+              f"{tail}", flush=True)
+        lowered = tail.lower()
+        # A different decompressor cannot fix absent volumes, lack of disk
+        # space or a required password; avoid multiple costly retries.
+        if any(problem in lowered for problem in (
+                "no space left", "not enough space", "disk full",
+                "wrong password", "password is incorrect", "password protected",
+                "missing volume", "next volume is required",
+                "unexpected end of archive", "unexpected end of data")):
+            break
+
+    print("[BioiOSMutant] RAR retained for recovery:", rar, flush=True)
+    raise RuntimeError(
+        "[BioiOSMutant RAR] Cannot extract cached archive. "
+        "RAR not deleted; do NOT redownload it blindly. "
+        "Check the detailed extractor messages above for unsupported method, "
+        "password, missing volumes, CRC errors or insufficient disk space.\n"
+        + "\n\n".join(failures))
 
 
 def upload_checked(api, path: Path, drive_name: str) -> dict:
