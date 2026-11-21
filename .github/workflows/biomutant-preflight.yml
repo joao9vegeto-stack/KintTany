@@ -24,11 +24,14 @@ jobs:
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.13'
-      - name: Install minimal Linux test runtime
-        run: python3 -m pip install --disable-pip-version-check requests google-api-python-client
+      - name: Install minimal Linux test runtime and archive reader
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zstd
+          python3 -m pip install --disable-pip-version-check requests google-api-python-client google-auth
       - name: Python syntax check
         run: |
           python3 -m compileall -q biotant
-      - name: Run 33 offline regressions including SIGKILL rewrite recovery
+      - name: Run offline regressions including private Linux main offload
         run: |
           PYTHONUNBUFFERED=1 python3 -m unittest discover -s biotant/tests -p 'test_*.py' -v
