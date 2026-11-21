@@ -32,6 +32,6 @@ jobs:
       - name: Python syntax check
         run: |
           python3 -m compileall -q biotant
-      - name: Run offline regressions including private Linux main offload
+      - name: Run offline regressions including Drive-owned output update
         run: |
           PYTHONUNBUFFERED=1 python3 -m unittest discover -s biotant/tests -p 'test_*.py' -v
