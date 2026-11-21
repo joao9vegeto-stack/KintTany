@@ -197,6 +197,13 @@ def prepare(api, *, token=None, runtime="/content/biomutant",
     shutil.copy2(record, stage / "build_src.sha256")
     shutil.copytree(project_profile, stage / "profile" / TITLE_ID,
                     ignore=shutil.ignore_patterns("__pycache__"))
+    # Preserve *all* completed rewrite modules in the same private Drive
+    # source package. It survives Colab disconnects while Linux Actions runs.
+    saved = stage / "saved-partial"
+    saved.mkdir()
+    for entry in sorted(part.iterdir()):
+        if entry.is_file() and not entry.is_symlink() and not entry.name.startswith("main."):
+            shutil.copy2(entry, saved / entry.name)
     info = {
         "format": 1, "project": BRANCH, "branch": BRANCH, "request_id": request_id,
         "title_id": TITLE_ID, "version": version,
@@ -208,6 +215,9 @@ def prepare(api, *, token=None, runtime="/content/biomutant",
         "profile_hashes": {
             x.relative_to(stage).as_posix(): sha(x)
             for x in sorted((stage / "profile").rglob("*")) if x.is_file()
+        },
+        "checkpoint_hashes": {
+            x.name: sha(x) for x in sorted(saved.iterdir()) if x.is_file()
         },
     }
     (stage / "input.json").write_text(json.dumps(info, indent=2) + "\n")
@@ -263,8 +273,16 @@ def receive(api, *, runtime="/content/biomutant"):
     import rewrite_guard
     root = Path(runtime)
     request_path = root / "main-offload-request.json"
-    insist(request_path.is_file(), "Run main offload preparation first in this runtime")
-    req = json.loads(request_path.read_text())
+    if request_path.is_file():
+        req = json.loads(request_path.read_text())
+    else:
+        # When Colab expires while Actions runs, the public GitHub request
+        # carries only Drive IDs and digests; the game bytes remain private.
+        repo_request = Path("/content/BioiOSMutant-repo/biotant/main-rewrite-request.json")
+        insist(repo_request.is_file(),
+               "Main offload request missing; fetch BioiOSMutant branch first")
+        req = json.loads(repo_request.read_text())
+        request_path.write_text(json.dumps(req, indent=2))
     prefix = "main-result-" + req["request_id"] + ".tar.zst"
     files = [x for x in list_children(api, req["folder_id"])
              if x.get("id") == req["output_file_id"]
@@ -287,6 +305,42 @@ def receive(api, *, runtime="/content/biomutant"):
     version = req["version"]
     main = work / "extract" / version / "ExeFS/main"
     part = work / ("patched_" + version + ".partial")
+    if not (main.is_file() and part.is_dir()
+            and (part / ".bio-rewrite-fingerprint.json").is_file()):
+        # Restore the saved 3/4 module cache from the SAME authenticated
+        # Drive input. Do not require the original Colab session to survive.
+        source_bundle = root / "main-rewrite-input-restore.tar.zst"
+        download_drive_file(api, req["archive"], source_bundle)
+        backup = root / "main-rewrite-source-restored"
+        if backup.exists():
+            shutil.rmtree(backup)
+        unpack_zstd(source_bundle, backup)
+        info = json.loads((backup / "input.json").read_text())
+        insist(info.get("request_id") == req["request_id"]
+               and info.get("main_sha256") == req["main_sha256"]
+               and info.get("fingerprint") == req["fingerprint"],
+               "Private checkpoint does not match Linux source request")
+        insist(sha(backup / "main.nso") == req["main_sha256"],
+               "Saved main source checksum mismatch")
+        for name, digest in info.get("checkpoint_hashes", {}).items():
+            insist(name == Path(name).name and (backup / "saved-partial" / name).is_file()
+                   and sha(backup / "saved-partial" / name) == digest,
+                   "Saved module checkpoint checksum mismatch: " + name)
+        main.parent.mkdir(parents=True, exist_ok=True)
+        if not main.is_file():
+            shutil.copy2(backup / "main.nso", main)
+        part.mkdir(parents=True, exist_ok=True)
+        for entry in (backup / "saved-partial").iterdir():
+            if entry.is_file() and not (part / entry.name).is_file():
+                shutil.copy2(entry, part / entry.name)
+        saved_profile = backup / "profile" / TITLE_ID
+        local_profile = work / "profile" / TITLE_ID
+        if not local_profile.is_dir():
+            local_profile.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(saved_profile, local_profile)
+        print("[BioiOSMutant] Previous Colab runtime lost; "
+              "3/4 verified module backups restored from private Drive.",
+              flush=True)
     insist(main.is_file() and sha(main) == req["main_sha256"],
            "Original main changed since Linux submission")
     fingerprint = json.loads((part / ".bio-rewrite-fingerprint.json").read_text()).get("fingerprint")
