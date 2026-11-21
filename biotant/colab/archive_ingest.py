@@ -150,7 +150,7 @@ def download_rar(url: str, destination: Path) -> dict:
                     first_byte = next(probe.iter_content(chunk_size=1), b"")
                     require(len(first_byte) == 1, "Incomplete RAR Range probe")
                     if probe.headers.get("Content-Encoding", "identity").lower() != "identity":
-                        raise OriginRangeUnsupported("RAR host returned compressed HTTP ranges")
+                        raise RuntimeError("RAR HTTP Range probe uses an unsupported content encoding")
                     etag = probe.headers.get("ETag", "")
                     last_modified = probe.headers.get("Last-Modified", "")
                     range_supported = True
@@ -474,8 +474,8 @@ def ingest(api, parent_folder_id: str, base_url: str, update_url: str,
         # Delete the RAR only after the remote NSP size and MD5 are verified.
         archive.unlink(missing_ok=True)
         Path(str(archive) + ".downloaded.json").unlink(missing_ok=True)
-            Path(str(archive) + ".part").unlink(missing_ok=True)
-            Path(str(archive) + ".part.json").unlink(missing_ok=True)
+        Path(str(archive) + ".part").unlink(missing_ok=True)
+        Path(str(archive) + ".part.json").unlink(missing_ok=True)
         print(f"[BioiOSMutant] {kind} RAR removed after verified Drive upload", flush=True)
     require(len(results) == 2 and results["base"]["id"] != results["update"]["id"],
             "Both independent NSPs must be present in biotant")
