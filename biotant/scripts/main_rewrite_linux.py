@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import re
@@ -22,7 +23,7 @@ from pathlib import Path
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "biotant"))
@@ -36,6 +37,7 @@ SUFFIXES = (
     "patched.bin", "fixups.tsv", "gates.tsv", "sites.tsv",
     "cuts.tsv", "changed.tsv", "obs.tsv",
 )
+PENDING = b"BIOMUTANT_MAIN_LINUX_PENDING_V1"
 
 
 def check(flag, message):
@@ -69,6 +71,47 @@ def drive():
     return build("drive", "v3", credentials=credentials, cache_discovery=False)
 
 
+def verify_drive_output_writable(api, req):
+    """Actually update the human-owned placeholder BEFORE the expensive rewrite.
+
+    This My Drive is not a Shared Drive: a service account cannot CREATE
+    files here. A missing writer permission must fail in seconds, not after
+    the multi-minute real main rewrite.
+    """
+    ident, folder, name = (req["output_file_id"], req["folder_id"],
+                           req["output_file_name"])
+    metadata = api.files().get(
+        fileId=ident, supportsAllDrives=True,
+        fields="id,name,size,parents,md5Checksum,capabilities(canEdit)"
+    ).execute()
+    check(metadata.get("id") == ident and metadata.get("name") == name
+          and folder in metadata.get("parents", []),
+          "Drive result placeholder metadata mismatch")
+    check(metadata.get("capabilities", {}).get("canEdit") is not False,
+          "Service account cannot edit the user-owned Drive result file")
+    size = int(metadata.get("size") or 0)
+    checksum = metadata.get("md5Checksum", "")
+    expected = hashlib.md5(PENDING).hexdigest()
+    if size == len(PENDING) and checksum == expected:
+        print("[BioiOSMutant] Reusing writable user-owned Drive placeholder.", flush=True)
+        return
+    check(size == 0, "Drive result file already has content; never overwrite outputs")
+    updated = api.files().update(
+        fileId=ident, supportsAllDrives=True,
+        media_body=MediaIoBaseUpload(io.BytesIO(PENDING),
+                                     mimetype="application/octet-stream",
+                                     resumable=False),
+        fields="id,name,size,md5Checksum"
+    ).execute()
+    check(updated.get("id") == ident
+          and int(updated.get("size") or 0) == len(PENDING)
+          and updated.get("md5Checksum") == expected,
+          "Service account failed to write a tiny probe to the user-owned "
+          "My Drive file; no costly rewrite will run")
+    print("[BioiOSMutant] Verified service-account update permission "
+          "BEFORE the heavy main rewrite.", flush=True)
+
+
 def upload(api, parent, result_id, path, name):
     # The Google account owns the pre-created empty file in My Drive.
     # A service account cannot CREATE files in personal My Drive (no quota);
@@ -80,8 +123,10 @@ def upload(api, parent, result_id, path, name):
           and metadata.get("name") == name
           and parent in metadata.get("parents", []),
           "Destination is not the exact pre-created user-owned Drive file")
-    check(int(metadata.get("size") or 0) == 0,
-          "The result file already has content; refusing to overwrite a previous build")
+    check(int(metadata.get("size") or 0) == len(PENDING)
+          and metadata.get("md5Checksum") == hashlib.md5(PENDING).hexdigest(),
+          "The preflight Drive write-probe marker changed; "
+          "refusing to overwrite another result")
     uploaded = api.files().update(
         fileId=result_id,
         media_body=MediaFileUpload(str(path),
@@ -179,6 +224,7 @@ def main():
     workspace = args.workspace.resolve()
     workspace.mkdir(parents=True, exist_ok=True)
     api = drive()
+    verify_drive_output_writable(api, req)
     input_archive = workspace / "main-input.tar.zst"
     download_drive_file(api, req["archive"], input_archive)
     stage = workspace / "input"
