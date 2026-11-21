@@ -102,9 +102,12 @@
   },
   "created_utc": "2026-11-21T05:47:53.020927+00:00",
   "retry_validation": {
-    "attempt": 2,
-    "prior_failed_run": 44880553579,
-    "reason": "macOS Python preflight was missing requests and Google Drive API before running offline tests; corrected workflow order",
+    "attempt": 3,
+    "prior_failed_runs": [
+      44880553579,
+      44880691501
+    ],
+    "reason": "preflight Python dependencies fixed; remove eight unlisted BladesTime/Dagor patches and verify exact 60 patch series before Homebrew",
     "source_data_unchanged": true
   }
 }
