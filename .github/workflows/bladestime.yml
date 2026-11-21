@@ -134,7 +134,7 @@ jobs:
             --wanted blades/shaders/iphone_missing_shaders.txt \
             --output "$RUNNER_TEMP/blades/work/shader/dagor_spv" \
             --report "$RUNNER_TEMP/blades/work/logs/dagor_shader_bank.json" \
-            --min-matches 80
+            --min-matches 109
       - name: Run necessary Apple Silicon captures, compile Metal and sign thin IPA
         run: |
           set -euo pipefail

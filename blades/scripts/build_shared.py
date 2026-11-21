@@ -132,6 +132,34 @@ def stage_nvn_shader_payload(ios: Path, framework: Path, chain: str) -> dict:
     return result
 
 
+def configure_bladestime_frame_rate_menu(framework: Path) -> None:
+    """Expose presentation pacing without pretending to unlock Dagor simulation."""
+    path = framework / "launcher.json"
+    if not path.is_file():
+        fail(f"framework missing launcher settings: {path}")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if data.get("game", "").upper() != TITLE_ID or not isinstance(data.get("settings"), list):
+        fail("wrong or malformed BladesTime launcher settings")
+    settings = data["settings"]
+    if any(item.get("env") in ("DM_FPS", "DM_FPS_TARGET") for item in settings):
+        fail("BladesTime has a competing frame-rate setting")
+    choice = {
+        "env": "DM_FPS", "kind": "choice", "section": "Game",
+        "label": "Taxa de quadros",
+        "note": "30 FPS estável; 60 FPS experimental, sujeito ao motor Dagor.",
+        "default": "30",
+        "options": [["30", "30 FPS (estável)"], ["60", "60 FPS (experimental)"]],
+        "level": "basic",
+    }
+    index = next((i + 1 for i, row in enumerate(settings) if row.get("env") == "DM_OPMODE"), 0)
+    settings.insert(index, choice)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    updated = json.loads(path.read_text(encoding="utf-8"))
+    if len([s for s in updated["settings"] if s.get("env") == "DM_FPS"]) != 1:
+        fail("BladesTime FPS setting was not written correctly")
+    print("[BladesTime] DM_FPS=30/60 choice installed (60 experimental).", flush=True)
+
+
 def stage_layer_shader_payload(ios: Path, framework: Path, graphics: str) -> dict:
     """Bundle the *actual* Metal shader files for GL/Vulkan titles."""
     if graphics not in ("gl", "vulkan"):
@@ -250,8 +278,8 @@ def main() -> None:
             if not dagor.is_dir() or not report.is_file():
                 fail("Dagor Vulkan SPIR-V bank must be decoded before Metal compilation")
             recovered = json.loads(report.read_text()).get("matched", 0)
-            if recovered < 80:
-                fail(f"only {recovered}/110 observed missing Vulkan shaders recovered: refusing incomplete IPA")
+            if recovered < 109:
+                fail(f"only {recovered} actual Vulkan shaders recovered (minimum 109): refusing incomplete IPA")
             if len(list(dagor.glob("*.spv"))) != recovered:
                 fail("Dagor SHA256 shader manifest does not match extracted SPIR-V files")
             print(f"[BladesTime] Compiling {recovered} authentic iPhone-requested Dagor SPIR-V modules plus runtime captures.", flush=True)
@@ -302,6 +330,7 @@ def main() -> None:
         for rel in (exe, "profile.tsv", "dm/shader_map.tsv"):
             if not (fw / rel).is_file():
                 fail(f"missing framework component {rel}")
+        configure_bladestime_frame_rate_menu(fw)
         # The framework-only builder removes msl/, but the iOS Shell requires
         # it unless a DMMSLTR1 trailer was appended to the external RomFS.
         # Never declare an IPA successful with only shader_map.tsv.
@@ -359,7 +388,8 @@ def main() -> None:
         with zipfile.ZipFile(ipa) as archive:
             paths = archive.namelist()
             must = ["Payload/DmShell.app/DmShell",
-                    f"Payload/DmShell.app/Frameworks/{framework_name}/{exe}"]
+                    f"Payload/DmShell.app/Frameworks/{framework_name}/{exe}",
+                    f"Payload/DmShell.app/Frameworks/{framework_name}/launcher.json"]
             if not all(x in paths for x in must):
                 fail("IPA missing app or framework executable")
             # NVN ships one image, GL/Vulkan ship a resource directory.
@@ -396,6 +426,8 @@ def main() -> None:
             "mac_host_stages": prep["mac_host_stages"],
             "ipa": ipa.name, "ipa_size_bytes": ipa.stat().st_size,
             "ios_deployment_target": "26.0",
+            "frame_rate_choice": {"env": "DM_FPS", "default": 30, "options": [30, 60],
+                                  "actual_60_fps_unverified": True},
             "romfs_in_ipa": False, "dlc_count": 0, "update_count": 1,
             "external_romfs": prepared["game_data"]["folder_url"],
             "signature": "ad-hoc: sideload resign required",

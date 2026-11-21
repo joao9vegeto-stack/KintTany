@@ -104,13 +104,13 @@
   },
   "created_utc": "2026-11-20T21:09:53.566034+00:00",
   "retry": {
-    "parent_run_id": 44850796780,
-    "attempt": 14,
-    "reason": "Correct SMOL-V end-of-stream by discarding 0-32 Dagor auxiliary bytes before zero padding, verify recovered 110 iPhone missing Vulkan hashes, build authentic Metal libraries only when coverage passes",
+    "parent_run_id": 44851214664,
+    "attempt": 15,
+    "reason": "From verified iPhone gameplay: real Shell DM_FPS 30/60 option with safe 30 default; include newly observed missing shader hashes; quieter Vulkan diagnostics; keep external RomFS and authentic Metal",
     "engine_patch": "0081-bladestime-offline-dns-host-errno-tls.patch",
     "patch_commit": "06ad4f55fa2694b73a6aac32ab2bb9dabdbfce6f",
     "diagnostic_shader_dump": false,
     "shader_bank": "compiledShaders/gameSpirV.ps50.shdump.bin",
-    "required_shader_matches": 80
+    "required_shader_matches": 109
   }
 }

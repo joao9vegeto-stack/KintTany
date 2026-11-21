@@ -1,4 +1,5 @@
-# Run 11 iPhone actual missing vkCreateShaderModule keys, sha256(SPIR-V)[:16]; not guessed.
+# Run 11: 110 real iPhone shader misses. New gameplay log: 3 additional distinct misses.
+# SHA-256(SPIR-V)[:16] only; no synthetic shaders.
 021aa0c46bd1a27b
 095824eca5966f1a
 0c68486a559e7b60
@@ -8,6 +9,8 @@
 14ca369ad3435937
 17aa0c8e6919d0ad
 1af0c817fae1fa8b
+1da18b93f912b6e7
+1ec589b568526477
 23d4393e92733f02
 283adefc2c112ed5
 28bf6bb3834e8484
@@ -107,5 +110,6 @@ f7de32a498723279
 f962f9ee7887d48f
 fa07f98bb816a08f
 fd0deee9c525c91c
+ff1eef685e0fa6c3
 ff40f772709649d1
 ffe47eed3aef9364

@@ -7,7 +7,7 @@ Blades of Time displays a 1280x720-looking logo movie in the top-left
 two-thirds of a 1920x1080 Vulkan swapchain while docked, and crashes
 immediately after the intro movie on SquirrelFunction<> call failed.
 
-Log the viewports and scissors selected by the game, bounded to the
+Log the viewports and scissors only when DM_VK_VIEWPORT_TRACE=1, bounded to
 first dozen queries plus any changed sizes. No drawing state is changed.
 These records, captured on Mac with DM_VK_LOG, distinguish a 720p game
 viewport from a Metal/UI drawable-size mismatch.
@@ -32,7 +32,7 @@ diff --git a/dm/gfx/vk/hle_vk.m b/dm/gfx/vk/hle_vk.m
 +        static _Atomic unsigned shown;
 +        int w = (int)v[0].width, h = (int)v[0].height;
 +        int prev_w = atomic_exchange(&last_w, w), prev_h = atomic_exchange(&last_h, h);
-+        if (w != prev_w || h != prev_h || atomic_fetch_add(&shown, 1) < 12)
++        if (getenv("DM_VK_VIEWPORT_TRACE") && (w != prev_w || h != prev_h || atomic_fetch_add(&shown, 1) < 12))
 +            VLOG("diag viewport: x=%.1f y=%.1f %.1fx%.1f (first=%u, count=%u)",
 +                 v[0].x, v[0].y, v[0].width, v[0].height, first, n);
 +    }
@@ -46,7 +46,7 @@ diff --git a/dm/gfx/vk/hle_vk.m b/dm/gfx/vk/hle_vk.m
 +        static _Atomic unsigned shown;
 +        int w = (int)r[0].extent.width, h = (int)r[0].extent.height;
 +        int prev_w = atomic_exchange(&last_w, w), prev_h = atomic_exchange(&last_h, h);
-+        if (w != prev_w || h != prev_h || atomic_fetch_add(&shown, 1) < 12)
++        if (getenv("DM_VK_VIEWPORT_TRACE") && (w != prev_w || h != prev_h || atomic_fetch_add(&shown, 1) < 12))
 +            VLOG("diag scissor: x=%d y=%d %ux%u (first=%u, count=%u)",
 +                 r[0].offset.x, r[0].offset.y, r[0].extent.width, r[0].extent.height, first, n);
 +    }
