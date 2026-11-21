@@ -104,10 +104,10 @@
   },
   "created_utc": "2026-11-20T21:09:53.566034+00:00",
   "retry": {
-    "parent_run_id": 44834434210,
-    "attempt": 8,
-    "reason": "Fix actual BladesTime eShop ShopServiceAccessor::Initialize RES_FAIL -> guest abort; supply zero-owned-items offline ec manager and fit 720p Dagor viewport in both handheld and docked",
+    "parent_run_id": 44843804869,
+    "attempt": 9,
+    "reason": "Re-run ec offline and docked viewport fix after correcting only test wording; earlier run stopped at lightweight Python preflight",
     "engine_patch": "0078-bladestime-offline-eshop-rights-manager.patch;0079-bladestime-docked-dagor-viewport-720p.patch",
-    "patch_commit": "b75ef6987df696bb685d0200cf522c6df5f9980c"
+    "patch_commit": "59d5d70741972d9877e969237698a03f80c7144f"
   }
 }
