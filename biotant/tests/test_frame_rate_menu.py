@@ -23,9 +23,12 @@ class FrameRateMenuTest(unittest.TestCase):
                  "options": [["1", "Na base"], ["0", "Portátil"]]}]}))
             build.configure_biomutant_frame_rate_menu(Path(folder))
             rows = json.loads(path.read_text())["settings"]
-            self.assertEqual([x["env"] for x in rows], ["DM_OPMODE", "DM_FPS"])
+            self.assertEqual([x["env"] for x in rows], ["DM_OPMODE", "DM_FPS_TARGET", "DM_PAD_MAP"])
             self.assertEqual(rows[1]["default"], "30")
             self.assertEqual([x[0] for x in rows[1]["options"]], ["30", "60"])
+            self.assertEqual(rows[2]["kind"], "toggle")
+            self.assertEqual(rows[2]["on"], "A=B,B=A")
+            self.assertEqual(rows[2]["off"], "")
 
     def test_rejects_bad_manifest_path(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -43,11 +46,20 @@ class FrameRateMenuTest(unittest.TestCase):
             manifest.write_text(json.dumps({"title_id": build.TITLE_ID, "launcher": "dm/launcher.json"}))
             path = Path(folder) / "dm" / "launcher.json"
             path.parent.mkdir(exist_ok=True)
-            for game, settings in (("0000000000000000", []),
-                                   (build.TITLE_ID, [{"env": "DM_FPS_TARGET"}])):
-                path.write_text(json.dumps({"schema": 1, "game": game, "settings": settings}))
-                with self.assertRaises(SystemExit):
-                    build.configure_biomutant_frame_rate_menu(Path(folder))
+            path.write_text(json.dumps({"schema": 1, "game": "0000000000000000", "settings": []}))
+            with self.assertRaises(SystemExit):
+                build.configure_biomutant_frame_rate_menu(Path(folder))
+            # Earlier builds had the presentation-only DM_FPS selector.
+            # It must be upgraded, not duplicated or left active.
+            path.write_text(json.dumps({"schema": 1, "game": build.TITLE_ID, "settings": [
+                {"env": "DM_FPS", "kind": "choice", "default": "30",
+                 "options": [["30", "30 FPS"], ["60", "60 FPS"]]}
+            ]}))
+            build.configure_biomutant_frame_rate_menu(Path(folder))
+            updated = json.loads(path.read_text())
+            self.assertNotIn("DM_FPS", [x["env"] for x in updated["settings"]])
+            self.assertEqual([x["env"] for x in updated["settings"]],
+                             ["DM_FPS_TARGET", "DM_PAD_MAP"])
 
 
 if __name__ == "__main__":
