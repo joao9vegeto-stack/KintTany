@@ -58,12 +58,4 @@
 0070-dante2ios-nxnative-93c76c1cbf41-trim-idle-metal.patch
 0071-ios-implement-saved-hud-bridge-for-multi-game-sh.patch
 0072-dante2ios-flush-audioout-after-movie-stop.patch
-0073-vulkan-dagor-khr-physical-device-queries.patch
-0074-vulkan-dagor-trace-physical-device-enumeration.patch
-0075-vulkan-dagor-required-shader-draw-parameters.patch
 0076-build-restore-layer-shaders-options-after-from-seed.patch
-0077-vulkan-dagor-log-viewport-scissor-size.patch
-0078-bladestime-offline-eshop-rights-manager.patch
-0079-bladestime-docked-dagor-viewport-720p.patch
-0080-bladestime-extend-vulkan-capture-through-intro.patch
-0081-bladestime-offline-dns-host-errno-tls.patch
