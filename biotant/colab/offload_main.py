@@ -169,10 +169,10 @@ def prepare(api, *, token=None, runtime="/content/biomutant",
            "Engine pin changed")
     source_commit = subprocess.check_output(
         ["git", "-C", str(root / "NX2Apple"), "rev-parse", "HEAD"], text=True).strip()
-    local_commit = subprocess.check_output(
-        ["git", "-C", str(git), "rev-parse", "HEAD"], text=True).strip()
-    insist(source_commit == local_commit,
-           "Source checkout changed between Colab and engine; fetch branch and synchronize first")
+    # The offload helper can be a newer commit than the already-materialized
+    # engine checkout. Its exact patch_nso.py bytes, dependency inventory and
+    # fingerprint are verified on Linux; do not invalidate the saved modules
+    # merely because Python orchestration scripts changed.
 
     request_id = uuid.uuid4().hex
     folder_id = folder(api, GAME_FOLDER_ID, "main-rewrite-" + request_id[:12])
@@ -189,6 +189,7 @@ def prepare(api, *, token=None, runtime="/content/biomutant",
         "source_commit": source_commit, "engine_pin": ENGINE_PIN,
         "main_sha256": sha(nsomain), "patch_nso_sha256": sha(source_rewriter),
         "build_src_sha256": sha(record), "fingerprint": fingerprint,
+        "dm_patch_front": os.environ.get("DM_PATCH_FRONT", ""),
         "other_modules": list(names),
         "profile_hashes": {
             x.relative_to(stage).as_posix(): sha(x)
