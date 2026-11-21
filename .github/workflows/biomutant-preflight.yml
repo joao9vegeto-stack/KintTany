@@ -32,6 +32,6 @@ jobs:
       - name: Python syntax check
         run: |
           python3 -m compileall -q biotant
-      - name: Regression: Drive MD5 metadata is requested before upload
+      - name: Verify Drive MD5 metadata requested before upload
         run: |
           PYTHONUNBUFFERED=1 python3 -m unittest discover -s biotant/tests -p 'test_*.py' -v
