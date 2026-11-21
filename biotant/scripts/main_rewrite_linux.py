@@ -69,9 +69,21 @@ def drive():
     return build("drive", "v3", credentials=credentials, cache_discovery=False)
 
 
-def upload(api, parent, path, name):
-    uploaded = api.files().create(
-        body={"name": name, "parents": [parent]},
+def upload(api, parent, result_id, path, name):
+    # The Google account owns the pre-created empty file in My Drive.
+    # A service account cannot CREATE files in personal My Drive (no quota);
+    # it CAN update a user-owned file where it has writer access.
+    metadata = api.files().get(
+        fileId=result_id, fields="id,name,size,parents",
+        supportsAllDrives=True).execute()
+    check(metadata.get("id") == result_id
+          and metadata.get("name") == name
+          and parent in metadata.get("parents", []),
+          "Destination is not the exact pre-created user-owned Drive file")
+    check(int(metadata.get("size") or 0) == 0,
+          "The result file already has content; refusing to overwrite a previous build")
+    uploaded = api.files().update(
+        fileId=result_id,
         media_body=MediaFileUpload(str(path),
                                    mimetype="application/octet-stream",
                                    chunksize=64 * 1024 * 1024, resumable=True),
@@ -156,7 +168,11 @@ def main():
           and req.get("engine_pin") == PIN
           and re.fullmatch(r"v[0-9]+", req.get("version", ""))
           and re.fullmatch(r"[0-9a-f]{32}", req.get("request_id", ""))
-          and re.fullmatch(r"[0-9a-f]{64}", req.get("fingerprint", "")),
+          and re.fullmatch(r"[0-9a-f]{64}", req.get("fingerprint", ""))
+          and req.get("output_file_name") ==
+              "main-result-" + req.get("request_id", "") + ".tar.zst"
+          and isinstance(req.get("output_file_id"), str)
+          and bool(req["output_file_id"]),
           "Request identity invalid")
     check((ROOT / ".upstream-ref").read_text().strip() == PIN,
           "The fork's pinned engine changed")
@@ -234,7 +250,9 @@ def main():
     (out / "result.json").write_text(json.dumps(report, indent=2) + "\n")
     archive = workspace / ("main-result-" + req["request_id"] + ".tar.zst")
     pack_zstd(out, archive)
-    upload(api, req["folder_id"], archive, archive.name)
+    check(archive.name == req["output_file_name"],
+          "Output name differs from user-owned reserved file")
+    upload(api, req["folder_id"], req["output_file_id"], archive, archive.name)
     print("[BioiOSMutant] Main-only rewrite completed and Drive upload "
           "verified. Return to Colab to import this result, then "
           "continue Linux shader preparation.", flush=True)
