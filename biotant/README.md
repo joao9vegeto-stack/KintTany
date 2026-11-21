@@ -34,6 +34,40 @@ O mesmo transporte por **6 × 64 MiB HTTP Range** (`biotant/drive_chunks.py`, co
 
 Os patches exclusivamente Dagor/Blades of Time foram excluídos da série aplicada nesta branch, preservando o backport geral `0076` relativo à compilação de shaders Vulkan. Não há lista de shaders Dagor ou versão fixa de update na execução do Biomutant.
 
+## Recuperação após SIGKILL do rewrite do main
+
+A preparação real do Biomutant identificou o update **v131072**, extraiu 166 arquivos (5,7 GB) e recuperou três módulos **subsdk0**, **sdk** e **nro0** a partir da pasta `patched_v131072.partial`. Duas tentativas de `patch_nso.py` no `main` foram mortas com `SIGKILL (-9)`, sem traceback e sem registro de `oom_kill` no cgroup consultado. **Não repetir o rewrite do main no Colab às cegas.**
+
+Há uma rota opcional **Linux → Linux** para somente esse módulo: [`biomutant-main-linux.yml`](../.github/workflows/biomutant-main-linux.yml), separada do workflow da IPA.
+
+1. **No mesmo Colab, mantenha `/content/biomutant` intacto** e execute novamente apenas a célula 2 para atualizar `/content/BioiOSMutant-repo`. NÃO execute a célula 5: ela tentaria outro rewrite do `main`.
+2. Em uma **nova célula Colab**, crie o pacote privado e publique o pedido de rewrite. O script guarda no seu Drive o `main` do ExeFS, perfil e cópias dos três módulos recuperados; publica no GitHub somente os IDs do Drive e hashes, sem NSP, prod.keys ou código do jogo:
+
+```python
+import importlib
+import offload_main
+offload_main = importlib.reload(offload_main)
+MAIN_REQUEST = offload_main.prepare(DRIVE_CLIENT)
+```
+
+3. Acompanhe a execução em [Actions / Biomutant main-only Linux](https://github.com/joao9vegeto-stack/KintTany/actions/workflows/biomutant-main-linux.yml). Um runner `ubuntu-latest` (não `xcode-27`) verifica o mesmo `patch_nso.py`, roda só o `main`, registra rastros Python a cada três minutos e atualiza **o arquivo de resultado vazio que o Colab já criou na pasta do usuário**. Essa última condição é importante: contas de serviço não podem criar novos arquivos no Meu Drive pessoal.
+4. **Só depois de o Linux Actions concluir com sucesso**, no Colab execute:
+
+```python
+import importlib
+import offload_main
+offload_main = importlib.reload(offload_main)
+MAIN_REPORT = offload_main.receive(DRIVE_CLIENT)
+import run_colab
+run_colab = importlib.reload(run_colab)
+HANDOFF = run_colab.prepare(
+    argparse.Namespace(drive_folder_id=DRIVE_PARENT_ID),
+    api=DRIVE_CLIENT,
+)
+```
+
+A importação verifica SHA-256 de cada saída e os fingerprints originais. Caso a sessão Colab anterior tenha sido encerrada, `receive` pode restaurar do pacote privado os três módulos recuperados, o perfil e o `main`, antes de prosseguir; as NSPs/ROMFS podem precisar ser baixadas ou extraídas novamente. **Não se garante o sucesso do rewrite no Linux Actions até executar o trabalho real.**
+
 ## Estado
 
-Infraestrutura publicada e arquivos do fluxo preparados. **Nenhum NSP de Biomutant foi ainda analisado**, pois os arquivos estão nos links externos e a importação deve ocorrer na célula do Colab autenticado. A criação de perfil, a tradução dos shaders e a execução no iPhone só podem ser validadas depois da preparação e de um build real; não presumir compatibilidade sem esses testes.
+**Observado nos logs de 21/11/2026:** base + update v131072 analisados, 166 arquivos extraídos (5,7 GB), `subsdk0`/`sdk`/`nro0` recuperados; rewrite do `main` encerrado duas vezes com sinal 9, apesar do segundo ser serializado. Rota alternativa Linux main-only preparada e testes offline aprovados; **a execução com os bytes reais do `main` ainda não ocorreu, não há workspace finalizado nem IPA gerada**. O port e sua compatibilidade em iOS não são afirmados como concluídos.
