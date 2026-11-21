@@ -484,7 +484,7 @@ def extract_one_nsp(rar: Path, extraction_dir: Path, destination: Path):
         try:
             result = subprocess.run(
                 command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, errors="replace", check=False)
+                stdin=subprocess.DEVNULL, text=True, errors="replace", check=False)
         except OSError as exc:
             failures.append(f"{kind}: failed to execute: {exc}")
             continue
