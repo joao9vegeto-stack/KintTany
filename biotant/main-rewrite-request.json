@@ -1,0 +1,22 @@
+{
+  "format": 1,
+  "project": "BioiOSMutant",
+  "branch": "BioiOSMutant",
+  "title_id": "01004BA017CD6000",
+  "version": "v131072",
+  "request_id": "792b56ae8531430098650baa12218a44",
+  "folder_id": "12rman8i4ZqftLfbBxSnHDFxBNgX_-NGw",
+  "output_file_id": "1lY10GHZdz_8n1ZpTwLLZ7S-SNK9UbLOl",
+  "output_file_name": "main-result-792b56ae8531430098650baa12218a44.tar.zst",
+  "engine_pin": "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb",
+  "source_commit": "b3ca954001aa00ff0669a4c4274dc9e77fe21cf4",
+  "main_sha256": "3af7ba90aceeec63d73757e4df18b98d494df3203b47efde3417747f69872453",
+  "fingerprint": "6bff36a087ec929c5932f9efe5f9528dfd483ee3ae444484abd3efd86cd31abc",
+  "archive": {
+    "id": "1I6QTVvJUR_F0cPlezswIf9OUBxqZfgSi",
+    "name": "main-input.tar.zst",
+    "size": 46959958,
+    "sha256": "ff98f5ff88d1000a1664a1e491d0706e7a4f81119bc34e06a1e651e7d58e6aa9",
+    "md5": "6a791441dd9931bb3c0fb9784e9fbfdb"
+  }
+}
