@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: KintTany port maintainer <patches@localhost>
+Date: Fri, 20 Nov 2026 21:55:00 -0300
+Subject: [PATCH] BladesTime: keep Vulkan shader capture running through intro
+
+BladesTime's Gaijin/intro videos continue longer than the default
+20-second no-new-shaders cutoff on macOS' headless capture host.
+Run 44843909597 captured its eight first SPIR-V shaders, then
+SIGTERM stopped the game during gaijin.ogm, BEFORE its failing Nintendo
+ec initialization could be exercised.
+
+Allow 90 seconds without a new shader for this one Vulkan title.
+Retain the existing maximum CAPTURE_SECS=120; other titles remain at 20
+seconds. This collects any post-intro shaders and makes the actual
+offline eShop startup visible in the Mac diagnostic log, instead of
+claiming the corrected startup was verified from a premature capture.
+
+Upstream-Status: fork-only
+Reason: verify BladesTime post-intro offline ec initialization and collect genuine menu SPIR-V
+Issue: joao9vegeto-stack/KintTany BladesTime run 44843909597
+---
+ scripts/build_ipa_from_nsp.py | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/scripts/build_ipa_from_nsp.py b/scripts/build_ipa_from_nsp.py
+--- a/scripts/build_ipa_from_nsp.py
++++ b/scripts/build_ipa_from_nsp.py
+@@ -2005,7 +2005,8 @@
+     def done():   # every listed key is there; without the table, none has been added for 20 s
+         got = capture_done(cap, api); n = len(got & want if want else got); PROG.set(done=n)
+         if n != last['n']: last['n'], last['t'] = n, time.time()
+-        return bool((want and got >= want) or (not want and n and time.time() - last['t'] > 20))
++        idle_s = 90 if api == 'vk' and g.id.upper() == '0100CFA00CC74000' else 20
++        return bool((want and got >= want) or (not want and n and time.time() - last['t'] > idle_s))
+     rc = boot_mac(host, patched, henv, rd, log, CAPTURE_SECS, done)
+     got = capture_done(cap, api)
+     if rc is not None and not (want and got >= want): host_stopped(log, rc, time.time() - t0)
+
+-- 
+2.56.0
