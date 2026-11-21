@@ -43,6 +43,23 @@ def check(flag, message):
         raise RuntimeError("[BioiOSMutant Linux main rewrite] " + message)
 
 
+def dependency_entries(path):
+    """Relocation-safe NXNative build_src.sha256 equality.
+
+    The names may contain absolute colab/runner paths to provisional profile
+    files. Require identical individual bytes (sha256) and the same filenames,
+    ignoring only directory location.
+    """
+    entries = []
+    for line in Path(path).read_text(errors="replace").splitlines():
+        parts = line.split("  ", 1)
+        check(len(parts) == 2 and re.fullmatch(r"[0-9a-f]{64}", parts[0]),
+              "Corrupt SHA-256 dependency inventory")
+        entries.append((parts[0], Path(parts[1].strip()).name))
+    check(bool(entries), "Empty rewriter SHA-256 inventory")
+    return sorted(entries)
+
+
 def drive():
     raw = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
     check(bool(raw), "GOOGLE_SERVICE_ACCOUNT_JSON must be set with Drive write access")
@@ -84,6 +101,8 @@ def run_main(py, script, source, output, env):
         "faulthandler.enable();"
         "faulthandler.dump_traceback_later(180,repeat=True);"
         "script=sys.argv[1];"
+        "from pathlib import Path;"
+        "sys.path.insert(0,str(Path(script).parent));"
         "sys.argv=sys.argv[1:];"
         "runpy.run_path(script,run_name='__main__')"
     )
@@ -184,10 +203,12 @@ def main():
         env["DM_PATCH_FRONT"] = info["dm_patch_front"]
     run_main(sys.executable, tool, source, output, env)
     result_record = output / "build_src.sha256"
-    check(result_record.is_file()
-          and sha(result_record) == info["build_src_sha256"],
-          "Rewriter tool inventory differs from the original Colab run; "
-          "do not import the result")
+    original_record = stage / "build_src.sha256"
+    check(result_record.is_file() and original_record.is_file()
+          and sha(original_record) == info["build_src_sha256"]
+          and dependency_entries(result_record) == dependency_entries(original_record),
+          "Rewriter dependency source hashes differ from the original Colab "
+          "run; refuse a different engine/profile")
     files = {}
     for suffix in SUFFIXES:
         name = "main." + suffix
@@ -202,6 +223,7 @@ def main():
         "request_id": req["request_id"], "version": req["version"],
         "engine_pin": PIN, "main_sha256": req["main_sha256"],
         "fingerprint": req["fingerprint"], "build_src_sha256":
+            sha(original_record), "runner_build_src_sha256":
             sha(result_record), "file_hashes": files,
         "runner": "GitHub Ubuntu Linux", "reused_colab_modules": 3,
     }
