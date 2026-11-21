@@ -104,10 +104,10 @@
   },
   "created_utc": "2026-11-20T21:09:53.566034+00:00",
   "retry": {
-    "parent_run_id": 44843804869,
-    "attempt": 9,
-    "reason": "Re-run ec offline and docked viewport fix after correcting only test wording; earlier run stopped at lightweight Python preflight",
-    "engine_patch": "0078-bladestime-offline-eshop-rights-manager.patch;0079-bladestime-docked-dagor-viewport-720p.patch",
-    "patch_commit": "59d5d70741972d9877e969237698a03f80c7144f"
+    "parent_run_id": 44843909597,
+    "attempt": 10,
+    "reason": "Extend only BladesTime Vulkan capture idle from 20 to 90 seconds (120-second total cap), to verify actual post-intro offline eShop init and capture real menu SPIR-V; original Mac run terminated during Gaijin video",
+    "engine_patch": "0080-bladestime-extend-vulkan-capture-through-intro.patch",
+    "patch_commit": "3c17b7d8ce7ee4fc1d5013de542a95eca1bf4b53"
   }
 }
