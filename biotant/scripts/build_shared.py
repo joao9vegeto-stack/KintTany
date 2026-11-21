@@ -133,7 +133,7 @@ def stage_nvn_shader_payload(ios: Path, framework: Path, chain: str) -> dict:
 
 
 def configure_biomutant_frame_rate_menu(framework: Path) -> None:
-    """Expose presentation pacing without promising an Unreal Engine simulation unlock."""
+    """The real engine FPS target and direct A/B swap, shared with IPA repack."""
     manifest_path = framework / "game.manifest.json"
     if not manifest_path.is_file():
         fail(f"framework manifest missing: {manifest_path}")
@@ -144,27 +144,20 @@ def configure_biomutant_frame_rate_menu(framework: Path) -> None:
     path = framework / rel
     if not path.is_file():
         fail(f"framework missing launcher settings: {path}")
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if data.get("game", "").upper() != TITLE_ID or not isinstance(data.get("settings"), list):
-        fail("wrong or malformed BioiOSMutant launcher settings")
-    settings = data["settings"]
-    if any(item.get("env") in ("DM_FPS", "DM_FPS_TARGET") for item in settings):
-        fail("BioiOSMutant has a competing frame-rate setting")
-    choice = {
-        "env": "DM_FPS", "kind": "choice", "section": "Game",
-        "label": "Taxa de quadros",
-        "note": "30 FPS padrão; 60 FPS experimental, sem desbloqueio garantido da lógica do jogo.",
-        "default": "30",
-        "options": [["30", "30 FPS (estável)"], ["60", "60 FPS (experimental)"]],
-        "level": "basic",
-    }
-    index = next((i + 1 for i, row in enumerate(settings) if row.get("env") == "DM_OPMODE"), 0)
-    settings.insert(index, choice)
+    helper_file = Path(__file__).resolve().parent / "repack_ipa.py"
+    helper_spec = importlib.util.spec_from_file_location("biomutant_repack_settings", helper_file)
+    if helper_spec is None or helper_spec.loader is None:
+        fail("Biomutant repack helper not importable")
+    helper = importlib.util.module_from_spec(helper_spec)
+    helper_spec.loader.exec_module(helper)
+    try:
+        data = helper.configure_launcher(json.loads(path.read_text(encoding="utf-8")))
+        helper.validate_settings(data)
+    except (ValueError, RuntimeError, KeyError) as error:
+        fail(str(error))
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    updated = json.loads(path.read_text(encoding="utf-8"))
-    if len([s for s in updated["settings"] if s.get("env") == "DM_FPS"]) != 1:
-        fail("BioiOSMutant FPS setting was not written correctly")
-    print("[BioiOSMutant] DM_FPS=30/60 choice installed (60 experimental).", flush=True)
+    print("[BioiOSMutant] DM_FPS_TARGET 30/60 + DM_PAD_MAP A/B swap installed.", flush=True)
+
 
 
 def stage_layer_shader_payload(ios: Path, framework: Path, graphics: str) -> dict:
@@ -390,11 +383,14 @@ def main() -> None:
                 fail("IPA missing app or framework executable")
             launcher_entry = f"Payload/DmShell.app/Frameworks/{framework_name}/dm/launcher.json"
             launcher_config = json.loads(archive.read(launcher_entry).decode("utf-8"))
-            rate_rows = [row for row in launcher_config.get("settings", []) if row.get("env") == "DM_FPS"]
+            rate_rows = [row for row in launcher_config.get("settings", []) if row.get("env") == "DM_FPS_TARGET"]
+            map_rows = [row for row in launcher_config.get("settings", []) if row.get("env") == "DM_PAD_MAP"]
             if (launcher_config.get("game") != TITLE_ID or len(rate_rows) != 1 or
                     rate_rows[0].get("default") != "30" or
-                    [opt[0] for opt in rate_rows[0].get("options", [])] != ["30", "60"]):
-                fail("signed IPA does not contain the validated 30/60 FPS game setting")
+                    [opt[0] for opt in rate_rows[0].get("options", [])] != ["30", "60"] or
+                    len(map_rows) != 1 or map_rows[0].get("on") != "A=B,B=A" or
+                    any(row.get("env") == "DM_FPS" for row in launcher_config.get("settings", []))):
+                fail("signed IPA does not contain real Unreal 30/60 and gamepad A/B settings")
             # NVN ships one image, GL/Vulkan ship a resource directory.
             # Verify the exact compiled file bytes inside the signed IPA.
             for item in shader_payload["files"]:
@@ -429,8 +425,10 @@ def main() -> None:
             "mac_host_stages": prep["mac_host_stages"],
             "ipa": ipa.name, "ipa_size_bytes": ipa.stat().st_size,
             "ios_deployment_target": "26.0",
-            "frame_rate_choice": {"env": "DM_FPS", "default": 30, "options": [30, 60],
+            "frame_rate_choice": {"env": "DM_FPS_TARGET", "default": 30, "options": [30, 60],
+                                  "unreal_cvars_written_by_engine": True,
                                   "actual_60_fps_unverified": True},
+            "swap_ab_choice": {"env": "DM_PAD_MAP", "off": "", "on": "A=B,B=A"},
             "romfs_in_ipa": False, "dlc_count": 0, "update_count": 1,
             "external_romfs": prepared["game_data"]["folder_url"],
             "signature": "ad-hoc: sideload resign required",
