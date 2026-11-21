@@ -68,8 +68,8 @@ def macho_text_sha(path):
                         "Malformed Mach-O section inventory")
                 for i in range(nsects):
                     entry = at + 72 + i * 80
-                    name = commands[entry:entry + 16].split(b"\\0", 1)[0]
-                    seg = commands[entry + 16:entry + 32].split(b"\\0", 1)[0]
+                    name = commands[entry:entry + 16].split(b"\x00", 1)[0]
+                    seg = commands[entry + 16:entry + 32].split(b"\x00", 1)[0]
                     if name != b"__text" or not seg.startswith(b"__TEXT"):
                         continue
                     n = struct.unpack_from("<Q", commands, entry + 40)[0]
