@@ -11,6 +11,7 @@ import threading
 import unittest
 from pathlib import Path
 from unittest import mock
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "colab"))
@@ -181,6 +182,52 @@ class RARRangeTests(unittest.TestCase):
     def test_range_geometry_covers_entire_file(self):
         with mock.patch.object(rar, "RANGE_BYTES", 8):
             self.assertEqual(rar._ranges(17), [(0, 7), (8, 15), (16, 16)])
+
+    def test_unsupported_7z_codec_falls_back_to_unrar_and_discards_partial_nsp(self):
+        archive = self.destination
+        archive.write_bytes(RAR)
+        extracted = archive.parent / "extracted"
+        nsp = archive.parent / "output.nsp"
+        commands = []
+
+        def fake_run(args, **kwargs):
+            name = Path(args[0]).name
+            if name == "apt-get":
+                return SimpleNamespace(returncode=0, stdout="")
+            commands.append(name)
+            if name == "7z":
+                extracted.mkdir(exist_ok=True)
+                (extracted / "incomplete.nsp").write_bytes(b"corrupt partial")
+                return SimpleNamespace(returncode=2, stdout="ERROR: Unsupported Method : update.nsp")
+            if name == "unrar":
+                extracted.mkdir(exist_ok=True)
+                (extracted / "valid.nsp").write_bytes(b"PFS0" + b"x" * 256)
+                return SimpleNamespace(returncode=0, stdout="All OK")
+            raise AssertionError(f"Unexpected extraction command: {args}")
+
+        with mock.patch.object(rar, "sevenzip_executable", return_value="/usr/bin/7z"), \
+                mock.patch.object(rar.shutil, "which",
+                                  side_effect=lambda name: "/usr/bin/unrar" if name == "unrar" else None), \
+                mock.patch.object(rar.subprocess, "run", side_effect=fake_run):
+            rar.extract_one_nsp(archive, extracted, nsp)
+        self.assertEqual(commands, ["7z", "unrar"])
+        self.assertTrue(nsp.read_bytes().startswith(b"PFS0"))
+        self.assertEqual(archive.read_bytes(), RAR)
+        self.assertFalse(extracted.exists())
+
+    def test_7z_password_failure_reports_reason_and_keeps_rar(self):
+        archive = self.destination
+        archive.write_bytes(RAR)
+        extracted = archive.parent / "extracted"
+        nsp = archive.parent / "output.nsp"
+        def fake_run(args, **kwargs):
+            return SimpleNamespace(returncode=2, stdout="ERROR: Wrong password")
+        with mock.patch.object(rar, "sevenzip_executable", return_value="/usr/bin/7z"), \
+                mock.patch.object(rar.subprocess, "run", side_effect=fake_run):
+            with self.assertRaisesRegex(RuntimeError, "Wrong password"):
+                rar.extract_one_nsp(archive, extracted, nsp)
+        self.assertEqual(archive.read_bytes(), RAR)
+        self.assertFalse(nsp.exists())
 
 
 if __name__ == "__main__":
