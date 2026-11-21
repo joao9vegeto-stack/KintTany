@@ -116,6 +116,11 @@ class MainOffloadTests(unittest.TestCase):
         runner.upload(api, "owned-folder", "owned-file", path, path.name)
         self.assertEqual(api.f.update_args["fileId"], "owned-file")
         self.assertNotIn("body", api.f.update_args)
+        # The real failure after the successful 5-minute main rewrite: the
+        # upload() metadata get forgot to request md5Checksum, yet later
+        # required its value. Prevent another costly repeat of this bug.
+        self.assertIn("md5Checksum", api.f.get_args["fields"])
+        self.assertIn("capabilities(canEdit)", api.f.get_args["fields"])
 
     def test_drive_write_probe_runs_before_rewrite(self):
         identity = {"output_file_id": "owned-file",
