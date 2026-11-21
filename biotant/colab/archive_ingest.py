@@ -148,7 +148,8 @@ def download_rar(url: str, destination: Path) -> dict:
                     require(match is not None, "Invalid RAR Range probe Content-Range")
                     total = int(match.group(1))
                     first_byte = next(probe.iter_content(chunk_size=1), b"")
-                    require(len(first_byte) == 1, "Incomplete RAR Range probe")
+                    require(first_byte == b"R",
+                            "RAR link returned an unexpected first byte (HTML/expired URL?)")
                     if probe.headers.get("Content-Encoding", "identity").lower() != "identity":
                         raise RuntimeError("RAR HTTP Range probe uses an unsupported content encoding")
                     etag = probe.headers.get("ETag", "")
@@ -328,6 +329,9 @@ def download_rar(url: str, destination: Path) -> dict:
                         for block in response.iter_content(chunk_size=STREAM_BYTES):
                             if not block:
                                 continue
+                            if transferred == 0:
+                                require(block.startswith(b"Rar!"),
+                                        "RAR link returned HTML or invalid content instead of a RAR")
                             output.write(block)
                             transferred += len(block)
                             if length and transferred % (64 * 1024 * 1024) < len(block):
@@ -340,10 +344,13 @@ def download_rar(url: str, destination: Path) -> dict:
                             and (not total or transferred == total),
                             "Sequential RAR download truncated or inconsistent")
                 break
-            except (requests.RequestException, OSError) as exc:
+            except (requests.RequestException, OSError, RuntimeError) as exc:
+                if "Source HTTP" in str(exc) or "RAR link returned HTML" in str(exc):
+                    raise
                 if attempt == MAX_ATTEMPTS:
                     raise RuntimeError(
-                        f"Sequential RAR download failed after {attempt} attempts: {exc}") from exc
+                        f"Sequential RAR download failed after {attempt} attempts: "
+                        f"{type(exc).__name__}") from exc
                 print(f"[BioiOSMutant] Sequential retry {attempt}/{MAX_ATTEMPTS}: "
                       f"{type(exc).__name__}", flush=True)
                 time.sleep(min(2 ** attempt, 16))
