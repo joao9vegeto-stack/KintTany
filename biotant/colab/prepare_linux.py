@@ -11,6 +11,8 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 TITLE_ID = "01004BA017CD6000"
@@ -254,6 +256,58 @@ def run_preparation(args) -> dict:
         "--keep-extracted", "--romfs", "separate",
         "--no-heap-check", "--progress", "lines", "--gpu", "none",
     ])
+    # NXNative counts fully rewritten modules, not instructions processed
+    # inside an active module. Its original ETA remains frozen indefinitely
+    # when no additional module finishes. Hide only stale module ETAs.
+    original_eta = module.PROG._eta
+    def honest_eta(stage):
+        if (stage.unit == "modules" and stage.hist
+                and time.time() - stage.hist[-1][0] > 90):
+            return None
+        return original_eta(stage)
+    module.PROG._eta = honest_eta
+
+    # Read-only health observations; they never interrupt the rewriter and
+    # never change its process count, cache or CPU allocation.
+    heartbeat_stop = threading.Event()
+    def rewrite_heartbeat():
+        while not heartbeat_stop.wait(120):
+            with module.PROG.lock:
+                stage = module.PROG.cur
+                if not stage or stage.name != "rewrite" or stage.total is None:
+                    continue
+                completed, total = stage.done or 0, stage.total
+            try:
+                proc = subprocess.run(
+                    ["ps", "-eo", "pid,stat,pcpu,pmem,etime,args"],
+                    capture_output=True, text=True, check=False, timeout=15)
+                active = [line.strip() for line in proc.stdout.splitlines()
+                          if "patch_nso.py" in line and
+                          "ps -eo" not in line]
+                log_paths = sorted((work / "logs").glob("rewrite_*.log"))
+                reports = []
+                now = time.time()
+                for log in log_paths:
+                    st = log.stat()
+                    reports.append(f"{log.name}={st.st_size:,}B, "
+                                   f"updated {int(now - st.st_mtime)}s ago")
+                print(f"[BioiOSMutant] Rewrite heartbeat: {completed}/{total} "
+                      "modules finished. The counter moves only when a whole "
+                      "module finishes.", flush=True)
+                for line in active[:12]:
+                    print("[BioiOSMutant] Active rewrite:", line, flush=True)
+                if not active:
+                    print("[BioiOSMutant] No patch_nso.py process found at this "
+                          "snapshot; check for a finished/failed worker.", flush=True)
+                if reports:
+                    print("[BioiOSMutant] Rewrite logs: "
+                          + " | ".join(reports[-12:]), flush=True)
+            except (OSError, subprocess.SubprocessError) as exc:
+                print("[BioiOSMutant] Rewrite heartbeat unavailable: "
+                      + type(exc).__name__, flush=True)
+
+    heartbeat_thread = threading.Thread(target=rewrite_heartbeat, daemon=True)
+    heartbeat_thread.start()
     try:
         module.main(parsed)
         raise SystemExit("[BioiOSMutant] builder ended without entering the Xcode-only boundary.")
@@ -265,6 +319,7 @@ def run_preparation(args) -> dict:
               f"Apenas {pending.stage} depende de Apple Silicon; "
               "o trabalho foi preservado para o handoff.", flush=True)
     finally:
+        heartbeat_stop.set()
         try:
             module.PROG.close(ok=True)
         except Exception:
