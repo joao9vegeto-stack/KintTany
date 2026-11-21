@@ -64,7 +64,7 @@ def extract(image_path: Path, output_path: Path) -> dict:
                   'header_hex': sample[:64].hex(),
                   'zstd_frame_magic_in_first_256': sample.count(b'\\x28\\xb5\\x2f\\xfd'),
                   'spirv_magic_in_first_256': sample.count(b'\\x03\\x02\\x23\\x07')}
-        output_path.with_suffix('.json').write_text(json.dumps(result, indent=2) + '\\n')
+        output_path.with_suffix('.json').write_text(json.dumps(result, indent=2) + '\n')
         return result
 
 

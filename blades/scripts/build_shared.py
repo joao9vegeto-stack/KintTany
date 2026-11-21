@@ -242,9 +242,22 @@ def main() -> None:
                 provisional=bool(prep["provisional"]),
                 fixed=bool(facts.get("gl_fixed", (False, ""))[0]))
         elif gfx == "vulkan":
+            # Dagor's shader dump is zlib -> SMOL-V, not naked .spv.
+            # The portable scanner recovers only sha256-matched SPIR-V from
+            # the iPhone's 110 observed missing shaders, before Metal build.
+            dagor = work / "shader" / "dagor_spv"
+            report = logs / "dagor_shader_bank.json"
+            if not dagor.is_dir() or not report.is_file():
+                fail("Dagor Vulkan SPIR-V bank must be decoded before Metal compilation")
+            recovered = json.loads(report.read_text()).get("matched", 0)
+            if recovered < 80:
+                fail(f"only {recovered}/110 observed missing Vulkan shaders recovered: refusing incomplete IPA")
+            if len(list(dagor.glob("*.spv"))) != recovered:
+                fail("Dagor SHA256 shader manifest does not match extracted SPIR-V files")
+            print(f"[BladesTime] Compiling {recovered} authentic iPhone-requested Dagor SPIR-V modules plus runtime captures.", flush=True)
             ios = builder.build_vk_shaders(
                 py, engine,
-                [builder.rfs.source(version), version / "ExeFS/main", *extra_roots],
+                [builder.rfs.source(version), version / "ExeFS/main", dagor, *extra_roots],
                 work / "shader", env, logs, profile,
                 mac=False, provisional=bool(prep["provisional"]))
         else:

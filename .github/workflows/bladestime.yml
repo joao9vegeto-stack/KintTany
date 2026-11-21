@@ -121,29 +121,25 @@ jobs:
         run: |
           set -euo pipefail
           python3 blades/scripts/prepare_actions.py --handoff "$GITHUB_WORKSPACE/blades/handoff.json" --destination "$RUNNER_TEMP/blades"
-      - name: Export Dagor shader dump from verified external RomFS
-        id: dagor_dump
+      - name: Recover missing Vulkan shaders from Dagor zlib/SMOL-V bank
         shell: bash
         run: |
           set -euo pipefail
+          node --version
           python3 blades/scripts/extract_dagor_shdump.py \
             --image "$RUNNER_TEMP/blades/work/extract/v262144/RomFS.img" \
-            --output "$RUNNER_TEMP/blades-shader-dump/gameSpirV.ps50.shdump.bin"
-          echo "inspect_only=true" >> "$GITHUB_OUTPUT"
-      - name: Preserve Dagor SPIR-V dump for offline format research
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: BladesTime-dagor-dump-${{ github.run_number }}
-          path: ${{ runner.temp }}/blades-shader-dump/
-          if-no-files-found: error
-          retention-days: 1
+            --output "$RUNNER_TEMP/blades/work/tmp/gameSpirV.ps50.shdump.bin"
+          node blades/scripts/dagor_spv_bank.js \
+            --dump "$RUNNER_TEMP/blades/work/tmp/gameSpirV.ps50.shdump.bin" \
+            --wanted blades/shaders/iphone_missing_shaders.txt \
+            --output "$RUNNER_TEMP/blades/work/shader/dagor_spv" \
+            --report "$RUNNER_TEMP/blades/work/logs/dagor_shader_bank.json" \
+            --min-matches 80
       - name: Run necessary Apple Silicon captures, compile Metal and sign thin IPA
-        if: steps.dagor_dump.outputs.inspect_only != 'true'
         run: |
           set -euo pipefail
           python3 blades/scripts/build_shared.py --nx2apple-root "$GITHUB_WORKSPACE" --prepared-json "$RUNNER_TEMP/blades/actions-input.json" --output "$RUNNER_TEMP/blades-output"
       - name: Publish BladesTime IPA and report
-        if: steps.dagor_dump.outputs.inspect_only != 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: BladesTime-BoTime-${{ github.run_number }}
@@ -160,6 +156,7 @@ jobs:
           path: |
             ${{ runner.temp }}/blades/work/logs/vk_capture.log
             ${{ runner.temp }}/blades/work/logs/vk_shaders.log
+            ${{ runner.temp }}/blades/work/logs/dagor_shader_bank.json
           if-no-files-found: warn
           retention-days: 14
       - name: Preserve failure diagnostics
