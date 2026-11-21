@@ -104,9 +104,9 @@
   },
   "created_utc": "2026-11-20T21:09:53.566034+00:00",
   "retry": {
-    "parent_run_id": 44851214664,
-    "attempt": 15,
-    "reason": "From verified iPhone gameplay: real Shell DM_FPS 30/60 option with safe 30 default; include newly observed missing shader hashes; quieter Vulkan diagnostics; keep external RomFS and authentic Metal",
+    "parent_run_id": 44855205018,
+    "attempt": 16,
+    "reason": "Correct existing Dagor bank regression expectation for 113 unique real iPhone shader hashes; unchanged 30/60 FPS Shell menu and original thin IPA requirements.",
     "engine_patch": "0081-bladestime-offline-dns-host-errno-tls.patch",
     "patch_commit": "06ad4f55fa2694b73a6aac32ab2bb9dabdbfce6f",
     "diagnostic_shader_dump": false,

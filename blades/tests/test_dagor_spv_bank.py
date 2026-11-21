@@ -44,8 +44,10 @@ class DagorSPVBankTest(unittest.TestCase):
     def test_requested_shaders_match_actual_log(self):
         lines=(ROOT/"shaders/iphone_missing_shaders.txt").read_text().splitlines()
         keys=[line for line in lines if line and not line.startswith("#")]
-        self.assertEqual(len(keys),110)
-        self.assertEqual(len(set(keys)),110)
+        self.assertEqual(len(keys),113)
+        self.assertEqual(len(set(keys)),113)
         self.assertTrue(all(len(x)==16 and int(x,16)>=0 for x in keys))
+        self.assertTrue({'ceb416754dbc738a', 'ff1eef685e0fa6c3',
+                         '1da18b93f912b6e7', '1ec589b568526477'}.issubset(keys))
 
 if __name__=="__main__":unittest.main()
