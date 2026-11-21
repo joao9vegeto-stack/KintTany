@@ -181,6 +181,7 @@ def prepare(api, *, token=None, runtime="/content/biomutant",
         shutil.rmtree(stage)
     stage.mkdir(parents=True)
     shutil.copy2(nsomain, stage / "main.nso")
+    shutil.copy2(record, stage / "build_src.sha256")
     shutil.copytree(project_profile, stage / "profile" / TITLE_ID,
                     ignore=shutil.ignore_patterns("__pycache__"))
     info = {
