@@ -325,13 +325,20 @@ def download_rar(url: str, destination: Path) -> dict:
                     require(total in (None, 0) or length in (0, total),
                             "RAR source changed size after Range probe")
                     transferred = 0
+                    prefix = b""
                     with part.open("wb") as output:
                         for block in response.iter_content(chunk_size=STREAM_BYTES):
                             if not block:
                                 continue
-                            if transferred == 0:
-                                require(block.startswith(b"Rar!"),
-                                        "RAR link returned HTML or invalid content instead of a RAR")
+                            # HTTP iter_content may yield fewer bytes than its
+                            # chunk_size. Assemble the 8-byte RAR signature
+                            # across chunks instead of assuming block[0] is
+                            # at least four bytes long.
+                            if len(prefix) < 8:
+                                prefix += block[:8 - len(prefix)]
+                                if len(prefix) == 8:
+                                    require(any(prefix.startswith(magic) for magic in RAR_MAGIC),
+                                            "RAR link returned HTML or invalid content instead of a RAR")
                             output.write(block)
                             transferred += len(block)
                             if length and transferred % (64 * 1024 * 1024) < len(block):
