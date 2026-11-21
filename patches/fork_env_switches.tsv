@@ -41,3 +41,4 @@ DM_TOUCH_LAYOUT	player	The player's per-layout touch-control arrangement, encode
 DM_TOUCH_SIZE	player	iOS touch-control size: small, medium (default) or large. Controls move toward medium when the requested size does not fit
 DM_TOUCH_STICK	player	iOS left touch-stick position: corner (default), higher or inward
 DM_UI_HOLD	test	When set, keeps the controller mapping test window open for 60 seconds after its UI screenshot for manual inspection
+DM_VK_VIEWPORT_TRACE	diagnostic	`=1` enables BladesTime's per-change Vulkan viewport and scissor diagnostics while DM_VK_LOG is active; unset/0 disables the very noisy repeated diagnostics in gameplay. The game render path is unchanged.
