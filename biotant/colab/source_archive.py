@@ -53,10 +53,15 @@ def prepare_source(api, drive_folder_id: str, runtime_root: Path) -> dict:
     if sorted(x["name"].lower() for x in nsp_items) != ["base.nsp", "update.nsp"]:
         fail("biotant must contain exactly one base.nsp and one update.nsp")
     by_name = {x["name"].lower(): x for x in nsp_items}
-    keys = [x for x in children + parents if x["name"].casefold() == "prod.keys"
-            and x.get("mimeType") != FOLDER_MIME]
+    # Prefer a game-local key file when one exists, otherwise the shared parent.
+    # An intentionally copied key in both locations must not become ambiguous.
+    keys_local = [x for x in children if x["name"].casefold() == "prod.keys"
+                  and x.get("mimeType") != FOLDER_MIME]
+    keys_parent = [x for x in parents if x["name"].casefold() == "prod.keys"
+                   and x.get("mimeType") != FOLDER_MIME]
+    keys = keys_local if keys_local else keys_parent
     if len(keys) != 1:
-        fail("Expected exactly one prod.keys in biotant or the shared Drive parent")
+        fail("Expected one prod.keys in biotant or the shared Drive parent")
     key_path = runtime_root / "keys" / "prod.keys"
     download_drive_file(api, keys[0], key_path)
     packages = runtime_root / "input-packages"
