@@ -18,5 +18,7 @@
     "size": 46959958,
     "sha256": "ff98f5ff88d1000a1664a1e491d0706e7a4f81119bc34e06a1e651e7d58e6aa9",
     "md5": "6a791441dd9931bb3c0fb9784e9fbfdb"
-  }
+  },
+  "retry_attempt": 2,
+  "retry_reason": "fixed Drive upload metadata selector (md5Checksum) after successful main rewrite"
 }
