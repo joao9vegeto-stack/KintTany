@@ -134,7 +134,14 @@ def stage_nvn_shader_payload(ios: Path, framework: Path, chain: str) -> dict:
 
 def configure_bladestime_frame_rate_menu(framework: Path) -> None:
     """Expose presentation pacing without pretending to unlock Dagor simulation."""
-    path = framework / "launcher.json"
+    manifest_path = framework / "game.manifest.json"
+    if not manifest_path.is_file():
+        fail(f"framework manifest missing: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    rel = manifest.get("launcher")
+    if manifest.get("title_id", "").upper() != TITLE_ID or rel != "dm/launcher.json":
+        fail("BladesTime manifest has unexpected launcher location or identity")
+    path = framework / rel
     if not path.is_file():
         fail(f"framework missing launcher settings: {path}")
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -389,9 +396,16 @@ def main() -> None:
             paths = archive.namelist()
             must = ["Payload/DmShell.app/DmShell",
                     f"Payload/DmShell.app/Frameworks/{framework_name}/{exe}",
-                    f"Payload/DmShell.app/Frameworks/{framework_name}/launcher.json"]
+                    f"Payload/DmShell.app/Frameworks/{framework_name}/dm/launcher.json"]
             if not all(x in paths for x in must):
                 fail("IPA missing app or framework executable")
+            launcher_entry = f"Payload/DmShell.app/Frameworks/{framework_name}/dm/launcher.json"
+            launcher_config = json.loads(archive.read(launcher_entry).decode("utf-8"))
+            rate_rows = [row for row in launcher_config.get("settings", []) if row.get("env") == "DM_FPS"]
+            if (launcher_config.get("game") != TITLE_ID or len(rate_rows) != 1 or
+                    rate_rows[0].get("default") != "30" or
+                    [opt[0] for opt in rate_rows[0].get("options", [])] != ["30", "60"]):
+                fail("signed IPA does not contain the validated 30/60 FPS game setting")
             # NVN ships one image, GL/Vulkan ship a resource directory.
             # Verify the exact compiled file bytes inside the signed IPA.
             for item in shader_payload["files"]:

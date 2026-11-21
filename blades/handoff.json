@@ -104,9 +104,9 @@
   },
   "created_utc": "2026-11-20T21:09:53.566034+00:00",
   "retry": {
-    "parent_run_id": 44855266685,
-    "attempt": 17,
-    "reason": "Register new DM_VK_VIEWPORT_TRACE diagnostic switch as required by NXNative engine.py sync; verified 34 Python tests passed in run 16, menu/shader work unchanged.",
+    "parent_run_id": 44855492465,
+    "attempt": 18,
+    "reason": "Run 17 decoded 112/113 authentic SPIR-V and translated 120 shaders; fix FPS launcher path by reading real signed IPA manifest dm/launcher.json, validate final 30/60 menu after packaging; no repeat Linux prep.",
     "engine_patch": "0081-bladestime-offline-dns-host-errno-tls.patch",
     "patch_commit": "06ad4f55fa2694b73a6aac32ab2bb9dabdbfce6f",
     "diagnostic_shader_dump": false,
