@@ -20,7 +20,7 @@ class BladesTimeBootRegression(unittest.TestCase):
                          "GetRequiredBufferSizeToExportSerializedRightData", "return RES_OK"):
             self.assertIn(required, patch)
         self.assertIn("if (!ec_blades_time()) return RES_FAIL;", patch)
-        self.assertIn("no owned items", patch)
+        self.assertIn("no-owned-items manager", patch)
         self.assertNotIn("purchased = 1", patch)
 
     def test_docked_extents_scoped_to_dagor(self):
