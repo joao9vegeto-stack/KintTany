@@ -1,0 +1,94 @@
+name: BioiOSMutant - 60FPS and A/B resource-only IPA repack
+on:
+  push:
+    branches: [BioiOSMutant]
+    paths: ['biotant/repack-request.json']
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: biomutant-repack-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repack:
+    if: github.ref == 'refs/heads/BioiOSMutant'
+    runs-on: xcode-27
+    timeout-minutes: 70
+    steps:
+      - name: Checkout exact lightweight repack
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate repair contract and deterministic settings
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile biotant/scripts/repack_ipa.py
+          python3 -m unittest discover -s biotant/tests -p test_repack_ipa.py -v
+          python3 -m unittest discover -s biotant/tests -p test_frame_rate_menu.py -v
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          req = json.loads(Path("biotant/repack-request.json").read_text())
+          assert req["branch"] == "BioiOSMutant"
+          assert req["title_id"] == "01004BA017CD6000"
+          assert req["source_run_id"] == 44880915730
+          assert req["source_artifact"] == "BioiOSMutant-Biomutant-3"
+          assert req["mode"] == "resources_and_resign_only"
+          print("Biomutant repack: original compiled IPA, no other build stages")
+          PY
+
+      - name: Download successful Biomutant IPA from immutable run 44880915730
+        uses: actions/download-artifact@v4
+        with:
+          name: BioiOSMutant-Biomutant-3
+          repository: joao9vegeto-stack/KintTany
+          run-id: 44880915730
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/biomutant-original
+
+      - name: Modify only FPS/A-B launcher settings, re-sign and repack IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          src_dir="${{ runner.temp }}/biomutant-original"
+          out_dir="${{ runner.temp }}/biomutant-repacked"
+          mkdir -p "$out_dir"
+          python3 - "$src_dir" "$out_dir" <<'PY'
+          import pathlib, subprocess, sys
+          original = pathlib.Path(sys.argv[1])
+          dest = pathlib.Path(sys.argv[2])
+          ipas = sorted(original.rglob("*.ipa"))
+          if len(ipas) != 1 or ipas[0].name != "BioiOSMutant-Biomutant.ipa":
+              raise SystemExit(f"Expected exactly the original signed BioiOSMutant IPA, got {ipas}")
+          subprocess.run([
+              sys.executable, "biotant/scripts/repack_ipa.py",
+              "--source", str(ipas[0]),
+              "--output", str(dest / "BioiOSMutant-Biomutant-60FPS-AB-repack.ipa"),
+              "--report", str(dest / "repack-report.json"),
+          ], check=True)
+          PY
+
+      - name: Publish only verified repacked IPA, original Metal and compiled game retained
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: BioiOSMutant-60FPS-AB-repack-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/biomutant-repacked/BioiOSMutant-Biomutant-60FPS-AB-repack.ipa
+            ${{ runner.temp }}/biomutant-repacked/repack-report.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Preserve repack diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: BioiOSMutant-repack-failure-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/biomutant-repacked/repack-report.json
+            ${{ runner.temp }}/biomutant-original/build-report.json
+          if-no-files-found: warn
+          retention-days: 7
