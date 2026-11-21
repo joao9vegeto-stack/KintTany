@@ -50,11 +50,24 @@ function scan(archive,output,wanted,all) {
       const smol=envelope.subarray(116);
       const trim=smol.indexOf(PADDING,24);
       if (trim<25)throw Error('no 16-byte SMOL-V padding sentinel');
-      const data=smol.subarray(0,trim);
-      const outputSize=smolvDecodedSize(data.buffer,data.byteOffset,data.length);
+      // The first long zero run is padding, but Dagor appends 0-8
+      // auxiliary bytes immediately before it (variant/end markers).
+      // Passing those bytes to generic SMOL-V produces a truncated module.
+      // Find the *exact* length accepted by the decoder, with the original
+      // uncompressed size and SPIR-V magic as independent integrity gates.
+      const outputSize=smolvDecodedSize(smol.buffer,smol.byteOffset,Math.min(smol.length,trim+1));
       if (outputSize<20||outputSize>MAX_SPIRV||outputSize%4)throw Error('invalid SPIR-V size '+outputSize);
-      const spv=Buffer.from(decode(data.buffer,data.byteOffset,data.length));
-      if (spv.length!==outputSize||spv.readUInt32LE(0)!==SPIRV)throw Error('invalid SPIR-V magic/size');
+      let spv=null,validEnd=-1;
+      for (let end=trim;end>=Math.max(24,trim-32);end--) {
+        const input=smol.subarray(0,end);
+        try {
+          const candidate=Buffer.from(decode(input.buffer,input.byteOffset,input.length));
+          if (candidate.length===outputSize && candidate.readUInt32LE(0)===SPIRV) {
+            spv=candidate;validEnd=end;break;
+          }
+        }catch(e) { /* the candidate still includes an auxiliary byte */ }
+      }
+      if (!spv)throw Error('no exact SMOL-V end within 32 bytes of padding');
       decoded++;
       const key=crypto.createHash('sha256').update(spv).digest('hex').slice(0,16);
       if (allkeys.has(key))continue;
