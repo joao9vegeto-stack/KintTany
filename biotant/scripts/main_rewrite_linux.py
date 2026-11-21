@@ -117,13 +117,14 @@ def upload(api, parent, result_id, path, name):
     # A service account cannot CREATE files in personal My Drive (no quota);
     # it CAN update a user-owned file where it has writer access.
     metadata = api.files().get(
-        fileId=result_id, fields="id,name,size,parents",
+        fileId=result_id, fields="id,name,size,parents,md5Checksum,capabilities(canEdit)",
         supportsAllDrives=True).execute()
     check(metadata.get("id") == result_id
           and metadata.get("name") == name
           and parent in metadata.get("parents", []),
           "Destination is not the exact pre-created user-owned Drive file")
-    check(int(metadata.get("size") or 0) == len(PENDING)
+    check(metadata.get("capabilities", {}).get("canEdit") is not False
+          and int(metadata.get("size") or 0) == len(PENDING)
           and metadata.get("md5Checksum") == hashlib.md5(PENDING).hexdigest(),
           "The preflight Drive write-probe marker changed; "
           "refusing to overwrite another result")
