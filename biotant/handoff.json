@@ -100,5 +100,11 @@
       "provisional_heap_and_region_checks_skipped_on_linux"
     ]
   },
-  "created_utc": "2026-11-21T05:47:53.020927+00:00"
+  "created_utc": "2026-11-21T05:47:53.020927+00:00",
+  "retry_validation": {
+    "attempt": 2,
+    "prior_failed_run": 44880553579,
+    "reason": "macOS Python preflight was missing requests and Google Drive API before running offline tests; corrected workflow order",
+    "source_data_unchanged": true
+  }
 }
