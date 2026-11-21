@@ -12,6 +12,7 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "biotant" / "colab"))
@@ -75,6 +76,44 @@ class MainOffloadTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Unsafe"):
             m.unpack_zstd(compressed, self.dir / "safe")
         self.assertFalse((self.dir / "outside.txt").exists())
+
+    def test_service_account_updates_existing_user_owned_file_not_creates(self):
+        path = self.dir / "main-result-id.tar.zst"
+        path.write_bytes(b"known output")
+        size = path.stat().st_size
+        md5 = __import__("hashlib").md5(path.read_bytes()).hexdigest()
+        result = {"id": "owned-file", "name": path.name,
+                  "size": str(size), "md5Checksum": md5}
+
+        class Action:
+            def __init__(self, item):
+                self.item = item
+            def execute(self):
+                return self.item
+            def next_chunk(self, **kwargs):
+                return None, self.item
+
+        class Files:
+            def get(self, **kwargs):
+                self.get_args = kwargs
+                return Action({"id": "owned-file", "name": path.name,
+                               "size": "0", "parents": ["owned-folder"]})
+            def update(self, **kwargs):
+                self.update_args = kwargs
+                return Action(result)
+            def create(self, **kwargs):
+                raise AssertionError("Service account must not create in My Drive")
+
+        class Api:
+            def __init__(self):
+                self.f = Files()
+            def files(self):
+                return self.f
+
+        api = Api()
+        runner.upload(api, "owned-folder", "owned-file", path, path.name)
+        self.assertEqual(api.f.update_args["fileId"], "owned-file")
+        self.assertNotIn("body", api.f.update_args)
 
     def test_workflows_remain_isolated(self):
         linux = (ROOT / ".github/workflows/biomutant-main-linux.yml").read_text()
