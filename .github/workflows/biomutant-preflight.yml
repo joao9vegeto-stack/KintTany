@@ -32,6 +32,6 @@ jobs:
       - name: Python syntax check
         run: |
           python3 -m compileall -q biotant
-      - name: Verify Drive MD5 metadata requested before upload
+      - name: Validate 60FPS Unreal and A/B resources-only repack regression
         run: |
           PYTHONUNBUFFERED=1 python3 -m unittest discover -s biotant/tests -p 'test_*.py' -v
