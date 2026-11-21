@@ -63,3 +63,5 @@
 0075-vulkan-dagor-required-shader-draw-parameters.patch
 0076-build-restore-layer-shaders-options-after-from-seed.patch
 0077-vulkan-dagor-log-viewport-scissor-size.patch
+0078-bladestime-offline-eshop-rights-manager.patch
+0079-bladestime-docked-dagor-viewport-720p.patch

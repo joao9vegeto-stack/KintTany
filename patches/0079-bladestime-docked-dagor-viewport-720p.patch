@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: KintTany port maintainer <patches@localhost>
+Date: Fri, 20 Nov 2026 21:42:00 -0300
+Subject: [PATCH] BladesTime: match Dagor's 720p viewport in both Switch modes
+
+Mac capture log from run 44834434210: Dagor always submits 1280x720
+scissors and viewport (negative height, y=720) even while docked.
+The generic host reports a 1920x1080 surface in docked mode,
+leaving the bottom-right of the image blank (exact 2/3 scale).
+Do not distort other titles or intercept arbitrary offscreen passes.
+BladesTime alone gets a 720p swapchain in both console modes; the
+front end scales the complete image to its 16:9 screen region.
+Docked mode continues to be reported to the game through nn::oe.
+Native 1080p internal rendering remains a separate future feature.
+
+Upstream-Status: fork-only
+Reason: Fix confirmed 1280-in-1920 upper-left logo rendering on BladesTime
+Issue: joao9vegeto-stack/KintTany BladesTime user screenshot 2026-11-20
+---
+ dm/gfx/vk/hle_vk.m | title-specific swapchain extent
+
+diff --git a/dm/gfx/vk/hle_vk.m b/dm/gfx/vk/hle_vk.m
+--- a/dm/gfx/vk/hle_vk.m
++++ b/dm/gfx/vk/hle_vk.m
+@@ -534,7 +534,16 @@
+ VK(vkGetImageSparseMemoryRequirements, void, VkDevice d, VkImage i, uint32_t *n, VkSparseImageMemoryRequirements *r) { (void)d; (void)i; (void)r; *n = 0; }
+ 
+ // ---------- Surface ----------
+-static VkExtent2D surf_ext(void) { return dm_opmode() ? (VkExtent2D){1920, 1080} : (VkExtent2D){1280, 720}; }
++static VkExtent2D surf_ext(void) {
++    // This Dagor Switch build keeps its viewport and scissor at 1280x720
++    // even in docked mode (confirmed in actual macOS capture). A nominal
++    // 1920x1080 swapchain displays the movie in its upper-left 2/3 only.
++    // Keep DM_OPMODE intact (docked/handheld semantics) while exposing the
++    // surface that the game really renders. The Metal front end then scales
++    // the complete 16:9 surface to its native display window.
++    if (!strcmp(DM_GAME_ID, "0100CFA00CC74000")) return (VkExtent2D){1280, 720};
++    return dm_opmode() ? (VkExtent2D){1920, 1080} : (VkExtent2D){1280, 720};
++}
+ VK(vkCreateViSurfaceNN, VkResult, VkInstance i, const VkViSurfaceCreateInfoNN *ci, const VkAllocationCallbacks *a, VkSurfaceKHR *out) {
+     (void)i; (void)a; VkSurfaceKHR s = zalloc(sizeof *s); s->win = ci->window; *out = s;
+     VLOG("CreateViSurfaceNN window %p", ci->window); return VK_SUCCESS;
+-- 
+2.56.0
