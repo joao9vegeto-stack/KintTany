@@ -25,6 +25,19 @@ jobs:
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.12'
+      - name: Install Python test imports before validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Validation imports both RAR/Drive helpers and offload regression
+          # tests. These modules must exist BEFORE unittest discovery.
+          python3 -m pip install --disable-pip-version-check requests google-api-python-client google-auth
+          python3 - <<'PY'
+          import requests
+          import googleapiclient.discovery
+          import google.auth
+          print("Biomutant validation Python imports OK")
+          PY
       - name: Validate Colab identity, engine and game inputs
         shell: bash
         run: |
@@ -84,7 +97,7 @@ jobs:
           xcodebuild -version
           brew install xcodegen zstd glslang
           command -v dotnet >/dev/null || brew install --cask dotnet-sdk
-          python3 -m pip install --disable-pip-version-check lz4 'capstone>=5,<6' fonttools zbic backports.zstd google-api-python-client google-auth requests
+          python3 -m pip install --disable-pip-version-check lz4 'capstone>=5,<6' fonttools zbic backports.zstd
           xcrun --sdk iphoneos metal --version
       - name: Materialize NXNative from pinned patches
         shell: bash
