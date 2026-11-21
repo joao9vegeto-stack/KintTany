@@ -132,6 +132,10 @@ def run_preparation(args) -> dict:
     require(nsp_dir.is_dir() and keys.is_file(), "missing base NSP or prod.keys")
     module = load_builder(engine)
     check_linux_prerequisites()
+    # Guard the real NXNative rewrite BEFORE launching its resource-intensive
+    # AArch64 workers; reuses validated completed outputs from a SIGKILL run.
+    import rewrite_guard
+    rewrite_guard.install(module)
     linux_nx_extract = ensure_linux_native_extractor(engine, nx.parent, module)
     # NXNative's builder resolves repo / NX_EXTRACT in its own module.
     # An absolute Linux path replaces only the executable selected here.
@@ -311,6 +315,26 @@ def run_preparation(args) -> dict:
     try:
         module.main(parsed)
         raise SystemExit("[BioiOSMutant] builder ended without entering the Xcode-only boundary.")
+    except module.BuildError as exc:
+        if "patch_nso.py exit code -9" in str(exc):
+            print("[BioiOSMutant] SIGKILL in patch_nso.py. Possible cgroup "
+                  "OOM kill; inspecting memory events:", flush=True)
+            for probe in ("/sys/fs/cgroup/memory.events",
+                          "/sys/fs/cgroup/memory.peak",
+                          "/sys/fs/cgroup/memory.max",
+                          "/proc/meminfo"):
+                try:
+                    data = Path(probe).read_text(errors="replace")
+                    print(f"[BioiOSMutant] {probe}: "
+                          + (data[:650] if probe.endswith("meminfo") else data[:2000]),
+                          flush=True)
+                except OSError:
+                    pass
+            print("[BioiOSMutant] Keep the existing /content/biomutant/work "
+                  "and use the updated one-worker checkpointed rewrite. "
+                  "If the main alone exceeds memory, select a Colab high-RAM "
+                  "runtime; no other parallel worker can be removed.", flush=True)
+        raise
     except FinishedLinux:
         pass
     except NeedsMacHost as pending:
