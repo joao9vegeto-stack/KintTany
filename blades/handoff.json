@@ -104,11 +104,13 @@
   },
   "created_utc": "2026-11-20T21:09:53.566034+00:00",
   "retry": {
-    "parent_run_id": 44845995981,
-    "attempt": 12,
-    "reason": "Diagnostic-only: extract exact Dagor precompiled Vulkan shader dump from verified external RomFS to analyze >110 missing shader IDs; do not compile unchanged 8-shader IPA",
+    "parent_run_id": 44849569712,
+    "attempt": 13,
+    "reason": "Decode actual Dagor compiledShaders/gameSpirV.ps50.shdump.bin (zlib + SMOL-V), match 110 missing iPhone shader keys, compile recovered SPIR-V to Metal, reject empty 8-shader IPA",
     "engine_patch": "0081-bladestime-offline-dns-host-errno-tls.patch",
-    "patch_commit": "c54067f62594589092725aa5c2cd092f1ce0e043",
-    "diagnostic_shader_dump": true
+    "patch_commit": "fb663d681fd794fff4a55619052ed78a7e9b552f",
+    "diagnostic_shader_dump": false,
+    "shader_bank": "compiledShaders/gameSpirV.ps50.shdump.bin",
+    "required_shader_matches": 80
   }
 }
