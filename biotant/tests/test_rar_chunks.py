@@ -123,7 +123,7 @@ class RARRangeTests(unittest.TestCase):
         self.assertEqual(result["sha256"], hashlib.sha256(RAR).hexdigest())
         self.assertIn("bytes=0-0", host.calls)
         self.assertIn("bytes=0-7", host.calls)
-        self.assertIn("bytes=80-84", host.calls)
+        self.assertIn("bytes=80-83", host.calls)
         count = len(host.calls)
         self.assertEqual(self.run_source(host), result)
         self.assertEqual(len(host.calls), count)
