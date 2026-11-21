@@ -89,6 +89,12 @@ jobs:
           print('BioiOSMutant metadata verified:', d['title_id'], d['package_version'],
                 'Linux shader work:', p['shader_split_stage'], 'Mac-only:', p['mac_host_stages'])
           PY
+      - name: Validate patch queue before expensive macOS dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/engine.py relink
+          python3 tools/engine.py check
       - name: Install host requirements
         shell: bash
         run: |
@@ -103,8 +109,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 tools/engine.py relink
-          python3 tools/engine.py check
+          # Patch queue already validated before Homebrew installation.
           python3 tools/engine.py sync
           python3 tools/engine.py stale
           test -f engine/scripts/build_ipa_from_nsp.py
