@@ -55,14 +55,14 @@ diff --git a/dm/host/hle_misc.c b/dm/host/hle_misc.c
 +// service for consumable entitlements, which does not exist on this host.
 +// The game needs a *valid empty* offline manager, not RES_FAIL (fatal SDK
 +// assertion), and never a fabricated purchase, token, or consumable item.
-+HLE_FORCE("_ZN2nn2ec28ConsumableServiceItemManager10InitializeEPNS0_19ShopServiceAccessorERKNS_7account3UidEPvmPKvm", "BladesTime offline rights manager: empty imported rights", Result, h_ec_CsmInitData, void *self, void *accessor, const void *uid, void *work, const void *saved, size_t savedSize) {
-+    (void)self; (void)accessor; (void)uid; (void)work; (void)saved; (void)savedSize;
++HLE_FORCE("_ZN2nn2ec28ConsumableServiceItemManager10InitializeEPNS0_19ShopServiceAccessorERKNS_7account3UidEPvmPKvm", "BladesTime offline rights manager: empty imported rights", Result, h_ec_CsmInitData, void *self, void *accessor, const void *uid, void *work, size_t workSize, const void *saved, size_t savedSize) {
++    (void)self; (void)accessor; (void)uid; (void)work; (void)workSize; (void)saved; (void)savedSize;
 +    if (!ec_blades_time()) return RES_FAIL;
 +    LOG("ec: BladesTime offline consumable rights initialized with 0 owned items");
 +    return RES_OK;
 +}
-+HLE_FORCE("_ZN2nn2ec28ConsumableServiceItemManager10InitializeEPNS0_19ShopServiceAccessorERKNS_7account3UidEPvm", "BladesTime offline rights manager: no serialized rights", Result, h_ec_CsmInit, void *self, void *accessor, const void *uid, void *work) {
-+    return h_ec_CsmInitData(self, accessor, uid, work, NULL, 0);
++HLE_FORCE("_ZN2nn2ec28ConsumableServiceItemManager10InitializeEPNS0_19ShopServiceAccessorERKNS_7account3UidEPvm", "BladesTime offline rights manager: no serialized rights", Result, h_ec_CsmInit, void *self, void *accessor, const void *uid, void *work, size_t workSize) {
++    return h_ec_CsmInitData(self, accessor, uid, work, workSize, NULL, 0);
 +}
 +HLE_FORCE("_ZN2nn2ec28ConsumableServiceItemManager18IsRecoveryRequiredEv", "no offline consumable rights recovery", unsigned, h_ec_CsmRecoverNeeded, void *self) { (void)self; return 0; }
 +HLE_FORCE("_ZN2nn2ec28ConsumableServiceItemManager15CanQueryNewDataEv", "offline: no store to query", unsigned, h_ec_CsmCanQuery, void *self) { (void)self; return 0; }
