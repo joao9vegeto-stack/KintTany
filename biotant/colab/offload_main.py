@@ -176,6 +176,19 @@ def prepare(api, *, token=None, runtime="/content/biomutant",
 
     request_id = uuid.uuid4().hex
     folder_id = folder(api, GAME_FOLDER_ID, "main-rewrite-" + request_id[:12])
+    # This is a personal My Drive, NOT a Workspace Shared Drive. A service
+    # account cannot own newly-created files here. The human OAuth owner
+    # creates a zero-byte file and the service account only UPDATES its bytes.
+    output_name = "main-result-" + request_id + ".tar.zst"
+    placeholder = api.files().create(
+        body={"name": output_name, "parents": [folder_id],
+              "mimeType": "application/octet-stream"},
+        fields="id,name,size,mimeType,parents",
+        supportsAllDrives=True
+    ).execute()
+    insist(placeholder.get("name") == output_name
+           and folder_id in placeholder.get("parents", []),
+           "User-owned empty result placeholder was not created")
     stage = root / "main-offload-staging"
     if stage.exists():
         shutil.rmtree(stage)
@@ -205,6 +218,7 @@ def prepare(api, *, token=None, runtime="/content/biomutant",
         "format": 1, "project": BRANCH, "branch": BRANCH,
         "title_id": TITLE_ID, "version": version,
         "request_id": request_id, "folder_id": folder_id,
+        "output_file_id": placeholder["id"], "output_file_name": output_name,
         "engine_pin": ENGINE_PIN, "source_commit": source_commit,
         "main_sha256": info["main_sha256"],
         "fingerprint": fingerprint,
@@ -252,10 +266,13 @@ def receive(api, *, runtime="/content/biomutant"):
     insist(request_path.is_file(), "Run main offload preparation first in this runtime")
     req = json.loads(request_path.read_text())
     prefix = "main-result-" + req["request_id"] + ".tar.zst"
-    files = [x for x in list_children(api, req["folder_id"]) if x.get("name") == prefix]
-    insist(files, "Main rewrite result not yet in Drive; check Linux workflow status")
-    insist(len(files) == 1, "Ambiguous rewrite results; refusing to use an arbitrary file")
+    files = [x for x in list_children(api, req["folder_id"])
+             if x.get("id") == req["output_file_id"]
+             and x.get("name") == req["output_file_name"]]
+    insist(len(files) == 1, "Original user-owned result file missing or replaced")
     item = files[0]
+    insist(int(item.get("size") or 0) > 0 and item.get("md5Checksum"),
+           "Main rewrite not yet completed in Linux Actions; result file is still empty")
     target = root / prefix
     download_drive_file(api, item, target)
     received = root / "main-rewrite-result-extracted"
