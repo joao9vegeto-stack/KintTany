@@ -104,10 +104,11 @@
   },
   "created_utc": "2026-11-20T21:09:53.566034+00:00",
   "retry": {
-    "parent_run_id": 44844936301,
-    "attempt": 11,
-    "reason": "Address verified SDK9.4 SIGSEGV at sdk+f75dc during offline matching network DNS resolver TLS error access after successful eShop/menu init",
+    "parent_run_id": 44845995981,
+    "attempt": 12,
+    "reason": "Diagnostic-only: extract exact Dagor precompiled Vulkan shader dump from verified external RomFS to analyze >110 missing shader IDs; do not compile unchanged 8-shader IPA",
     "engine_patch": "0081-bladestime-offline-dns-host-errno-tls.patch",
-    "patch_commit": "c54067f62594589092725aa5c2cd092f1ce0e043"
+    "patch_commit": "c54067f62594589092725aa5c2cd092f1ce0e043",
+    "diagnostic_shader_dump": true
   }
 }
