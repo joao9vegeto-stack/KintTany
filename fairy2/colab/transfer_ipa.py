@@ -201,10 +201,10 @@ def try_transfer_host_repack():
     runs = get(f"/actions/workflows/{wf['id']}/runs",
                {"branch": BRANCH, "per_page": 30}).get("workflow_runs", [])
     runs = [r for r in runs if r.get("head_branch") == BRANCH]
-    if not runs:
-        print("[Fairy2iOS] Nenhum host repack executado ainda: rota base antiga.", flush=True)
-        return False
-    newest = max(runs, key=lambda r: r.get("created_at") or "")
+    require(bool(runs),
+            "Nenhum run do repack host-only encontrado: operação interrompida. "
+            "A IPA original que crashou não é uma alternativa.")
+    newest = max(runs, key=lambda r: (r.get("created_at") or "", int(r.get("id") or 0)))
     require(newest.get("status") == "completed" and newest.get("conclusion") == "success",
             f"Host-only repack mais recente ainda não teve sucesso: "
             f"{newest.get('id')} ({newest.get('status')}/{newest.get('conclusion')}). "
@@ -217,7 +217,8 @@ def try_transfer_host_repack():
     require(len(choices) == 1,
             f"Run {newest['id']} precisa conter exatamente um artefato IPA de host repack")
     artifact = choices[0]
-    print(f"[Fairy2iOS] IPA corrigida: run {newest['id']}, artifact {artifact['id']}.", flush=True)
+    print(f"[Fairy2iOS] 1/4: Run correto {newest['id']} / commit {newest.get('head_sha')} "
+          f"/ artifact {artifact['name']}", flush=True)
     response = requests.get(api_root + f"/actions/artifacts/{artifact['id']}/zip",
                             headers=auth, allow_redirects=False, timeout=60)
     require(response.status_code in (301, 302, 303, 307, 308) and
@@ -229,8 +230,10 @@ def try_transfer_host_repack():
     work = Path("/content/fairy2-host-repack-transfer")
     work.mkdir(parents=True, exist_ok=True)
     outer = work / ("artifact-" + str(newest["id"]) + ".zip")
+    print("[Fairy2iOS] 2/4: Baixando ZIP do host repack, 6 ranges + SHA-256...", flush=True)
     outer_sha = signed_download(response.headers["Location"],
                  int(artifact.get("size_in_bytes") or 0), expected_sha, outer)
+    print("[Fairy2iOS] 3/4: Extraindo/verificando IPA do host repack e relatório...", flush=True)
     with zipfile.ZipFile(outer) as zipf:
         require(zipf.testzip() is None, "ZIP externo do host repack corrompido")
         names=zipf.namelist()
@@ -288,6 +291,7 @@ def try_transfer_host_repack():
     require(len(subs) == 1, "Pasta fairy2/ipa não encontrada ou ambígua")
     folder = subs[0]["id"]
     destination_name = ipa.stem + "-run" + str(newest["id"]) + ".ipa"
+    print("[Fairy2iOS] 4/4: Upload validado para fairy2/ipa...", flush=True)
     uploaded = upload(drive, ipa, folder, destination_name)
     provenance = {
         "project": BRANCH, "run_id": newest["id"], "artifact_id": artifact["id"],
@@ -308,9 +312,8 @@ def try_transfer_host_repack():
     return True
 
 
-def main():
-    if try_transfer_host_repack():
-        return
+def transfer_original_explicit():
+    """Legacy first-build transfer, not selected by the current notebook."""
     import google.auth
     import requests
     from googleapiclient.discovery import build
@@ -433,6 +436,13 @@ def main():
     print("[Fairy2iOS] COMPLETO. IPA e relatório de proveniência enviados e verificados.", flush=True)
     print(f"Drive: https://drive.google.com/drive/folders/{folder}", flush=True)
     print(f"Run: {provenance['run_url']}", flush=True)
+
+
+def main():
+    """Require newest completed HookLink-style host repack; NEVER use old crashing IPA."""
+    result = try_transfer_host_repack()
+    require(result is True, "Não existe repack do host validado. Não usarei a IPA antiga.")
+    return result
 
 
 if __name__ == "__main__":
