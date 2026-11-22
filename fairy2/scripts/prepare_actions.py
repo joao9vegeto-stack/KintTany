@@ -109,6 +109,30 @@ def main() -> None:
                    "shader_versions", "jit_required", "linux_ue_decode_complete"):
         if prep.get(field) != real.get(field):
             fail(f"Drive handoff and workspace disagree on {field}")
+    # Real private-source parity gate: the reference-based reader invariants
+    # are checked from the *verified Colab workspace* before the 7.9 GB RomFS
+    # download and before any Mac shader/IPA work. No game bytes are committed.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from ktgl_reference_baseline import audit as ktgl_source_audit
+    original_main = work / "extract" / version / "ExeFS" / "main"
+    rewritten_main = work / ("patched_" + version) / "main.patched.bin"
+    original_profile = work / "profile" / TITLE_ID / "game.tsv"
+    for path in (original_main, rewritten_main, original_profile):
+        if not path.is_file():
+            fail("KTGL reference-parity input missing in verified Colab archive: " + str(path))
+    try:
+        parity = ktgl_source_audit(original_main, rewritten_main, original_profile)
+    except ValueError as exc:
+        fail("KTGL original/AOT reference baseline violation: " + str(exc))
+    if (parity["original_code_verified_bytes"] < 4096 or
+            len(parity["critical_aarch64_regions"]) != 10 or
+            len(parity["guest_paths"]) != 2):
+        fail("KTGL archive AOT source parity did not verify both native reader paths")
+    (root / "ktgl-reference-parity-report.json").write_text(
+        json.dumps(parity, indent=2, ensure_ascii=False) + "\\n")
+    print("[Fairy2iOS] Original Switch NSO versus AOT: verified",
+          parity["original_code_verified_bytes"],
+          "bytes across 10 KTGL code regions, both reader paths; no guest fix claimed")
     relative = PurePosixPath(real["romfs_relative_path"])
     id_relative = PurePosixPath(real["romfs_id_relative_path"])
     for path in (relative, id_relative):
