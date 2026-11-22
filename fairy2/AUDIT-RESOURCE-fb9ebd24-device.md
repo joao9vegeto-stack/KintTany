@@ -53,3 +53,31 @@ External independent source mappings confirm 0xafbec60c = **G1T texture**:
 Reconstructing the failed type's vtable from the original Colab handoff guest main at guest+0x2b90368 gives virtual method at slot +0xa0 = guest **main+0x1dc3a60**. That method calls guest **main+0xc09be0** (preparation) and **main+0x112eb28** (resource stream/materialization), then either initializes an object or yields NULL. The latter enters main+0xc109c4 and reports the exact G1T resource hash. The underlying resource stream reader at **main+0x6120e0** parses binary data and can return NULL when read/validation fails. Without the actual record bytes or a branch/return trace, neither malformed G1T nor HLE error nor allocation failure is PROVEN. No safe patch is to skip fatal abort or fabricate a texture pointer.
 
 The crash's final successful OpenFile of 0x8baaa1ce.fdata is a strong candidate source but **is not yet proven to contain the requested FileKTID 0xfb9ebd24**; only RDB/RDX+FDATA index verification can prove that link. An intentionally read-only Colab report must print both FileKTID and TypeKTID and only identify a G1T record when actual bytes verify it.
+
+
+## Colab report received — November 22, v458752, authoritative on-byte findings
+
+Source: user-provided \`fairy2-resource-fb9ebd24-report.json\` from the authenticated Range auditor. Source RomFS size 7,889,449,169, 14,770 index entries, 664,697 index bytes.
+
+- \`system.rdb\`: 85,436 bytes, SHA-256 \`00994767b00868e69809b9ef1a4c8058c62f5dabcc1378579c3c8cd94aba88e5\`.
+- One exact \`IDRK\` match: index offset **83860 (0x14794)**; entry length 101; stored length **13**; uncompressed size 48; FileKTID **0xfb9ebd24**; TypeKTID **0xafbec60c (G1T)**; flags **0x420000**; pointer bytes are in the last 13 bytes at \`system.rdb+83948\`.
+- \`root.rdb\`: 6,326,888 bytes with 70,292 indexed IDRK entries, no match for file KTID; \`system.rdb\` has 1,127 records.
+- \`system.rdx\`: exactly 40 bytes, 5 \`<HBBI\` entries, SHA-256 \`db0b933405e37d1c0c74f9f475a24857ed644530533eed744a36cde55a55f1c5\`. Its first two marker/hash tuples are marker 0 → 0x38f972af, marker 1 → 0x52482d03. The actual matching marker remains unread because v1 did not dump the 13 pointer bytes.
+- \`root.rdx\`: 17,552 bytes, includes fdata hash 0x8baaa1ce. That container is **not automatically the source** for a \`system.rdb\` record; correct resolution is through \`system.rdx\`.
+- \`0x8baaa1ce.fdata\`: 2,408,559,912 bytes, not downloaded by v1 (max-file 192 MiB).
+- No NCA damaged flags for those five sampled files.
+
+**CRITICAL V1 AUDITOR ERROR:** V1 labels the 13-byte \`system.rdb\` locator as \`invalid: compressed first chunk exceeds record\`. This is NOT a confirmed corrupt G1T. Under Koei Tecmo's newer RDB/FDATA design, flag bit 0x20000 represents an **external stored location** and the RDB's terminal 13-byte payload is a pointer of the form \`01 04 + variable-length offset + variable-length entry size + u16 RDX marker + 00\`. Actual content and compression flags must be read from the referenced FDATA IDRK. The parser had incorrectly zlib-parsed locator bytes.
+
+Independent code evidence: \`eArmada8/yumia_fdata_tools/yumia_mod_lib.py\`, functions \`create_rdb_idrk\`, \`append_rdx\`, \`read_fdata_file\`:
+https://github.com/eArmada8/yumia_fdata_tools/blob/main/yumia_mod_lib.py
+The source constructs 13-byte external pointers and 8-byte RDX records in exactly that structure. It identifies 0xafbec60c as G1T.
+
+**Corrected targeted auditor V2** in the conversation artifact, \`Fairy2iOS_Auditoria_G1T_v2_corrigida.ipynb\`:
+1. Reads source DMROMFS1 index, \`system.rdb\`, \`system.rdx\` only.
+2. Decodes one locator, resolves the exact RDX marker to its .fdata basename and verifies it exists in the actual RomFS.
+3. HTTP Range reads the IDRK header at exactly that FDATA offset; checks FileKTID, TypeKTID, sizes and flags against original \`system.rdb\`.
+4. Decodes ONLY the first compressed data chunk (zlib for compression type 4, LZ4 for 5); reports GT1G/G1TG first bytes and errors, without pulling 2.4GB.
+5. Produces read-only JSON. 10 local synthetic regression tests passed (including missing FDATA, missing PDRK, bad hash and invalid zlib). It has NOT been run with the user's real FDATA bytes yet.
+
+**No new IPA or Actions run**, because the report pinpoints an external G1T reference but does not prove which runtime operation returns NULL. Do not patch guest factory to suppress the SIGTRAP, do not classify the 13-byte pointer as corrupted, and do not recompile shaders before resolving the actual payload.
