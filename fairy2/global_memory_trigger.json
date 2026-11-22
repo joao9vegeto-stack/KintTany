@@ -7,7 +7,9 @@
   "compile_metal": false,
   "rewrite_game": false,
   "device_tested": false,
-  "preflight_revision": 2,
+  "preflight_revision": 3,
   "prevent_false_signature_failure": true,
-  "reason": "Codesign changes __LINKEDIT binary digest; compare exact signed Shell executable __TEXT,__text"
+  "reason": "Codesign changes __LINKEDIT binary digest; compare exact signed Shell executable __TEXT,__text",
+  "runner_compatibility_fix": "use isolated setup-python 3.12; select Xcode 27.2; PEP668 system Python not touched",
+  "previous_job": 44989893779
 }

@@ -13,12 +13,18 @@ jobs:
   global-memory:
     runs-on: xcode-27
     timeout-minutes: 180
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     steps:
       - name: Checkout exactly Fairy2iOS
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Isolated Python 3.12 for host build and dependencies
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
       - name: Validate globally coherent profile, ARM64 opcodes and code
         shell: bash
         run: |
