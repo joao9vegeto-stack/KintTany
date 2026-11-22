@@ -31,4 +31,36 @@ class G1SReaderTests(unittest.TestCase):
         sites={x[0]:x for x in mod.NEW_SITES}
         self.assertEqual(sites[0x1dbdcac][2],0x1dbdd04)
         self.assertEqual(sites[0x6e7bb0][2],0x6e8ac0)
+    def test_host_fs_probe_is_bound_to_original_image_handles(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp)/"hle_fs.c"
+            fake.write_text(
+                'HLE_FORCE("_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvm", "fsp-srv → pread(2)", Result, h_fs_ReadFile, size_t *out, uint64_t h, int64_t off, void *buf, size_t sz) { dm_thread_service_request();\n'
+                '    size_t got = 0; int reprep = 0, fd = (int)h; int64_t base = 0;\n'
+                '            return err_res("pread", "fd"); }\n'
+                '    *out = got;\n'
+                '}\n'
+                'HLE_FORCE("_ZN2nn2fs9WriteFileENS0_10FileHandleElPKvmRKNS0_11WriteOptionE" )\n'
+            )
+            mod.patch_host_fs_trace(fake)
+            changed = fake.read_text()
+            self.assertIn("FAIRY2_FDATA_IO_PROOF", changed)
+            self.assertIn("FAIRY2_FDATA_IO_ZERO", changed)
+            self.assertIn("FAIRY2_FDATA_IO_HISTORY", changed)
+            self.assertIn("IMG_K(h) == 12943 || IMG_K(h) == 13660", changed)
+            self.assertIn("size_t requested = sz", changed)
+            self.assertIn("*out = got", changed)
+            self.assertIn('return err_res("pread", "fd")', changed)
+            with self.assertRaises(ValueError):
+                mod.patch_host_fs_trace(fake)
+    def test_host_crash_prints_fs_after_trapped_guest_parser(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/"crash.c"
+            path.write_text("    if (sig == SIGTRAP) fairy2_stage_dump();\n"
+                            "static void on_crash(int sig, siginfo_t *si, void *uc_) {}")
+            mod.patch_host_crash_io(path)
+            self.assertIn("fairy2_fdata_probe_dump();", path.read_text())
+            self.assertIn("extern void fairy2_fdata_probe_dump(void);", path.read_text())
 if __name__=="__main__":unittest.main()
