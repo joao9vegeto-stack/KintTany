@@ -15,5 +15,6 @@
   "guest_va_bytes": 6442450944,
   "guest_root_bytes": 5368709120,
   "romfs_aoc_external": true,
-  "gameplay_fix_claimed": false
+  "gameplay_fix_claimed": false,
+  "workflow_expression_revision": 2
 }

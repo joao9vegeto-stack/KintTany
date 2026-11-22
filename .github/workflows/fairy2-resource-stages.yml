@@ -7,7 +7,7 @@ permissions:
   contents: read
   actions: read
 concurrency:
-  group: fairy2-resource-stages-${ github.ref }}
+  group: fairy2-resource-stages-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   resource-stage-trace:
@@ -15,12 +15,12 @@ jobs:
     timeout-minutes: 120
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
-      GH_TOKEN: ${ github.token }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout exact Fairy2iOS commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${ github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Python 3.12
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
@@ -111,17 +111,17 @@ jobs:
       - name: Upload isolated instrumentation IPA and host/guest proof
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: Fairy2iOS-G1T-BranchTrace-${ github.run_number }}
+          name: Fairy2iOS-G1T-BranchTrace-${{ github.run_number }}
           path: |
-            ${ runner.temp }}/output/Fairy2iOS-FairyTail2-G1T-BranchTrace.ipa
-            ${ runner.temp }}/output/g1t-branchtrace-report.json
-            ${ runner.temp }}/output/full-resource-va-report.json
+            ${{ runner.temp }}/output/Fairy2iOS-FairyTail2-G1T-BranchTrace.ipa
+            ${{ runner.temp }}/output/g1t-branchtrace-report.json
+            ${{ runner.temp }}/output/full-resource-va-report.json
           if-no-files-found: error
           retention-days: 14
       - name: Upload native host Xcode build log if failure
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: Fairy2iOS-G1T-BranchTrace-failure-${ github.run_number }}
-          path: ${ runner.temp }}/output/host-build.log
+          name: Fairy2iOS-G1T-BranchTrace-failure-${{ github.run_number }}
+          path: ${{ runner.temp }}/output/host-build.log
           if-no-files-found: warn
