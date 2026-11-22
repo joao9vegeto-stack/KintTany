@@ -81,3 +81,24 @@ The source constructs 13-byte external pointers and 8-byte RDX records in exactl
 5. Produces read-only JSON. 10 local synthetic regression tests passed (including missing FDATA, missing PDRK, bad hash and invalid zlib). It has NOT been run with the user's real FDATA bytes yet.
 
 **No new IPA or Actions run**, because the report pinpoints an external G1T reference but does not prove which runtime operation returns NULL. Do not patch guest factory to suppress the SIGTRAP, do not classify the 13-byte pointer as corrupted, and do not recompile shaders before resolving the actual payload.
+
+
+## V2 from actual Colab Drive — definitive end-to-end asset identity (22 Nov 2026)
+
+The authenticated partial-read report \`fairy2-resource-fb9ebd24-pointer-v2.json\` is **complete** and identifies the failing resource without inference:
+- **RDB:** \`system.rdb\`, IDRK index offset 83860, \`FileKTID=0xfb9ebd24\`, \`TypeKTID=0xafbec60c (G1T)\`, flags \`0x420000\` (= pointer flag \`0x20000\` + compression type \`4\`), terminal external pointer \`0104f0e02f0089000000000000\`.
+- **Pointer:** FDATA offset **3,137,776**, full entry length **137** bytes, RDX marker **0**.
+- **RDX:** \`system.rdx\` marker 0 resolves to **\`Motor/ReleasePackage/KIDS_PLATFORM_NX/release/0x38f972af.fdata\`**, not the last logged \`0x8baaa1ce.fdata\`.
+- **FDATA:** 267,741,963 bytes, \`PDRK0000\` header; its IDRK entry at offset 3,137,776 matches **both hashes exactly**. Stored bytes 49, inflated bytes **48**, flags \`0x400000\` (chunked zlib), payload offset 3,137,864.
+- **Decoded first chunk:** 37-byte zlib stream SHA-256 \`f4a0ffed01e78a9455e33c4de3b9c409d8def0715db87c8a28112715e1ffc2c6\`, yields **48 bytes** and begins \`47543147303530303000000020000000\` = \`GT1G\`, version \`0500\`, total length \`0x30\` (48), offset table begins \`0x20\`.
+- NCA damaged-content flag is **false**. These facts establish that the referenced G1T is present, the pointer is correct, and the stored compressed first chunk is readable from Google Drive. They **do not** prove that the complete resource parser or GPU texture construction succeeded on the iPhone.
+
+**Refined ROMFS log correlation:** both iPhone logs show \`fs open .../0x38f972af.fdata\` around the start of asset loading, before the later \`0x8baaa1ce.fdata\` open and resource trap. Prior claim that the *last* FDATA open identifies the failing asset was wrong.
+
+## Why we need the remaining 32 decompressed bytes
+
+48 bytes are the **whole** requested G1T, not merely a truncated sample. V2 saved only its first 16 bytes. The native ARM64 parser at \`main+0x60db9c\` reads magic/version, platform at G1T+0x14, metadata at +0x18, and for version 0500 checks whether platform is in **{0,7,10,14,16}** (mask \`0x14481\`) before it proceeds. Function \`main+0x6120e0\` then allocates/reads each texture; \`main+0x112eb28\` returns a null resource on a failed stream/parser. Distinguishing a header rejection from allocation and texture upload requires these remaining 32 bytes and/or a targeted live return-value trace.
+
+A new **read-only Colab V3 notebook** was created in this conversation: \`Fairy2iOS_Auditoria_G1T_v3_48bytes.ipynb\`. It reads exactly the 49-byte compressed FDATA payload using authenticated HTTP Range, verifies prior digest and decompresses all 48 bytes, then saves the complete G1T hex plus header / platform / texture record checks. It requires no Actions, IPA rebuild, shaders, or 7.9GB download. Ten synthetic regression tests passed; actual user-source V3 results not yet available. Only after this can a justified implementation fix be selected.
+
+**Do not re-enable the known-crashing 45000495987 IPA in Colab's transfer script or claim the port fixed on device.**
