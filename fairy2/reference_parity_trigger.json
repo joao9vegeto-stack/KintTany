@@ -17,10 +17,14 @@
   "not_a_gameplay_fix": true,
   "workflow_kind": "Linux synthetic original-NSO/AOT parity regression",
   "refused_experimental_run": 45068245797,
-  "revision": 2,
+  "revision": 3,
   "previous_invalid_workflow_runs": [
     45073508714,
     45073520224
   ],
-  "fix": "quote colon in workflow step name; no IPA"
+  "fix": "quote colon in workflow step name; no IPA",
+  "source_verified_locally": true,
+  "add_real_drive_workflow_job": true,
+  "expected_private_archive_sha256": "61890137d23a64c46a3c8b0799a863537508aba34c0c8eb688d47d9d2e1ba10a",
+  "previous_ci": 45073574051
 }
