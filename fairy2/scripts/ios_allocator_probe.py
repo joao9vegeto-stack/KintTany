@@ -108,12 +108,12 @@ static void fairy2_bin47_start(void) {
 #endif
 """
 
-def apply(path: Path):
+def apply(path: Path, bin_offset: int = 0x95800178):
     source = path.read_text()
     if source.count(ANCHOR) != 1 or "fairy2_bin47_poll" in source:
         raise RuntimeError("Pinned NXNative probe.c does not match the audited version")
     source = source.replace(ANCHOR,
-        POLL + "\nvoid probe_install(void) {\n"
+        POLL.replace("0x95800178ull", f"0x{bin_offset:x}ull") + "\nvoid probe_install(void) {\n"
         "#if TARGET_OS_IPHONE\n    fairy2_bin47_start();\n#endif\n"
         "#if !TARGET_OS_IPHONE")
     if source.count("fairy2_bin47_start();") != 1:
@@ -124,5 +124,8 @@ def apply(path: Path):
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--source", type=Path, required=True)
+    p.add_argument("--bin-offset", type=lambda x:int(x,0), default=0x95800178)
     args = p.parse_args()
-    apply(args.source)
+    if args.bin_offset not in (0x95800178, 0xc5800178):
+        raise RuntimeError("Not an audited KTGL bin table offset")
+    apply(args.source,args.bin_offset)
