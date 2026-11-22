@@ -11,8 +11,8 @@ class HostMemoryRepackTests(unittest.TestCase):
         self.assertTrue(source.is_file())
         self.assertEqual(m.profile_row(source,"mem_alias"),"0x118000000")
         self.assertEqual(m.profile_row(source,"mem_reserve"),"0x140000000")
-        self.assertNotIn("present_interval\\t0",source.read_text())
-        self.assertIn("build\\tv458752\\t1.4.1",source.read_text())
+        self.assertNotIn("present_interval\t0",source.read_text())
+        self.assertIn("build\tv458752\t1.4.1",source.read_text())
         self.assertIn('shutil.copy2(canonical,overlay/"game.tsv")',s.read_text())
     def test_capacity_real_fix(self):
         self.assertEqual(m.OLD_HEAP_CAP,128*1024*1024)
