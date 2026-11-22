@@ -21,13 +21,13 @@ original=stage.host_trace_source
 def bounded_retry_source():
     src=original()
     a=src.index('/* FAIRY2 G1T HEADER RESCUE:')
-    b=src.index('       (taken ? s->target : s->off + 4);',a)
-    b=src.rfind('    uc->uc_mcontext->__ss.__pc =',a,b)
-    base.require(b>a,'Original branch tail unavailable')
+    b=src.index('struct fairy2_stage_spec',a)
     # Remove original one-shot synthetic 48-byte G1T injection entirely.
     src=src[:a]+src[b:]
     a=src.index('    /* Both iPhone logs: #76 header fail')
-    b=src.index('    uc->uc_mcontext->__ss.__pc = (uint64_t)(uintptr_t)m->base +\\n       (taken ? s->target : s->off + 4);',a)
+    b=src.index('       (taken ? s->target : s->off + 4);',a)
+    b=src.rfind('    uc->uc_mcontext->__ss.__pc =',a,b)
+    base.require(b>a,'Original final branch tail unavailable')
     src=src[:a]+r'''
     /* FAIRY2_MODE4_ORIGINAL_STREAM_RETRY: neither a G1T override nor a G1S
      * header bypass. The original chunk producer may publish after the
