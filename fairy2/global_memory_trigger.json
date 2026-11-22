@@ -1,0 +1,10 @@
+{
+  "source_run": 44988275455,
+  "budget_enabled": true,
+  "guest_alias": 4697620480,
+  "heap": 134217728,
+  "root": 4294967296,
+  "compile_metal": false,
+  "rewrite_game": false,
+  "device_tested": false
+}
