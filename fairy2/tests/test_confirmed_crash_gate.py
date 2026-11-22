@@ -28,6 +28,30 @@ class KnownDeviceCrash(unittest.TestCase):
                 "416b9582e27cf2ca3ae4d10e2001b07ee95717c398451766b5445efc80dd3a6e")
         self.assertIn(45064035915, module.DEVICE_CRASH_RUNS)
 
+    def test_user_refused_experiment_is_not_a_confirmed_crash(self):
+        run_id = 45068245797
+        sha = "db906123fba2a6b215da72a737d5aa2da9e241a03d5eecbc843b52a30e8ad669"
+        self.assertNotIn(run_id, module.DEVICE_CRASH_RUNS)
+        self.assertNotIn(sha, module.DEVICE_CRASH_SHA256)
+        self.assertIn(run_id, module.USER_REJECTED_UNVERIFIED_RUNS)
+        with self.assertRaisesRegex(RuntimeError, "expressamente recusada"):
+            module.reject_user_rejected_unverified(run_id)
+        with self.assertRaisesRegex(RuntimeError, "NÃO é crash confirmado"):
+            module.reject_user_rejected_unverified(100000000000, sha)
+
+    def test_user_refused_run_is_filtered_before_artifact_request(self):
+        src = (COLAB / "transfer_ipa.py").read_text()
+        discovery = src.split("def select_latest_successful_ipa_artifact(", 1)[1].split(
+            "def verified_ipa_report(", 1)[0]
+        transfer = src.split("def transfer_latest_successful_ipa(", 1)[1].split(
+            "def main():", 1)[0]
+        self.assertLess(discovery.index("if rid in USER_REJECTED_UNVERIFIED_RUNS:"),
+                        discovery.index("artifacts = github_get("))
+        self.assertLess(transfer.index("reject_user_rejected_unverified(rid)"),
+                        transfer.index("/actions/artifacts/{artifact"))
+        self.assertLess(transfer.index("reject_user_rejected_unverified(rid, sha)"),
+                        transfer.index("uploaded = upload("))
+
     def test_allow_new_candidate_for_future_validation(self):
         module.reject_confirmed_device_crash(100000000000, "f" * 64)
 
