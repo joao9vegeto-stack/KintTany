@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 120
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
-      ${{ github.token }}: ${{ github.token }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout exact Fairy2iOS head (single workflow)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

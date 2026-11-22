@@ -7,5 +7,7 @@
   "keep_ktgl": 2147483648,
   "compile_shaders": false,
   "runtime_resource_diagnostics": true,
-  "only_fairy2_branch": true
+  "only_fairy2_branch": true,
+  "rerun_after_token_fix": 44999109167,
+  "revision": 2
 }
