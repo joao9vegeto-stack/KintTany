@@ -1241,11 +1241,237 @@ def transfer_original_explicit():
     print(f"Run: {provenance['run_url']}", flush=True)
 
 
+def select_latest_successful_ipa_artifact(github_get, max_pages=10):
+    """Find the newest produced Fairy2iOS IPA across ALL branch workflows.
+
+    Order is from GitHub's branch-filtered run feed, not a hard-coded run,
+    artifact number or one historical workflow file. A successful CI run is
+    only a successful build; device-known crash builds are quarantined.
+    """
+    skipped_crash = []
+    examined = 0
+    for page in range(1, max_pages + 1):
+        data = github_get("/actions/runs", {
+            "branch": BRANCH, "status": "success", "per_page": 100, "page": page,
+        })
+        runs = data.get("workflow_runs", [])
+        require(isinstance(runs, list), "GitHub Actions returned an invalid run list")
+        for run in sorted(runs, key=lambda x: (
+                x.get("run_started_at") or x.get("created_at") or "",
+                int(x.get("id") or 0)), reverse=True):
+            if not (run.get("head_branch") == BRANCH and
+                    run.get("status") == "completed" and
+                    run.get("conclusion") == "success" and
+                    str(run.get("name") or "").startswith("Fairy2iOS")):
+                continue
+            rid = int(run.get("id") or 0)
+            if not re.fullmatch(r"[0-9a-f]{40}", str(run.get("head_sha") or "")):
+                continue
+            if rid in DEVICE_CRASH_RUNS:
+                skipped_crash.append(rid)
+                continue
+            examined += 1
+            artifacts = github_get(f"/actions/runs/{rid}/artifacts", {
+                "per_page": 100
+            }).get("artifacts", [])
+            choices = []
+            for a in artifacts:
+                n = str(a.get("name") or "")
+                if (not n.startswith("Fairy2iOS-") or
+                    any(bad in n.lower() for bad in
+                        ("failure", "diagnostic", "capture", "forensic",
+                         "resourceorigin", "resource-origin", "audit", "logs")) or
+                    a.get("expired") or int(a.get("size_in_bytes") or 0) < 100 * 1024 * 1024):
+                    continue
+                attached = a.get("workflow_run") or {}
+                if attached and (int(attached.get("id") or 0) != rid or
+                                 attached.get("head_sha") != run.get("head_sha")):
+                    continue
+                choices.append(a)
+            if choices:
+                selected = max(choices, key=lambda a: (
+                    a.get("created_at") or "", int(a.get("id") or 0)))
+                return run, selected, skipped_crash
+        if len(runs) < 100:
+            break
+    raise RuntimeError(
+        "[Fairy2iOS] Nenhuma IPA candidata disponível em runs bem-sucedidos "
+        "da branch, ou todas as IPAs conhecidas estão em quarentena. "
+        f"Execuções analisadas: {examined}; crashes ignorados: {skipped_crash}. "
+        "Não vou enviar um ZIP de logs nem selecionar uma IPA sabidamente defeituosa."
+    )
+
+
+def verified_ipa_report(z, ipa_name):
+    """Select the report linked to this exact IPA, not the first JSON in ZIP."""
+    reports = []
+    for n in z.namelist():
+        if not n.endswith(".json") or not Path(n).name.endswith("report.json"):
+            continue
+        try:
+            report = json.loads(z.read(n))
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if (report.get("project") == BRANCH and
+            str(report.get("title_id") or "").upper() == TITLE_ID and
+            (report.get("output_ipa") or report.get("ipa")) == ipa_name):
+            reports.append((n, report))
+    require(len(reports) == 1,
+            f"Artefato precisa conter um relatório exato para {ipa_name}; "
+            f"encontrados {len(reports)}")
+    return reports[0]
+
+
+def transfer_latest_successful_ipa():
+    """GitHub latest successful Fairy2iOS IPA -> Drive, cryptographically checked.
+
+    This function never rebuilds shaders or a game. CI success is deliberately
+    not called a successful iPhone launch.
+    """
+    import requests
+    import google.auth
+    from googleapiclient.discovery import build
+
+    token = os.environ.get("FAIRY2_GITHUB_TOKEN", "").strip()
+    require(bool(token), "GitHub PAT com Actions: Read necessário para baixar artefatos")
+    api_root = f"https://api.github.com/repos/{REPO}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "Fairy2iOS-latest-successful-IPA"
+    }
+
+    def github_get(uri, params=None):
+        response = requests.get(api_root + uri, headers=headers, params=params,
+                                timeout=(30, 90))
+        require(response.ok, f"GitHub HTTP {response.status_code}: "
+                f"{response.text[:240]}")
+        return response.json()
+
+    print("[Fairy2iOS] 1/4: Buscando a última IPA válida em TODOS os workflows "
+          "bem-sucedidos da branch...", flush=True)
+    run, artifact, skipped = select_latest_successful_ipa_artifact(github_get)
+    rid = int(run["id"])
+    reject_confirmed_device_crash(rid)
+    print(f"[Fairy2iOS] Selecionado run {rid} commit {run['head_sha']} "
+          f"artefato {artifact['name']} ({artifact['size_in_bytes']:,} B).", flush=True)
+    if skipped:
+        print(f"[Fairy2iOS] IPAs antigas com crash comprovado ignoradas: {skipped}",
+              flush=True)
+
+    response = requests.get(
+        api_root + f"/actions/artifacts/{artifact['id']}/zip",
+        headers=headers, allow_redirects=False, timeout=(30, 90))
+    require(response.status_code in (301, 302, 303, 307, 308) and
+            response.headers.get("Location"),
+            f"GitHub não forneceu URL assinada do ZIP (HTTP {response.status_code})")
+    expected_zip_sha = str(artifact.get("digest") or "").removeprefix("sha256:").lower()
+    require(not expected_zip_sha or bool(re.fullmatch(r"[0-9a-f]{64}", expected_zip_sha)),
+            "GitHub devolveu SHA-256 inválido para o artefato")
+    work = Path("/content/fairy2-latest-ipa-transfer")
+    work.mkdir(parents=True, exist_ok=True)
+    outer = work / f"artifact-{rid}-{artifact['id']}.zip"
+    print("[Fairy2iOS] 2/4: Baixando ZIP de artefato com 6 HTTP ranges e SHA...",
+          flush=True)
+    zip_sha = signed_download(
+        response.headers["Location"], int(artifact["size_in_bytes"]),
+        expected_zip_sha, outer)
+
+    print("[Fairy2iOS] 3/4: Extraindo SOMENTE o arquivo .ipa, validando "
+          "manifesto, shaders, assinatura de conteúdo e CRC...", flush=True)
+    with zipfile.ZipFile(outer) as z:
+        require(z.testzip() is None, "CRC do ZIP externo não confere")
+        members = z.namelist()
+        require(len(members) == len(set(members)) and
+                all(not Path(n).is_absolute() and ".." not in Path(n).parts
+                    and "\\" not in n for n in members),
+                "O artefato possui caminhos inválidos ou duplicados")
+        ipa_files = [n for n in members if n.lower().endswith(".ipa") and
+                     not n.endswith("/")]
+        require(len(ipa_files) == 1, "Artefato não possui exatamente uma IPA")
+        ipa_name = Path(ipa_files[0]).name
+        report_path, report = verified_ipa_report(z, ipa_name)
+        expected_size = report.get("output_ipa_size_bytes", report.get("ipa_size_bytes"))
+        expected_sha = report.get("output_ipa_sha256", report.get("ipa_sha256"))
+        require(expected_size and int(expected_size) > 100 * 1024 * 1024,
+                "Relatório indica IPA truncada ou sem tamanho")
+        require(z.getinfo(ipa_files[0]).file_size == int(expected_size),
+                "IPA e relatório divergem em tamanho")
+        if expected_sha:
+            require(bool(re.fullmatch(r"[0-9a-f]{64}", str(expected_sha).lower())),
+                    "SHA-256 de IPA inválido no relatório")
+        require(report.get("romfs_in_ipa") is not True and
+                report.get("external_romfs_aoc_unchanged") is not False,
+                "Artefato não comprova pacote thin com RomFS externa")
+        framework = f"DmGame{TITLE_ID}.framework"
+        shader = report.get("shader_payload") or {}
+        if not shader.get("ipa_path"):
+            shader["ipa_path"] = f"Frameworks/{framework}/msl/b-0724088d3779.img"
+        if not shader.get("size_bytes"):
+            # This is the original proven NVN image's length, not a guessed shader count.
+            shader["size_bytes"] = 2640519506
+        validate_report = {"framework": framework, "shader_payload": shader}
+        target = work / ipa_name
+        with z.open(ipa_files[0]) as inp, target.open("wb") as out:
+            shutil.copyfileobj(inp, out, length=8 * 1024 * 1024)
+
+    sha, _ = hashes(target)
+    reject_confirmed_device_crash(rid, sha)
+    require(target.stat().st_size == int(expected_size), "IPA incompleta")
+    require(not expected_sha or sha == str(expected_sha).lower(),
+            "SHA-256 da IPA difere do relatório de build")
+    validation = validate_ipa(target, validate_report, verify_crc=True)
+    require(validation["fps"] == [30, 60] and validation["swap_ab"],
+            "Pacote sem o menu FPS 30/60 e inversão A/B")
+    print(f"[Fairy2iOS] IPA interna real: {ipa_name} ({target.stat().st_size:,} B), "
+          f"SHA-256 {sha}", flush=True)
+
+    print("[Fairy2iOS] 4/4: Enviando a IPA extraída ao Google Drive/fairy2/ipa...",
+          flush=True)
+    credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/drive"])
+    drive = build("drive", "v3", credentials=credentials, cache_discovery=False)
+    game_folder = drive.files().get(fileId=DRIVE_GAME_FOLDER,
+                                   supportsAllDrives=True,
+                                   fields="id,name,mimeType,trashed").execute()
+    require(game_folder.get("name") == "fairy2" and
+            game_folder.get("mimeType") == "application/vnd.google-apps.folder" and
+            not game_folder.get("trashed"), "Pasta Drive fairy2 incorreta")
+    folders = [x for x in children(drive, DRIVE_GAME_FOLDER)
+               if x.get("name") == "ipa" and
+               x.get("mimeType") == "application/vnd.google-apps.folder"]
+    require(len(folders) <= 1, "Pastas /ipa duplicadas no Drive")
+    folder = (folders[0]["id"] if folders else
+              drive.files().create(body={"name": "ipa", "parents": [DRIVE_GAME_FOLDER],
+                                         "mimeType": "application/vnd.google-apps.folder"},
+                                   fields="id", supportsAllDrives=True).execute()["id"])
+    dest_name = f"Fairy2iOS-run{rid}-{ipa_name}"
+    uploaded = upload(drive, target, folder, dest_name)
+    provenance = {
+        "project": BRANCH, "title_id": TITLE_ID, "run_id": rid,
+        "run_url": f"https://github.com/{REPO}/actions/runs/{rid}",
+        "run_commit": run["head_sha"], "artifact_id": artifact["id"],
+        "artifact_name": artifact["name"], "artifact_zip_sha256": zip_sha,
+        "artifact_digest": expected_zip_sha, "report_filename": report_path,
+        "ipa_name": dest_name, "ipa_sha256": sha,
+        "ipa_size": target.stat().st_size, "drive_file_id": uploaded["id"],
+        "device_tested": False, "gameplay_fix_claimed": False,
+        "build_succeeded": True, "runtime_status": "NOT_DEVICE_VERIFIED",
+        "ipa_validation": validation, "build_report": report,
+    }
+    prov = work / f"{dest_name}-provenance.json"
+    prov.write_text(json.dumps(provenance, ensure_ascii=False, indent=2) + "\n")
+    upload(drive, prov, folder, prov.name)
+    print(f"[Fairy2iOS] Concluído: {dest_name}\n"
+          f"Drive: https://drive.google.com/drive/folders/{folder}\n"
+          f"Actions: {provenance['run_url']}\n"
+          "AVISO: build bem-sucedido não significa jogo funcionando no iPhone.",
+          flush=True)
+    return provenance
+
 def main():
-    """Fail-closed: only verified G1S first-read instrumentation, never proven-crashing IPAs."""
-    selected=try_transfer_g1s_reader_trace()
-    require(selected is True,"IPA G1S ReaderTrace indisponível; não selecionar builds com crash.")
-    return selected
+    """Always discover newest valid Fairy2iOS IPA across successful branch runs."""
+    return transfer_latest_successful_ipa()
 
 
 if __name__ == "__main__":
