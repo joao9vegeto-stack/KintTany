@@ -12,3 +12,12 @@ Because 5GiB is not one MOVZ, use five independently verified branches to zero-p
 Keep original 19,210 Metal shaders, external RomFS (14,770 entries) and 16 DLCs, SVC device-shared guards, physical app-pool and memory budget, 30/60 options and A/B swap.
 CI must assert source run 44995690307 IPA SHA b1792f9eb522de53b2b252e3a85229584831434999edda98f31c87c7c8c256cd; exact five-code-cave semantics; all hashes, proper 6GiB runtime profile, code signing and IPA CRC.
 Do not call this a gameplay fix before a new iPhone test advances beyond the resource error. If unchanged, capture full hash and FS evidence for direct cause analysis.
+
+Critical correction from failed build 45000042038 (not a game crash): real packaged main consists of THREE Mach-O segments, per pinned NXNative dm/host/loader.c:
+- __TEXT,__dmmainx0: original RX 0..0x22d4000;
+- __DMmainW,__img: guest RO/data W from 0x22d4000 to generated code PATCH_OFF 0x2c60000;
+- __TEXT,__dmmainx1: generated executable RX from PATCH_OFF 0x2c60000 through the rounded end (observed main size 0x2d6c000).
+The earlier repacker incorrectly treated __dmmainx0 alone as the entire guest. A purported cave at 0x2c5f000 would actually lie in W (non-executable), and is forbidden even if its bytes were zero. It was correctly rejected by validation, though the early error text misidentified the reason.
+The repaired repacker explicitly concatenates three sections in GUEST offset order, checks x0 + W ends exactly at PATCH_OFF, validates only x0's prior guest SHA against the failed IPA report and checks x0/x1/W SHA separately.
+The five 4GiB producer sites are in x0. The five new trampolines are placed ONLY in proven-zero bytes of executable x1 after PATCH_OFF. W remains bit-for-bit unchanged. The game-side branch is direct ARM64 B (within +/-128MiB), not a linker or code relocation guess.
+These build failures did not produce usable IPAs. The new x0/W/x1-aware repacker has not yet been verified on the device.
