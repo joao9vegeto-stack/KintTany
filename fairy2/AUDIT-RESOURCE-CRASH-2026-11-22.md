@@ -2,7 +2,7 @@
 
 Two separate iPhone 17 Pro crash logs: GPU encoder/prefetch OFF and ON; both end identically in CRASH sig=5 pc=main+0xbfe2a8. This is a deliberate resource-factory trap, not prior SIGSEGV in allocator list.
 Real game ARM64 main: main+0xc108ec calls a virtual resource factory, main+0xc1098c branches on NULL, main+0xc10b84 references the string can't create resource Name[%s] Hash[0x%08x], main+0xc10b8c calls error handler and main+0xbfe2a8 triggers SIGTRAP.
-The fault message hash is truncated in old crash dump. No evidence yet that the unknown resource is a missing file, versus failed allocation. Enable original NXNative DM_FS=1 and DM_CRASH_PEEK=x1 for next on-device trace.
+The displayed crash memory was truncated after the first six words, but both crash contexts preserve x11=0x626539626678305b and x10=0x5d343264. In little-endian these reconstruct the exact suffix [0xfb9ebd24]. The complete resource diagnostic is: can't create resource Name[Unknown] Hash[0xfb9ebd24]. No evidence yet that this hash is missing on disk rather than a failed allocation/initialization; DM_FS=1 and DM_CRASH_PEEK=x1 will preserve future diagnostics.
 
 Previous no-overlap build fixed 2GiB KTGL inner child: 0x36d800000..0x3ed800000, NVN 1290MiB ends 0x3d20ac000, next allocator bin47 is 0x3ed800178. Both logs verify relocation; original allocator corruption no longer occurs.
 However original main v458752 requests 60GiB at five independent sites (0x5f1b9c, 0x1d700bc, 0x225de0c, 0x2295a44, 0x2295a50). Port reduced all to 4GiB; eight initial subregions reach 0x401200000, leaving 0x2ae00000 (~682 MiB) in original root to support later resources.
