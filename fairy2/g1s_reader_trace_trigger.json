@@ -1,0 +1,15 @@
+{
+  "project": "Fairy2iOS",
+  "branch": "Fairy2iOS",
+  "title_id": "0100B9801F872000",
+  "trace_sites": 18,
+  "source_run": 44995690307,
+  "gameplay_fix_claimed": false,
+  "shader_rebuild": false,
+  "g1s_hash": "0xac9ed13e",
+  "g1s_type": "0x7bcd279f",
+  "g1s_read_expected": 184,
+  "require_device_log": true,
+  "host_build": "rebuild-only",
+  "reason": "actual native G1S parser first virtual read before further fix"
+}
