@@ -748,8 +748,8 @@ def try_transfer_align64():
 
 
 
-def try_transfer_ktgl_cap():
-    """Select the NEWEST Mac-tested two-instruction KTGL region capacity repack, never silently re-upload the crashing base IPA.
+def try_transfer_root3250():
+    """Select the NEWEST five-instruction iPhone root-region overrun correction, never silently re-upload the crashing base IPA.
 
     Does not trigger a build or download any game/ROMFS content.
     """
@@ -770,7 +770,7 @@ def try_transfer_ktgl_cap():
         require(res.ok, f"GitHub HTTP {res.status_code}: {res.text[:160]}")
         return res.json()
 
-    wf = get("/actions/workflows/fairy2-ktgl-cap-repack.yml")
+    wf = get("/actions/workflows/fairy2-root3250-repack.yml")
     runs = get(f"/actions/workflows/{wf['id']}/runs",
                {"branch": BRANCH, "per_page": 30}).get("workflow_runs", [])
     runs = [r for r in runs if r.get("head_branch") == BRANCH]
@@ -785,7 +785,7 @@ def try_transfer_ktgl_cap():
     artifacts = get(f"/actions/runs/{newest['id']}/artifacts",
                     {"per_page": 100}).get("artifacts", [])
     choices = [a for a in artifacts
-               if str(a.get("name", "")).startswith("Fairy2iOS-KTGL-1250MiB-proven-")
+               if str(a.get("name", "")).startswith("Fairy2iOS-iPhone-root3250-fixed-")
                and not a.get("expired")]
     require(len(choices) == 1,
             f"Run {newest['id']} precisa conter exatamente um artefato IPA de host repack")
@@ -800,7 +800,7 @@ def try_transfer_ktgl_cap():
     expected_sha = str(artifact.get("digest") or "").removeprefix("sha256:").lower()
     require(not expected_sha or bool(re.fullmatch(r"[0-9a-f]{64}", expected_sha)),
             "Artifact digest inválido")
-    work = Path("/content/fairy2-ktgl1250-transfer")
+    work = Path("/content/fairy2-root3250-transfer")
     work.mkdir(parents=True, exist_ok=True)
     outer = work / ("artifact-" + str(newest["id"]) + ".zip")
     print("[Fairy2iOS] 2/4: Baixando ZIP do host repack, 6 ranges + SHA-256...", flush=True)
@@ -813,41 +813,44 @@ def try_transfer_ktgl_cap():
         require(all(not Path(n).is_absolute() and ".." not in Path(n).parts for n in names),
                 "Caminho inseguro no artifact")
         ipa_items = [n for n in names if n.endswith(".ipa") and not n.endswith("/")]
-        reports = [n for n in names if Path(n).name == "ktgl-cap-report.json"]
+        reports = [n for n in names if Path(n).name == "root3250-report.json"]
         require(len(ipa_items) == 1 and len(reports) == 1,
                 "Artifact host repack não tem uma IPA e um relatório")
         record = json.loads(zipf.read(reports[0]))
-        audit = record.get("capacity_instruction_audit", {})
-        sites = audit.get("instructions", [])
+        audit = record.get("guest_root_patch", {})
+        geo = audit.get("parent_region_geometry", {})
         require(record.get("project") == BRANCH and
                 record.get("title_id") == TITLE_ID and
-                record.get("source_run_id") == 44983552364 and
-                record.get("mac_runtime_proof_run_id") == 44986356916 and
-                record.get("ktgl_original_sparse_region_bytes") == 0x18b000000 and
-                record.get("ktgl_corrected_sparse_region_bytes") == 0x50000000 and
-                record.get("ktgl_corrected_capacity_units") == 0x14000000 and
-                audit.get("byte_changes") == 8 and
-                audit.get("instruction_count") == 2 and
-                len(sites) == 2 and
-                sites[0].get("site") == "main+0x21b6924" and
-                sites[0].get("patched_opcode") == "0880a2d2" and
-                sites[1].get("site") == "main+0x21b6954" and
-                sites[1].get("patched_opcode") == "1980a2d2" and
-                record.get("mac_arena_32mib_valid_verified") is True and
-                record.get("mac_old_sigsegv_removed_verified") is True and
-                record.get("original_3g_region_cut_preserved") is True and
-                record.get("heap128_mib_patch_preserved") is True and
-                record.get("aligned64k_arena_patch_preserved") is True and
-                record.get("native_host_recompiled") is False and
-                record.get("game_shaders_recompiled") is False and
+                record.get("source_run_id") == 44986770915 and
+                record.get("original_crash_pc") == "main+0x227bd9c" and
+                record.get("original_crash_address") == "0x4257d9e00" and
+                record.get("guest_root_previous_size") == 0xc0000000 and
+                record.get("guest_root_new_size") == 0xd0000000 and
+                audit.get("changed_bytes") == 5 and
+                audit.get("five_root_movz_verified") is True and
+                audit.get("offsets") == [
+                    "main+0x5f1b9c", "main+0x1d700bc",
+                    "main+0x225de0c", "main+0x2295a44", "main+0x2295a50"] and
+                geo.get("old_root_end") == "0x424000000" and
+                geo.get("new_root_end") == "0x434000000" and
+                geo.get("inner_region_end") == "0x425800000" and
+                geo.get("inner_overrun_bytes_before") == 0x1800000 and
+                geo.get("alias_headroom_bytes_after") == 0xc000000 and
+                record.get("prior_ktgl_1_25g_capacity_preserved") is True and
+                record.get("prior_64k_alignment_preserved") is True and
+                record.get("prior_128m_heap_preserved") is True and
+                record.get("first_32mib_arena_crash_resolved_on_iphone") is True and
+                record.get("second_root_bounds_issue_statically_validated") is True and
+                record.get("no_shader_rebuild") is True and
+                record.get("no_native_host_rebuild") is True and
                 record.get("romfs_aoc_external_unchanged") is True and
-                record.get("iphone_boot_verified") is False,
-                "Relatório não confirma o patch KTGL 1,25 GiB aprovado em teste funcional Mac")
+                record.get("new_ipa_runtime_verified_on_iphone") is False,
+                "Relatório não valida a correção exata de 3,25 GiB ou perdeu patches anteriores")
         require(record.get("game_shader_sha256") ==
                 "ab35b0ef89c907a38c8462da78ba6864153c86f8c203d613b321d45ce0aa262b",
-                "Biblioteca Metal difere dos shaders originais; transferência recusada")
+                "Shaders Metal alterados durante o repack; recusando a IPA")
         name = Path(ipa_items[0]).name
-        require(name == "Fairy2iOS-FairyTail2-KTGL-1250MiB-region-cap.ipa"
+        require(name == "Fairy2iOS-FairyTail2-KTGL-3250MiB-root-region.ipa"
                 and record.get("output_ipa") == name,
                 "Nome da IPA corrigida não confere")
         ipa = work / name
@@ -884,7 +887,7 @@ def try_transfer_ktgl_cap():
     uploaded = upload(drive, ipa, folder, destination_name)
     provenance = {
         "project": BRANCH, "run_id": newest["id"], "artifact_id": artifact["id"],
-        "source_run_id": 44983552364,
+        "source_run_id": 44986770915,
         "run_url": f"https://github.com/{REPO}/actions/runs/{newest['id']}",
         "branch_commit": newest.get("head_sha"),
         "ipa_name": destination_name, "ipa_size": ipa.stat().st_size,
@@ -892,10 +895,10 @@ def try_transfer_ktgl_cap():
         "ipa_internal_validation": details, "report": record,
         "drive_ipa_id": uploaded["id"]
     }
-    prov_file = work / ("Fairy2iOS-ktgl1250-run" + str(newest["id"]) + "-provenance.json")
+    prov_file = work / ("Fairy2iOS-root3250-run" + str(newest["id"]) + "-provenance.json")
     prov_file.write_text(json.dumps(provenance, ensure_ascii=False, indent=2)+"\n")
     upload(drive, prov_file, folder, prov_file.name)
-    print("[Fairy2iOS] REGIÃO KTGL 1,25 GiB verificada e enviada:",destination_name,flush=True)
+    print("[Fairy2iOS] REGIÃO EXTERNA 3,25 GiB verificada e enviada:",destination_name,flush=True)
     print("Drive: https://drive.google.com/drive/folders/" + folder,flush=True)
     print("Actions: " + provenance["run_url"],flush=True)
     return True
@@ -1032,9 +1035,9 @@ def transfer_original_explicit():
 
 
 def main():
-    """Transfer only the newest Mac-proven KTGL 1.25GiB IPA; no old IPA fallback."""
-    selected=try_transfer_ktgl_cap()
-    require(selected is True,"IPA KTGL de 1,25 GiB indisponível; não selecione as IPAs antigas.")
+    """Transfer only the newest verified root3250 IPA; never fall back to crashing runs."""
+    selected=try_transfer_root3250()
+    require(selected is True,"IPA KTGL de 3,25 GiB indisponível; não selecione as IPAs antigas.")
     return selected
 
 
