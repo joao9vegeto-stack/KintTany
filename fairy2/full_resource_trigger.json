@@ -1,0 +1,11 @@
+{
+  "source_run": 44995690307,
+  "source_sha256": "b1792f9eb522de53b2b252e3a85229584831434999edda98f31c87c7c8c256cd",
+  "guest_reserve": 6442450944,
+  "guest_alias": 5771362304,
+  "new_guest_root": 5368709120,
+  "keep_ktgl": 2147483648,
+  "compile_shaders": false,
+  "runtime_resource_diagnostics": true,
+  "only_fairy2_branch": true
+}
