@@ -28,6 +28,17 @@ class TestFullResourceVA(unittest.TestCase):
             self.assertEqual((movk>>21)&3,1)
             self.assertEqual((((movz>>5)&0xffff)<<32)+(((movk>>5)&0xffff)<<16),0x140000000)
             self.assertEqual(movz&31,reg);self.assertEqual(movk&31,reg)
+    def test_actual_macho_main_section_shorter_than_gate_boundary(self):
+        # The prior IPA's __dmmainx0 ends before 0x2c60100; a code cave must
+        # be inside THAT section, not only within the original Linux file.
+        raw=bytearray(fix.CAVE_FIRST+0x250)
+        for site,reg in fix.ROOT_SITES:raw[site:site+4]=fix.ROOT_OLD[reg]
+        for site,op in fix.PRESERVE:raw[site:site+4]=bytes.fromhex(op)
+        selected=fix.choose_cave(bytes(raw))
+        self.assertEqual(selected,fix.CAVE_FIRST)
+        output,proof=fix.patch_bytes(bytes(raw))
+        self.assertEqual(proof['code_cave'],f'main+0x{fix.CAVE_FIRST:x}')
+        self.assertEqual(len(output),len(raw))
     def test_code_cave_fallback_uses_only_actual_embedded_zeroes(self):
         # Mimic a final IPA whose Linux-stage preferred cave became occupied.
         raw=bytearray(fix.CAVE_LAST+0x110)
