@@ -11,8 +11,17 @@
   "g1s_read_expected": 184,
   "require_device_log": true,
   "host_build": "rebuild-only",
-  "reason": "fix successful Xcode build failing verification due to obsolete fallback_kind field in G1S report",
+  "reason": "G1S source mode4 zlib confirmed for BOTH successful and failing G1S; correlate host pread and guest reader to isolate loss of 184 bytes, do not speculate",
   "syntax_revision": 3,
   "dump_anchor_fix": true,
-  "report_gate_revision": 2
+  "report_gate_revision": 2,
+  "fdata_io_correlation": {
+    "revision": 1,
+    "source_successfully_verified_run": 45063871048,
+    "crash_phone_log": "2026-11-22 16:51: G1S first_read=0 of 184, parser NULL, SIGTRAP main+0xbfe2a8",
+    "focus": "HLE RomFS image entries 12943 (0x38f972af.fdata) and 13660 (0x8baaa1ce.fdata) versus native guest reader",
+    "shader_rebuild": false,
+    "guest_branch_semantics_unchanged": true,
+    "not_a_gameplay_fix": true
+  }
 }
