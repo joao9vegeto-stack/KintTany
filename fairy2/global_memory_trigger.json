@@ -11,5 +11,8 @@
   "prevent_false_signature_failure": true,
   "reason": "Codesign changes __LINKEDIT binary digest; compare exact signed Shell executable __TEXT,__text",
   "runner_compatibility_fix": "use isolated setup-python 3.12; select Xcode 27.2; PEP668 system Python not touched",
-  "previous_job": 44989893779
+  "previous_job": 44989893779,
+  "runtime_profile_semantics_verified": true,
+  "runtime_profile_preflight_revision": 4,
+  "previous_failed_run": 44990000499
 }

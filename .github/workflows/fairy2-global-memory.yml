@@ -58,7 +58,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           s=Path('engine/dm/host/hle_svc.c').read_text()
-          for x in ('DM_GAME_MEM_MAP_LIMIT && num == 0x2C','alias_unmapped(off, size)','used_beside_heap()','device_shared(a, size','regs[0] = 0x10801'):
+          for x in ('(dm_profile()->mem_map_limit) && num == 0x2C','alias_unmapped(off, size)','used_beside_heap()','device_shared(a, size','regs[0] = 0x10801'):
            assert x in s,x
           t=Path('engine/dm/games/game.py').read_text()
           assert 'mem_map_limit must be on or off' in t
