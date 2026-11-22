@@ -945,8 +945,8 @@ def try_transfer_global_memory():
 
 
 
-def try_transfer_g1t_header_rescue():
-    """Transfer ONLY the device-untested, one-shot G1T header-rescue IPA from verified run.
+def try_transfer_g1s_reader_trace():
+    """Transfer ONLY the device-untested, one-shot G1S reader-trace IPA from verified run.
 
     Never fall back to the crashing 6GiB/old IPA; fail before downloading if
     GitHub changed the expected run, commit, artifact or provenance.
@@ -955,10 +955,10 @@ def try_transfer_g1t_header_rescue():
     import google.auth
     from googleapiclient.discovery import build
 
-    RUN_ID = 45050364099
-    RUN_SHA = "e2117a992b66bdb7d9926287d00512bb30b86d7e"
-    ARTIFACT_NAME = "Fairy2iOS-G1T-HeaderRescue-4"
-    IPA_NAME = "Fairy2iOS-FairyTail2-G1T-HeaderRescue.ipa"
+    RUN_ID = 45056075925
+    RUN_SHA = "42cdddedf49d7c90aa6ddafc4e98432d0ebcb3d2"
+    ARTIFACT_NAME = "Fairy2iOS-G1S-ReaderTrace-3"
+    IPA_NAME = "Fairy2iOS-FairyTail2-G1S-ReaderTrace.ipa"
     SHADER_SHA = "ab35b0ef89c907a38c8462da78ba6864153c86f8c203d613b321d45ce0aa262b"
     G1T_SHA = "558ada8c563fe44fa18d894d01f39e8b1a230b26ad1bcd0782743797f815e494"
     SOURCE_SHA = "b1792f9eb522de53b2b252e3a85229584831434999edda98f31c87c7c8c256cd"
@@ -969,7 +969,7 @@ def try_transfer_g1t_header_rescue():
     headers = {"Authorization": f"Bearer {token}",
                "Accept": "application/vnd.github+json",
                "X-GitHub-Api-Version": "2022-11-28",
-               "User-Agent": "Fairy2iOS-G1T-HeaderRescue-Drive-Transfer"}
+               "User-Agent": "Fairy2iOS-G1S-ReaderTrace-Drive-Transfer"}
 
     def get(path, params=None):
         response = requests.get(api_root + path, headers=headers, params=params, timeout=60)
@@ -979,7 +979,7 @@ def try_transfer_g1t_header_rescue():
     run = get(f"/actions/runs/{RUN_ID}")
     require(run.get("id") == RUN_ID and run.get("head_sha") == RUN_SHA and
             run.get("head_branch") == BRANCH and
-            run.get("name") == "Fairy2iOS - verified G1T header rescue (host-only)" and
+            run.get("name") == "Fairy2iOS - G1S factory and stream first-read diagnosis (host-only)" and
             run.get("status") == "completed" and run.get("conclusion") == "success",
             f"Run de diagnóstico {RUN_ID} não corresponde à execução esperada ou não concluiu com sucesso")
     reject_confirmed_device_crash(RUN_ID)
@@ -1020,7 +1020,7 @@ def try_transfer_g1t_header_rescue():
                 "ZIP externo contém nomes duplicados ou caminhos inseguros")
         ipa_names = [n for n in names if n.endswith(".ipa") and not n.endswith("/")]
         report_names = [n for n in names
-                        if Path(n).name == "g1t-headerrescue-report.json"]
+                        if Path(n).name == "g1s-readertrace-report.json"]
         require(len(ipa_names) == 1 and len(report_names) == 1,
                 "Artefato precisa conter exatamente 1 IPA e 1 relatório G1T")
         record = json.loads(z.read(report_names[0]))
@@ -1030,15 +1030,18 @@ def try_transfer_g1t_header_rescue():
                 and record.get("source_run_id") == 44995690307
                 and record.get("source_sha256") == SOURCE_SHA
                 and record.get("output_ipa") == IPA_NAME
-                and record.get("branch_trace_sites") == 11
-                and len(patch.get("resource_stage_traps", [])) == 11
+                and record.get("branch_trace_sites") == 18
+                and len(patch.get("resource_stage_traps", [])) == 18
                 and patch.get("resource_stage_trap_opcode") == "40403ed4"
                 and record.get("resource_stage_trace") is True
-                and record.get("not_a_gameplay_fix") is False
+                and record.get("not_a_gameplay_fix") is True
                 and record.get("device_boot_verified") is False
-                and record.get("fallback_g1t_bytes") == 48
-                and "one-shot" in str(record.get("fallback_kind", ""))
-                and record.get("g1t_header_sha256") == G1T_SHA
+                and record.get("g1t_fallback_preserved") is True
+                and record.get("g1s_factory") == "main+0x1dbdc14"
+                and record.get("g1s_parser") == "main+0x6e7b60"
+                and record.get("g1s_hash") == "0xac9ed13e"
+                and record.get("g1s_header_read") == "virtual [vtable+0x20] requests 184 bytes"
+                and record.get("g1s_full_original_sha256") == "edb3bceed3c426cfe5b851d78f2e7f56168abe8ac5d6aac3a6927bdaf6e3535a"
                 and record.get("host_recompiled") is True
                 and record.get("game_shaders_recompiled") is False
                 and record.get("guest_modules_rewritten") is False
@@ -1088,7 +1091,7 @@ def try_transfer_g1t_header_rescue():
             "parents": [DRIVE_GAME_FOLDER],
             "mimeType": "application/vnd.google-apps.folder"},
             fields="id", supportsAllDrives=True).execute()["id"]
-    destination_name = f"Fairy2iOS-G1T-HeaderRescue-run{RUN_ID}.ipa"
+    destination_name = f"Fairy2iOS-G1S-ReaderTrace-run{RUN_ID}.ipa"
     print(f"[Fairy2iOS] 4/4: Enviando {destination_name} ao Drive fairy2/ipa...", flush=True)
     uploaded = upload(drive, ipa, folder, destination_name)
 
@@ -1100,10 +1103,10 @@ def try_transfer_g1t_header_rescue():
         "ipa_name": destination_name, "ipa_sha256": digest,
         "ipa_size": ipa.stat().st_size, "drive_ipa_id": uploaded["id"],
         "device_tested": False, "gameplay_fix_claimed": False,
-        "status": "G1T_HEADER_RESCUE_CANDIDATE_NOT_DEVICE_VERIFIED",
+        "status": "G1S_READER_DIAGNOSTIC_NOT_DEVICE_VERIFIED",
         "ipa_validation": details, "build_report": record
     }
-    prov = work / f"Fairy2iOS-G1T-HeaderRescue-run{RUN_ID}-provenance.json"
+    prov = work / f"Fairy2iOS-G1S-ReaderTrace-run{RUN_ID}-provenance.json"
     prov.write_text(json.dumps(provenance, ensure_ascii=False, indent=2) + "\n")
     upload(drive, prov, folder, prov.name)
     print("[Fairy2iOS] IPA candidata G1T HeaderRescue enviada e validada:", destination_name, flush=True)
@@ -1239,9 +1242,9 @@ def transfer_original_explicit():
 
 
 def main():
-    """Fail-closed: reject the latest iPhone-proven G1T HeaderRescue crash."""
-    selected=try_transfer_g1t_header_rescue()
-    require(selected is True,"IPA HeaderRescue indisponível; não selecionar builds com crash.")
+    """Fail-closed: only verified G1S first-read instrumentation, never proven-crashing IPAs."""
+    selected=try_transfer_g1s_reader_trace()
+    require(selected is True,"IPA G1S ReaderTrace indisponível; não selecionar builds com crash.")
     return selected
 
 
