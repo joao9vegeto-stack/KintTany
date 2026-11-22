@@ -1,0 +1,15 @@
+{
+  "project": "Fairy2iOS",
+  "source_run_id": 44981941022,
+  "main_build_id": "a588f7bb864aad5fb6a18236878d9216",
+  "crash_pc": "main+0x21b6dcc",
+  "crash_address": "0x1ebc4",
+  "allocation_call_site": "main+0x21b6a7c",
+  "original_alignment": 16,
+  "updated_alignment": 65536,
+  "requested_bytes": 33554432,
+  "hypothesis": "32MiB KTGL backing arena cannot be initialized with insufficient alignment on iOS; based on nxnative 13 Sentinels ring heap",
+  "compile_shaders": false,
+  "compile_host": false,
+  "iphone_success_verified": false
+}
