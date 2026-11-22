@@ -1,0 +1,16 @@
+{
+  "project": "Fairy2iOS",
+  "prior_audit_run": 44985713638,
+  "source_region_request_bytes": 6627000320,
+  "original_config_units": 1656750080,
+  "request_function": "main+0x21b6924",
+  "allocator_capacity_function": "main+0x21b6954",
+  "test_values": [
+    268435456,
+    335544320,
+    402653184
+  ],
+  "compile_shaders": false,
+  "build_ipa": false,
+  "iphone_success_verified": false
+}

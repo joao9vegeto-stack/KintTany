@@ -1,0 +1,83 @@
+name: Fairy2iOS - Measure KTGL 32MiB arena with bounded source-size cuts (Mac only)
+on:
+  push:
+    branches: [Fairy2iOS]
+    paths: ['fairy2/cap_audit_trigger.json']
+permissions:
+  contents: read
+concurrency:
+  group: fairy2-ktgl-cap-test-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test-capacities:
+    runs-on: xcode-27
+    timeout-minutes: 120
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+    steps:
+      - name: Checkout Fairy2iOS only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Verify diagnostic and exact two instruction sites
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile fairy2/scripts/audit_ktgl_cap.py
+          python3 -m unittest discover -s fairy2/tests -p test_ktgl_cap.py -v
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          d=json.loads(Path('fairy2/cap_audit_trigger.json').read_text())
+          assert d["prior_audit_run"]==44985713638
+          assert d["source_region_request_bytes"]==0x18b000000
+          assert d["test_values"]==[0x10000000,0x14000000,0x18000000]
+          assert not d["compile_shaders"] and not d["build_ipa"]
+          PY
+      - name: Synchronize pinned NXNative
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/engine.py relink
+          python3 tools/engine.py check
+          python3 tools/engine.py sync
+          python3 tools/engine.py stale
+      - name: Host-only dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install zstd glslang || true
+          python3 -m pip install --disable-pip-version-check requests google-api-python-client google-auth lz4 'capstone>=5,<6' fonttools zbic backports.zstd
+      - name: Restore exact tested Colab workspace and external RomFS and AOC
+        shell: bash
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          python3 fairy2/scripts/prepare_actions.py \
+            --handoff "$GITHUB_WORKSPACE/fairy2/handoff.json" \
+            --destination "$RUNNER_TEMP/fairy2"
+      - name: Compile Mac host only ONCE and test three exact guest capacity cuts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 fairy2/scripts/audit_ktgl_cap.py \
+            --repository "$GITHUB_WORKSPACE" \
+            --prepared "$RUNNER_TEMP/fairy2/actions-input.json" \
+            --output "$RUNNER_TEMP/fairy2-cap-audit" \
+            --seconds 45
+      - name: Preserve full input/output probe logs, no IPA output
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Fairy2iOS-KTGL-cap-measurements-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/fairy2-cap-audit/
+            ${{ runner.temp }}/fairy2/work/logs/
+          if-no-files-found: warn
+          retention-days: 14
