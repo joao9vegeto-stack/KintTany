@@ -1,0 +1,101 @@
+name: Fairy2iOS - Exact AArch64 allocator region repack (no compiler)
+on:
+  push:
+    branches: [Fairy2iOS]
+    paths: ['fairy2/region_cut_trigger.json']
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: fairy2-region-cut-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  region-repack:
+    runs-on: xcode-27
+    timeout-minutes: 120
+    steps:
+      - name: Checkout only Fairy2iOS repack scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: AArch64 patch fingerprint and no-shader regression gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/Fairy2iOS"
+          python3 -m py_compile fairy2/scripts/repack_region_cut.py
+          python3 -m unittest discover -s fairy2/tests -p test_region_cut.py -v
+          python3 - <<'PY'
+          import json,pathlib
+          d=json.loads(pathlib.Path("fairy2/region_cut_trigger.json").read_text())
+          assert d["source_run_id"]==44977592488
+          assert d["new_region_bytes"]==0xc0000000 and d["five_movs"]
+          assert not d["compile_shaders"] and not d["compile_host"]
+          print("Only the five verified main MOVs may change")
+          PY
+      - name: Download exact previous successful host repack IPA (never source NSPs)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/region-source"
+          gh run download 44977592488 -R joao9vegeto-stack/KintTany \
+             -n Fairy2iOS-host-memory-repack-5 -D "$RUNNER_TEMP/region-source"
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,json,os
+          p=Path(os.environ["RUNNER_TEMP"])/"region-source"
+          f=p/"Fairy2iOS-FairyTail2-host-memory-repack.ipa"
+          assert f.exists()
+          d=hashlib.sha256()
+          with f.open("rb") as inp:
+            for x in iter(lambda:inp.read(8*1024*1024),b""):d.update(x)
+          assert d.hexdigest()=="4e2cb0937545effbebffa01341e84711452622e449359961fae0539d1952f70e"
+          rep=json.loads((p/"host-repack-report.json").read_text())
+          assert rep["host_recompiled"] and not rep["game_shaders_recompiled"]
+          assert rep["new_mem_alias"]=="0xe0000000"
+          print("Validated prior host-only IPA SHA256",d.hexdigest())
+          PY
+      - name: Change five guest AArch64 MOVs and re-sign existing IPA only
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/region-result"
+          python3 fairy2/scripts/repack_region_cut.py \
+            --source "$RUNNER_TEMP/region-source/Fairy2iOS-FairyTail2-host-memory-repack.ipa" \
+            --output "$RUNNER_TEMP/region-result/Fairy2iOS-FairyTail2-3GiB-region-cut.ipa" \
+            --report "$RUNNER_TEMP/region-result/region-cut-report.json"
+      - name: Verify signed IPA, Metal, original host, 30/60FPS and A/B
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,sys,os
+          from pathlib import Path
+          sys.path.insert(0,str(Path("fairy2/colab").resolve()))
+          from ipa_validator import validate_ipa
+          root=Path(os.environ["RUNNER_TEMP"])/"region-result"
+          rep=json.loads((root/"region-cut-report.json").read_text())
+          base={"framework":"DmGame0100B9801F872000.framework",
+                "shader_payload":{"ipa_path":"Frameworks/DmGame0100B9801F872000.framework/msl/b-0724088d3779.img",
+                                  "size_bytes":2640519506}}
+          v=validate_ipa(root/rep["output_ipa"],base,verify_crc=True)
+          assert v["fps"]==[30,60] and v["swap_ab"]
+          assert rep["guest_main_instruction_patches"]==5
+          assert rep["allocator_patched_bytes"]==0xc0000000
+          assert rep["native_host_recompiled"] is False and rep["game_shaders_recompiled"] is False
+          assert rep["game_shader_sha256"]=="ab35b0ef89c907a38c8462da78ba6864153c86f8c203d613b321d45ce0aa262b"
+          assert rep["crash_fixed_on_iphone_verified"] is False
+          print("REPACK VERIFIED: 5 MOVs changed, original Metal and host, FPS/A-B, source unchanged")
+          PY
+      - name: Publish only the signed new region-cut IPA and report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Fairy2iOS-3GiB-region-cut-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/region-result/Fairy2iOS-FairyTail2-3GiB-region-cut.ipa
+            ${{ runner.temp }}/region-result/region-cut-report.json
+          if-no-files-found: error
+          retention-days: 14
