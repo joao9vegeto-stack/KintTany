@@ -94,6 +94,7 @@ static int f2_direct_reader_trap(ucontext_t *uc) {
 
     if (off == 0xc11b80u) {
         uint64_t reader=uc->uc_mcontext->__ss.__x[0];
+        if (!reader) return 0; /* Original NULL dereference must not be swallowed. */
         if (reader) {
             uint64_t vt=0;
             memcpy(&vt,(void *)(uintptr_t)reader,8);
