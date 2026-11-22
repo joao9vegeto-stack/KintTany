@@ -1,0 +1,17 @@
+{
+  "project": "Fairy2iOS",
+  "source_run": 44983552364,
+  "mac_proof_run": 44986356916,
+  "cause": "6.17GiB KTGL sub-reservation exceeded 3GiB global region, 32MiB arena got NULL",
+  "cap_units": 335544320,
+  "new_region_bytes": 1342177280,
+  "old_region_bytes": 6627000320,
+  "guest_code_sites": [
+    "main+0x21b6924",
+    "main+0x21b6954"
+  ],
+  "changed_guest_bytes": 8,
+  "compile_shaders": false,
+  "compile_host": false,
+  "iphone_tested": false
+}

@@ -1,0 +1,136 @@
+name: Fairy2iOS - Mac-proven KTGL sparse capacity IPA-only repack
+on:
+  push:
+    branches: [Fairy2iOS]
+    paths: ['fairy2/ktgl_cap_repack_trigger.json']
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: fairy2-proven-ktgl-region-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  repack:
+    runs-on: xcode-27
+    timeout-minutes: 120
+    steps:
+      - name: Checkout Fairy2iOS exact commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate two exact instruction patches, no heavy rebuild
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/Fairy2iOS
+          python3 -m py_compile fairy2/scripts/repack_ktgl_cap.py
+          python3 -m unittest discover -s fairy2/tests -p test_ktgl_cap_repack.py -v
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('fairy2/ktgl_cap_repack_trigger.json').read_text())
+          assert d["mac_proof_run"]==44986356916 and d["source_run"]==44983552364
+          assert d["cap_units"]==0x14000000
+          assert not d["compile_shaders"] and not d["compile_host"]
+          print("Exact Mac-proven two-MOVZ fix selected, no shader compilation")
+          PY
+      - name: Verify real native Mac experiment before repacking any IPA
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ktgl-proof"
+          gh run download 44986356916 -R joao9vegeto-stack/KintTany \
+            -n Fairy2iOS-KTGL-cap-measurements-2 -D "$RUNNER_TEMP/ktgl-proof"
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          p=Path(os.environ["RUNNER_TEMP"])/"ktgl-proof"
+          entries=list(p.rglob("all-caps-audit.json"))
+          assert len(entries)==1
+          d=json.loads(entries[0].read_text())
+          a=[x for x in d["outcomes"] if x["label"]=="1_25GiB"]
+          assert len(a)==1
+          r=a[0]
+          assert r["patch"]["capacity_raw"]==0x14000000
+          assert r["patch"]["reserved_bytes"]==0x50000000
+          assert r["proof"]["arena_32mib_success"] is True
+          assert r["proof"]["page_commit_error_results"]==[]
+          assert r["proof"]["same_original_crash"] is False
+          assert r["result"]["nnmain"] is True
+          ls=list(p.rglob("1_25GiB/boot.log"))
+          assert len(ls)==1
+          log=ls[0].read_text(errors="replace")
+          assert "no Metal 4 (no Metal 4 GPU family)" in log
+          assert "CRASH sig=11 addr=0x1ebc4" not in log
+          assert "[game] nn::os::ResultInvalidParameter" not in log
+          print("REAL MAC VALIDATION PASSED: arena valid, no error 0xe03, old SIGSEGV removed")
+          PY
+      - name: Download and verify exact previous aligned-allocator IPA
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ktgl-source"
+          gh run download 44983552364 -R joao9vegeto-stack/KintTany \
+            -n Fairy2iOS-KTGL-64KiB-alignment-1 -D "$RUNNER_TEMP/ktgl-source"
+          python3 - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          f=Path(os.environ["RUNNER_TEMP"])/"ktgl-source/Fairy2iOS-FairyTail2-64KiB-aligned-allocator.ipa"
+          assert f.is_file()
+          h=hashlib.sha256()
+          with f.open("rb") as inp:
+           for chunk in iter(lambda:inp.read(8*1024*1024),b""):h.update(chunk)
+          assert h.hexdigest()=="a8945d1b4f940f697df1fabd81fa647f91f5911b169fbbc9ce5882bab2c597fb"
+          print("SOURCE SHA-256 CHECK PASSED:",h.hexdigest())
+          PY
+      - name: Repack only two proven KTGL-capacity opcodes, ad hoc re-sign app
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ktgl-out"
+          python3 fairy2/scripts/repack_ktgl_cap.py \
+            --source "$RUNNER_TEMP/ktgl-source/Fairy2iOS-FairyTail2-64KiB-aligned-allocator.ipa" \
+            --output "$RUNNER_TEMP/ktgl-out/Fairy2iOS-FairyTail2-KTGL-1250MiB-region-cap.ipa" \
+            --report "$RUNNER_TEMP/ktgl-out/ktgl-cap-report.json"
+      - name: Verify full IPA CRC, shaders unchanged, original host, 30/60 and A/B
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import json,sys,os
+          sys.path.insert(0,str(Path("fairy2/colab").resolve()))
+          from ipa_validator import validate_ipa
+          p=Path(os.environ["RUNNER_TEMP"])/"ktgl-out"
+          report=json.loads((p/"ktgl-cap-report.json").read_text())
+          main={"framework":"DmGame0100B9801F872000.framework",
+                "shader_payload":{"ipa_path":"Frameworks/DmGame0100B9801F872000.framework/msl/b-0724088d3779.img",
+                                  "size_bytes":2640519506}}
+          valid=validate_ipa(p/report["output_ipa"],main,verify_crc=True)
+          assert valid["fps"]==[30,60] and valid["swap_ab"]
+          assert report["capacity_instruction_audit"]["byte_changes"]==8
+          assert report["capacity_instruction_audit"]["instruction_count"]==2
+          assert report["ktgl_corrected_sparse_region_bytes"]==0x50000000
+          assert report["mac_arena_32mib_valid_verified"] is True
+          assert report["mac_old_sigsegv_removed_verified"] is True
+          assert report["iphone_boot_verified"] is False
+          assert report["original_3g_region_cut_preserved"] and report["heap128_mib_patch_preserved"]
+          assert report["aligned64k_arena_patch_preserved"]
+          assert not report["native_host_recompiled"] and not report["game_shaders_recompiled"]
+          assert report["game_shader_sha256"]=="ab35b0ef89c907a38c8462da78ba6864153c86f8c203d613b321d45ce0aa262b"
+          print("8 guest bytes only; signed IPA CRC; Metal library identical; options retained")
+          PY
+      - name: Publish Mac-proven KTGL IPA and audit report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Fairy2iOS-KTGL-1250MiB-proven-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/ktgl-out/Fairy2iOS-FairyTail2-KTGL-1250MiB-region-cap.ipa
+            ${{ runner.temp }}/ktgl-out/ktgl-cap-report.json
+          if-no-files-found: error
+          retention-days: 14
