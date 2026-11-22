@@ -1,0 +1,45 @@
+name: Fairy2iOS - KTGL source/AOT reference parity fixture tests (Linux only)
+on:
+  push:
+    branches: [Fairy2iOS]
+    paths: ['fairy2/reference_parity_trigger.json']
+permissions:
+  contents: read
+concurrency:
+  group: fairy2-ktgl-reference-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  source-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact Fairy2iOS source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install LZ4 for genuine NSO0 compression semantics
+        run: python -m pip install --disable-pip-version-check 'lz4>=4,<5'
+      - name: Reject fake resources, wrong module layout and AOT byte changes
+        run: |
+          set -euo pipefail
+          python -m compileall -q fairy2/scripts/ktgl_reference_baseline.py
+          python -m unittest discover -v -s fairy2/tests -p test_ktgl_reference_baseline.py
+      - name: Verify scope: no macOS, shaders, builds or released IPA
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          d=json.loads(Path('fairy2/reference_parity_trigger.json').read_text())
+          assert d['branch']=='Fairy2iOS'
+          assert d['build_ipa'] is False
+          assert d['rebuild_shaders'] is False
+          assert d['source_nso_private'] is True
+          assert d['original_reader_bytes_changed'] == 0
+          assert d['distinct_backing_paths'] == 2
+          print('REFERENCE BASELINE FIXTURE CHECK PASSED; no claim of gameplay or iPhone fix')
+          PY
