@@ -29,8 +29,8 @@ WORKERS = 6
 
 
 # Quarantined by actual A19 Pro crash log, not by CI build status.
-DEVICE_CRASH_RUNS = frozenset({44990224107, 44992666178, 44995690307, 45000495987, 45046524330, 45050364099, 45056917685})
-DEVICE_CRASH_SHA256 = frozenset({"6faba771ab897cec3c19277a03815e42c3428be1c6c92e522195a0133db196d1", "6b3803ac5359c724fb43781688c1e3eab7cb3b80dde723a64f73e945c0574c0c", "b1792f9eb522de53b2b252e3a85229584831434999edda98f31c87c7c8c256cd", "df6cd6c826a3218fd965b03161ea2355cf348c13c369e13f2afb7dff74c953c2", "5f713b1a06bdf8d8fcff63bd29d69cd3a5cff280f5cd42065973919c0d81c94a"})
+DEVICE_CRASH_RUNS = frozenset({44990224107, 44992666178, 44995690307, 45000495987, 45046524330, 45050364099, 45056917685, 45064035915})
+DEVICE_CRASH_SHA256 = frozenset({"6faba771ab897cec3c19277a03815e42c3428be1c6c92e522195a0133db196d1", "6b3803ac5359c724fb43781688c1e3eab7cb3b80dde723a64f73e945c0574c0c", "b1792f9eb522de53b2b252e3a85229584831434999edda98f31c87c7c8c256cd", "df6cd6c826a3218fd965b03161ea2355cf348c13c369e13f2afb7dff74c953c2", "5f713b1a06bdf8d8fcff63bd29d69cd3a5cff280f5cd42065973919c0d81c94a", "416b9582e27cf2ca3ae4d10e2001b07ee95717c398451766b5445efc80dd3a6e"})
 
 def reject_confirmed_device_crash(run_id, sha256=None):
     """A structurally valid IPA can still be proven to crash on real hardware."""
@@ -40,7 +40,7 @@ def reject_confirmed_device_crash(run_id, sha256=None):
             "run 45000495987 aborta em main+0xbfe2a8 (Hash[0xfb9ebd24]); "
             "o run instrumentado 45046524330 confirmou G1T header-validation-failed "
             "em main+0x612120 nos dois logs do iPhone. "
-            "IPA de diagnóstico G1S do run 45056917685 também abortou: leitura=0/184 seguida de factory NULL. Não transferir builds com crash comprovado.")
+            "G1S run 45056917685 e FDATA IOProbe run 45064035915 abortaram: stream 0/184, parser/factory NULL, SIGTRAP. As 45 leituras monitoradas do FDATA no run 45064035915 completaram; o defeito está após a leitura. Não transferir builds com crash comprovado.")
 
 def require(condition, reason):
     if not condition:
