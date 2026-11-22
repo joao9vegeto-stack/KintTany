@@ -41,26 +41,31 @@ int main(void) {
   f2_inflate_run = inflate;
   f2_inflate_end = inflateEnd;
   unsigned char plain[16384], compressed[20000], framed[20008], dst[16384];
-  for (unsigned i = 0; i < sizeof plain; ++i)
-    plain[i] = (unsigned char)((i * 23u + 17u) & 255u);
-  uLongf length = sizeof compressed;
-  assert(compress2(compressed, &length, plain, sizeof plain, Z_BEST_SPEED) == Z_OK);
-  assert(length + 8u <= sizeof framed);
-  memcpy(framed, "KTGLRDB!", 8); memcpy(framed + 8, compressed, length);
-  uint64_t written = 0;
-  assert(f2_zlib_original_chunk(dst, sizeof dst, &written, framed, length + 8));
-  assert(written == sizeof plain && !memcmp(plain, dst, written));
-  /* Integrity and size gates must NOT produce synthetic data. */
-  framed[length + 7] ^= 0xff;
-  assert(!f2_zlib_original_chunk(dst, sizeof dst, &written, framed, length + 8));
-  framed[length + 7] ^= 0xff;
-  assert(!f2_zlib_original_chunk(dst, sizeof dst, &written, framed, length + 7));
-  framed[8] = 0;
-  assert(!f2_zlib_original_chunk(dst, sizeof dst, &written, framed, length + 8));
-  framed[8] = compressed[0];
-  assert(!f2_zlib_original_chunk(dst, 0, &written, framed, length + 8));
-  assert(!f2_zlib_original_chunk(dst, 16385, &written, framed, length + 8));
-  assert(!f2_zlib_original_chunk(dst, sizeof dst, &written, framed, 65536));
+  /* Cover all observed failing source shapes: 48B G1T, 1956B G1S
+   * remainder, and one 16KiB complete G1S zlib chunk. */
+  const unsigned sizes[] = {48, 1956, 16384};
+  for (unsigned k = 0; k < sizeof sizes / sizeof sizes[0]; ++k) {
+    unsigned size = sizes[k];
+    for (unsigned i = 0; i < size; ++i)
+      plain[i] = (unsigned char)((i * 23u + 17u) & 255u);
+    uLongf length = sizeof compressed;
+    assert(compress2(compressed, &length, plain, size, Z_BEST_SPEED) == Z_OK);
+    assert(length + 8u <= sizeof framed);
+    memcpy(framed, "KTGLRDB!", 8); memcpy(framed + 8, compressed, length);
+    uint64_t written = 0;
+    assert(f2_zlib_original_chunk(dst, size, &written, framed, length + 8));
+    assert(written == size && !memcmp(plain, dst, written));
+    framed[length + 7] ^= 0xff;
+    assert(!f2_zlib_original_chunk(dst, size, &written, framed, length + 8));
+    framed[length + 7] ^= 0xff;
+    assert(!f2_zlib_original_chunk(dst, size, &written, framed, length + 7));
+    framed[8] = 0;
+    assert(!f2_zlib_original_chunk(dst, size, &written, framed, length + 8));
+    framed[8] = compressed[0];
+    assert(!f2_zlib_original_chunk(dst, 0, &written, framed, length + 8));
+    assert(!f2_zlib_original_chunk(dst, 16385, &written, framed, length + 8));
+    assert(!f2_zlib_original_chunk(dst, size, &written, framed, 65536));
+  }
   puts("FAIRY2 GENERIC RFC1950 FALLBACK PASS: source intact, corruption rejected");
   return 0;
 }
