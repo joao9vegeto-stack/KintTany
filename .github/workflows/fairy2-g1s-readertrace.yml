@@ -1,8 +1,8 @@
-name: Fairy2iOS - G1S source FDATA vs virtual reader IO correlation (host-only)
+name: Fairy2iOS - mode4 original-stream bounded retry G1T + G1S
 on:
   push:
     branches: [Fairy2iOS]
-    paths: ['fairy2/g1s_reader_trace_trigger.json']
+    paths: ['fairy2/mode4_retry_trigger.json']
 permissions:
   contents: read
   actions: read
@@ -26,22 +26,25 @@ jobs:
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.12'
-      - name: Validate 18 native branches and HLE FDATA IO instrumentation, pin engine
+      - name: Verify original asset retry, no synthetic G1T and 18 native branches
         shell: bash
         run: |
           set -euo pipefail
           test "$(cat .upstream-ref)" = b526a50b85e4cfa3142c111e1ad491d9fd11f0eb
           python3 -m unittest discover -s fairy2/tests -p test_resource_stages.py -v
           python3 -m unittest discover -s fairy2/tests -p test_g1s_readertrace.py -v
+          python3 -m unittest discover -s fairy2/tests -p test_mode4_retry.py -v
           python3 -m unittest discover -s fairy2/tests -p test_full_resource_va.py -v
           python3 - <<'PY'
           import json
-          a=json.load(open('fairy2/g1s_reader_trace_trigger.json'))
+          a=json.load(open('fairy2/mode4_retry_trigger.json'))
           assert a['source_run'] == 44995690307
           assert a['gameplay_fix_claimed'] is False
           assert a['shader_rebuild'] is False
           assert a['trace_sites'] == 18
-          print('G1S 184-byte native stream trace, 18 branches, original shader library unchanged')
+          assert a['original_stream_only'] is True
+          assert a['synthetic_reader_removed'] is True
+          print('G1T+G1S original virtual stream retry, 18 original branch guards, shader image unchanged')
           PY
           xcodebuild -version
           brew list --formula xcodegen >/dev/null 2>&1 || brew install xcodegen
@@ -70,16 +73,16 @@ jobs:
           assert report['output_ipa_sha256']==d
           print('Verified original 19,210 shader IPA, SHA-256',d)
           PY
-      - name: Preserve 6GiB geometry, trace guest reader and real FDATA reads without shaders rebuild
+      - name: Repack native G1T + G1S original-stream retry without shader rebuild
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/output"
-          python3 fairy2/scripts/repack_g1s_readertrace.py \
+          python3 fairy2/scripts/repack_mode4_retry.py \
             --source-ipa "$RUNNER_TEMP/source/Fairy2iOS-FairyTail2-KTGL-2GiB-NoOverlap.ipa" \
             --source-report "$RUNNER_TEMP/source/ktgl-nooverlap-report.json" \
             --repo "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/output"
-      - name: Verify G1S/FDATA source correlation, shaders, CRC, controllers and external RomFS
+      - name: Verify no synthetic assets, shader SHA, IPA CRC, controls and external RomFS
         shell: bash
         run: |
           set -euo pipefail
@@ -87,13 +90,16 @@ jobs:
           from pathlib import Path
           import os,json,zipfile,hashlib
           d=Path(os.environ['RUNNER_TEMP'])/'output'
-          info=json.loads((d/'g1s-readertrace-report.json').read_text())
+          info=json.loads((d/'mode4-retry-report.json').read_text())
           assert info['branch_trace_sites']==18
           assert info['not_a_gameplay_fix'] is True
           assert info['device_boot_verified'] is False
-          assert info['g1t_fallback_preserved'] is True
+          assert info['g1t_fallback_preserved'] is False
+          assert info['mode4_native_retry_enabled'] is True
+          assert info['original_stream_only'] is True
+          assert info['retry_bound_per_thread'] == 64
           assert info['fdata_io_proof'] is True
-          assert info['probe_entries'] == [12943, 13660]
+          assert info['resource_stage_trace'] is True
           assert info['g1s_hash']=='0xac9ed13e'
           assert info['g1s_factory']=='main+0x1dbdc14'
           assert info['g1s_parser']=='main+0x6e7b60'
@@ -115,15 +121,15 @@ jobs:
             assert 'Payload/DmShell.app/DmShell' in names
             assert z.getinfo(fw+'profile.tsv').file_size>100
             assert not any(n.endswith('/romfs.img') for n in names)
-          print('FAIRY2 FDATA IO CORRELATION CANDIDATE verified:',ipa.name,'SHA',s.hexdigest())
+          print('FAIRY2 ORIGINAL-ONLY BOUNDED RETRY CANDIDATE:',ipa.name,'SHA',s.hexdigest())
           PY
-      - name: Upload one host-only G1S FDATA correlation IPA and source report
+      - name: Upload one mode4 G1T and G1S native-stream retry IPA
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: Fairy2iOS-G1S-FDATA-IOProbe-${{ github.run_number }}
+          name: Fairy2iOS-Mode4-OriginalRetry-${{ github.run_number }}
           path: |
-            ${{ runner.temp }}/output/Fairy2iOS-FairyTail2-G1S-FDATA-IOProbe.ipa
-            ${{ runner.temp }}/output/g1s-readertrace-report.json
+            ${{ runner.temp }}/output/Fairy2iOS-FairyTail2-Mode4-BoundedRetry.ipa
+            ${{ runner.temp }}/output/mode4-retry-report.json
             ${{ runner.temp }}/output/full-resource-va-report.json
           if-no-files-found: error
           retention-days: 14
@@ -131,6 +137,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: Fairy2iOS-G1S-FDATA-IOProbe-failure-${{ github.run_number }}
+          name: Fairy2iOS-Mode4-OriginalRetry-failure-${{ github.run_number }}
           path: ${{ runner.temp }}/output/host-build.log
           if-no-files-found: warn
