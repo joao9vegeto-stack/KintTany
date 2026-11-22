@@ -20,6 +20,11 @@ class HostMemoryRepackTests(unittest.TestCase):
         self.assertIn('str(gen/"framework/objc_namespace.h")',src)
         self.assertIn('str(gen/"framework/exported_symbols.txt")',src)
         self.assertIn('"DM_NS_TAG="+ns_tag',src)
+    def test_shell_integrity_ignores_resigning_bytes(self):
+        src=s.read_text()
+        self.assertIn('original_shell_text_sha=mod.macho_text_sha(app/"DmShell")',src)
+        self.assertIn('mod.macho_text_sha(app/"DmShell")!=original_shell_text_sha',src)
+        self.assertNotIn('sha256(app/"DmShell")!=original_shell_hash',src)
     def test_capacity_real_fix(self):
         self.assertEqual(m.OLD_HEAP_CAP,128*1024*1024)
         self.assertEqual(m.NEW_HEAP_CAP,1024*1024*1024)

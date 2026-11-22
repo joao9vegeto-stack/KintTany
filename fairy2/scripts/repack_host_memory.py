@@ -412,7 +412,10 @@ def main():
         settings=mod.configure_launcher(json.loads(launcher.read_text()))
         mod.validate_settings(settings)
         launcher.write_text(json.dumps(settings,indent=2,ensure_ascii=False)+"\n",encoding="utf-8")
-        original_shell_hash=sha256(app/"DmShell")
+        # codesign necessarily rewrites LC_CODE_SIGNATURE and may change
+        # __LINKEDIT bytes. Compare actual executable code, not the complete
+        # signed Mach-O file. Repack helper implements __TEXT,__text hashing.
+        original_shell_text_sha=mod.macho_text_sha(app/"DmShell")
         log("Reinserting new host binary into original framework; Metal and Shell unchanged")
         shutil.copy2(built,old_binary)
         run(["xattr","-cr",fw])
@@ -422,8 +425,8 @@ def main():
         run(["codesign","--force","--sign","-","--entitlements",entitlements,
              "--timestamp=none",app])
         run(["codesign","--verify","--deep","--strict",app])
-        if sha256(app/"DmShell")!=original_shell_hash:
-            fail("Shell Mach-O unexpectedly changed")
+        if mod.macho_text_sha(app/"DmShell")!=original_shell_text_sha:
+            fail("Shell __TEXT,__text code unexpectedly changed")
         if sha256(old_shader)!=old_shader_sha:
             fail("reused Metal shader library changed in selective host rebuild")
         output_ipa=output/"Fairy2iOS-FairyTail2-host-memory-repack.ipa"

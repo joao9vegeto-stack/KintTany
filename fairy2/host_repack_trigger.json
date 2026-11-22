@@ -12,7 +12,7 @@
   "romfs_aoc_repacked": false,
   "crash_pc": "main+0x227b750",
   "verified_fix": false,
-  "attempt": 4,
-  "last_failure_run_id": 44976968412,
-  "last_failure_reason": "DmShellGame swift bridging compile requires Gen/framework/objc_namespace.h and exported_symbols.txt generated via gen_objc_namespace.py; now explicit host-only generation"
+  "attempt": 5,
+  "last_failure_run_id": 44977311621,
+  "last_failure_reason": "Host compilation and guest sections succeeded; code-signing rewrote Shell Mach-O signature as expected; compare __TEXT,__text SHA rather than entire signed executable SHA"
 }
