@@ -944,8 +944,8 @@ def try_transfer_global_memory():
 
 
 
-def try_transfer_g1t_branch_trace():
-    """Transfer ONLY the device-untested G1T branch-trace IPA from verified run.
+def try_transfer_g1t_header_rescue():
+    """Transfer ONLY the device-untested, one-shot G1T header-rescue IPA from verified run.
 
     Never fall back to the crashing 6GiB/old IPA; fail before downloading if
     GitHub changed the expected run, commit, artifact or provenance.
@@ -954,10 +954,10 @@ def try_transfer_g1t_branch_trace():
     import google.auth
     from googleapiclient.discovery import build
 
-    RUN_ID = 45046524330
-    RUN_SHA = "0a96bd9ff19df5cbea6f9643e46a27f215e4ed39"
-    ARTIFACT_NAME = "Fairy2iOS-G1T-BranchTrace-3"
-    IPA_NAME = "Fairy2iOS-FairyTail2-G1T-BranchTrace.ipa"
+    RUN_ID = 45050364099
+    RUN_SHA = "e2117a992b66bdb7d9926287d00512bb30b86d7e"
+    ARTIFACT_NAME = "Fairy2iOS-G1T-HeaderRescue-4"
+    IPA_NAME = "Fairy2iOS-FairyTail2-G1T-HeaderRescue.ipa"
     SHADER_SHA = "ab35b0ef89c907a38c8462da78ba6864153c86f8c203d613b321d45ce0aa262b"
     G1T_SHA = "558ada8c563fe44fa18d894d01f39e8b1a230b26ad1bcd0782743797f815e494"
     SOURCE_SHA = "b1792f9eb522de53b2b252e3a85229584831434999edda98f31c87c7c8c256cd"
@@ -968,7 +968,7 @@ def try_transfer_g1t_branch_trace():
     headers = {"Authorization": f"Bearer {token}",
                "Accept": "application/vnd.github+json",
                "X-GitHub-Api-Version": "2022-11-28",
-               "User-Agent": "Fairy2iOS-G1T-Trace-Drive-Transfer"}
+               "User-Agent": "Fairy2iOS-G1T-HeaderRescue-Drive-Transfer"}
 
     def get(path, params=None):
         response = requests.get(api_root + path, headers=headers, params=params, timeout=60)
@@ -978,7 +978,7 @@ def try_transfer_g1t_branch_trace():
     run = get(f"/actions/runs/{RUN_ID}")
     require(run.get("id") == RUN_ID and run.get("head_sha") == RUN_SHA and
             run.get("head_branch") == BRANCH and
-            run.get("name") == "Fairy2iOS - G1T factory branch trace (host-only, no shaders)" and
+            run.get("name") == "Fairy2iOS - verified G1T header rescue (host-only)" and
             run.get("status") == "completed" and run.get("conclusion") == "success",
             f"Run de diagnóstico {RUN_ID} não corresponde à execução esperada ou não concluiu com sucesso")
     reject_confirmed_device_crash(RUN_ID)
@@ -992,7 +992,7 @@ def try_transfer_g1t_branch_trace():
     source = (artifact.get("workflow_run") or {})
     require(source.get("id") == RUN_ID and source.get("head_sha") == RUN_SHA,
             "Proveniência do artifact não coincide com o run validado")
-    print(f"[Fairy2iOS] 1/4: G1T BranchTrace — run {RUN_ID}, artifact {ARTIFACT_NAME}.", flush=True)
+    print(f"[Fairy2iOS] 1/4: G1T HeaderRescue — run {RUN_ID}, artifact {ARTIFACT_NAME}.", flush=True)
 
     response = requests.get(api_root + f"/actions/artifacts/{artifact['id']}/zip",
                             headers=headers, allow_redirects=False, timeout=60)
@@ -1019,7 +1019,7 @@ def try_transfer_g1t_branch_trace():
                 "ZIP externo contém nomes duplicados ou caminhos inseguros")
         ipa_names = [n for n in names if n.endswith(".ipa") and not n.endswith("/")]
         report_names = [n for n in names
-                        if Path(n).name == "g1t-branchtrace-report.json"]
+                        if Path(n).name == "g1t-headerrescue-report.json"]
         require(len(ipa_names) == 1 and len(report_names) == 1,
                 "Artefato precisa conter exatamente 1 IPA e 1 relatório G1T")
         record = json.loads(z.read(report_names[0]))
@@ -1033,7 +1033,10 @@ def try_transfer_g1t_branch_trace():
                 and len(patch.get("resource_stage_traps", [])) == 11
                 and patch.get("resource_stage_trap_opcode") == "40403ed4"
                 and record.get("resource_stage_trace") is True
-                and record.get("not_a_gameplay_fix") is True
+                and record.get("not_a_gameplay_fix") is False
+                and record.get("device_boot_verified") is False
+                and record.get("fallback_g1t_bytes") == 48
+                and "one-shot" in str(record.get("fallback_kind", ""))
                 and record.get("g1t_header_sha256") == G1T_SHA
                 and record.get("host_recompiled") is True
                 and record.get("game_shaders_recompiled") is False
@@ -1084,7 +1087,7 @@ def try_transfer_g1t_branch_trace():
             "parents": [DRIVE_GAME_FOLDER],
             "mimeType": "application/vnd.google-apps.folder"},
             fields="id", supportsAllDrives=True).execute()["id"]
-    destination_name = f"Fairy2iOS-G1T-BranchTrace-run{RUN_ID}.ipa"
+    destination_name = f"Fairy2iOS-G1T-HeaderRescue-run{RUN_ID}.ipa"
     print(f"[Fairy2iOS] 4/4: Enviando {destination_name} ao Drive fairy2/ipa...", flush=True)
     uploaded = upload(drive, ipa, folder, destination_name)
 
@@ -1096,13 +1099,13 @@ def try_transfer_g1t_branch_trace():
         "ipa_name": destination_name, "ipa_sha256": digest,
         "ipa_size": ipa.stat().st_size, "drive_ipa_id": uploaded["id"],
         "device_tested": False, "gameplay_fix_claimed": False,
-        "status": "DEVICE_DIAGNOSTIC_G1T_BRANCH_TRACE",
+        "status": "G1T_HEADER_RESCUE_CANDIDATE_NOT_DEVICE_VERIFIED",
         "ipa_validation": details, "build_report": record
     }
-    prov = work / f"Fairy2iOS-G1T-BranchTrace-run{RUN_ID}-provenance.json"
+    prov = work / f"Fairy2iOS-G1T-HeaderRescue-run{RUN_ID}-provenance.json"
     prov.write_text(json.dumps(provenance, ensure_ascii=False, indent=2) + "\n")
     upload(drive, prov, folder, prov.name)
-    print("[Fairy2iOS] IPA de DIAGNÓSTICO G1T enviada e validada:", destination_name, flush=True)
+    print("[Fairy2iOS] IPA candidata G1T HeaderRescue enviada e validada:", destination_name, flush=True)
     print("Drive: https://drive.google.com/drive/folders/" + folder, flush=True)
     print("Actions: " + provenance["run_url"], flush=True)
     return True
@@ -1236,8 +1239,8 @@ def transfer_original_explicit():
 
 def main():
     """Transfer the verified new G1T trace IPA, NOT the known-crashing 6GiB IPA."""
-    selected=try_transfer_g1t_branch_trace()
-    require(selected is True,"IPA de diagnóstico G1T indisponível; não selecionar builds com crash.")
+    selected=try_transfer_g1t_header_rescue()
+    require(selected is True,"IPA HeaderRescue indisponível; não selecionar builds com crash.")
     return selected
 
 
