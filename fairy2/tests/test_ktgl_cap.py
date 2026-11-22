@@ -17,7 +17,7 @@ class Test(unittest.TestCase):
   with TemporaryDirectory() as tmp:
    p=Path(tmp)/"main.patched.bin"
    with self.assertRaisesRegex(RuntimeError,"original KTGL load"):
-    m.insert_cap(p,bytes(0x21b6958),0x10000000)
+    m.insert_cap(p,bytes(0x21b6958+8),0x10000000)
  def test_mac_only(self):
   src=file.read_text()
   for needle in ('build_ipa.sh','xcodebuild','dmsh_build.py'):

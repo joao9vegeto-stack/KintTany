@@ -12,5 +12,8 @@
   ],
   "compile_shaders": false,
   "build_ipa": false,
-  "iphone_success_verified": false
+  "iphone_success_verified": false,
+  "attempt": 2,
+  "last_preflight_run": 44986310229,
+  "preflight_fix": "test fixture needs enough bytes to reach both load sites; test invalid opcode not length"
 }
