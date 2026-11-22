@@ -31,7 +31,7 @@ jobs:
           set -euo pipefail
           # Validation imports both RAR/Drive helpers and offload regression
           # tests. These modules must exist BEFORE unittest discovery.
-          python3 -m pip install --disable-pip-version-check requests google-api-python-client google-auth
+          python3 -m pip install --disable-pip-version-check requests google-api-python-client google-auth 'lz4>=4,<5'
           python3 - <<'PY'
           import requests
           import googleapiclient.discovery
@@ -44,6 +44,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/Fairy2iOS"
           test "$(cat .upstream-ref)" = "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb"
+          python3 -m py_compile fairy2/scripts/ktgl_reference_baseline.py fairy2/scripts/prepare_actions.py
           python3 -m py_compile fairy2/port_stages.py fairy2/scripts/mac_capture.py fairy2/drive_chunks.py fairy2/colab/source_archive.py fairy2/colab/prepare_linux.py fairy2/colab/run_colab.py fairy2/scripts/prepare_actions.py fairy2/scripts/build_shared.py fairy2/colab/transfer_ipa.py fairy2/colab/archive_ingest.py
           python3 -m unittest discover -s fairy2/tests -p "test_*.py" -v
           python3 - <<'PY'
