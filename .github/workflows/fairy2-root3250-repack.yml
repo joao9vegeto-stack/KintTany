@@ -29,7 +29,9 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
-          from fairy2.scripts import repack_root3250 as fix
+          import sys
+          sys.path.insert(0,str(Path('fairy2/scripts').resolve()))
+          import repack_root3250 as fix
           m=fix.memory_geometry()
           t=json.loads(Path('fairy2/root3250_repack_trigger.json').read_text())
           assert t['source_run']==fix.SOURCE_RUN==44986770915
