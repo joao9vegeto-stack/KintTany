@@ -34,6 +34,7 @@ class RepackTransferRegression(unittest.TestCase):
         self.assertIn('subprocess.run(["git", "-C", str(REPO), "reset"',src)
         self.assertIn('spec_from_file_location("fairy2_latest_repack_transfer"',src)
         self.assertIn("base 44965722551 BLOQUEADA",src)
+        self.assertIn("colab_auth.authenticate_user()",src)
     def test_no_implicit_original_in_main_body(self):
         src=file.read_text()
         main=src.split("def main():",1)[1]
