@@ -32,6 +32,24 @@ WORKERS = 6
 DEVICE_CRASH_RUNS = frozenset({44990224107, 44992666178, 44995690307, 45000495987, 45046524330, 45050364099, 45056917685, 45064035915})
 DEVICE_CRASH_SHA256 = frozenset({"6faba771ab897cec3c19277a03815e42c3428be1c6c92e522195a0133db196d1", "6b3803ac5359c724fb43781688c1e3eab7cb3b80dde723a64f73e945c0574c0c", "b1792f9eb522de53b2b252e3a85229584831434999edda98f31c87c7c8c256cd", "df6cd6c826a3218fd965b03161ea2355cf348c13c369e13f2afb7dff74c953c2", "5f713b1a06bdf8d8fcff63bd29d69cd3a5cff280f5cd42065973919c0d81c94a", "416b9582e27cf2ca3ae4d10e2001b07ee95717c398451766b5445efc80dd3a6e"})
 
+
+# Build 45068245797 is structurally valid, but it is a speculative, untested
+# 64x original-stream retry that the project owner explicitly declined to use.
+# Do NOT label it a confirmed crash. Keep it out of automatic IPA selection
+# until a *reference-based* fix is validated on an actual device.
+USER_REJECTED_UNVERIFIED_RUNS = frozenset({45068245797})
+USER_REJECTED_UNVERIFIED_SHA256 = frozenset({
+    "db906123fba2a6b215da72a737d5aa2da9e241a03d5eecbc843b52a30e8ad669",
+})
+
+def reject_user_rejected_unverified(run_id, sha256=None):
+    """Do not silently distribute an experimental IPA rejected by the owner."""
+    require(int(run_id) not in USER_REJECTED_UNVERIFIED_RUNS and
+            str(sha256 or "").lower() not in USER_REJECTED_UNVERIFIED_SHA256,
+            "IPA experimental SEM validação de gameplay e expressamente "
+            "recusada pelo usuário (run 45068245797). Não selecionar nem "
+            "transferir automaticamente; NÃO é crash confirmado.")
+
 def reject_confirmed_device_crash(run_id, sha256=None):
     """A structurally valid IPA can still be proven to crash on real hardware."""
     require(int(run_id) not in DEVICE_CRASH_RUNS and
@@ -224,6 +242,7 @@ def try_transfer_host_repack():
             f"{newest.get('id')} ({newest.get('status')}/{newest.get('conclusion')}). "
             "Não vou selecionar a IPA antiga com crash.")
     reject_confirmed_device_crash(newest["id"])
+    reject_user_rejected_unverified(newest["id"])
     artifacts = get(f"/actions/runs/{newest['id']}/artifacts",
                     {"per_page": 100}).get("artifacts", [])
     choices = [a for a in artifacts
@@ -796,6 +815,7 @@ def try_transfer_global_memory():
     # Fail EARLY: the latest completed 6GiB build now has TWO independently
     # confirmed iPhone resource-factory traps. Do not download 1.62GiB.
     reject_confirmed_device_crash(int(newest["id"]))
+    reject_user_rejected_unverified(int(newest["id"]))
     # Never fall back to any earlier device-crashing IPA.
     # A green build yields a *candidate*; the iPhone still must verify gameplay.
     require(newest.get("status") == "completed" and newest.get("conclusion") == "success",
@@ -891,6 +911,7 @@ def try_transfer_global_memory():
             shutil.copyfileobj(inp, out, length=8 * 1024 * 1024)
     digest, _ = hashes(ipa)
     reject_confirmed_device_crash(newest["id"], digest)
+    reject_user_rejected_unverified(newest["id"], digest)
     require(ipa.stat().st_size == int(record.get("output_ipa_size_bytes") or -1)
             and digest == record.get("output_ipa_sha256"),
             "IPA extraída diverge de size/SHA-256 do relatório host repack")
@@ -983,6 +1004,7 @@ def try_transfer_g1s_reader_trace():
             run.get("status") == "completed" and run.get("conclusion") == "success",
             f"Run de diagnóstico {RUN_ID} não corresponde à execução esperada ou não concluiu com sucesso")
     reject_confirmed_device_crash(RUN_ID)
+    reject_user_rejected_unverified(RUN_ID)
     artifacts = get(f"/actions/runs/{RUN_ID}/artifacts", {"per_page": 100}).get("artifacts", [])
     matches = [a for a in artifacts if a.get("name") == ARTIFACT_NAME and not a.get("expired")]
     require(len(matches) == 1,
@@ -1060,6 +1082,7 @@ def try_transfer_g1s_reader_trace():
             shutil.copyfileobj(inp, dest, length=8 * 1024 * 1024)
     digest, _ = hashes(ipa)
     reject_confirmed_device_crash(RUN_ID, digest)
+    reject_user_rejected_unverified(RUN_ID, digest)
     require(ipa.stat().st_size == int(record.get("output_ipa_size_bytes") or -1)
             and digest == record.get("output_ipa_sha256"),
             "IPA extraída não corresponde ao SHA-256/tamanho do relatório")
@@ -1270,6 +1293,9 @@ def select_latest_successful_ipa_artifact(github_get, max_pages=10):
             if rid in DEVICE_CRASH_RUNS:
                 skipped_crash.append(rid)
                 continue
+            if rid in USER_REJECTED_UNVERIFIED_RUNS:
+                skipped_crash.append(rid)
+                continue
             examined += 1
             artifacts = github_get(f"/actions/runs/{rid}/artifacts", {
                 "per_page": 100
@@ -1369,6 +1395,7 @@ def transfer_latest_successful_ipa():
     run, artifact, skipped = select_latest_successful_ipa_artifact(github_get)
     rid = int(run["id"])
     reject_confirmed_device_crash(rid)
+    reject_user_rejected_unverified(rid)
     print(f"[Fairy2iOS] Selecionado run {rid} commit {run['head_sha']} "
           f"artefato {artifact['name']} ({artifact['size_in_bytes']:,} B).", flush=True)
     if skipped:
@@ -1442,6 +1469,7 @@ def transfer_latest_successful_ipa():
     validate_report = {"framework": framework, "shader_payload": shader}
     sha, _ = hashes(target)
     reject_confirmed_device_crash(rid, sha)
+    reject_user_rejected_unverified(rid, sha)
     require(target.stat().st_size == int(expected_size), "IPA incompleta")
     require(not expected_sha or sha == str(expected_sha).lower(),
             "SHA-256 da IPA difere do relatório de build")
