@@ -59,16 +59,113 @@ def host_trace_source():
     return src
 stage.host_trace_source=host_trace_source
 
+
+# Cross-layer reader proof: POSIX RomFS-image reads versus the G1S virtual
+# reader return. Avoid guessing whether the failure is FS, zlib, or cursor.
+def patch_host_fs_trace(path:Path):
+    src=path.read_text()
+    target='HLE_FORCE("_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvm", "fsp-srv → pread(2)", Result, h_fs_ReadFile, size_t *out, uint64_t h, int64_t off, void *buf, size_t sz) { dm_thread_service_request();'
+    stage.base.require(src.count(target)==1, "Pinned NXNative ReadFile anchor changed")
+    stage.base.require("FAIRY2_FDATA_IO_PROOF" not in src, "host FS already patched")
+    before=src[:src.index(target)]
+    tail=src[src.index(target):]
+    next_fn='HLE_FORCE("_ZN2nn2fs9WriteFileENS0_10FileHandleElPKvmRKNS0_11WriteOptionE"'
+    stage.base.require(next_fn in tail, "ReadFile end not found")
+    read,remain=tail.split(next_fn,1)
+    stage.base.require(read.count("    *out = got;\n")==1, "ReadFile count assignment changed")
+    read=read.replace("    *out = got;\n", r'''    *out = got;
+    /* Fairy2iOS only: observed RDB source files in the exact external
+       DMROMFS1 image (verified entries 12943 and 13660, stable SHA). */
+    if (IMG_H(h) && (IMG_K(h) == 12943 || IMG_K(h) == 13660)) {
+        fairy2_fdata_io_record(h, off, requested, sz, got, base,
+                              g_mnt[IMG_M(h)].img->e[IMG_K(h)].b,
+                              got >= 8 ? buf : NULL);
+    }
+''',1)
+    stage.base.require(read.count('            return err_res("pread", "fd"); }')==1,
+                       "Host ReadFile error path differs")
+    read=read.replace('            return err_res("pread", "fd"); }',
+        '            if (IMG_H(h) && (IMG_K(h)==12943 || IMG_K(h)==13660))\n'
+        '                LOG("[dm] FAIRY2_FDATA_IO_ERROR entry=%llu off=%lld got=%zu errno=%d",\n'
+        '                    (unsigned long long)IMG_K(h), (long long)off, got, errno);\n'
+        '            return err_res("pread", "fd"); }')
+    old='    size_t got = 0; int reprep = 0, fd = (int)h; int64_t base = 0;'
+    stage.base.require(read.count(old)==1, "ReadFile input size binding changed")
+    read=read.replace(old,
+         '    size_t requested = sz;\n'+old,1)
+    block=r'''
+/* FAIRY2_FDATA_IO_PROOF: runtime source IO correlated with native G1S parser.
+ * No ROMFS contents, shader files, guest code, filesystem result or offset
+ * are modified. This is NOT a gameplay fix. */
+struct fairy2_fdata_event {
+    uint64_t seq, h, entry, off, wanted, clipped, got, base, entry_size, first8;
+};
+#define FAIRY2_FDATA_RING 512u
+static struct fairy2_fdata_event fairy2_fdata_events[FAIRY2_FDATA_RING];
+static uint64_t fairy2_fdata_seq;
+static void fairy2_fdata_io_record(uint64_t h, int64_t off,
+                                   size_t wanted, size_t clipped, size_t got,
+                                   int64_t base, uint64_t entry_size,
+                                   const void *content) {
+    const uint64_t seq=__atomic_add_fetch(&fairy2_fdata_seq, 1, __ATOMIC_RELAXED);
+    struct fairy2_fdata_event *e=&fairy2_fdata_events[seq & (FAIRY2_FDATA_RING-1)];
+    e->h=h; e->entry=IMG_K(h); e->off=(uint64_t)off;
+    e->wanted=wanted; e->clipped=clipped; e->got=got;
+    e->base=(uint64_t)base; e->entry_size=entry_size;
+    e->first8=0;
+    if (content) memcpy(&e->first8, content, 8);
+    __atomic_store_n(&e->seq, seq, __ATOMIC_RELEASE);
+    if (wanted && !got) LOG("[dm] FAIRY2_FDATA_IO_ZERO entry=%llu off=%lld wanted=%zu clipped=%zu len=%llu",
+                           (unsigned long long)e->entry, (long long)off,
+                           wanted, clipped, (unsigned long long)entry_size);
+}
+void fairy2_fdata_probe_dump(void) {
+    uint64_t last=__atomic_load_n(&fairy2_fdata_seq, __ATOMIC_ACQUIRE);
+    uint64_t first=last>128?last-128:1;
+    LOG("[dm] FAIRY2_FDATA_IO_HISTORY last %llu of %llu reads targeting source FDATA entries 12943/13660",
+        (unsigned long long)(last>=first?last-first+1:0), (unsigned long long)last);
+    for(uint64_t seq=first; seq<=last && seq>0; ++seq) {
+        struct fairy2_fdata_event *e=&fairy2_fdata_events[seq & (FAIRY2_FDATA_RING-1)];
+        if (__atomic_load_n(&e->seq, __ATOMIC_ACQUIRE)!=seq) continue;
+        LOG("[dm] FAIRY2_FDATA_IO #%llu entry=%llu off=%lld wanted=%llu clipped=%llu got=%llu base=%llu filelen=%llu data_first8=%016llx",
+            (unsigned long long)seq, (unsigned long long)e->entry,
+            (long long)e->off, (unsigned long long)e->wanted,
+            (unsigned long long)e->clipped, (unsigned long long)e->got,
+            (unsigned long long)e->base, (unsigned long long)e->entry_size,
+            (unsigned long long)e->first8);
+    }
+}
+'''
+    path.write_text(before+block+read+next_fn+remain)
+    stage.base.require("FAIRY2_FDATA_IO_PROOF" in path.read_text(),
+                       "FS instrumentation not written")
+
+def patch_host_crash_io(path:Path):
+    src=path.read_text()
+    anchor="    if (sig == SIGTRAP) fairy2_stage_dump();"
+    stage.base.require(src.count(anchor)==1, "Stage dump anchor missing")
+    # The existing 18 exact original branch decisions remain unchanged.
+    src=src.replace(anchor,"    if (sig == SIGTRAP) { fairy2_stage_dump(); fairy2_fdata_probe_dump(); }")
+    anchor2="static void on_crash(int sig, siginfo_t *si, void *uc_) {"
+    stage.base.require(src.count(anchor2)==1, "Crash entry changed")
+    src=src.replace(anchor2,"extern void fairy2_fdata_probe_dump(void);\n"+anchor2,1)
+    path.write_text(src)
+
 def make(source:Path,report:Path,repo:Path,out:Path):
     base=stage.base
     base.require((repo/'.upstream-ref').read_text().strip()==base.hook.ENGINE_PIN,"wrong pinned NXNative")
     stage.patch_host_crash(repo/'engine/dm/host/crash.c')
+    patch_host_crash_io(repo/'engine/dm/host/crash.c')
+    patch_host_fs_trace(repo/'engine/dm/host/hle_fs.c')
     base.patch_main=stage.trace_patch_main
     base.verify_main=stage.trace_verify_main
-    base.OUT_NAME='Fairy2iOS-FairyTail2-G1S-ReaderTrace.ipa'
+    base.OUT_NAME='Fairy2iOS-FairyTail2-G1S-FDATA-IOProbe.ipa'
     result=base.make(source,report,repo,out)
     result.update({
       "resource_stage_trace":True,
+      "fdata_io_proof":True,
+      "probe_entries": [12943, 13660],
+      "device_boot_verified":False,
       "branch_emulation":"exact AArch64 original 18 conditional predicates",
       "branch_trace_sites":18,
       "g1t_fallback_preserved":True,
