@@ -129,7 +129,7 @@ def main() -> None:
             len(parity["guest_paths"]) != 2):
         fail("KTGL archive AOT source parity did not verify both native reader paths")
     (root / "ktgl-reference-parity-report.json").write_text(
-        json.dumps(parity, indent=2, ensure_ascii=False) + "\\n")
+        json.dumps(parity, indent=2, ensure_ascii=False) + "\n")
     print("[Fairy2iOS] Original Switch NSO versus AOT: verified",
           parity["original_code_verified_bytes"],
           "bytes across 10 KTGL code regions, both reader paths; no guest fix claimed")
