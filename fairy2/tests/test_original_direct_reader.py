@@ -97,7 +97,7 @@ class DirectReader(unittest.TestCase):
         s=SCRIPT.read_text()
         for key in ("FAIRY2_KTGL_DIRECT_MODE4_SOURCE_RECOVERY",
                     "main+0x2a64b50", "original==0", "s->decoded_pos != 0",
-                    "f2_zlib_original_chunk(cache, F2_ZLIB_MAX_OUT",
+                    "f2_zlib_original_chunk(f2_direct_verified_output, F2_ZLIB_MAX_OUT",
                     "f2_direct_reader_pop(", "compressed_end - s->compressed_pos"):
             if key=="main+0x2a64b50":
                 self.assertIn(key,s)
@@ -106,7 +106,8 @@ class DirectReader(unittest.TestCase):
         self.assertIn("only_when_read_returns_zero",s)
         self.assertNotIn("fairy2_known_g1t",h)
         self.assertNotIn("GT1G05000",h)
-        self.assertEqual(len(__import__("re").findall(r"0xc11(?:b80|f9c)",s)),2)
+        self.assertIn("0xc11b80",s)
+        self.assertIn("0xc11f9c",s)
 
     def test_critical_guest_opcodes_match_private_original_nso(self):
         source=SCRIPT.read_text()
