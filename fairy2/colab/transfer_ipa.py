@@ -762,7 +762,7 @@ def try_transfer_align64():
 
 
 def try_transfer_global_memory():
-    """Select the NEWEST five-instruction iPhone root-region overrun correction, never silently re-upload the crashing base IPA.
+    """Select ONLY the new conservative-GPU/allocator-trace candidate, never a known crashing IPA.
 
     Does not trigger a build or download any game/ROMFS content.
     """
@@ -783,7 +783,7 @@ def try_transfer_global_memory():
         require(res.ok, f"GitHub HTTP {res.status_code}: {res.text[:160]}")
         return res.json()
 
-    wf = get("/actions/workflows/fairy2-global-memory.yml")
+    wf = get("/actions/workflows/fairy2-conservative.yml")
     runs = get(f"/actions/workflows/{wf['id']}/runs",
                {"branch": BRANCH, "per_page": 30}).get("workflow_runs", [])
     runs = [r for r in runs if r.get("head_branch") == BRANCH]
@@ -791,6 +791,8 @@ def try_transfer_global_memory():
             "Nenhum run do repack host-only encontrado: operação interrompida. "
             "A IPA original que crashou não é uma alternativa.")
     newest = max(runs, key=lambda r: (r.get("created_at") or "", int(r.get("id") or 0)))
+    # Never fall back to the 4GiB global-memory IPA that already crashed.
+    # A green build yields a *candidate*; the iPhone still must verify gameplay.
     require(newest.get("status") == "completed" and newest.get("conclusion") == "success",
             f"Host-only repack mais recente ainda não teve sucesso: "
             f"{newest.get('id')} ({newest.get('status')}/{newest.get('conclusion')}). "
@@ -798,7 +800,7 @@ def try_transfer_global_memory():
     artifacts = get(f"/actions/runs/{newest['id']}/artifacts",
                     {"per_page": 100}).get("artifacts", [])
     choices = [a for a in artifacts
-               if str(a.get("name", "")).startswith("Fairy2iOS-GlobalMemory-")
+               if str(a.get("name", "")).startswith("Fairy2iOS-Conservative-")
                and not a.get("expired")]
     require(len(choices) == 1,
             f"Run {newest['id']} precisa conter exatamente um artefato IPA de host repack")
@@ -826,7 +828,7 @@ def try_transfer_global_memory():
         require(all(not Path(n).is_absolute() and ".." not in Path(n).parts for n in names),
                 "Caminho inseguro no artifact")
         ipa_items = [n for n in names if n.endswith(".ipa") and not n.endswith("/")]
-        reports = [n for n in names if Path(n).name == "global-memory-report.json"]
+        reports = [n for n in names if Path(n).name == "conservative-report.json"]
         require(len(ipa_items) == 1 and len(reports) == 1,
                 "Artifact host repack não tem uma IPA e um relatório")
         record = json.loads(zipf.read(reports[0]))
@@ -854,13 +856,19 @@ def try_transfer_global_memory():
                 record.get("external_romfs_aoc_unchanged") is True and
                 record.get("fps_selector") == [30, 60] and
                 record.get("ab_swap_available") is True and
-                record.get("device_boot_verified") is False,
+                record.get("device_boot_verified") is False and
+                record.get("repair_candidate") is True and
+                record.get("runtime_verified_on_iphone") is False and
+                record.get("native_host_bin47_poll") is True and
+                record.get("conservative_defaults") ==
+                {"DM_NVN_ENC_THREAD":"0","DM_NVN_PREFETCH":"0","DM_PSO_PREBUILD":"0"} and
+                record.get("shader_and_guest_code_reused") is True,
                 "Relatório não comprova o modelo GLOBAL de memória ou shaders/controles preservados")
         require(record.get("metal_shader_sha256") ==
                 "ab35b0ef89c907a38c8462da78ba6864153c86f8c203d613b321d45ce0aa262b",
                 "Shaders Metal modificados: recusando transferência")
         name = Path(ipa_items[0]).name
-        require(name == "Fairy2iOS-FairyTail2-GlobalMemory-4GiB.ipa"
+        require(name == "Fairy2iOS-FairyTail2-ConservativeGPU-MemoryTrace.ipa"
                 and record.get("output_ipa") == name,
                 "Nome da IPA corrigida não confere")
         ipa = work / name
@@ -904,12 +912,14 @@ def try_transfer_global_memory():
         "ipa_name": destination_name, "ipa_size": ipa.stat().st_size,
         "ipa_sha256": digest, "artifact_zip_sha256": outer_sha,
         "ipa_internal_validation": details, "report": record,
+        "runtime_verified_on_iphone": False,
+        "release_status": "EXPERIMENTAL_CANDIDATE_NOT_IPHONE_VERIFIED",
         "drive_ipa_id": uploaded["id"]
     }
     prov_file = work / ("Fairy2iOS-global-memory-run" + str(newest["id"]) + "-provenance.json")
     prov_file.write_text(json.dumps(provenance, ensure_ascii=False, indent=2)+"\n")
     upload(drive, prov_file, folder, prov_file.name)
-    print("[Fairy2iOS] MEMÓRIA GLOBAL REVISADA E ENVIADA:",destination_name,flush=True)
+    print("[Fairy2iOS] CANDIDATA GPU CONSERVADORA (AINDA NÃO VALIDADA NO IPHONE):",destination_name,flush=True)
     print("Drive: https://drive.google.com/drive/folders/" + folder,flush=True)
     print("Actions: " + provenance["run_url"],flush=True)
     return True
