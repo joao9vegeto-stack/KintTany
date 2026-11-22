@@ -15,5 +15,8 @@
   "bounded_retries": 64,
   "goal": "Replace one-shot known G1T fake 48B stream with bounded retry of original guest virtual reader for empty G1T and G1S header reads; preserve failure if no real data",
   "workflow": "fairy2-g1s-readertrace.yml",
-  "snapshot": "2026-11-22"
+  "snapshot": "2026-11-22",
+  "revision": 2,
+  "regression_fix": "Remove complete original one-shot G1T rescue source block. Keep only native reader retry with original fail branch.",
+  "previous_ci_run": 45067489559
 }
