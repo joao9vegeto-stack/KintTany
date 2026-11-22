@@ -1,0 +1,16 @@
+{
+  "branch": "Fairy2iOS",
+  "title_id": "0100B9801F872000",
+  "engine_pin": "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb",
+  "source_run": 44995690307,
+  "source_ipa_sha256": "b1792f9eb522de53b2b252e3a85229584831434999edda98f31c87c7c8c256cd",
+  "only_original_stored_zlib": true,
+  "only_on_native_codec_failure": true,
+  "no_fabricated_resource": true,
+  "no_repeated_header_reads": true,
+  "shader_rebuild": false,
+  "gameplay_fix_claimed": false,
+  "device_boot_verified": false,
+  "workflow": "fairy2-ktgl-nativez.yml",
+  "method": "Original Switch mode4 zlib inflater runs first. Only on zero return and original failing path, native libz decompresses same input bytes with full zlib/Adler32 validation; unchanged guest G1T/G1S parsers."
+}
