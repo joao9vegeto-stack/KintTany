@@ -16,8 +16,8 @@
   "goal": "Replace one-shot known G1T fake 48B stream with bounded retry of original guest virtual reader for empty G1T and G1S header reads; preserve failure if no real data",
   "workflow": "fairy2-g1s-readertrace.yml",
   "snapshot": "2026-11-22",
-  "revision": 3,
-  "regression_fix": "Remove complete original one-shot G1T rescue source block. Keep only native reader retry with original fail branch.",
-  "previous_ci_run": 45067594787,
+  "revision": 4,
+  "regression_fix": "Provenance report fields g1s_hash, g1s_factory, g1s_parser, g1s_header_read added; prebuild guard test",
+  "previous_ci_run": 45067654323,
   "fix_ci": "test assertion matched base+0xoffset (module-relative AArch64 guest runtime)"
 }
