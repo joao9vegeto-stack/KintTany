@@ -1,0 +1,82 @@
+name: Fairy2iOS - exact crash disassembly
+on:
+  push:
+    branches: [Fairy2iOS]
+    paths: ['fairy2/forensic_trigger.json']
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: fairy2-forensic-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  disassemble:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: SHA verified global IPA -> disassemble original embedded guest (no build)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install capstone==5.0.9
+          mkdir -p "$RUNNER_TEMP/fairy2-forensic"
+          gh run download 44990224107 -R joao9vegeto-stack/KintTany -n Fairy2iOS-GlobalMemory-4 -D "$RUNNER_TEMP/fairy2-forensic"
+          python3 - <<'PY'
+          import zipfile,os,pathlib,json,subprocess,hashlib,sys
+          from capstone import Cs,CS_ARCH_ARM64,CS_MODE_ARM
+          sys.path.insert(0,str(pathlib.Path("fairy2/scripts").resolve()))
+          from repack_host_memory import otool_sections
+          d=pathlib.Path(os.environ["RUNNER_TEMP"])/"fairy2-forensic"
+          ipa=d/"Fairy2iOS-FairyTail2-GlobalMemory-4GiB.ipa"
+          h=hashlib.sha256()
+          with ipa.open("rb") as f:
+           for b in iter(lambda:f.read(4*1024*1024),b""):h.update(b)
+          assert h.hexdigest()=="6faba771ab897cec3c19277a03815e42c3428be1c6c92e522195a0133db196d1",h.hexdigest()
+          fw="Payload/DmShell.app/Frameworks/DmGame0100B9801F872000.framework/"
+          with zipfile.ZipFile(ipa) as z:
+           n=fw+"DmGame0100B9801F872000"
+           target=d/"DmGame0100B9801F872000"
+           with z.open(n) as src,target.open("wb") as dst:
+            while True:
+             b=src.read(4*1024*1024)
+             if not b:break
+             dst.write(b)
+           profile=z.read(fw+"profile.tsv").decode()
+           assert "mem_alias\t0x118000000" in profile and "mem_map_limit\t1" in profile
+           (d/"runtime-profile.tsv").write_text(profile)
+          sec=otool_sections(target)[("__TEXT","__dmmainx0")]
+          with target.open("rb") as f:f.seek(sec["offset"]);code=f.read(sec["size"])
+          patches={0x5f1b9c:"2900c0d2",0x1d700bc:"2900c0d2",0x225de0c:"2900c0d2",0x2295a44:"2900c0d2",0x2295a50:"2100c0d2"}
+          assert all(code[k:k+4].hex()==v for k,v in patches.items()),"wrong source guest binary"
+          windows=[("allocator-crash",0x227bbf0,0x227bea0),("caller",0x227d700,0x227d9b0),("allocation",0x227d000,0x227d600),("KTGL",0x21b6800,0x21b6e50),("root-init",0x2295a00,0x2295b00)]
+          md=Cs(CS_ARCH_ARM64,CS_MODE_ARM);out=[]
+          for name,start,end in windows:
+           lines=["======= "+name+" main+0x"+format(start,"x")+" ======="]
+           for ins in md.disasm(code[start:end],start):
+            note=" *** CRASH x22+8" if ins.address==0x227bd74 else (" *** PREVIOUS" if ins.address==0x227bd9c else "")
+            lines.append("main+0x%08x %s %-8s %s%s"%(ins.address,ins.bytes.hex(),ins.mnemonic,ins.op_str,note))
+           out.extend(lines+[""])
+          (d/"arm64-forensic.txt").write_text("\n".join(out)+"\n")
+          (d/"forensic-report.json").write_text(json.dumps({"run":44990224107,"source_sha256":h.hexdigest(),"guest_sha256":hashlib.sha256(code).hexdigest(),"root_patched":True,"crash_pc":"main+0x227bd74","x22":"0x5f6ad594929b1ff2","shader_compilation":False},indent=2))
+          for line in out:
+           if line.startswith("main+0x0227b") or line.startswith("main+0x0227d") or "=======" in line:print(line,flush=True)
+          PY
+      - name: Publish forensic report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Fairy2iOS-Forensic-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/fairy2-forensic/arm64-forensic.txt
+            ${{ runner.temp }}/fairy2-forensic/forensic-report.json
+            ${{ runner.temp }}/fairy2-forensic/runtime-profile.tsv
+          if-no-files-found: error

@@ -1,0 +1,6 @@
+{
+  "run": 44990224107,
+  "crash_pc": "main+0x227bd74",
+  "purpose": "exact ARM64 allocator dataflow before consolidated fix",
+  "compile": false
+}
