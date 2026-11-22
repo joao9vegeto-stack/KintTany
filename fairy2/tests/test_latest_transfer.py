@@ -33,7 +33,7 @@ class RepackTransferRegression(unittest.TestCase):
         self.assertIn('subprocess.run(["git", "-C", str(REPO), "fetch"',src)
         self.assertIn('subprocess.run(["git", "-C", str(REPO), "reset"',src)
         self.assertIn('spec_from_file_location("fairy2_latest_repack_transfer"',src)
-        self.assertIn("Run 45056075925",src)
+        self.assertIn("Run 45056917685",src)
         self.assertIn("colab_auth.authenticate_user()",src)
     def test_no_implicit_original_in_main_body(self):
         src=file.read_text()

@@ -955,9 +955,9 @@ def try_transfer_g1s_reader_trace():
     import google.auth
     from googleapiclient.discovery import build
 
-    RUN_ID = 45056075925
-    RUN_SHA = "42cdddedf49d7c90aa6ddafc4e98432d0ebcb3d2"
-    ARTIFACT_NAME = "Fairy2iOS-G1S-ReaderTrace-3"
+    RUN_ID = 45056917685
+    RUN_SHA = "825df676fe8087dd47ab84a5ea7fcf4a37e538c9"
+    ARTIFACT_NAME = "Fairy2iOS-G1S-ReaderTrace-4"
     IPA_NAME = "Fairy2iOS-FairyTail2-G1S-ReaderTrace.ipa"
     SHADER_SHA = "ab35b0ef89c907a38c8462da78ba6864153c86f8c203d613b321d45ce0aa262b"
     G1T_SHA = "558ada8c563fe44fa18d894d01f39e8b1a230b26ad1bcd0782743797f815e494"
