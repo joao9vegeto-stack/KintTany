@@ -21,6 +21,7 @@ static __thread struct {
     struct f2_direct_snapshot frames[16];
 } f2_direct_tls;
 static unsigned f2_direct_recover_ok, f2_direct_recover_refused;
+static __thread unsigned char f2_direct_verified_output[F2_ZLIB_MAX_OUT];
 
 static int f2_direct_recover_original_block(const struct f2_direct_snapshot *s) {
     if (!s || !s->reader || !s->destination || !s->raw ||
@@ -47,10 +48,13 @@ static int f2_direct_recover_original_block(const struct f2_direct_snapshot *s) 
     /* Entire output is retained in the guest's OWN 16KiB decoded cache,
      * so the very next original reader call handles its remaining bytes. */
     unsigned char *cache = (unsigned char *)(uintptr_t)(s->reader + 0x30);
-    if (!f2_zlib_original_chunk(cache, F2_ZLIB_MAX_OUT, &unpacked,
-                                head + 2, (size_t)packet_bytes))
+    if (!f2_zlib_original_chunk(f2_direct_verified_output, F2_ZLIB_MAX_OUT,
+                                &unpacked, head + 2, (size_t)packet_bytes))
         return 0;
     if (unpacked < s->requested) return 0;
+    /* No guest write occurs until ALL source-length, stream-integrity and
+     * requested-byte preconditions have been checked. */
+    memcpy(cache, f2_direct_verified_output, (size_t)unpacked);
 
     unsigned char *dest = (unsigned char *)(uintptr_t)
                           (s->destination + s->destination_off);
