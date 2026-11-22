@@ -1,0 +1,33 @@
+name: Fairy2iOS - transfer selector unit tests (Linux only)
+on:
+  push:
+    branches: [Fairy2iOS]
+    paths:
+      - '.github/workflows/fairy2-transfer-check.yml'
+      - 'fairy2/colab/transfer_ipa.py'
+      - 'fairy2/colab/Fairy2iOS_FairyTail2.ipynb'
+      - 'fairy2/tests/test_latest_transfer.py'
+      - 'fairy2/tests/test_confirmed_crash_gate.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: fairy2-transfer-check-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test-transfer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate latest-IPA selector and notebook freshness
+        run: |
+          set -euo pipefail
+          python -m compileall -q fairy2/colab/transfer_ipa.py fairy2/colab/ipa_validator.py fairy2/tests/test_latest_transfer.py
+          python -m unittest discover -v -s fairy2/tests -p test_latest_transfer.py
+          python -m unittest discover -v -s fairy2/tests -p test_confirmed_crash_gate.py
