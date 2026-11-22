@@ -762,7 +762,7 @@ def try_transfer_align64():
 
 
 def try_transfer_global_memory():
-    """Select ONLY the new conservative-GPU/allocator-trace candidate, never a known crashing IPA.
+    """Select only the SHA-verified KTGL 2GiB overlapping-arena repair candidate.
 
     Does not trigger a build or download any game/ROMFS content.
     """
@@ -783,7 +783,7 @@ def try_transfer_global_memory():
         require(res.ok, f"GitHub HTTP {res.status_code}: {res.text[:160]}")
         return res.json()
 
-    wf = get("/actions/workflows/fairy2-conservative.yml")
+    wf = get("/actions/workflows/fairy2-ktgl-nooverlap.yml")
     runs = get(f"/actions/workflows/{wf['id']}/runs",
                {"branch": BRANCH, "per_page": 30}).get("workflow_runs", [])
     runs = [r for r in runs if r.get("head_branch") == BRANCH]
@@ -800,7 +800,7 @@ def try_transfer_global_memory():
     artifacts = get(f"/actions/runs/{newest['id']}/artifacts",
                     {"per_page": 100}).get("artifacts", [])
     choices = [a for a in artifacts
-               if str(a.get("name", "")).startswith("Fairy2iOS-Conservative-")
+               if str(a.get("name", "")).startswith("Fairy2iOS-KTGL-NoOverlap-")
                and not a.get("expired")]
     require(len(choices) == 1,
             f"Run {newest['id']} precisa conter exatamente um artefato IPA de host repack")
@@ -815,7 +815,7 @@ def try_transfer_global_memory():
     expected_sha = str(artifact.get("digest") or "").removeprefix("sha256:").lower()
     require(not expected_sha or bool(re.fullmatch(r"[0-9a-f]{64}", expected_sha)),
             "Artifact digest inválido")
-    work = Path("/content/fairy2-global-memory-transfer")
+    work = Path("/content/fairy2-ktgl-nooverlap-transfer")
     work.mkdir(parents=True, exist_ok=True)
     outer = work / ("artifact-" + str(newest["id"]) + ".zip")
     print("[Fairy2iOS] 2/4: Baixando ZIP do host repack, 6 ranges + SHA-256...", flush=True)
@@ -828,27 +828,36 @@ def try_transfer_global_memory():
         require(all(not Path(n).is_absolute() and ".." not in Path(n).parts for n in names),
                 "Caminho inseguro no artifact")
         ipa_items = [n for n in names if n.endswith(".ipa") and not n.endswith("/")]
-        reports = [n for n in names if Path(n).name == "conservative-report.json"]
+        reports = [n for n in names if Path(n).name == "ktgl-nooverlap-report.json"]
         require(len(ipa_items) == 1 and len(reports) == 1,
                 "Artifact host repack não tem uma IPA e um relatório")
         record = json.loads(zipf.read(reports[0]))
         geo = record.get("global_geometry", {})
-        patch = record.get("guest_root_patch", {})
+        patch = record.get("guest_ktgl_2g_patch", {})
         require(record.get("project") == BRANCH and
                 record.get("title_id") == TITLE_ID and
-                record.get("source_run_id") == 44988275455 and
-                record.get("source_sha256") == "a27f70cbeb1890f103887bcbc93a074b650da032778186ec799f80b2ec63a78b" and
+                record.get("source_run_id") == 44992666178 and
+                record.get("source_sha256") ==
+                "6b3803ac5359c724fb43781688c1e3eab7cb3b80dde723a64f73e945c0574c0c" and
                 geo.get("guest_reserve") == 0x140000000 and
                 geo.get("alias_after") == 0x118000000 and
                 geo.get("heap_after") == 0x8000000 and
                 geo.get("root_after") == 0x100000000 and
-                geo.get("root_extra_alias_bytes") == 0x14200000 and
-                geo.get("mapped_alias_budget") == 0xc1500000 and
+                geo.get("old_gpu_overflow_bytes") == 0x148ac000 and
+                geo.get("old_ktgl_capacity") == 0x50000000 and
+                geo.get("new_ktgl_capacity") == 0x80000000 and
+                geo.get("old_ktgl_end") == 0x3bd800000 and
+                geo.get("new_ktgl_end") == 0x3ed800000 and
+                geo.get("gpu_pool_end") == 0x3d20ac000 and
+                geo.get("new_gpu_gap_bytes") == 0x1b754000 and
+                geo.get("root_free_after_initial_regions") == 0x2ae00000 and
+                geo.get("no_overlapping_virtual_regions") is True and
                 geo.get("map_limit") == 1 and
-                patch.get("new_region_bytes") == 0x100000000 and
-                patch.get("byte_changes") == 10 and
-                patch.get("instructions_changed") == 5 and
-                patch.get("existing_four_patches_retained") is True and
+                patch.get("old_region_bytes") == 0x50000000 and
+                patch.get("new_region_bytes") == 0x80000000 and
+                patch.get("byte_changes") == 4 and
+                patch.get("instructions_changed") == 2 and
+                patch.get("other_global_4g_memory_fixes_preserved") is True and
                 record.get("host_recompiled") is True and
                 record.get("game_shaders_recompiled") is False and
                 record.get("guest_modules_rewritten") is False and
@@ -857,18 +866,14 @@ def try_transfer_global_memory():
                 record.get("fps_selector") == [30, 60] and
                 record.get("ab_swap_available") is True and
                 record.get("device_boot_verified") is False and
-                record.get("repair_candidate") is True and
-                record.get("runtime_verified_on_iphone") is False and
-                record.get("native_host_bin47_poll") is True and
-                record.get("conservative_defaults") ==
-                {"DM_NVN_ENC_THREAD":"0","DM_NVN_PREFETCH":"0","DM_PSO_PREBUILD":"0"} and
-                record.get("shader_and_guest_code_reused") is True,
-                "Relatório não comprova o modelo GLOBAL de memória ou shaders/controles preservados")
+                record.get("ktgl_virtual_region_overlap_repaired") is True and
+                record.get("bin47_alias_offset") == "0xc5800178",
+                "Relatório não comprova a correção completa de sobreposição KTGL/NVN")
         require(record.get("metal_shader_sha256") ==
                 "ab35b0ef89c907a38c8462da78ba6864153c86f8c203d613b321d45ce0aa262b",
                 "Shaders Metal modificados: recusando transferência")
         name = Path(ipa_items[0]).name
-        require(name == "Fairy2iOS-FairyTail2-ConservativeGPU-MemoryTrace.ipa"
+        require(name == "Fairy2iOS-FairyTail2-KTGL-2GiB-NoOverlap.ipa"
                 and record.get("output_ipa") == name,
                 "Nome da IPA corrigida não confere")
         ipa = work / name
@@ -906,20 +911,20 @@ def try_transfer_global_memory():
     uploaded = upload(drive, ipa, folder, destination_name)
     provenance = {
         "project": BRANCH, "run_id": newest["id"], "artifact_id": artifact["id"],
-        "source_run_id": 44988275455,
+        "source_run_id": 44992666178,
         "run_url": f"https://github.com/{REPO}/actions/runs/{newest['id']}",
         "branch_commit": newest.get("head_sha"),
         "ipa_name": destination_name, "ipa_size": ipa.stat().st_size,
         "ipa_sha256": digest, "artifact_zip_sha256": outer_sha,
         "ipa_internal_validation": details, "report": record,
         "runtime_verified_on_iphone": False,
-        "release_status": "EXPERIMENTAL_CANDIDATE_NOT_IPHONE_VERIFIED",
+        "release_status": "KTGL_2G_CANDIDATE_NOT_IPHONE_VERIFIED",
         "drive_ipa_id": uploaded["id"]
     }
-    prov_file = work / ("Fairy2iOS-global-memory-run" + str(newest["id"]) + "-provenance.json")
+    prov_file = work / ("Fairy2iOS-ktgl-nooverlap-run" + str(newest["id"]) + "-provenance.json")
     prov_file.write_text(json.dumps(provenance, ensure_ascii=False, indent=2)+"\n")
     upload(drive, prov_file, folder, prov_file.name)
-    print("[Fairy2iOS] CANDIDATA GPU CONSERVADORA (AINDA NÃO VALIDADA NO IPHONE):",destination_name,flush=True)
+    print("[Fairy2iOS] CANDIDATA KTGL 2GiB SEM SOBREPOSIÇÃO (AINDA NÃO VALIDADA NO IPHONE):",destination_name,flush=True)
     print("Drive: https://drive.google.com/drive/folders/" + folder,flush=True)
     print("Actions: " + provenance["run_url"],flush=True)
     return True
