@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """No-recompile Fairy Tail 2 iOS repack from a completed, verified GitHub IPA.
 
-Changes ONLY dm/launcher.json in the existing game framework, re-signs the
+Changes ONLY dm/launcher.json (including DM_SVC=1 memory diagnostics) in the original framework, re-signs the
 framework and containing app ad hoc, and recreates the IPA. Unchanged: game
 Mach-O, Shell Mach-O, Metal libraries, shader images, shader maps and RomFS.
 Does not invoke Xcode, Metal, NXNative, rewrite, dmsh_build.py or Colab.
@@ -23,7 +23,7 @@ from pathlib import Path
 TITLE = "0100B9801F872000"
 FRAMEWORK = f"DmGame{TITLE}.framework"
 APP = "DmShell.app"
-IPA_NAME = "Fairy2iOS-FairyTail2-60FPS-AB-repack.ipa"
+IPA_NAME = "Fairy2iOS-FairyTail2-crash-probe-repack.ipa"
 
 
 def require(condition, message):
@@ -111,7 +111,7 @@ def configure_launcher(data):
     rows = data.get("settings")
     require(isinstance(rows, list), "Launcher settings are not a list")
     kept = [x for x in rows if x.get("env") not in
-            ("DM_FPS", "DM_FPS_TARGET", "DM_PAD_MAP")]
+            ("DM_FPS", "DM_FPS_TARGET", "DM_PAD_MAP", "DM_SVC")]
     fps = {
         "env": "DM_FPS_TARGET", "kind": "choice", "section": "Game",
         "label": "Taxa de quadros",
@@ -129,7 +129,16 @@ def configure_launcher(data):
     }
     pos = next((i + 1 for i, x in enumerate(kept)
                 if x.get("env") == "DM_OPMODE"), 0)
-    kept[pos:pos] = [fps, swap]
+    # Enables precise memory-SVC telemetry on the original, unchanged game.
+    # This is a diagnostic repack, not a claimed pointer fix.
+    memprobe = {
+        "env": "DM_SVC", "kind": "toggle", "section": "Game",
+        "label": "Registro detalhado de memória",
+        "note": "Diagnóstico: registra SVCs de heap e mapeamento do host. "
+                "Não altera as instruções, shaders ou memória do jogo.",
+        "default": "1", "on": "1", "off": "0", "level": "basic",
+    }
+    kept[pos:pos] = [fps, swap, memprobe]
     require(len({r["env"] for r in kept}) == len(kept),
             "Duplicate environment setting")
     data["settings"] = kept
@@ -149,6 +158,10 @@ def validate_settings(data):
     require(ab["kind"] == "toggle" and ab["on"] == "A=B,B=A"
             and ab["off"] == ab["default"] == "",
             "A/B mapping must use the Shell's actual PadMap env syntax")
+    dbg = rows.get("DM_SVC", {})
+    require(dbg.get("kind") == "toggle" and dbg.get("default") == "1"
+            and dbg.get("on") == "1" and dbg.get("off") == "0",
+            "SVC diagnostic must start enabled in this crash-probe repack")
     return True
 
 
@@ -264,20 +277,23 @@ def make_repack(source: Path, target: Path, report: Path):
                     "Repacked IPA contains game package/ROMFS")
         result = {
             "branch": "Fairy2iOS", "title_id": TITLE, "repack_only": True,
-            "source_run_id": None,  # Do not associate a new game with a Biomutant source run.
+            "source_run_id": 44965722551,
             "source_ipa_sha256": checksum(source),
             "result_ipa_sha256": checksum(target),
             "source_bytes": source.stat().st_size,
             "result_bytes": target.stat().st_size,
             "native_macho_recompiled": False,
             "metal_recompiled": False,
+            "crash_probe": {"guest_pc": "main+0x227b750", "invalid_write": "0x12c00280",
+                            "source_log": "SIGSEGV 11, before first present",
+                            "instrumentation": "DM_SVC=1", "actual_fix_verified": False},
             "shader_metal_file_count": len(metal),
             "original_payload_sha256_before_resign": original_hashes,
             "unchanged_macho_text_sha256": original_code,
             "settings": {
                 "fps_env": "DM_FPS_TARGET", "fps_options": ["30", "60"],
                 "ab_env": "DM_PAD_MAP", "ab_off": "",
-                "ab_on": "A=B,B=A",
+                "ab_on": "A=B,B=A", "svc_diagnostics": "1",
             },
             "performance_caveat": "60 FPS internal target enabled, sustained FPS on the device unverified",
             "romfs_external": True,
