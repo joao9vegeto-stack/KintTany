@@ -35,9 +35,12 @@ OUT_NAME="Fairy2iOS-FairyTail2-FullResourceVA-6GiB.ipa"
 # previous IPA is exactly 4GiB at five independently audited callsites.
 ROOT_SITES=((0x5f1b9c,9),(0x1d700bc,9),(0x225de0c,9),
             (0x2295a44,9),(0x2295a50,1))
-CAVE=0x2c5f000    # preferred code-cave position, but not trusted on packaged main
-CAVE_FIRST=0x2c00000
-CAVE_LAST=0x2c60000  # rewritten Nintendo gate code begins precisely here
+PATCH_OFF=0x2c60000       # genuine AArch64 generated gate segment in NXNative
+CAVE=0x2d6b000            # preferred zero padding in executable __dmmainx1
+CAVE_FIRST=PATCH_OFF+0x20000
+CAVE_LAST=0x2d6c000       # observed rounded end of the actual rewritten main
+# x0=main original RX; W=real guest RO/data; x1=generated executable patch RX
+# NEVER place a branch target in the W segment 0x22d4000..0x2c60000.
 CAVE_STRIDE=16
 # Two prior 2GiB child capacities and both prior heap/alignment patches.
 PRESERVE=((0x21b6924,"0800a4d2"),(0x21b6954,"1900a4d2"),
@@ -110,32 +113,61 @@ def profile_adjust(path:Path,canonical:bool):
     if not found:out.append("mem_map_limit\t"+("on" if canonical else "1"))
     path.write_text("\n".join(out)+"\n")
 
-def main_section(exe:Path):
-    obj=hook.otool_sections(exe).get(("__TEXT","__dmmainx0"))
-    require(bool(obj) and obj["size"]>0x2295a50+64,"missing verified embedded main")
-    with exe.open("rb") as f:
-        f.seek(obj["offset"]);data=f.read(obj["size"])
-    require(len(data)==obj["size"],"guest section truncated")
-    return obj["offset"],data
+def main_sections(exe:Path):
+    """Build a *logical* guest image from three different Mach-O sections.
+
+    Pinned NXNative loader.c remaps __dmmainx0 at guest +0, __DMmainW/__img
+    at guest +len(x0), and __dmmainx1 at guest +PATCH_OFF (executable).
+    The virtual AArch64 offsets are not Mach-O file offsets, and a code cave
+    in W would NOT be executable on iOS. Keep all three byte-identical outside
+    the five branch producer sites and x1's separately checked spare bytes.
+    """
+    sections=hook.otool_sections(exe)
+    keys={"x0":("__TEXT","__dmmainx0"),
+          "w":("__DMmainW","__img"),
+          "x1":("__TEXT","__dmmainx1")}
+    require(all(k in sections for k in keys.values()),
+            "split NXNative executable sections are missing")
+    parts={}
+    with exe.open("rb") as file:
+        for k,sect in keys.items():
+            info=sections[sect]
+            require(info["size"]>0 and
+                    info["offset"]+info["size"]<=exe.stat().st_size,
+                    "embedded "+k+" section exceeds signed IPA framework")
+            file.seek(info["offset"])
+            data=file.read(info["size"])
+            require(len(data)==info["size"],"truncated embedded "+k)
+            parts[k]={"offset":info["offset"],"size":info["size"],"data":data}
+    require(parts["x0"]["size"]>max(x[0] for x in ROOT_SITES)+4,
+            "all root producers must be executable inside x0")
+    require(parts["x0"]["size"]+parts["w"]["size"]==PATCH_OFF,
+            "NXNative x0+W do not meet exactly at the executable x1 patch base")
+    require(parts["x1"]["size"]>=0x40000 and
+            (parts["x1"]["size"]&0x3fff)==0,
+            "generated x1 patch area has implausible size or alignment")
+    raw=parts["x0"]["data"]+parts["w"]["data"]+parts["x1"]["data"]
+    require(len(raw)==PATCH_OFF+parts["x1"]["size"],
+            "logical guest ARM64 offsets differ from Mach-O section layout")
+    return parts,raw
 
 def choose_cave(raw: bytes) -> int:
-    """Find a safe 0x100-byte all-zero executable padding slot IN THE FINAL IPA.
+    """Only choose an all-zero 256B slot in the actual RX x1 patch section.
 
-    The handoff's Linux main and embedded IPA can differ inside the rewrite's
-    spare code pages; never use source-workspace emptiness as proof. Limit to
-    the known original padding 0x2c00000..0x2c60000 before all patched gates.
+    Never use the RO/data W gap, even if it contains zero bytes, and never
+    infer executability from the flattened Linux main's original padding.
     """
     needed=0x100
-    require(len(raw)>CAVE_FIRST+needed,
-            f"embedded main ({len(raw):#x}) has no accessible pre-gate spare padding")
-    boundary=min(CAVE_LAST,len(raw))  # Mach-O __dmmainx0 ends before gate section
-    options=[CAVE]+list(range(CAVE_FIRST,boundary-needed+1,0x1000))
+    boundary=min(CAVE_LAST,len(raw))
+    require(boundary>=CAVE_FIRST+needed,
+            f"genuine x1 executable patch section too short: {len(raw):#x}")
+    # Prefer known padding near the true end, then search last to first.
+    options=[CAVE]+list(range((boundary-needed)&~0xfff,CAVE_FIRST-1,-0x1000))
     for off in options:
-        if ((off&0xf)==0 and CAVE_FIRST<=off and off+needed<=boundary and
-                raw[off:off+needed]==bytes(needed)):
+        if (off&0xf)==0 and CAVE_FIRST<=off and off+needed<=boundary and raw[off:off+needed]==bytes(needed):
             return off
-    sample=[(hex(p),raw[p:p+16].hex()) for p in options[:7]]
-    raise RuntimeError("[Fairy2iOS GLOBAL] all audited pre-gate code-cave pages occupied; refusing patch: "+repr(sample))
+    sample=[(hex(p),raw[p:p+16].hex()) for p in options[:9]]
+    raise RuntimeError("[Fairy2iOS GLOBAL] no original zero-code region in executable __dmmainx1; refusing to touch writable W or active gates: "+repr(sample))
 
 def patch_bytes(raw:bytes)->tuple[bytes,dict]:
     cave_base=choose_cave(raw)
@@ -174,33 +206,58 @@ def patch_bytes(raw:bytes)->tuple[bytes,dict]:
                            "old_cave_all_zeros":True}
 
 def patch_main(exe:Path,src_report:dict):
-    off,raw=main_section(exe)
+    parts,raw=main_sections(exe)
     source=(src_report.get("guest_ktgl_2g_patch") or {})
     expected=source.get("after_sha256")
-    require(bool(expected) and hashlib.sha256(raw).hexdigest()==expected,
-            "source 2GiB no-overlap IPA embedded guest SHA mismatch")
+    require(bool(expected) and
+            hashlib.sha256(parts["x0"]["data"]).hexdigest()==expected,
+            "source 2GiB IPA's exact original x0 shader-free guest SHA differs")
     fixed,proof=patch_bytes(raw)
-    with exe.open("r+b") as f:
-        f.seek(off);require(f.read(len(raw))==raw,"embedded main changed")
-        f.seek(off);f.write(fixed)
-    return {"before_sha256":expected,"after_sha256":hashlib.sha256(fixed).hexdigest(),**proof}
+    require(fixed[parts["x0"]["size"]:PATCH_OFF]==raw[parts["x0"]["size"]:PATCH_OFF],
+            "NEVER change the guest W/RO/data segment")
+    checks={}
+    with exe.open("r+b") as file:
+        for label,offset in (("x0",0),("x1",PATCH_OFF)):
+            item=parts[label]
+            segment=fixed[offset:offset+item["size"]]
+            require(len(segment)==item["size"],
+                    "patched "+label+" shortened")
+            file.seek(item["offset"])
+            require(file.read(item["size"])==item["data"],
+                    "framework changed after guest sections audit")
+            file.seek(item["offset"])
+            file.write(segment)
+            checks[label+"_before_sha256"]=hashlib.sha256(item["data"]).hexdigest()
+            checks[label+"_after_sha256"]=hashlib.sha256(segment).hexdigest()
+    checks["w_sha256"]=hashlib.sha256(parts["w"]["data"]).hexdigest()
+    checks["x0_size"]=parts["x0"]["size"]
+    checks["w_size"]=parts["w"]["size"]
+    checks["x1_size"]=parts["x1"]["size"]
+    return {"before_sha256":hashlib.sha256(raw).hexdigest(),
+            "after_sha256":hashlib.sha256(fixed).hexdigest(),**checks,**proof}
+
 def verify_main(exe:Path,stamp:dict):
-    _,raw=main_section(exe)
+    parts,raw=main_sections(exe)
     require(hashlib.sha256(raw).hexdigest()==stamp["after_sha256"],
-            "rebuilt framework changed 5GiB root guest code")
+            "after host-only iOS compile, flattened guest main code differs")
+    for key in ("x0","x1"):
+        require(hashlib.sha256(parts[key]["data"]).hexdigest()==stamp[key+"_after_sha256"],
+                "relinked guest executable "+key+" differs")
+    require(hashlib.sha256(parts["w"]["data"]).hexdigest()==stamp["w_sha256"],
+            "native compiler unexpectedly changed guest W/RO/data")
     cave_base=int(stamp["code_cave"].split("+0x",1)[1],16)
-    require(CAVE_FIRST <= cave_base and cave_base+0x100<=min(CAVE_LAST,len(raw)),
-            "reported code cave not inside embedded executable and pre-gate padding")
+    require(CAVE_FIRST<=cave_base and cave_base+0x100<=min(CAVE_LAST,len(raw)),
+            "code cave is not in executable guest x1")
     for i,(site,reg) in enumerate(ROOT_SITES):
         cave=cave_base+i*CAVE_STRIDE
         require(raw[site:site+4]==branch_opcode(site,cave),
-                f"root producer main+0x{site:x} trampoline lost")
+                f"guest original-code producer main+0x{site:x} B lost")
         want=(0xd2c00020|reg).to_bytes(4,"little") + (0xf2a80000|reg).to_bytes(4,"little") + branch_opcode(cave+8,site+4)
         require(raw[cave:cave+12]==want,
-                f"root producer trampoline {i} invalid")
+                "guest executable x1 trampoline does not build exact 5GiB")
     for site,opcode in PRESERVE:
         require(raw[site:site+4]==bytes.fromhex(opcode),
-                f"2GiB KTGL child, heap or alignment reverted at main+0x{site:x}")
+                f"old 2GiB KTGL child, 128MiB heap or alignment patch lost: {site:x}")
 
 def make(source:Path,source_report:Path,repo:Path,out:Path):
     require(sys.platform=="darwin","macOS-only host build")
