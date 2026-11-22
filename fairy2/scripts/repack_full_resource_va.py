@@ -126,11 +126,12 @@ def choose_cave(raw: bytes) -> int:
     the known original padding 0x2c00000..0x2c60000 before all patched gates.
     """
     needed=0x100
-    require(len(raw)>=CAVE_LAST+needed,
-            "embedded main too short for audited padded executable code")
-    options=[CAVE]+list(range(CAVE_FIRST,CAVE_LAST-needed+1,0x1000))
+    require(len(raw)>CAVE_FIRST+needed,
+            f"embedded main ({len(raw):#x}) has no accessible pre-gate spare padding")
+    boundary=min(CAVE_LAST,len(raw))  # Mach-O __dmmainx0 ends before gate section
+    options=[CAVE]+list(range(CAVE_FIRST,boundary-needed+1,0x1000))
     for off in options:
-        if ((off&0xf)==0 and CAVE_FIRST<=off and off+needed<=CAVE_LAST and
+        if ((off&0xf)==0 and CAVE_FIRST<=off and off+needed<=boundary and
                 raw[off:off+needed]==bytes(needed)):
             return off
     sample=[(hex(p),raw[p:p+16].hex()) for p in options[:7]]
@@ -188,8 +189,8 @@ def verify_main(exe:Path,stamp:dict):
     require(hashlib.sha256(raw).hexdigest()==stamp["after_sha256"],
             "rebuilt framework changed 5GiB root guest code")
     cave_base=int(stamp["code_cave"].split("+0x",1)[1],16)
-    require(CAVE_FIRST <= cave_base and cave_base+0x100<=CAVE_LAST,
-            "reported final-IPA code cave not in verified pre-gate range")
+    require(CAVE_FIRST <= cave_base and cave_base+0x100<=min(CAVE_LAST,len(raw)),
+            "reported code cave not inside embedded executable and pre-gate padding")
     for i,(site,reg) in enumerate(ROOT_SITES):
         cave=cave_base+i*CAVE_STRIDE
         require(raw[site:site+4]==branch_opcode(site,cave),
