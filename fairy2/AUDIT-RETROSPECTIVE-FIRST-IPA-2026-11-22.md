@@ -72,3 +72,21 @@ Os sites de `x18` na factory são `+0xc10a6c, +0xc10aa0, +0xc10abc, +0xc10ac0, +
 5. Só publicar IPA "corrigida" quando teste de execução comprovar passagem além da factory e cena inicial real no iPhone; preservar shaders 19.210, RomFS/AOC externos, menus 30/60 e A/B.
 
 **Veredito:** a falha funcional persiste. A auditoria fundamenta o problema no caminho KTGL guest e expõe as lacunas dos patches sucessivos, mas **não prova ainda a causa raiz do stream inválido**. O rewriter `x18` e as regiões VA são alvos sérios de investigação, não causas demonstradas.
+
+## Final signed binary evidence: run 45082573287 (COMPLETED SUCCESS)
+
+The evidence demanded by this audit was obtained directly from TWO immutable signed historical artifacts. The new Linux audit workflow did **not** build game/Metal. Report artifact: [14777233310](https://github.com/joao9vegeto-stack/KintTany/actions/runs/45082573287/artifacts/14777233310).
+
+- **First IPA** run `44965722551`, SHA-256 `b390754af72fc8b6c00bd54bd5d5d5dbbeb393d77b9aa1292d288e0131fabcf9`, 1,622,225,666 bytes.
+- **Last failing IPA** run `45078767146`, SHA-256 `ef2e6edff30d0072796066d9ae46eb1be0ec27248dbec5b52b958cf001f4c22b`, 1,622,227,025 bytes.
+- **Guest original executable `__dmmainx0`: exactly 13 changed 4-byte instructions** at `main+0x5f1b9c, +0xc0ef8c, +0xc0f0d4, +0xc11b80, +0xc11f9c, +0x1d700bc, +0x21b6924, +0x21b6954, +0x21b6a74, +0x225de0c, +0x2295a44, +0x2295a50, +0x2295a88`. No unspecified extra changes in x0.
+- **Guest data `__DMmainW,__img`: exactly 0 changed words**.
+- **Generated executable `__dmmainx1`: 15 changed instructions in five 12-byte groups** of 5 GiB trampolins (segment-relative `+0x10b000` through `+0x10b04c`).
+- **Native host `__TEXT,__text`: 369,989 changed 4-byte words** over 37,621 runs. This is a **different compiled host build**, with relocations and instrumentation; byte differences alone do not prove defects, but the source/host must be audited separately.
+- **Identical compiled shader metallib and shader map** in both signed IPAs by size and CRC.
+- G1T branch `main+0x612120` stays `a0050054`; G1S `main+0x6e7bb0` stays `81780054`.
+- The last IPA has **four speculative BRK traps** absent from the first: `main+0xc11b80` original `08a440a9`, `+0xc11f9c` original `e00313aa`, `+0xc0ef8c` original `e9e30191`, `+0xc0f0d4` original `e0031f2a`. All became `40403ed4`.
+- KTGL child modifications `+0x21b6924` and `+0x21b6954` are **NOT merely replacing existing immediate constants**. The first IPA uses **dynamic loads** `ldr x8,[x27,#0xe0]` / `ldr x25,[x27,#0xe0]` (bytes `687340f9`, `797340f9`); the last replaces both with **fixed 2 GiB-derived values** (`0800a4d2`, `1900a4d2`). This may make the in-memory source configuration inconsistent with its consumers, **an identified semantic divergence**. The original 1.25 GiB allocator overlap was real; do not simply revert to known corruption, but verify *all* consumers of the same underlying configuration field before claiming the constant replacement safe.
+- **PROFILE REGRESSION:** the first IPA has `mem_reserve 0x140000000` (5 GiB), `mem_alias 0x118000000` (4.375 GiB), **`mem_map_limit 0`**; the last has 6 GiB, 5.375 GiB, **`mem_map_limit 1`**. No explicit `MapPhysicalMemory refused` appears in the latest logs, so this change is unproven as crash cause but must not be treated as equivalent.
+
+**Corrected audit conclusion:** the guest mutation set is **fully bounded** between the first and last IPA (13 instructions plus five three-instruction trampolins); no mystery hundreds of guest patches. The **host build** and **semantic compatibility** of dynamic KTGL configuration are still uncertain. This completed diff is not a gameplay fix, and it would be incorrect to issue another IPA as 'fixed' solely from these findings.
