@@ -1420,17 +1420,26 @@ def transfer_latest_successful_ipa():
                 report.get("external_romfs_aoc_unchanged") is not False,
                 "Artefato não comprova pacote thin com RomFS externa")
         framework = f"DmGame{TITLE_ID}.framework"
-        shader = report.get("shader_payload") or {}
-        if not shader.get("ipa_path"):
-            shader["ipa_path"] = f"Frameworks/{framework}/msl/b-0724088d3779.img"
-        if not shader.get("size_bytes"):
-            # This is the original proven NVN image's length, not a guessed shader count.
-            shader["size_bytes"] = 2640519506
-        validate_report = {"framework": framework, "shader_payload": shader}
         target = work / ipa_name
         with z.open(ipa_files[0]) as inp, target.open("wb") as out:
             shutil.copyfileobj(inp, out, length=8 * 1024 * 1024)
 
+    # Inspect the actual IPA: new successful shader builds may use a different
+    # hash-named image or size. Never guess an old shader filename or length.
+    shader = dict(report.get("shader_payload") or {})
+    if not shader.get("ipa_path") or not shader.get("size_bytes"):
+        with zipfile.ZipFile(target) as inner:
+            prefix = f"Payload/DmShell.app/Frameworks/{framework}/"
+            matches = [m for m in inner.infolist()
+                       if m.filename.startswith(prefix + "msl/")
+                       and m.filename.endswith(".img")
+                       and m.file_size > 64 * 1024 * 1024]
+            require(len(matches) == 1,
+                    "Não encontrei exatamente uma imagem Metal de shaders válida na IPA")
+            shader = {"ipa_path": matches[0].filename.removeprefix(
+                           "Payload/DmShell.app/"),
+                      "size_bytes": matches[0].file_size}
+    validate_report = {"framework": framework, "shader_payload": shader}
     sha, _ = hashes(target)
     reject_confirmed_device_crash(rid, sha)
     require(target.stat().st_size == int(expected_size), "IPA incompleta")
