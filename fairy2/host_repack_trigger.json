@@ -1,0 +1,15 @@
+{
+  "project": "Fairy2iOS",
+  "kind": "selective_host_memory_repack",
+  "method": "HookLink2iOS host-only framework rebuild",
+  "source_run_id": 44965722551,
+  "old_alias": "0x118000000",
+  "new_alias": "0xe0000000",
+  "heap_region_before_mib": 128,
+  "heap_region_after_mib": 1024,
+  "shader_recompile": false,
+  "guest_rewrite": false,
+  "romfs_aoc_repacked": false,
+  "crash_pc": "main+0x227b750",
+  "verified_fix": false
+}

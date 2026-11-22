@@ -1,0 +1,136 @@
+name: Fairy2iOS - HookLink-style host memory repack
+on:
+  push:
+    branches: [Fairy2iOS]
+    paths: ['fairy2/host_repack_trigger.json']
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: fairy2-host-repack-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  repack:
+    if: github.ref == 'refs/heads/Fairy2iOS'
+    runs-on: xcode-27
+    timeout-minutes: 180
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+    steps:
+      - name: Checkout exact Fairy2iOS host-only repack
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Validate source crash, host-only script and regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/Fairy2iOS"
+          test "$(cat .upstream-ref)" = "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb"
+          python3 -m py_compile fairy2/scripts/repack_host_memory.py fairy2/scripts/repack_ipa.py fairy2/colab/ipa_validator.py
+          python3 -m unittest discover -s fairy2/tests -p "test_host_memory_repack.py" -v
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          p=json.loads(Path("fairy2/host_repack_trigger.json").read_text())
+          assert p["source_run_id"]==44965722551
+          assert p["method"]=="HookLink2iOS host-only framework rebuild"
+          assert p["new_alias"]=="0xe0000000" and p["old_alias"]=="0x118000000"
+          assert p["shader_recompile"] is False and p["guest_rewrite"] is False
+          print("Preflight: 128MiB -> 1GiB host memory region, no game shader rebuild")
+          PY
+      - name: Install native host-only Xcode tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version
+          brew list --formula xcodegen >/dev/null 2>&1 || brew install xcodegen
+          python3 -m pip install --disable-pip-version-check lz4 'capstone>=5,<6' fonttools zbic backports.zstd
+      - name: Materialize pinned NXNative without Colab, NSP or shaders
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/engine.py relink
+          python3 tools/engine.py check
+          python3 tools/engine.py sync
+          test -f engine/dm/ios/project-framework.yml
+          test -f engine/dm/ios/tools/gen_build.py
+          test -f engine/dm/ios/tools/pack_ipa.py
+      - name: Download and verify successful original Fairy Tail 2 IPA only
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/fairy2-host-input"
+          gh run download 44965722551 -R joao9vegeto-stack/KintTany \
+            -n Fairy2iOS-FairyTail2-1 -D "$RUNNER_TEMP/fairy2-host-input"
+          python3 - <<'PY'
+          import pathlib,hashlib,json,os
+          root=pathlib.Path(os.environ["RUNNER_TEMP"])/"fairy2-host-input"
+          ipa=root/"Fairy2iOS-FairyTail2.ipa"
+          report=json.loads((root/"build-report.json").read_text())
+          assert report["project"]=="Fairy2iOS" and report["title_id"]=="0100B9801F872000"
+          assert ipa.stat().st_size==1622225666
+          digest=hashlib.sha256()
+          with ipa.open("rb") as f:
+              for chunk in iter(lambda:f.read(8*1024*1024),b""):digest.update(chunk)
+          assert digest.hexdigest()=="b390754af72fc8b6c00bd54bd5d5d5dbbeb393d77b9aa1292d288e0131fabcf9"
+          print("Reused source IPA verified:",ipa.stat().st_size,"bytes")
+          PY
+      - name: Recompile native framework host ONLY around unchanged guest ARM64 modules and Metal shaders
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/fairy2-host-output"
+          python3 fairy2/scripts/repack_host_memory.py \
+            --source-ipa "$RUNNER_TEMP/fairy2-host-input/Fairy2iOS-FairyTail2.ipa" \
+            --source-report "$RUNNER_TEMP/fairy2-host-input/build-report.json" \
+            --nx2apple-root "$GITHUB_WORKSPACE" \
+            --output "$RUNNER_TEMP/fairy2-host-output"
+      - name: Verify newly signed host-only IPA and original shaders, A/B, FPS options
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,os,sys,pathlib
+          sys.path.insert(0,str(pathlib.Path("fairy2/colab").resolve()))
+          from ipa_validator import validate_ipa
+          root=pathlib.Path(os.environ["RUNNER_TEMP"])
+          report=json.loads((root/"fairy2-host-input/build-report.json").read_text())
+          patched=json.loads((root/"fairy2-host-output/host-repack-report.json").read_text())
+          ipa=root/"fairy2-host-output/Fairy2iOS-FairyTail2-host-memory-repack.ipa"
+          info=validate_ipa(ipa,report,verify_crc=True)
+          assert info["fps"]==[30,60] and info["swap_ab"]
+          assert patched["host_recompiled"] and not patched["game_shaders_recompiled"]
+          assert not patched["guest_modules_rewritten"] and not patched["shared_shell_recompiled"]
+          assert patched["heap_region_after_bytes"]==1073741824
+          assert patched["metal_shader_sha256"]==report["shader_payload"]["sha256"]
+          assert not patched["runtime_boot_fix_verified_on_iphone"]
+          print("VALIDATED: repacked 1GiB host, original ARM64/Metal, 30/60 FPS + A/B controls.")
+          PY
+      - name: Publish signed selective-host IPA and accurate validation report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Fairy2iOS-host-memory-repack-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/fairy2-host-output/Fairy2iOS-FairyTail2-host-memory-repack.ipa
+            ${{ runner.temp }}/fairy2-host-output/host-repack-report.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve selective native-host diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Fairy2iOS-host-memory-repack-failure-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/fairy2-host-output/host-build.log
+            ${{ runner.temp }}/fairy2-host-output/host-repack-report.json
+          if-no-files-found: warn
+          retention-days: 14

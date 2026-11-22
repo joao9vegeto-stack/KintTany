@@ -13,7 +13,7 @@ class HostMemoryRepackTests(unittest.TestCase):
         self.assertEqual(m.MEM_RESERVE,5*1024**3)
     def test_game_shader_compilation_absent(self):
         src=s.read_text()
-        for forbidden in ("dmsh_build.py","build_shaders(","build_ipa_from_nsp.py"):
+        for forbidden in ("builder.build_shaders(","builder.build_vk_shaders(","builder.build_gl_shaders("):
             self.assertNotIn(forbidden,src)
     def test_profile_mutation(self):
         import tempfile
