@@ -29,7 +29,7 @@ WORKERS = 6
 
 
 # Quarantined by actual A19 Pro crash log, not by CI build status.
-DEVICE_CRASH_RUNS = frozenset({44990224107, 44992666178, 44995690307, 45000495987, 45046524330})
+DEVICE_CRASH_RUNS = frozenset({44990224107, 44992666178, 44995690307, 45000495987, 45046524330, 45050364099})
 DEVICE_CRASH_SHA256 = frozenset({"6faba771ab897cec3c19277a03815e42c3428be1c6c92e522195a0133db196d1", "6b3803ac5359c724fb43781688c1e3eab7cb3b80dde723a64f73e945c0574c0c", "b1792f9eb522de53b2b252e3a85229584831434999edda98f31c87c7c8c256cd", "df6cd6c826a3218fd965b03161ea2355cf348c13c369e13f2afb7dff74c953c2"})
 
 def reject_confirmed_device_crash(run_id, sha256=None):
@@ -1239,7 +1239,7 @@ def transfer_original_explicit():
 
 
 def main():
-    """Transfer the verified new G1T trace IPA, NOT the known-crashing 6GiB IPA."""
+    """Fail-closed: reject the latest iPhone-proven G1T HeaderRescue crash."""
     selected=try_transfer_g1t_header_rescue()
     require(selected is True,"IPA HeaderRescue indisponível; não selecionar builds com crash.")
     return selected
