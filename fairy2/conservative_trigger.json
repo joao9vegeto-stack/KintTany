@@ -1,0 +1,10 @@
+{
+  "source_run": 44988275455,
+  "failed_device_run": 44990224107,
+  "mode": "conservative_gpu_serial_no_shader_rebuild",
+  "verify_first_corruption_write": true,
+  "guest_alias": 4697620480,
+  "heap": 134217728,
+  "root": 4294967296,
+  "no_metal_rebuild": true
+}
