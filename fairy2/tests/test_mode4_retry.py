@@ -37,6 +37,13 @@ class Mode4OriginalRetry(unittest.TestCase):
         self.assertIn("if (!taken) {",src)
         self.assertIn("*(const uint64_t *)(uintptr_t)reader",src)
         self.assertIn("__x[26]",src)
+    def test_report_has_required_verifier_metadata(self):
+        src=(ROOT/"scripts"/"repack_mode4_retry.py").read_text()
+        for key in ("g1s_hash", "g1s_factory", "g1s_parser",
+                    "g1s_header_read", "original_stream_only",
+                    "g1t_fallback_preserved"):
+            self.assertIn("'"+key+"':",src)
+
     def test_18_original_branch_emulation(self):
         self.assertEqual(len(r.stage.TRACE_SITES),18)
         by_site={x[0]:x for x in r.stage.TRACE_SITES}
