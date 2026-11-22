@@ -28,9 +28,9 @@ class TestFullResourceVA(unittest.TestCase):
             self.assertEqual((movk>>21)&3,1)
             self.assertEqual((((movz>>5)&0xffff)<<32)+(((movk>>5)&0xffff)<<16),0x140000000)
             self.assertEqual(movz&31,reg);self.assertEqual(movk&31,reg)
-    def test_actual_macho_main_section_shorter_than_gate_boundary(self):
-        # The prior IPA's __dmmainx0 ends before 0x2c60100; a code cave must
-        # be inside THAT section, not only within the original Linux file.
+    def test_executable_x1_shorter_than_preferred_cave(self):
+        # In a truncated x1 executable segment, the selector must use an
+        # actually present zero slot inside x1 rather than the preferred end.
         raw=bytearray(fix.CAVE_FIRST+0x250)
         for site,reg in fix.ROOT_SITES:raw[site:site+4]=fix.ROOT_OLD[reg]
         for site,op in fix.PRESERVE:raw[site:site+4]=bytes.fromhex(op)
