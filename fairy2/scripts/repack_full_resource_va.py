@@ -130,8 +130,8 @@ def choose_cave(raw: bytes) -> int:
             "embedded main too short for audited padded executable code")
     options=[CAVE]+list(range(CAVE_FIRST,CAVE_LAST-needed+1,0x1000))
     for off in options:
-        if (off&0xf)==0 and CAVE_FIRST<=off and off+needed<=CAVE_LAST and
-                raw[off:off+needed]==bytes(needed):
+        if ((off&0xf)==0 and CAVE_FIRST<=off and off+needed<=CAVE_LAST and
+                raw[off:off+needed]==bytes(needed)):
             return off
     sample=[(hex(p),raw[p:p+16].hex()) for p in options[:7]]
     raise RuntimeError("[Fairy2iOS GLOBAL] all audited pre-gate code-cave pages occupied; refusing patch: "+repr(sample))
