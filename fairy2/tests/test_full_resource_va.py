@@ -46,12 +46,17 @@ class TestFullResourceVA(unittest.TestCase):
         for site,reg in fix.ROOT_SITES:raw[site:site+4]=fix.ROOT_OLD[reg]
         for site,op in fix.PRESERVE:raw[site:site+4]=bytes.fromhex(op)
         used=fix.choose_cave(bytes(raw))
-        self.assertEqual(used,fix.CAVE_FIRST)
+        self.assertEqual(used,fix.CAVE-0x1000)
+        self.assertGreaterEqual(used,fix.PATCH_OFF)
         patched,proof=fix.patch_bytes(bytes(raw))
-        self.assertEqual(proof['code_cave'],f'main+0x{fix.CAVE_FIRST:x}')
+        self.assertEqual(proof['code_cave'],f'main+0x{used:x}')
         self.assertEqual(patched[fix.CAVE:fix.CAVE+0x100],bytes([0x42])*0x100)
     def test_exact_patch_sites_and_reject_repeat(self):
         source=bytearray(fix.CAVE_LAST+0x110)
+        # W contains real non-executable data even when the synthetic source is
+        # otherwise zero-filled; the patch must not alter one byte of it.
+        wbeg=0x22d4000
+        source[wbeg:fix.PATCH_OFF]=bytes([0xAB])*(fix.PATCH_OFF-wbeg)
         for site,reg in fix.ROOT_SITES:source[site:site+4]=fix.ROOT_OLD[reg]
         for site,op in fix.PRESERVE:source[site:site+4]=bytes.fromhex(op)
         source=bytes(source)
@@ -67,6 +72,7 @@ class TestFullResourceVA(unittest.TestCase):
             self.assertEqual(patched[target:target+4],(0xd2c00020|reg).to_bytes(4,"little"))
             self.assertEqual(patched[target+4:target+8],(0xf2a80000|reg).to_bytes(4,"little"))
             self.assertEqual(patched[target+8:target+12],fix.branch_opcode(target+8,site+4))
+        self.assertEqual(patched[wbeg:fix.PATCH_OFF],source[wbeg:fix.PATCH_OFF])
         changed={i for i,(a,b) in enumerate(zip(source,patched)) if a!=b}
         self.assertTrue(changed.issubset(legal))
         for site,op in fix.PRESERVE:self.assertEqual(patched[site:site+4],bytes.fromhex(op))
