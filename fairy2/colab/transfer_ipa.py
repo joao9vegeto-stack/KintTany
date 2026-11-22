@@ -28,6 +28,18 @@ BLOCK = 64 * 1024 * 1024
 WORKERS = 6
 
 
+# Quarantined by actual A19 Pro crash log, not by CI build status.
+DEVICE_CRASH_RUNS = frozenset({44990224107})
+DEVICE_CRASH_SHA256 = frozenset({"6faba771ab897cec3c19277a03815e42c3428be1c6c92e522195a0133db196d1"})
+
+def reject_confirmed_device_crash(run_id, sha256=None):
+    """A structurally valid IPA can still be proven to crash on real hardware."""
+    require(int(run_id) not in DEVICE_CRASH_RUNS and
+            str(sha256 or "").lower() not in DEVICE_CRASH_SHA256,
+            "IPA com CRASH CONFIRMADO no iPhone (run 44990224107; "
+            "main+0x227bd74). Não transferir nem renomear como corrigida. "
+            "É necessário um novo build com correção global e validação real.")
+
 def require(condition, reason):
     if not condition:
         raise RuntimeError("[Fairy2iOS] " + reason)
@@ -209,6 +221,7 @@ def try_transfer_host_repack():
             f"Host-only repack mais recente ainda não teve sucesso: "
             f"{newest.get('id')} ({newest.get('status')}/{newest.get('conclusion')}). "
             "Não vou selecionar a IPA antiga com crash.")
+    reject_confirmed_device_crash(newest["id"])
     artifacts = get(f"/actions/runs/{newest['id']}/artifacts",
                     {"per_page": 100}).get("artifacts", [])
     choices = [a for a in artifacts
@@ -854,6 +867,7 @@ def try_transfer_global_memory():
         with zipf.open(ipa_items[0]) as inp, ipa.open("wb") as out:
             shutil.copyfileobj(inp, out, length=8 * 1024 * 1024)
     digest, _ = hashes(ipa)
+    reject_confirmed_device_crash(newest["id"], digest)
     require(ipa.stat().st_size == int(record.get("output_ipa_size_bytes") or -1)
             and digest == record.get("output_ipa_sha256"),
             "IPA extraída diverge de size/SHA-256 do relatório host repack")
