@@ -24,8 +24,13 @@ class KnownDeviceCrash(unittest.TestCase):
 
     def test_run_rejected_before_artifact_download(self):
         src = (COLAB / "transfer_ipa.py").read_text()
-        body = src.split("def try_transfer_global_memory():",1)[1].split("def transfer_original_explicit():",1)[0]
-        self.assertLess(body.index('reject_confirmed_device_crash(newest["id"])'),
-                        body.index('artifacts = get('))
-        self.assertLess(body.index('reject_confirmed_device_crash(newest["id"], digest)'),
-                        body.index('uploaded = upload('))
+        discovery = src.split("def select_latest_successful_ipa_artifact(", 1)[1].split(
+            "def verified_ipa_report(", 1)[0]
+        transfer = src.split("def transfer_latest_successful_ipa(", 1)[1].split(
+            "def main():", 1)[0]
+        self.assertLess(discovery.index("if rid in DEVICE_CRASH_RUNS:"),
+                        discovery.index('artifacts = github_get('))
+        self.assertLess(transfer.index("reject_confirmed_device_crash(rid)"),
+                        transfer.index("response = requests.get("))
+        self.assertLess(transfer.index("reject_confirmed_device_crash(rid, sha)"),
+                        transfer.index("uploaded = upload("))
