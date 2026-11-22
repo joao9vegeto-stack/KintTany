@@ -21,7 +21,9 @@ original=stage.host_trace_source
 def bounded_retry_source():
     src=original()
     a=src.index('/* FAIRY2 G1T HEADER RESCUE:')
-    b=src.index('struct fairy2_stage_spec',a)
+    b=src.index('       (taken ? s->target : s->off + 4);',a)
+    b=src.rfind('    uc->uc_mcontext->__ss.__pc =',a,b)
+    base.require(b>a,'Original branch tail unavailable')
     # Remove original one-shot synthetic 48-byte G1T injection entirely.
     src=src[:a]+src[b:]
     a=src.index('    /* Both iPhone logs: #76 header fail')
