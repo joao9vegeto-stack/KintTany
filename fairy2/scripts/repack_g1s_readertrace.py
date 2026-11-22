@@ -54,7 +54,7 @@ def host_trace_source():
     }
   }
 }
-''' ''')
+''')
     assert "FAIRY2_G1S_READER first_read" in src
     return src
 stage.host_trace_source=host_trace_source

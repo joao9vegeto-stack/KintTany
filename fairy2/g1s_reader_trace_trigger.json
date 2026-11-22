@@ -11,5 +11,6 @@
   "g1s_read_expected": 184,
   "require_device_log": true,
   "host_build": "rebuild-only",
-  "reason": "actual native G1S parser first virtual read before further fix"
+  "reason": "actual native G1S parser first virtual read before further fix",
+  "syntax_revision": 2
 }
