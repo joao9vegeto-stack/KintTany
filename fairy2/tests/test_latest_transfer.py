@@ -15,14 +15,14 @@ spec.loader.exec_module(m)
 
 class RepackTransferRegression(unittest.TestCase):
     def test_main_selects_repack_only(self):
-        with patch.object(m,"try_transfer_heap128",return_value=True) as latest, \
+        with patch.object(m,"try_transfer_align64",return_value=True) as latest, \
              patch.object(m,"transfer_original_explicit",side_effect=AssertionError("old IPA")):
             self.assertTrue(m.main())
             latest.assert_called_once_with()
     def test_main_never_falls_back_to_original(self):
-        with patch.object(m,"try_transfer_heap128",return_value=False), \
+        with patch.object(m,"try_transfer_align64",return_value=False), \
              patch.object(m,"transfer_original_explicit",side_effect=AssertionError("old IPA")):
-            with self.assertRaisesRegex(RuntimeError,"Repack de heap 128 MiB"):
+            with self.assertRaisesRegex(RuntimeError,"Novo repack KTGL 64 KiB"):
                 m.main()
     def test_notebook_fetches_branch_in_same_transfer_cell(self):
         book=json.loads((ROOT/"colab/Fairy2iOS_FairyTail2.ipynb").read_text())
@@ -33,12 +33,12 @@ class RepackTransferRegression(unittest.TestCase):
         self.assertIn('subprocess.run(["git", "-C", str(REPO), "fetch"',src)
         self.assertIn('subprocess.run(["git", "-C", str(REPO), "reset"',src)
         self.assertIn('spec_from_file_location("fairy2_latest_repack_transfer"',src)
-        self.assertIn("44965722551, 44977592488 e 44980090949 BLOQUEADOS",src)
+        self.assertIn("44965722551, 44977592488, 44980090949 e 44981941022 BLOQUEADOS",src)
         self.assertIn("colab_auth.authenticate_user()",src)
     def test_no_implicit_original_in_main_body(self):
         src=file.read_text()
         main=src.split("def main():",1)[1]
-        self.assertIn("try_transfer_heap128()",main)
+        self.assertIn("try_transfer_align64()",main)
         self.assertNotIn("transfer_original_explicit()",main)
 
 if __name__=="__main__":
