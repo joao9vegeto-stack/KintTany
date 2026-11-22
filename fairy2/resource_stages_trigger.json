@@ -16,5 +16,6 @@
   "guest_root_bytes": 5368709120,
   "romfs_aoc_external": true,
   "gameplay_fix_claimed": false,
-  "workflow_expression_revision": 2
+  "workflow_expression_revision": 3,
+  "clang_atomic_builtin_fix": true
 }

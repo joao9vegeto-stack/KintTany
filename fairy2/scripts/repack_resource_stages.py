@@ -121,7 +121,7 @@ struct fairy2_stage_event {
   uint64_t x0, x8, x25, x27, lr, cpsr;
 };
 static struct fairy2_stage_event fairy2_stage_events[256];
-static _Atomic unsigned fairy2_stage_sequence;
+static unsigned fairy2_stage_sequence; /* accessed via __atomic_* builtins only */
 static int fairy2_stage_trap(ucontext_t *uc) {
   uint64_t pc = uc->uc_mcontext->__ss.__pc;
   module_t *m = module_of((void *)(uintptr_t)pc);
