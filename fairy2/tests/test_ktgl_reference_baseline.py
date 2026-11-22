@@ -78,6 +78,14 @@ class SourceParity(unittest.TestCase):
         self.assertEqual({x[0] for x in m.CODE_REGIONS}.__contains__(
             "KTGL_chunk_direct_read"), True)
 
+    def test_official_actions_checks_source_before_large_romfs(self):
+        source=(SRC.parent/"prepare_actions.py").read_text()
+        audit_call=source.index("parity = ktgl_source_audit(")
+        romfs_get=source.index('download_drive_file(api, d["game_data"]["romfs"], romfs)')
+        self.assertLess(audit_call, romfs_get)
+        self.assertIn("ktgl-reference-parity-report.json",source)
+        self.assertIn("main.patched.bin",source)
+
     def test_invalid_profile_must_not_be_reused(self):
         other = self.root / "other.tsv"
         other.write_text("title_id\t0100000000000000\npackage\tv458752\n"
