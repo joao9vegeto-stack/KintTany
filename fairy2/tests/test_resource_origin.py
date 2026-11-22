@@ -17,5 +17,21 @@ class OriginTest(unittest.TestCase):
         class R:
             def at(self,p,off,n):return b[off:off+n]
         h={"data":0,"stored":len(b),"flags":0x400000,"plain":len(raw)}
-        self.assertTrue(m.sample(R(),"file",h)["is_g1s"])
+        result=m.sample(R(),"file",h)
+        self.assertTrue(result["is_g1s"])
+        self.assertEqual(result["status"],"zlib_ok")
+        self.assertEqual(result["decoded_length"],len(raw))
+        self.assertEqual(result["chunks"],1)
+    def test_zlib_two_chunks_complete(self):
+        first=b"_S2G5000"+bytes(16376)
+        second=b"tail"+bytes(1952)
+        a=zlib.compress(first);b=zlib.compress(second)
+        packed=struct.pack("<HQ",len(a),0)+a+struct.pack("<HQ",len(b),0)+b
+        class R:
+            def at(self,p,off,n):return packed[off:off+n]
+        row={"data":0,"stored":len(packed),"flags":0x400000,"plain":len(first)+len(second)}
+        result=m.sample(R(),"file",row)
+        self.assertEqual(result["status"],"zlib_ok")
+        self.assertEqual(result["chunks"],2)
+        self.assertEqual(result["decoded_length"],18340)
 if __name__=="__main__":unittest.main()

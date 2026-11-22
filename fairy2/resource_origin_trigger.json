@@ -10,5 +10,8 @@
     "0xac9ed13e"
   ],
   "corrected_full_abort_message": "can't create resource Name[Unknown] Hash[0xac9ed13e]",
-  "reason": "Decoded complete little-endian 7-qword abort text, preventing truncated hash misread"
+  "reason": "Decoded complete little-endian 7-qword abort text, preventing truncated hash misread",
+  "verify_all_chunks": true,
+  "expected_g1s_full_length": 18340,
+  "method": "strict 206 ranges and full streaming zlib SHA256 for each chunk"
 }

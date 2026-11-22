@@ -114,17 +114,36 @@ def sample(rom,path,r):
         return {**info,"status":"raw","header64":b[:64].hex(),"header_magic":b[:8].decode("latin1")}
     if mode not in (1,4,5):return {**info,"status":"unknown_compression"}
     hs=4 if mode==1 else 10
-    hdr=rom.at(path,off,hs)
-    zsize=struct.unpack_from("<I" if mode==1 else "<H",hdr)[0]
-    if zsize<1 or zsize+hs>n or zsize>8*M:return {**info,"status":"bad_chunk_length","chunk":zsize}
-    comp=rom.at(path,off+hs,zsize)
-    if mode==5:return {**info,"status":"lz4","compressed_sha256":sha(comp)}
-    try:plain=zlib.decompress(comp)
-    except zlib.error as e:return {**info,"status":"zlib_error","error":str(e)}
-    return {**info,"status":"zlib_ok","header64":plain[:64].hex(),
-            "header_magic":plain[:8].decode("latin1"),"chunk_sha256":sha(plain),
-            "chunk_len":len(plain),"is_g1s":plain.startswith(b"_S2G"),
-            "is_g1t":plain.startswith(b"GT1G")}
+    cursor=0
+    total=0
+    digest=hashlib.sha256()
+    first=b""
+    chunks=0
+    while cursor<n:
+        if cursor+hs>n:return {**info,"status":"incomplete_chunk_header","offset":cursor}
+        hdr=rom.at(path,off+cursor,hs)
+        zsize=struct.unpack_from("<I" if mode==1 else "<H",hdr)[0]
+        if not 0<zsize<=8*M or cursor+hs+zsize>n:
+            return {**info,"status":"bad_chunk_length","offset":cursor,"chunk":zsize}
+        comp=rom.at(path,off+cursor+hs,zsize)
+        if mode==5:
+            return {**info,"status":"lz4_not_decoded","chunks_read":chunks+1,
+                    "first_compressed_sha256":sha(comp)}
+        try:plain=zlib.decompress(comp)
+        except zlib.error as e:
+            return {**info,"status":"zlib_error","offset":cursor,"error":str(e)}
+        if not chunks:first=plain[:64]
+        total+=len(plain)
+        if total>64*M:return {**info,"status":"decompressed_size_limit"}
+        digest.update(plain)
+        chunks+=1
+        cursor+=hs+zsize
+    return {**info,"status":"zlib_ok" if total==r["plain"] else "plain_size_mismatch",
+            "header64":first.hex(),"header_magic":first[:8].decode("latin1"),
+            "full_payload_sha256":digest.hexdigest(),"decoded_length":total,
+            "complete_input_bytes":cursor,"chunks":chunks,"is_g1s":first.startswith(b"_S2G"),
+            "is_g1t":first.startswith(b"GT1G")}
+
 def audit(rom):
     cache={}
     for name in ("system","root"):
