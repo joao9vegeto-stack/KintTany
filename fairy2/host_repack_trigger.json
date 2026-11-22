@@ -11,5 +11,8 @@
   "guest_rewrite": false,
   "romfs_aoc_repacked": false,
   "crash_pc": "main+0x227b750",
-  "verified_fix": false
+  "verified_fix": false,
+  "attempt": 2,
+  "last_failure_run_id": 44976528877,
+  "last_failure_reason": "runtime profile.tsv present_interval=0 is not canonical game.tsv; use verified Colab game.tsv for host profile generator"
 }

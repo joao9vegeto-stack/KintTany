@@ -285,9 +285,19 @@ def main():
 
         # The host gets its compile-time game_profile.h from a per-run overlay.
         # Editing the framework's profile.tsv alone would not change memory macros.
+        # Runtime profile.tsv is a serialized numeric representation, e.g.
+        # present_interval=0. game.py/header() requires the surveyed game.tsv
+        # source with textual enums (game/display). HookLink keeps that
+        # distinction as well. Never feed runtime profile.tsv to gen_build.py.
+        canonical=Path(__file__).resolve().parents[1]/"profile"/TITLE_ID/"game.tsv"
+        if not canonical.is_file():
+            fail("Missing canonical game.tsv recovered from Colab preparation")
+        if profile_row(canonical,"mem_alias").lower()!=hex(OLD_ALIAS):
+            fail("Canonical survey profile drift")
         overlay=work/"profiles"/TITLE_ID
         overlay.mkdir(parents=True)
-        shutil.copy2(profile,overlay/"game.tsv")
+        shutil.copy2(canonical,overlay/"game.tsv")
+        change_profile(overlay/"game.tsv")
         fw_info=plistlib.loads((fw/"Info.plist").read_bytes())
         env=os.environ.copy()
         env.update({

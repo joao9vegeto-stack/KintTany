@@ -6,6 +6,14 @@ s=Path(__file__).resolve().parents[1]/"scripts"/"repack_host_memory.py"
 spec=importlib.util.spec_from_file_location("fairy2_host_profile",s)
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 class HostMemoryRepackTests(unittest.TestCase):
+    def test_canonical_profile_is_game_tsv_not_runtime_tsv(self):
+        source=Path(__file__).resolve().parents[1]/"profile"/m.TITLE_ID/"game.tsv"
+        self.assertTrue(source.is_file())
+        self.assertEqual(m.profile_row(source,"mem_alias"),"0x118000000")
+        self.assertEqual(m.profile_row(source,"mem_reserve"),"0x140000000")
+        self.assertNotIn("present_interval\\t0",source.read_text())
+        self.assertIn("build\\tv458752\\t1.4.1",source.read_text())
+        self.assertIn('shutil.copy2(canonical,overlay/"game.tsv")',s.read_text())
     def test_capacity_real_fix(self):
         self.assertEqual(m.OLD_HEAP_CAP,128*1024*1024)
         self.assertEqual(m.NEW_HEAP_CAP,1024*1024*1024)
