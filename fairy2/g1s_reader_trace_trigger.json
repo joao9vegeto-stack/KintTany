@@ -11,7 +11,8 @@
   "g1s_read_expected": 184,
   "require_device_log": true,
   "host_build": "rebuild-only",
-  "reason": "actual native G1S parser first virtual read before further fix",
+  "reason": "fix successful Xcode build failing verification due to obsolete fallback_kind field in G1S report",
   "syntax_revision": 3,
-  "dump_anchor_fix": true
+  "dump_anchor_fix": true,
+  "report_gate_revision": 2
 }

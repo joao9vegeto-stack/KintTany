@@ -70,7 +70,7 @@ jobs:
           assert report['output_ipa_sha256']==d
           print('Verified original 19,210 shader IPA, SHA-256',d)
           PY
-      - name: Preserve 6GiB geometry and insert one-shot verified G1T stream rescue and eleven stage probes before host Xcode build
+      - name: Preserve 6GiB geometry and instrument 18 G1T/G1S branches without rebuilding shaders
         shell: bash
         run: |
           set -euo pipefail
@@ -79,7 +79,7 @@ jobs:
             --source-ipa "$RUNNER_TEMP/source/Fairy2iOS-FairyTail2-KTGL-2GiB-NoOverlap.ipa" \
             --source-report "$RUNNER_TEMP/source/ktgl-nooverlap-report.json" \
             --repo "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/output"
-      - name: Verify 11 trap points, original shaders, SHA, IPA CRC, controllers and RomFS external
+      - name: Verify 18 trap points, original shaders, SHA, IPA CRC, controllers and RomFS external
         shell: bash
         run: |
           set -euo pipefail
@@ -93,7 +93,9 @@ jobs:
           assert info['device_boot_verified'] is False
           assert info['g1t_fallback_preserved'] is True
           assert info['g1s_hash']=='0xac9ed13e'
-          assert 'one-shot' in info['fallback_kind']
+          assert info['g1s_factory']=='main+0x1dbdc14'
+          assert info['g1s_parser']=='main+0x6e7b60'
+          assert info['g1s_header_read']=='virtual [vtable+0x20] requests 184 bytes'
           assert info['game_shaders_recompiled'] is False
           assert info['guest_modules_rewritten'] is False
           assert info['external_romfs_aoc_unchanged'] is True
