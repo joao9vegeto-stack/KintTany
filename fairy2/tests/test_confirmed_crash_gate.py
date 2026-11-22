@@ -31,6 +31,6 @@ class KnownDeviceCrash(unittest.TestCase):
         self.assertLess(discovery.index("if rid in DEVICE_CRASH_RUNS:"),
                         discovery.index('artifacts = github_get('))
         self.assertLess(transfer.index("reject_confirmed_device_crash(rid)"),
-                        transfer.index("response = requests.get("))
+                        transfer.index("/actions/artifacts/{artifact"))
         self.assertLess(transfer.index("reject_confirmed_device_crash(rid, sha)"),
                         transfer.index("uploaded = upload("))
