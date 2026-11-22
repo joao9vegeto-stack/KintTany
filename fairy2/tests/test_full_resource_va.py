@@ -30,7 +30,7 @@ class TestFullResourceVA(unittest.TestCase):
             self.assertEqual(movz&31,reg);self.assertEqual(movk&31,reg)
     def test_code_cave_fallback_uses_only_actual_embedded_zeroes(self):
         # Mimic a final IPA whose Linux-stage preferred cave became occupied.
-        raw=bytearray(fix.CAVE+0x110)
+        raw=bytearray(fix.CAVE_LAST+0x110)
         raw[fix.CAVE:fix.CAVE+0x100]=bytes([0x42])*0x100
         for site,reg in fix.ROOT_SITES:raw[site:site+4]=fix.ROOT_OLD[reg]
         for site,op in fix.PRESERVE:raw[site:site+4]=bytes.fromhex(op)
@@ -40,7 +40,7 @@ class TestFullResourceVA(unittest.TestCase):
         self.assertEqual(proof['code_cave'],f'main+0x{fix.CAVE_FIRST:x}')
         self.assertEqual(patched[fix.CAVE:fix.CAVE+0x100],bytes([0x42])*0x100)
     def test_exact_patch_sites_and_reject_repeat(self):
-        source=bytearray(fix.CAVE+0x110)
+        source=bytearray(fix.CAVE_LAST+0x110)
         for site,reg in fix.ROOT_SITES:source[site:site+4]=fix.ROOT_OLD[reg]
         for site,op in fix.PRESERVE:source[site:site+4]=bytes.fromhex(op)
         source=bytes(source)
