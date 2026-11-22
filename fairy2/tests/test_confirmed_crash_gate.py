@@ -19,6 +19,15 @@ class KnownDeviceCrash(unittest.TestCase):
             module.reject_confirmed_device_crash(100000000000,
                 "6faba771ab897cec3c19277a03815e42c3428be1c6c92e522195a0133db196d1")
 
+    def test_fdata_ioprobe_crash_is_quarantined(self):
+        with self.assertRaisesRegex(RuntimeError, "CRASH CONFIRMADO"):
+            module.reject_confirmed_device_crash(45064035915)
+        with self.assertRaisesRegex(RuntimeError, "CRASH CONFIRMADO"):
+            module.reject_confirmed_device_crash(
+                100000000000,
+                "416b9582e27cf2ca3ae4d10e2001b07ee95717c398451766b5445efc80dd3a6e")
+        self.assertIn(45064035915, module.DEVICE_CRASH_RUNS)
+
     def test_allow_new_candidate_for_future_validation(self):
         module.reject_confirmed_device_crash(100000000000, "f" * 64)
 
