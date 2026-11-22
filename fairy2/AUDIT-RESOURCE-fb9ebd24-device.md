@@ -102,3 +102,19 @@ The authenticated partial-read report \`fairy2-resource-fb9ebd24-pointer-v2.json
 A new **read-only Colab V3 notebook** was created in this conversation: \`Fairy2iOS_Auditoria_G1T_v3_48bytes.ipynb\`. It reads exactly the 49-byte compressed FDATA payload using authenticated HTTP Range, verifies prior digest and decompresses all 48 bytes, then saves the complete G1T hex plus header / platform / texture record checks. It requires no Actions, IPA rebuild, shaders, or 7.9GB download. Ten synthetic regression tests passed; actual user-source V3 results not yet available. Only after this can a justified implementation fix be selected.
 
 **Do not re-enable the known-crashing 45000495987 IPA in Colab's transfer script or claim the port fixed on device.**
+
+
+## V3 — complete 48-byte G1T supplied by user, no further Colab required
+
+The uploaded report \`fairy2-G1T-fb9ebd24-48bytes-v3.json\` was verified 22 November 2026, using source \`Motor/ReleasePackage/KIDS_PLATFORM_NX/release/0x38f972af.fdata\` at offset 3137776, matching \`FileKTID=0xfb9ebd24\` and \`TypeKTID=0xafbec60c\`.
+
+- **All 48 decompressed bytes:** \`4754314730353030300000002000000001000000100000000000000000000000040000001001000000102100ffffffff\`.
+- Uncompressed blob SHA-256: \`558ada8c563fe44fa18d894d01f39e8b1a230b26ad1bcd0782743797f815e494\`. Compressed chunk digest: \`f4a0ffed01e78a9455e33c4de3b9c409d8def0715db87c8a28112715e1ffc2c6\`.
+- \`GT1G\`, version \`0500\`, declared 48 bytes; texture offset table \`0x20\`, **one texture**, platform code **16**, metadata size **0**.
+- One 1×1 pixel texture, format ID **1**, mip/system byte \`0x10\`, 8-byte header at offset \`0x24\`, last four bytes \`ffffffff\`.
+- Explicit V3 checks all true: valid magic, self-consistent file size, version 0500, plausible count, flags/table in bounds, texture header within bounds, guest platform mask accepts 16.
+- The report's \`format:null\` means it **did not assign a precise GPU pixel-format name**, NOT that the game cannot decode format 1, or that Metal is known to reject it.
+
+**Correct conclusion:** The G1T file is structurally valid with a complete successfully decompressed 48-byte payload. Do NOT repeat Colab/Drive asset forensics, mutate the ROMFS, patch texture pixel data, or return a fabricated resource pointer. The only remaining diagnostic target is live behavior in the Fairy Tail 2 guest G1T factory and the HLE NVN/memory path, including exact return-null branch or texture init failure, compared against working builds. No runtime fix has been proven by these static tests.
+
+**User workflow:** They did not have to do these 3 manual Colab probes on previous ports; the stepwise forensic probes imposed unnecessary work. Future instrumentation must be implemented by the maintainer in the existing host-only path, reusing 19,210 shaders, without additional user-operated Colab notebooks or repeated blind memory guesses. Source crash IPA 45000495987 remains quarantined.
