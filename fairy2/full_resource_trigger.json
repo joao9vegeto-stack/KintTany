@@ -9,10 +9,12 @@
   "runtime_resource_diagnostics": true,
   "only_fairy2_branch": true,
   "rerun_after_token_fix": 44999109167,
-  "revision": 5,
+  "revision": 6,
   "rerun_after_cave_preflight_failure": 44999238534,
   "source_verified": true,
   "final_ipa_zero_padding_selector": true,
   "rerun_after_python_preflight_failure": 44999618435,
-  "rerun_after_corrected_synthetic_test_array": 44999742674
+  "rerun_after_corrected_synthetic_test_array": 44999742674,
+  "rerun_after_exact_macho_section_boundary_fix": 44999813483,
+  "strict_cave_within_real_embedded_section": true
 }
