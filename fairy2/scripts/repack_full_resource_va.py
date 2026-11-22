@@ -126,7 +126,7 @@ def patch_bytes(raw:bytes)->tuple[bytes,dict]:
         require(raw[site:site+4]==old,
                 f"source not 4GiB at independently audited site main+0x{site:x}")
         cave=CAVE+i*CAVE_STRIDE
-        first=(0xd2c00000|reg).to_bytes(4,"little")
+        first=(0xd2c00020|reg).to_bytes(4,"little")
         second=(0xf2a80000|reg).to_bytes(4,"little")
         forward=branch_opcode(site,cave)
         backward=branch_opcode(cave+8,site+4)
@@ -171,7 +171,7 @@ def verify_main(exe:Path,stamp:dict):
         cave=CAVE+i*CAVE_STRIDE
         require(raw[site:site+4]==branch_opcode(site,cave),
                 f"root producer main+0x{site:x} trampoline lost")
-        want=(0xd2c00000|reg).to_bytes(4,"little") + (0xf2a80000|reg).to_bytes(4,"little") + branch_opcode(cave+8,site+4)
+        want=(0xd2c00020|reg).to_bytes(4,"little") + (0xf2a80000|reg).to_bytes(4,"little") + branch_opcode(cave+8,site+4)
         require(raw[cave:cave+12]==want,
                 f"root producer trampoline {i} invalid")
     for site,opcode in PRESERVE:
