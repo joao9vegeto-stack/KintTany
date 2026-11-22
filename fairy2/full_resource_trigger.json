@@ -9,5 +9,8 @@
   "runtime_resource_diagnostics": true,
   "only_fairy2_branch": true,
   "rerun_after_token_fix": 44999109167,
-  "revision": 2
+  "revision": 3,
+  "rerun_after_cave_preflight_failure": 44999238534,
+  "source_verified": true,
+  "final_ipa_zero_padding_selector": true
 }
