@@ -242,7 +242,7 @@ def make(source:Path,source_report:Path,repo:Path,out:Path):
                   "--timestamp=none",app])
         hook.run(["codesign","--verify","--deep","--strict",app])
         verify_main(exe,guest_stamp)
-        require(menu.macho_text_sha(shell)==shell_code and hook.sha256(shell)==shell_sha,
+        require(menu.macho_text_sha(shell)==shell_code,
                 "DmShell changed in host-only rebuild")
         require(hook.sha256(metal)==SHADER_SHA and hook.sha256(fw/"dm/shader_map.tsv")==shmap_sha,
                 "compiled Metal library or shader map changed")

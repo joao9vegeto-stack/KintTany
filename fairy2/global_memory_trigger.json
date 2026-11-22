@@ -6,5 +6,8 @@
   "root": 4294967296,
   "compile_metal": false,
   "rewrite_game": false,
-  "device_tested": false
+  "device_tested": false,
+  "preflight_revision": 2,
+  "prevent_false_signature_failure": true,
+  "reason": "Codesign changes __LINKEDIT binary digest; compare exact signed Shell executable __TEXT,__text"
 }
