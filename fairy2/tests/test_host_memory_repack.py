@@ -14,6 +14,12 @@ class HostMemoryRepackTests(unittest.TestCase):
         self.assertNotIn("present_interval\t0",source.read_text())
         self.assertIn("build\tv458752\t1.4.1",source.read_text())
         self.assertIn('shutil.copy2(canonical,overlay/"game.tsv")',s.read_text())
+    def test_objc_namespace_generation_before_xcode(self):
+        src=s.read_text()
+        self.assertIn('str(ios/"tools/gen_objc_namespace.py")',src)
+        self.assertIn('str(gen/"framework/objc_namespace.h")',src)
+        self.assertIn('str(gen/"framework/exported_symbols.txt")',src)
+        self.assertIn('"DM_NS_TAG="+ns_tag',src)
     def test_capacity_real_fix(self):
         self.assertEqual(m.OLD_HEAP_CAP,128*1024*1024)
         self.assertEqual(m.NEW_HEAP_CAP,1024*1024*1024)

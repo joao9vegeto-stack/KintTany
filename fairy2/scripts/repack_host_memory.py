@@ -327,7 +327,34 @@ def main():
         for macro in required:
             if macro.lower() not in headers.lower():
                 fail(f"generated host profile did not include target macro {macro}")
-        (gen/"dm.xcconfig").write_text(conf.stdout.rstrip()+"\nOTHER_LDFLAGS = $(inherited) $(DM_FRAMEWORKS) "+" ".join(segment_flags)+"\n")
+        # The pinned framework project globally pre-includes this generated
+        # ObjC namespace header (and links with exported_symbols.txt). The
+        # normal build_ipa.sh generates BOTH before xcodegen. Reproduce its
+        # exact host-only step here; skipping it causes bridging-header failure.
+        namespace=subprocess.run([
+            sys.executable,str(ios/"tools/gen_objc_namespace.py"),
+            "--print-tag","--game",TITLE_ID,
+            "--framework-name",old_binary.name,
+            "--header",str(gen/"framework/objc_namespace.h"),
+            "--exports",str(gen/"framework/exported_symbols.txt"),
+            str(host),str(engine/"dm/gfx"),
+            str(ios/"Sources"),str(ios/"framework"),
+        ],cwd=ios,env=env,text=True,capture_output=True)
+        if namespace.returncode:
+            fail("Framework ObjC namespace generation failed:\n"+
+                 namespace.stdout[-4000:]+"\n"+namespace.stderr[-6000:])
+        ns_tag=namespace.stdout.strip()
+        if not re.fullmatch(r"[A-Za-z0-9_]+",ns_tag):
+            fail("Framework namespace generator emitted invalid tag: "+repr(ns_tag))
+        for path in (gen/"framework/objc_namespace.h",
+                     gen/"framework/exported_symbols.txt"):
+            if not path.is_file() or path.stat().st_size<32:
+                fail("Framework namespace generator did not produce "+str(path))
+        log("Generated DmShellGame ObjC namespace and export symbols: "+ns_tag)
+        (gen/"dm.xcconfig").write_text(conf.stdout.rstrip()+
+           "\nDM_NS_TAG = "+ns_tag+
+           "\nOTHER_LDFLAGS = $(inherited) $(DM_FRAMEWORKS) "+
+           " ".join(segment_flags)+"\n")
         (gen/"framework.xcconfig").write_text("OTHER_LDFLAGS = $(inherited) "+" ".join(segment_flags)+"\n")
         (gen/"Assets.xcassets").mkdir()
         (gen/"Assets.xcassets/Contents.json").write_text(json.dumps({"info":{"author":"xcode","version":1}})+"\n")
@@ -345,6 +372,7 @@ def main():
            "MARKETING_VERSION="+str(fw_info.get("CFBundleShortVersionString","1.4.1")),
            "CURRENT_PROJECT_VERSION="+str(fw_info.get("CFBundleVersion","1")),
            "SYMROOT="+str(products),"OBJROOT="+str(objects),
+           "DM_NS_TAG="+ns_tag,
            "CODE_SIGNING_ALLOWED=NO","CODE_SIGNING_REQUIRED=NO","CODE_SIGN_IDENTITY=","build"
         ],cwd=ios,env=env,log_file=output/"host-build.log")
         built=products/"Release-iphoneos"/FRAMEWORK_NAME/old_binary.name
