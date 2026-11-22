@@ -28,7 +28,7 @@ jobs:
           set -euo pipefail
           python -m compileall -q fairy2/scripts/ktgl_reference_baseline.py
           python -m unittest discover -v -s fairy2/tests -p test_ktgl_reference_baseline.py
-      - name: Verify scope: no macOS, shaders, builds or released IPA
+      - name: "Verify scope: no macOS, shaders, builds or released IPA"
         run: |
           set -euo pipefail
           python - <<'PY'
