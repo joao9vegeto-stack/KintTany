@@ -22,6 +22,18 @@ class OriginTest(unittest.TestCase):
         self.assertEqual(result["status"],"zlib_ok")
         self.assertEqual(result["decoded_length"],len(raw))
         self.assertEqual(result["chunks"],1)
+    def test_zlib_terminal_zero_detects_short_resource(self):
+        first=b"_S2G5000"+bytes(16376)
+        a=zlib.compress(first)
+        packed=struct.pack("<HQ",len(a),0)+a+bytes(2)
+        class R:
+            def at(self,p,off,n):return packed[off:off+n]
+        row={"data":0,"stored":len(packed),"flags":0x400000,"plain":18340}
+        got=m.sample(R(),"file",row)
+        self.assertEqual(got["status"],"plain_size_mismatch")
+        self.assertEqual(got["decoded_length"],16384)
+        self.assertEqual(got["complete_input_bytes"],len(packed))
+
     def test_zlib_two_chunks_complete(self):
         first=b"_S2G5000"+bytes(16376)
         second=b"tail"+bytes(1952)

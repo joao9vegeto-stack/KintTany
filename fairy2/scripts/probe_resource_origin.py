@@ -120,7 +120,12 @@ def sample(rom,path,r):
     first=b""
     chunks=0
     while cursor<n:
-        if cursor+hs>n:return {**info,"status":"incomplete_chunk_header","offset":cursor}
+        if cursor+hs>n:
+            tail=rom.at(path,off+cursor,n-cursor)
+            if mode in (4,5) and tail==bytes(2):
+                cursor=n
+                break
+            return {**info,"status":"incomplete_chunk_header","offset":cursor,"trailer":tail.hex()}
         hdr=rom.at(path,off+cursor,hs)
         zsize=struct.unpack_from("<I" if mode==1 else "<H",hdr)[0]
         if not 0<zsize<=8*M or cursor+hs+zsize>n:

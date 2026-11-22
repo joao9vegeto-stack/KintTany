@@ -13,5 +13,8 @@
   "reason": "Decoded complete little-endian 7-qword abort text, preventing truncated hash misread",
   "verify_all_chunks": true,
   "expected_g1s_full_length": 18340,
-  "method": "strict 206 ranges and full streaming zlib SHA256 for each chunk"
+  "method": "strict 206 ranges and full streaming zlib SHA256 for each chunk",
+  "verify_terminal_zero": true,
+  "investigate_possible_length_mismatch": true,
+  "note": "Flag 0x400000 terminal 2 zero bytes is defined; a shorter inflated payload is a real RDB/FDATA size inconsistency"
 }
