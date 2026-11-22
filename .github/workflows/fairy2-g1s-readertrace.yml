@@ -1,4 +1,4 @@
-name: Fairy2iOS - G1S factory and stream first-read diagnosis (host-only)
+name: Fairy2iOS - G1S source FDATA vs virtual reader IO correlation (host-only)
 on:
   push:
     branches: [Fairy2iOS]
@@ -26,7 +26,7 @@ jobs:
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.12'
-      - name: Validate native conditional decisions and G1T header rescue and pin the NXNative engine
+      - name: Validate 18 native branches and HLE FDATA IO instrumentation, pin engine
         shell: bash
         run: |
           set -euo pipefail
@@ -70,7 +70,7 @@ jobs:
           assert report['output_ipa_sha256']==d
           print('Verified original 19,210 shader IPA, SHA-256',d)
           PY
-      - name: Preserve 6GiB geometry and instrument 18 G1T/G1S branches without rebuilding shaders
+      - name: Preserve 6GiB geometry, trace guest reader and real FDATA reads without shaders rebuild
         shell: bash
         run: |
           set -euo pipefail
@@ -79,7 +79,7 @@ jobs:
             --source-ipa "$RUNNER_TEMP/source/Fairy2iOS-FairyTail2-KTGL-2GiB-NoOverlap.ipa" \
             --source-report "$RUNNER_TEMP/source/ktgl-nooverlap-report.json" \
             --repo "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/output"
-      - name: Verify 18 trap points, original shaders, SHA, IPA CRC, controllers and RomFS external
+      - name: Verify G1S/FDATA source correlation, shaders, CRC, controllers and external RomFS
         shell: bash
         run: |
           set -euo pipefail
@@ -92,6 +92,8 @@ jobs:
           assert info['not_a_gameplay_fix'] is True
           assert info['device_boot_verified'] is False
           assert info['g1t_fallback_preserved'] is True
+          assert info['fdata_io_proof'] is True
+          assert info['probe_entries'] == [12943, 13660]
           assert info['g1s_hash']=='0xac9ed13e'
           assert info['g1s_factory']=='main+0x1dbdc14'
           assert info['g1s_parser']=='main+0x6e7b60'
@@ -113,14 +115,14 @@ jobs:
             assert 'Payload/DmShell.app/DmShell' in names
             assert z.getinfo(fw+'profile.tsv').file_size>100
             assert not any(n.endswith('/romfs.img') for n in names)
-          print('FAIRY2 G1S READER TRACE CANDIDATE verified:',ipa.name,'SHA',s.hexdigest())
+          print('FAIRY2 FDATA IO CORRELATION CANDIDATE verified:',ipa.name,'SHA',s.hexdigest())
           PY
-      - name: Upload one-shot verified G1T rescue and host/guest proof
+      - name: Upload one host-only G1S FDATA correlation IPA and source report
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: Fairy2iOS-G1S-ReaderTrace-${{ github.run_number }}
+          name: Fairy2iOS-G1S-FDATA-IOProbe-${{ github.run_number }}
           path: |
-            ${{ runner.temp }}/output/Fairy2iOS-FairyTail2-G1S-ReaderTrace.ipa
+            ${{ runner.temp }}/output/Fairy2iOS-FairyTail2-G1S-FDATA-IOProbe.ipa
             ${{ runner.temp }}/output/g1s-readertrace-report.json
             ${{ runner.temp }}/output/full-resource-va-report.json
           if-no-files-found: error
@@ -129,6 +131,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: Fairy2iOS-G1S-ReaderTrace-failure-${{ github.run_number }}
+          name: Fairy2iOS-G1S-FDATA-IOProbe-failure-${{ github.run_number }}
           path: ${{ runner.temp }}/output/host-build.log
           if-no-files-found: warn
