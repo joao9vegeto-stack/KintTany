@@ -118,15 +118,17 @@ jobs:
           assert report['no_synthetic_g1t_g1s'] is True
           assert report['no_repeated_reads'] is True
           assert report['preserve_guest_compressed_and_decoded_cursors'] is True
-          assert report['mode4_fallback_codec_sites']==['main+0xc0ef8c','main+0xc0f0d4']
           assert report['original_mode4_vtable']=='main+0x2a64b50'
-          assert report['g1t_synthetic_stream'] is False
-          assert report['g1s_synthetic_stream'] is False
-          assert report['guest_parser_skipped'] is False
-          assert report['native_resource_retry'] is False
+          assert report['native_failure_path']=='main+0xc11b60 / zero at main+0xc11f9c'
+          stamps=report['guest_root_5g_patch']
+          assert set(stamps['mode4_ktgl_codec_sites'])=={'main+0xc0ef8c','main+0xc0f0d4'}
+          assert set(stamps['original_direct_reader'])=={'main+0xc11b80','main+0xc11f9c'}
           assert report['number_of_shaders_recompiled']==0
-          assert report['external_romfs_unchanged'] is True
+          assert report['game_shaders_recompiled'] is False
+          assert report['guest_modules_rewritten'] is False
+          assert report['no_game_assets_modified'] is True
           assert report['device_boot_verified'] is False
+          assert report['runtime_tested_on_iphone'] is False
           assert report['not_a_gameplay_fix'] is True
           assert report['metal_shader_sha256']=='ab35b0ef89c907a38c8462da78ba6864153c86f8c203d613b321d45ce0aa262b'
           assert report['external_romfs_aoc_unchanged'] is True
