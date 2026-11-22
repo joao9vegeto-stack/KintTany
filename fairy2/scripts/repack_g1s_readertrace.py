@@ -36,7 +36,7 @@ def host_trace_source():
       "      const unsigned char *p=(const unsigned char *)(uintptr_t)(uc->uc_mcontext->__ss.__fp-0xc0ULL);\n"
       "      for (unsigned k=0; k<24; ++k) e->g1s_first24[k]=p[k];\n"
       "    }")
-    anchor="    if (k > 0 && (size_t)k < sizeof buf) write(2, buf, (size_t)k);\n  }\n}\n'''"
+    anchor="    if (k > 0 && (size_t)k < sizeof buf) write(2, buf, (size_t)k);\n  }\n}\n"
     assert src.count(anchor)==1
     src=src.replace(anchor, r'''    if (k > 0 && (size_t)k < sizeof buf) write(2, buf, (size_t)k);
     if (fairy2_stage_specs[e->slot].off == 0x6e7bb0ULL) {
