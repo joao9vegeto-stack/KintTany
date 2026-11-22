@@ -175,7 +175,142 @@ def upload(api, path, parent, name):
     return {"id": result["id"], "sha256": sha, "md5": md5, "size": size}
 
 
+def try_transfer_host_repack():
+    """Select the NEWEST host-only repack, never silently re-upload the crashing base IPA.
+
+    Does not trigger a build or download any game/ROMFS content.
+    """
+    import requests
+    from googleapiclient.discovery import build
+    import google.auth
+    from ipa_validator import validate_ipa
+
+    token = os.environ.get("FAIRY2_GITHUB_TOKEN", "").strip()
+    require(bool(token), "Precisa de GitHub PAT com permissão Actions: Read")
+    api_root = f"https://api.github.com/repos/{REPO}"
+    auth = {"Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "Fairy2iOS-Host-Repack-Transfer"}
+    def get(url, params=None):
+        res = requests.get(api_root + url, headers=auth, params=params, timeout=60)
+        require(res.ok, f"GitHub HTTP {res.status_code}: {res.text[:160]}")
+        return res.json()
+
+    wf = get("/actions/workflows/fairy2-host-repack.yml")
+    runs = get(f"/actions/workflows/{wf['id']}/runs",
+               {"branch": BRANCH, "per_page": 30}).get("workflow_runs", [])
+    runs = [r for r in runs if r.get("head_branch") == BRANCH]
+    if not runs:
+        print("[Fairy2iOS] Nenhum host repack executado ainda: rota base antiga.", flush=True)
+        return False
+    newest = max(runs, key=lambda r: r.get("created_at") or "")
+    require(newest.get("status") == "completed" and newest.get("conclusion") == "success",
+            f"Host-only repack mais recente ainda não teve sucesso: "
+            f"{newest.get('id')} ({newest.get('status')}/{newest.get('conclusion')}). "
+            "Não vou selecionar a IPA antiga com crash.")
+    artifacts = get(f"/actions/runs/{newest['id']}/artifacts",
+                    {"per_page": 100}).get("artifacts", [])
+    choices = [a for a in artifacts
+               if str(a.get("name", "")).startswith("Fairy2iOS-host-memory-repack-")
+               and not a.get("expired")]
+    require(len(choices) == 1,
+            f"Run {newest['id']} precisa conter exatamente um artefato IPA de host repack")
+    artifact = choices[0]
+    print(f"[Fairy2iOS] IPA corrigida: run {newest['id']}, artifact {artifact['id']}.", flush=True)
+    response = requests.get(api_root + f"/actions/artifacts/{artifact['id']}/zip",
+                            headers=auth, allow_redirects=False, timeout=60)
+    require(response.status_code in (301, 302, 303, 307, 308) and
+            response.headers.get("Location"),
+            f"GitHub não forneceu link ZIP assinado (HTTP {response.status_code})")
+    expected_sha = str(artifact.get("digest") or "").removeprefix("sha256:").lower()
+    require(not expected_sha or bool(re.fullmatch(r"[0-9a-f]{64}", expected_sha)),
+            "Artifact digest inválido")
+    work = Path("/content/fairy2-host-repack-transfer")
+    work.mkdir(parents=True, exist_ok=True)
+    outer = work / ("artifact-" + str(newest["id"]) + ".zip")
+    outer_sha = signed_download(response.headers["Location"],
+                 int(artifact.get("size_in_bytes") or 0), expected_sha, outer)
+    with zipfile.ZipFile(outer) as zipf:
+        require(zipf.testzip() is None, "ZIP externo do host repack corrompido")
+        names=zipf.namelist()
+        require(all(not Path(n).is_absolute() and ".." not in Path(n).parts for n in names),
+                "Caminho inseguro no artifact")
+        ipa_items = [n for n in names if n.endswith(".ipa") and not n.endswith("/")]
+        reports = [n for n in names if Path(n).name == "host-repack-report.json"]
+        require(len(ipa_items) == 1 and len(reports) == 1,
+                "Artifact host repack não tem uma IPA e um relatório")
+        record = json.loads(zipf.read(reports[0]))
+        require(record.get("project") == BRANCH and
+                record.get("source_run_id") == 44965722551 and
+                record.get("method", "").startswith("HookLink2iOS") and
+                record.get("host_recompiled") is True and
+                record.get("game_shaders_recompiled") is False and
+                record.get("guest_modules_rewritten") is False and
+                record.get("shared_shell_recompiled") is False and
+                record.get("external_romfs_aoc_unchanged") is True and
+                record.get("heap_region_after_bytes") == 1073741824,
+                "Relatório da IPA não confirma o repack seletivo correto")
+        require(record.get("metal_shader_sha256") ==
+                "ab35b0ef89c907a38c8462da78ba6864153c86f8c203d613b321d45ce0aa262b",
+                "Shader Metal não é o original reutilizado")
+        name = Path(ipa_items[0]).name
+        require(name == "Fairy2iOS-FairyTail2-host-memory-repack.ipa"
+                and record.get("output_ipa") == name,
+                "Nome da IPA corrigida não confere")
+        ipa = work / name
+        with zipf.open(ipa_items[0]) as inp, ipa.open("wb") as out:
+            shutil.copyfileobj(inp, out, length=8 * 1024 * 1024)
+    digest, _ = hashes(ipa)
+    require(ipa.stat().st_size == int(record.get("output_size_bytes") or -1)
+            and digest == record.get("output_sha256"),
+            "IPA extraída diverge de size/SHA-256 do relatório host repack")
+    original_report = {
+        "framework": f"DmGame{TITLE_ID}.framework",
+        "shader_payload": {
+            "ipa_path": f"Frameworks/DmGame{TITLE_ID}.framework/msl/b-0724088d3779.img",
+            "size_bytes": 2640519506
+        }
+    }
+    details = validate_ipa(ipa, original_report, verify_crc=True)
+    require(details["fps"] == [30, 60] and details["swap_ab"],
+            "Configurações 30/60 FPS / A-B ausentes")
+    credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/drive"])
+    drive = build("drive", "v3", credentials=credentials, cache_discovery=False)
+    root = drive.files().get(fileId=DRIVE_GAME_FOLDER, supportsAllDrives=True,
+                             fields="id,name,mimeType,trashed").execute()
+    require(root.get("name") == "fairy2" and
+            root.get("mimeType") == "application/vnd.google-apps.folder" and
+            not root.get("trashed"), "Pasta Drive fairy2 incorreta")
+    subs = [x for x in children(drive, DRIVE_GAME_FOLDER)
+            if x.get("name") == "ipa"
+            and x.get("mimeType") == "application/vnd.google-apps.folder"]
+    require(len(subs) == 1, "Pasta fairy2/ipa não encontrada ou ambígua")
+    folder = subs[0]["id"]
+    destination_name = ipa.stem + "-run" + str(newest["id"]) + ".ipa"
+    uploaded = upload(drive, ipa, folder, destination_name)
+    provenance = {
+        "project": BRANCH, "run_id": newest["id"], "artifact_id": artifact["id"],
+        "source_run_id": 44965722551,
+        "run_url": f"https://github.com/{REPO}/actions/runs/{newest['id']}",
+        "branch_commit": newest.get("head_sha"),
+        "ipa_name": destination_name, "ipa_size": ipa.stat().st_size,
+        "ipa_sha256": digest, "artifact_zip_sha256": outer_sha,
+        "ipa_internal_validation": details, "report": record,
+        "drive_ipa_id": uploaded["id"]
+    }
+    prov_file = work / ("Fairy2iOS-host-repack-run" + str(newest["id"]) + "-provenance.json")
+    prov_file.write_text(json.dumps(provenance, ensure_ascii=False, indent=2)+"\n")
+    upload(drive, prov_file, folder, prov_file.name)
+    print("[Fairy2iOS] HOST REPACK verificado e enviado:",destination_name,flush=True)
+    print("Drive: https://drive.google.com/drive/folders/" + folder,flush=True)
+    print("Actions: " + provenance["run_url"],flush=True)
+    return True
+
+
 def main():
+    if try_transfer_host_repack():
+        return
     import google.auth
     import requests
     from googleapiclient.discovery import build
