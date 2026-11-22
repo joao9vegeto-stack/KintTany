@@ -29,16 +29,17 @@ WORKERS = 6
 
 
 # Quarantined by actual A19 Pro crash log, not by CI build status.
-DEVICE_CRASH_RUNS = frozenset({44990224107, 44992666178, 44995690307})
-DEVICE_CRASH_SHA256 = frozenset({"6faba771ab897cec3c19277a03815e42c3428be1c6c92e522195a0133db196d1", "6b3803ac5359c724fb43781688c1e3eab7cb3b80dde723a64f73e945c0574c0c", "b1792f9eb522de53b2b252e3a85229584831434999edda98f31c87c7c8c256cd"})
+DEVICE_CRASH_RUNS = frozenset({44990224107, 44992666178, 44995690307, 45000495987})
+DEVICE_CRASH_SHA256 = frozenset({"6faba771ab897cec3c19277a03815e42c3428be1c6c92e522195a0133db196d1", "6b3803ac5359c724fb43781688c1e3eab7cb3b80dde723a64f73e945c0574c0c", "b1792f9eb522de53b2b252e3a85229584831434999edda98f31c87c7c8c256cd", "df6cd6c826a3218fd965b03161ea2355cf348c13c369e13f2afb7dff74c953c2"})
 
 def reject_confirmed_device_crash(run_id, sha256=None):
     """A structurally valid IPA can still be proven to crash on real hardware."""
     require(int(run_id) not in DEVICE_CRASH_RUNS and
             str(sha256 or "").lower() not in DEVICE_CRASH_SHA256,
-            "IPA com CRASH CONFIRMADO no iPhone (run 44990224107; "
-            "main+0x227bd74). Não transferir nem renomear como corrigida. "
-            "É necessário um novo build com correção global e validação real.")
+            "IPA com CRASH CONFIRMADO no iPhone. A versão 6GiB do "
+            "run 45000495987 também aborta em main+0xbfe2a8, "
+            "Hash[0xfb9ebd24], mesmo com Metal prefetch/thread desligados. "
+            "Não transferir nem rotular como corrigida; auditar RDB/RDX/FDATA.")
 
 def require(condition, reason):
     if not condition:
@@ -791,7 +792,10 @@ def try_transfer_global_memory():
             "Nenhum run do repack host-only encontrado: operação interrompida. "
             "A IPA original que crashou não é uma alternativa.")
     newest = max(runs, key=lambda r: (r.get("created_at") or "", int(r.get("id") or 0)))
-    # Never fall back to the 4GiB global-memory IPA that already crashed.
+    # Fail EARLY: the latest completed 6GiB build now has TWO independently
+    # confirmed iPhone resource-factory traps. Do not download 1.62GiB.
+    reject_confirmed_device_crash(int(newest["id"]))
+    # Never fall back to any earlier device-crashing IPA.
     # A green build yields a *candidate*; the iPhone still must verify gameplay.
     require(newest.get("status") == "completed" and newest.get("conclusion") == "success",
             f"Host-only repack mais recente ainda não teve sucesso: "
