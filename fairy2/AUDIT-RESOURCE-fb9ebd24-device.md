@@ -39,3 +39,17 @@ A self-contained notebook is included as a conversation artifact. No shaders or 
 ## Quarantined artifact
 
 The 6GiB IPA from run 45000495987 (SHA-256 df6cd6c826a3218fd965b03161ea2355cf348c13c369e13f2afb7dff74c953c2) is CONFIRMED to crash. fairy2/colab/transfer_ipa.py refuses this run and digest BEFORE downloading its 1.62GiB ZIP. Do not label it fixed.
+
+## Guest-specific breakthrough: requested type is G1T texture
+
+The crash registers in BOTH 6GiB device runs show `x24=0x3e3532fd0` and the first 64-bit word at `*x24=0xafbec60c20000001`. This is two little-endian u32 values: state 0x20000001 and **resource TypeKTID 0xafbec60c**. At main+0xc108a8 the original guest ARM64 executes `ldr w1,[x24,#4]`, passing **0xafbec60c** into its type lookup at main+0xbfe790 before virtual factory dispatch at main+0xc108ec. The abort reports the separate **FileKTID 0xfb9ebd24**. They must NOT be conflated.
+
+External independent source mappings confirm 0xafbec60c = **G1T texture**:
+- https://github.com/eArmada8/yumia_fdata_tools (yumia_mod_lib.py, mapping)
+- https://github.com/eterniti/qrdbtool (RDB MatchesType 0xafbec60c indicates G1T)
+- https://github.com/Joschuka/Project-G1M/issues/42 (distinct G1T-like 0xad57ebba type)
+- https://github.com/lunixxx37/NupExplorer (G1T Switch pixel formats, linear vs tiled layout).
+
+Reconstructing the failed type's vtable from the original Colab handoff guest main at guest+0x2b90368 gives virtual method at slot +0xa0 = guest **main+0x1dc3a60**. That method calls guest **main+0xc09be0** (preparation) and **main+0x112eb28** (resource stream/materialization), then either initializes an object or yields NULL. The latter enters main+0xc109c4 and reports the exact G1T FileKTID hash. The underlying resource stream reader at **main+0x6120e0** parses binary data and can return NULL when read/validation fails. Without the actual record bytes or a branch/return trace, neither malformed G1T nor HLE error nor allocation failure is PROVEN. No safe patch is to skip fatal abort or fabricate a texture pointer.
+
+The crash's final successful OpenFile of 0x8baaa1ce.fdata is a strong candidate source but **is not yet proven to contain the requested FileKTID 0xfb9ebd24**; only RDB/RDX+FDATA index verification can prove that link. An intentionally read-only Colab report must print both FileKTID and TypeKTID and only identify a G1T record when actual bytes verify it.
