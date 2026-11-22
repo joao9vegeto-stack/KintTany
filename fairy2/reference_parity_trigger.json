@@ -16,5 +16,11 @@
   "rebuild_shaders": false,
   "not_a_gameplay_fix": true,
   "workflow_kind": "Linux synthetic original-NSO/AOT parity regression",
-  "refused_experimental_run": 45068245797
+  "refused_experimental_run": 45068245797,
+  "revision": 2,
+  "previous_invalid_workflow_runs": [
+    45073508714,
+    45073520224
+  ],
+  "fix": "quote colon in workflow step name; no IPA"
 }
