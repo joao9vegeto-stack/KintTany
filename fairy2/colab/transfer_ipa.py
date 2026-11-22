@@ -1316,9 +1316,24 @@ def verified_ipa_report(z, ipa_name):
             str(report.get("title_id") or "").upper() == TITLE_ID and
             (report.get("output_ipa") or report.get("ipa")) == ipa_name):
             reports.append((n, report))
-    require(len(reports) == 1,
-            f"Artefato precisa conter um relatório exato para {ipa_name}; "
-            f"encontrados {len(reports)}")
+    require(bool(reports),
+            f"Artefato sem relatório de build para a IPA exata {ipa_name}")
+    # Host repacks commonly upload full-resource-va-report.json AND a more
+    # specific stage report for the *same* output IPA. Reject contradictions,
+    # then use the most specific report for provenance and validation.
+    sizes = {int(obj.get("output_ipa_size_bytes", obj.get("ipa_size_bytes")) or 0)
+             for _, obj in reports}
+    hashes_seen = {str(obj.get("output_ipa_sha256", obj.get("ipa_sha256"))).lower()
+                   for _, obj in reports
+                   if obj.get("output_ipa_sha256", obj.get("ipa_sha256"))}
+    require(len(sizes) == 1 and next(iter(sizes)) > 100 * 1024 * 1024,
+            f"Relatórios discordam do tamanho da IPA {ipa_name}")
+    require(len(hashes_seen) <= 1, "Relatórios divergem no SHA-256 da mesma IPA")
+    reports.sort(key=lambda item: (
+        Path(item[0]).name == "build-report.json",
+        Path(item[0]).name == "full-resource-va-report.json",
+        -len(item[1]),
+        item[0]))
     return reports[0]
 
 
