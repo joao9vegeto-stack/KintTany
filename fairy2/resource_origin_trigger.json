@@ -16,5 +16,16 @@
   "method": "strict 206 ranges and full streaming zlib SHA256 for each chunk",
   "verify_terminal_zero": true,
   "investigate_possible_length_mismatch": true,
-  "note": "Flag 0x400000 terminal 2 zero bytes is defined; a shorter inflated payload is a real RDB/FDATA size inconsistency"
+  "note": "Flag 0x400000 terminal 2 zero bytes is defined; a shorter inflated payload is a real RDB/FDATA size inconsistency",
+  "g1s_cohort_probe": {
+    "successful_read_lengths": [
+      938560,
+      94828,
+      34788
+    ],
+    "failed_read_length": 18340,
+    "method": "compare exact source IDRK flag modes (zlib vs LZ4) using original Drive RomFS strict HTTP ranges",
+    "runtime_from": "iPhone log.txt 2026-11-22",
+    "revision": 1
+  }
 }
