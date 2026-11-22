@@ -16,5 +16,9 @@
   "original_parser_unmodified": true,
   "compressed_bytes_from_original_external_fdata": true,
   "gameplay_fix_claimed": false,
-  "device_boot_verified": false
+  "device_boot_verified": false,
+  "revision": 2,
+  "retrigger_reason": "run 45078021103 successfully built and signed original-reader IPA, but final report schema inherited obsolete keys from older nativez job (KeyError mode4_fallback_codec_sites). Workflow validator is corrected; source and engine unchanged.",
+  "previous_failed_run": 45078021103,
+  "guest_runtime_patch_changed_since_previous_build": false
 }
