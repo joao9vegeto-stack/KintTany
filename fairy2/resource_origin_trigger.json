@@ -7,6 +7,8 @@
   "ipa_build": false,
   "hashes": [
     "0xfb9ebd24",
-    "0xac9ed331"
-  ]
+    "0xac9ed13e"
+  ],
+  "corrected_full_abort_message": "can't create resource Name[Unknown] Hash[0xac9ed13e]",
+  "reason": "Decoded complete little-endian 7-qword abort text, preventing truncated hash misread"
 }

@@ -9,7 +9,7 @@ SIZE=7889449169
 N=14770
 ROOT="Motor/ReleasePackage/KIDS_PLATFORM_NX/release/"
 M=1024*1024
-TARGETS={0xfb9ebd24:0xafbec60c,0xac9ed331:0x7bcd279f}
+TARGETS={0xfb9ebd24:0xafbec60c,0xac9ed13e:0x7bcd279f}
 IDRK=struct.Struct("<8sQQQIIII")
 def sha(x):return hashlib.sha256(x).hexdigest()
 class Range:
