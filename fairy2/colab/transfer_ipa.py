@@ -748,7 +748,7 @@ def try_transfer_align64():
 
 
 
-def try_transfer_root3250():
+def try_transfer_global_memory():
     """Select the NEWEST five-instruction iPhone root-region overrun correction, never silently re-upload the crashing base IPA.
 
     Does not trigger a build or download any game/ROMFS content.
@@ -770,7 +770,7 @@ def try_transfer_root3250():
         require(res.ok, f"GitHub HTTP {res.status_code}: {res.text[:160]}")
         return res.json()
 
-    wf = get("/actions/workflows/fairy2-root3250-repack.yml")
+    wf = get("/actions/workflows/fairy2-global-memory.yml")
     runs = get(f"/actions/workflows/{wf['id']}/runs",
                {"branch": BRANCH, "per_page": 30}).get("workflow_runs", [])
     runs = [r for r in runs if r.get("head_branch") == BRANCH]
@@ -785,7 +785,7 @@ def try_transfer_root3250():
     artifacts = get(f"/actions/runs/{newest['id']}/artifacts",
                     {"per_page": 100}).get("artifacts", [])
     choices = [a for a in artifacts
-               if str(a.get("name", "")).startswith("Fairy2iOS-iPhone-root3250-fixed-")
+               if str(a.get("name", "")).startswith("Fairy2iOS-GlobalMemory-")
                and not a.get("expired")]
     require(len(choices) == 1,
             f"Run {newest['id']} precisa conter exatamente um artefato IPA de host repack")
@@ -800,7 +800,7 @@ def try_transfer_root3250():
     expected_sha = str(artifact.get("digest") or "").removeprefix("sha256:").lower()
     require(not expected_sha or bool(re.fullmatch(r"[0-9a-f]{64}", expected_sha)),
             "Artifact digest inválido")
-    work = Path("/content/fairy2-root3250-transfer")
+    work = Path("/content/fairy2-global-memory-transfer")
     work.mkdir(parents=True, exist_ok=True)
     outer = work / ("artifact-" + str(newest["id"]) + ".zip")
     print("[Fairy2iOS] 2/4: Baixando ZIP do host repack, 6 ranges + SHA-256...", flush=True)
@@ -813,52 +813,49 @@ def try_transfer_root3250():
         require(all(not Path(n).is_absolute() and ".." not in Path(n).parts for n in names),
                 "Caminho inseguro no artifact")
         ipa_items = [n for n in names if n.endswith(".ipa") and not n.endswith("/")]
-        reports = [n for n in names if Path(n).name == "root3250-report.json"]
+        reports = [n for n in names if Path(n).name == "global-memory-report.json"]
         require(len(ipa_items) == 1 and len(reports) == 1,
                 "Artifact host repack não tem uma IPA e um relatório")
         record = json.loads(zipf.read(reports[0]))
-        audit = record.get("guest_root_patch", {})
-        geo = audit.get("parent_region_geometry", {})
+        geo = record.get("global_geometry", {})
+        patch = record.get("guest_root_patch", {})
         require(record.get("project") == BRANCH and
                 record.get("title_id") == TITLE_ID and
-                record.get("source_run_id") == 44986770915 and
-                record.get("original_crash_pc") == "main+0x227bd9c" and
-                record.get("original_crash_address") == "0x4257d9e00" and
-                record.get("guest_root_previous_size") == 0xc0000000 and
-                record.get("guest_root_new_size") == 0xd0000000 and
-                audit.get("changed_bytes") == 5 and
-                audit.get("five_root_movz_verified") is True and
-                audit.get("offsets") == [
-                    "main+0x5f1b9c", "main+0x1d700bc",
-                    "main+0x225de0c", "main+0x2295a44", "main+0x2295a50"] and
-                geo.get("old_root_end") == "0x424000000" and
-                geo.get("new_root_end") == "0x434000000" and
-                geo.get("inner_region_end") == "0x425800000" and
-                geo.get("inner_overrun_bytes_before") == 0x1800000 and
-                geo.get("alias_headroom_bytes_after") == 0xc000000 and
-                record.get("prior_ktgl_1_25g_capacity_preserved") is True and
-                record.get("prior_64k_alignment_preserved") is True and
-                record.get("prior_128m_heap_preserved") is True and
-                record.get("first_32mib_arena_crash_resolved_on_iphone") is True and
-                record.get("second_root_bounds_issue_statically_validated") is True and
-                record.get("no_shader_rebuild") is True and
-                record.get("no_native_host_rebuild") is True and
-                record.get("romfs_aoc_external_unchanged") is True and
-                record.get("new_ipa_runtime_verified_on_iphone") is False,
-                "Relatório não valida a correção exata de 3,25 GiB ou perdeu patches anteriores")
-        require(record.get("game_shader_sha256") ==
+                record.get("source_run_id") == 44988275455 and
+                record.get("source_sha256") == "a27f70cbeb1890f103887bcbc93a074b650da032778186ec799f80b2ec63a78b" and
+                geo.get("guest_reserve") == 0x140000000 and
+                geo.get("alias_after") == 0x118000000 and
+                geo.get("heap_after") == 0x8000000 and
+                geo.get("root_after") == 0x100000000 and
+                geo.get("root_extra_alias_bytes") == 0x14200000 and
+                geo.get("mapped_alias_budget") == 0xc1500000 and
+                geo.get("map_limit") == 1 and
+                patch.get("new_region_bytes") == 0x100000000 and
+                patch.get("byte_changes") == 10 and
+                patch.get("instructions_changed") == 5 and
+                patch.get("existing_four_patches_retained") is True and
+                record.get("host_recompiled") is True and
+                record.get("game_shaders_recompiled") is False and
+                record.get("guest_modules_rewritten") is False and
+                record.get("shell_recompiled") is False and
+                record.get("external_romfs_aoc_unchanged") is True and
+                record.get("fps_selector") == [30, 60] and
+                record.get("ab_swap_available") is True and
+                record.get("device_boot_verified") is False,
+                "Relatório não comprova o modelo GLOBAL de memória ou shaders/controles preservados")
+        require(record.get("metal_shader_sha256") ==
                 "ab35b0ef89c907a38c8462da78ba6864153c86f8c203d613b321d45ce0aa262b",
-                "Shaders Metal alterados durante o repack; recusando a IPA")
+                "Shaders Metal modificados: recusando transferência")
         name = Path(ipa_items[0]).name
-        require(name == "Fairy2iOS-FairyTail2-KTGL-3250MiB-root-region.ipa"
+        require(name == "Fairy2iOS-FairyTail2-GlobalMemory-4GiB.ipa"
                 and record.get("output_ipa") == name,
                 "Nome da IPA corrigida não confere")
         ipa = work / name
         with zipf.open(ipa_items[0]) as inp, ipa.open("wb") as out:
             shutil.copyfileobj(inp, out, length=8 * 1024 * 1024)
     digest, _ = hashes(ipa)
-    require(ipa.stat().st_size == int(record.get("output_size_bytes") or -1)
-            and digest == record.get("output_sha256"),
+    require(ipa.stat().st_size == int(record.get("output_ipa_size_bytes") or -1)
+            and digest == record.get("output_ipa_sha256"),
             "IPA extraída diverge de size/SHA-256 do relatório host repack")
     original_report = {
         "framework": f"DmGame{TITLE_ID}.framework",
@@ -887,7 +884,7 @@ def try_transfer_root3250():
     uploaded = upload(drive, ipa, folder, destination_name)
     provenance = {
         "project": BRANCH, "run_id": newest["id"], "artifact_id": artifact["id"],
-        "source_run_id": 44986770915,
+        "source_run_id": 44988275455,
         "run_url": f"https://github.com/{REPO}/actions/runs/{newest['id']}",
         "branch_commit": newest.get("head_sha"),
         "ipa_name": destination_name, "ipa_size": ipa.stat().st_size,
@@ -895,10 +892,10 @@ def try_transfer_root3250():
         "ipa_internal_validation": details, "report": record,
         "drive_ipa_id": uploaded["id"]
     }
-    prov_file = work / ("Fairy2iOS-root3250-run" + str(newest["id"]) + "-provenance.json")
+    prov_file = work / ("Fairy2iOS-global-memory-run" + str(newest["id"]) + "-provenance.json")
     prov_file.write_text(json.dumps(provenance, ensure_ascii=False, indent=2)+"\n")
     upload(drive, prov_file, folder, prov_file.name)
-    print("[Fairy2iOS] REGIÃO EXTERNA 3,25 GiB verificada e enviada:",destination_name,flush=True)
+    print("[Fairy2iOS] MEMÓRIA GLOBAL REVISADA E ENVIADA:",destination_name,flush=True)
     print("Drive: https://drive.google.com/drive/folders/" + folder,flush=True)
     print("Actions: " + provenance["run_url"],flush=True)
     return True
@@ -1035,9 +1032,9 @@ def transfer_original_explicit():
 
 
 def main():
-    """Transfer only the newest verified root3250 IPA; never fall back to crashing runs."""
-    selected=try_transfer_root3250()
-    require(selected is True,"IPA KTGL de 3,25 GiB indisponível; não selecione as IPAs antigas.")
+    """Only latest SUCCESSFUL global-budget IPA, never crash-era versions."""
+    selected=try_transfer_global_memory()
+    require(selected is True,"IPA GLOBAL de memória indisponível; não selecionar builds antigas.")
     return selected
 
 
