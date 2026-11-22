@@ -943,6 +943,171 @@ def try_transfer_global_memory():
 
 
 
+
+def try_transfer_g1t_branch_trace():
+    """Transfer ONLY the device-untested G1T branch-trace IPA from verified run.
+
+    Never fall back to the crashing 6GiB/old IPA; fail before downloading if
+    GitHub changed the expected run, commit, artifact or provenance.
+    """
+    import requests
+    import google.auth
+    from googleapiclient.discovery import build
+
+    RUN_ID = 45046524330
+    RUN_SHA = "0a96bd9ff19df5cbea6f9643e46a27f215e4ed39"
+    ARTIFACT_NAME = "Fairy2iOS-G1T-BranchTrace-3"
+    IPA_NAME = "Fairy2iOS-FairyTail2-G1T-BranchTrace.ipa"
+    SHADER_SHA = "ab35b0ef89c907a38c8462da78ba6864153c86f8c203d613b321d45ce0aa262b"
+    G1T_SHA = "558ada8c563fe44fa18d894d01f39e8b1a230b26ad1bcd0782743797f815e494"
+    SOURCE_SHA = "b1792f9eb522de53b2b252e3a85229584831434999edda98f31c87c7c8c256cd"
+
+    token = os.environ.get("FAIRY2_GITHUB_TOKEN", "").strip()
+    require(bool(token), "Precisa do GitHub PAT com Actions: Read")
+    api_root = f"https://api.github.com/repos/{REPO}"
+    headers = {"Authorization": f"Bearer {token}",
+               "Accept": "application/vnd.github+json",
+               "X-GitHub-Api-Version": "2022-11-28",
+               "User-Agent": "Fairy2iOS-G1T-Trace-Drive-Transfer"}
+
+    def get(path, params=None):
+        response = requests.get(api_root + path, headers=headers, params=params, timeout=60)
+        require(response.ok, f"GitHub API HTTP {response.status_code}: {response.text[:180]}")
+        return response.json()
+
+    run = get(f"/actions/runs/{RUN_ID}")
+    require(run.get("id") == RUN_ID and run.get("head_sha") == RUN_SHA and
+            run.get("head_branch") == BRANCH and
+            run.get("name") == "Fairy2iOS - G1T factory branch trace (host-only, no shaders)" and
+            run.get("status") == "completed" and run.get("conclusion") == "success",
+            f"Run de diagnóstico {RUN_ID} não corresponde à execução esperada ou não concluiu com sucesso")
+    reject_confirmed_device_crash(RUN_ID)
+    artifacts = get(f"/actions/runs/{RUN_ID}/artifacts", {"per_page": 100}).get("artifacts", [])
+    matches = [a for a in artifacts if a.get("name") == ARTIFACT_NAME and not a.get("expired")]
+    require(len(matches) == 1,
+            f"Esperado exatamente um artefato {ARTIFACT_NAME}, encontrado {len(matches)}")
+    artifact = matches[0]
+    require(int(artifact.get("size_in_bytes") or 0) > 1500 * 1000 * 1000,
+            "Artifact do G1T é pequeno demais; IPA suspeita")
+    source = (artifact.get("workflow_run") or {})
+    require(source.get("id") == RUN_ID and source.get("head_sha") == RUN_SHA,
+            "Proveniência do artifact não coincide com o run validado")
+    print(f"[Fairy2iOS] 1/4: G1T BranchTrace — run {RUN_ID}, artifact {ARTIFACT_NAME}.", flush=True)
+
+    response = requests.get(api_root + f"/actions/artifacts/{artifact['id']}/zip",
+                            headers=headers, allow_redirects=False, timeout=60)
+    require(response.status_code in (301, 302, 303, 307, 308)
+            and response.headers.get("Location"),
+            f"GitHub não retornou URL ZIP assinada: HTTP {response.status_code}")
+    expected_zip_sha = str(artifact.get("digest") or "").removeprefix("sha256:").lower()
+    require(bool(re.fullmatch(r"[0-9a-f]{64}", expected_zip_sha)),
+            "GitHub artifact precisa conter SHA-256 verificável")
+    work = Path("/content/fairy2-g1t-branchtrace-transfer")
+    work.mkdir(parents=True, exist_ok=True)
+    outer = work / f"artifact-{RUN_ID}.zip"
+    print("[Fairy2iOS] 2/4: Baixando ZIP do G1T em 6 ranges e conferindo SHA-256...", flush=True)
+    zip_sha = signed_download(response.headers["Location"],
+              int(artifact["size_in_bytes"]), expected_zip_sha, outer)
+
+    print("[Fairy2iOS] 3/4: Validando IPA, relatório e shaders existentes...", flush=True)
+    with zipfile.ZipFile(outer) as z:
+        require(z.testzip() is None, "ZIP externo do artifact corrompido")
+        names = z.namelist()
+        require(len(names) == len(set(names))
+                and all(not Path(n).is_absolute() and ".." not in Path(n).parts
+                        and "\\" not in n for n in names),
+                "ZIP externo contém nomes duplicados ou caminhos inseguros")
+        ipa_names = [n for n in names if n.endswith(".ipa") and not n.endswith("/")]
+        report_names = [n for n in names
+                        if Path(n).name == "g1t-branchtrace-report.json"]
+        require(len(ipa_names) == 1 and len(report_names) == 1,
+                "Artefato precisa conter exatamente 1 IPA e 1 relatório G1T")
+        record = json.loads(z.read(report_names[0]))
+        geo = record.get("global_geometry") or {}
+        patch = record.get("guest_root_5g_patch") or {}
+        require(record.get("project") == BRANCH and record.get("title_id") == TITLE_ID
+                and record.get("source_run_id") == 44995690307
+                and record.get("source_sha256") == SOURCE_SHA
+                and record.get("output_ipa") == IPA_NAME
+                and record.get("branch_trace_sites") == 11
+                and len(patch.get("resource_stage_traps", [])) == 11
+                and patch.get("resource_stage_trap_opcode") == "40403ed4"
+                and record.get("resource_stage_trace") is True
+                and record.get("not_a_gameplay_fix") is True
+                and record.get("g1t_header_sha256") == G1T_SHA
+                and record.get("host_recompiled") is True
+                and record.get("game_shaders_recompiled") is False
+                and record.get("guest_modules_rewritten") is False
+                and record.get("external_romfs_aoc_unchanged") is True
+                and record.get("metal_shader_sha256") == SHADER_SHA
+                and geo.get("guest_reserve") == 0x180000000
+                and geo.get("root_after") == 0x140000000
+                and geo.get("ktgl_child_size") == 0x80000000
+                and record.get("fps_selector") == [30, 60]
+                and record.get("ab_swap_available") is True,
+                "Relatório não comprova a versão G1T rastreada e a preservação dos shaders")
+        name = Path(ipa_names[0]).name
+        require(name == IPA_NAME, "O artifact contém IPA de outra versão")
+        ipa = work / name
+        with z.open(ipa_names[0]) as inp, ipa.open("wb") as dest:
+            shutil.copyfileobj(inp, dest, length=8 * 1024 * 1024)
+    digest, _ = hashes(ipa)
+    reject_confirmed_device_crash(RUN_ID, digest)
+    require(ipa.stat().st_size == int(record.get("output_ipa_size_bytes") or -1)
+            and digest == record.get("output_ipa_sha256"),
+            "IPA extraída não corresponde ao SHA-256/tamanho do relatório")
+    details = validate_ipa(ipa, {
+        "framework": f"DmGame{TITLE_ID}.framework",
+        "shader_payload": {
+            "ipa_path": f"Frameworks/DmGame{TITLE_ID}.framework/msl/b-0724088d3779.img",
+            "size_bytes": 2640519506
+        }
+    }, verify_crc=True)
+    require(details["fps"] == [30, 60] and details["swap_ab"],
+            "Menu 30/60 FPS e inversão A/B ausentes")
+
+    credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/drive"])
+    drive = build("drive", "v3", credentials=credentials, cache_discovery=False)
+    parent = drive.files().get(fileId=DRIVE_GAME_FOLDER, supportsAllDrives=True,
+                               fields="id,name,mimeType,trashed").execute()
+    require(parent.get("name") == "fairy2" and
+            parent.get("mimeType") == "application/vnd.google-apps.folder"
+            and not parent.get("trashed"), "Pasta fairy2 incorreta")
+    subfolders = [a for a in children(drive, DRIVE_GAME_FOLDER)
+                  if a.get("name") == "ipa" and
+                  a.get("mimeType") == "application/vnd.google-apps.folder"]
+    require(len(subfolders) <= 1, "Existem pastas fairy2/ipa duplicadas")
+    if subfolders:
+        folder = subfolders[0]["id"]
+    else:
+        folder = drive.files().create(body={"name": "ipa",
+            "parents": [DRIVE_GAME_FOLDER],
+            "mimeType": "application/vnd.google-apps.folder"},
+            fields="id", supportsAllDrives=True).execute()["id"]
+    destination_name = f"Fairy2iOS-G1T-BranchTrace-run{RUN_ID}.ipa"
+    print(f"[Fairy2iOS] 4/4: Enviando {destination_name} ao Drive fairy2/ipa...", flush=True)
+    uploaded = upload(drive, ipa, folder, destination_name)
+
+    provenance = {
+        "project": BRANCH, "run_id": RUN_ID,
+        "run_url": f"https://github.com/{REPO}/actions/runs/{RUN_ID}",
+        "run_commit": RUN_SHA, "artifact_id": artifact["id"],
+        "artifact_name": ARTIFACT_NAME, "artifact_zip_sha256": zip_sha,
+        "ipa_name": destination_name, "ipa_sha256": digest,
+        "ipa_size": ipa.stat().st_size, "drive_ipa_id": uploaded["id"],
+        "device_tested": False, "gameplay_fix_claimed": False,
+        "status": "DEVICE_DIAGNOSTIC_G1T_BRANCH_TRACE",
+        "ipa_validation": details, "build_report": record
+    }
+    prov = work / f"Fairy2iOS-G1T-BranchTrace-run{RUN_ID}-provenance.json"
+    prov.write_text(json.dumps(provenance, ensure_ascii=False, indent=2) + "\n")
+    upload(drive, prov, folder, prov.name)
+    print("[Fairy2iOS] IPA de DIAGNÓSTICO G1T enviada e validada:", destination_name, flush=True)
+    print("Drive: https://drive.google.com/drive/folders/" + folder, flush=True)
+    print("Actions: " + provenance["run_url"], flush=True)
+    return True
+
+
 def transfer_original_explicit():
     """Legacy first-build transfer, not selected by the current notebook."""
     import google.auth
@@ -1070,9 +1235,9 @@ def transfer_original_explicit():
 
 
 def main():
-    """Only latest SUCCESSFUL global-budget IPA, never crash-era versions."""
-    selected=try_transfer_global_memory()
-    require(selected is True,"IPA GLOBAL de memória indisponível; não selecionar builds antigas.")
+    """Transfer the verified new G1T trace IPA, NOT the known-crashing 6GiB IPA."""
+    selected=try_transfer_g1t_branch_trace()
+    require(selected is True,"IPA de diagnóstico G1T indisponível; não selecionar builds com crash.")
     return selected
 
 

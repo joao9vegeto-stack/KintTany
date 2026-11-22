@@ -15,14 +15,14 @@ spec.loader.exec_module(m)
 
 class RepackTransferRegression(unittest.TestCase):
     def test_main_selects_repack_only(self):
-        with patch.object(m,"try_transfer_global_memory",return_value=True) as latest, \
+        with patch.object(m,"try_transfer_g1t_branch_trace",return_value=True) as latest, \
              patch.object(m,"transfer_original_explicit",side_effect=AssertionError("old IPA")):
             self.assertTrue(m.main())
             latest.assert_called_once_with()
     def test_main_never_falls_back_to_original(self):
-        with patch.object(m,"try_transfer_global_memory",return_value=False), \
+        with patch.object(m,"try_transfer_g1t_branch_trace",return_value=False), \
              patch.object(m,"transfer_original_explicit",side_effect=AssertionError("old IPA")):
-            with self.assertRaisesRegex(RuntimeError,"IPA GLOBAL de memória"):
+            with self.assertRaisesRegex(RuntimeError,"IPA de diagnóstico G1T"):
                 m.main()
     def test_notebook_fetches_branch_in_same_transfer_cell(self):
         book=json.loads((ROOT/"colab/Fairy2iOS_FairyTail2.ipynb").read_text())
@@ -33,12 +33,12 @@ class RepackTransferRegression(unittest.TestCase):
         self.assertIn('subprocess.run(["git", "-C", str(REPO), "fetch"',src)
         self.assertIn('subprocess.run(["git", "-C", str(REPO), "reset"',src)
         self.assertIn('spec_from_file_location("fairy2_latest_repack_transfer"',src)
-        self.assertIn("Todos os runs com crash até 44988275455 BLOQUEADOS",src)
+        self.assertIn("Run G1T 45046524330",src)
         self.assertIn("colab_auth.authenticate_user()",src)
     def test_no_implicit_original_in_main_body(self):
         src=file.read_text()
         main=src.split("def main():",1)[1]
-        self.assertIn("try_transfer_global_memory()",main)
+        self.assertIn("try_transfer_g1t_branch_trace()",main)
         self.assertNotIn("transfer_original_explicit()",main)
 
 if __name__=="__main__":
