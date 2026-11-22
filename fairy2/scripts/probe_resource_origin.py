@@ -149,6 +149,81 @@ def sample(rom,path,r):
             "complete_input_bytes":cursor,"chunks":chunks,"is_g1s":first.startswith(b"_S2G"),
             "is_g1t":first.startswith(b"GT1G")}
 
+
+# Device G1S first-read proof, in chronological order:
+# 938560, 94828, 34788 were successfully read; 18340 returned 0/184.
+# The first 12 decoded G1S bytes contain its own little-endian byte length.
+OBSERVED_G1S_PLAINS=(938560,94828,34788,18340)
+
+def audit_observed_g1s_modes(rom,cache):
+    """Compare native success/failure with real source compression flag, never guess."""
+    result={"successful_plain_lengths":[938560,94828,34788],
+            "failed_plain_length":18340,
+            "type_ktid":"0x7bcd279f","matches":[]}
+    for group,info in cache.items():
+        targets=rdx(rom.get(ROOT+group+".rdx"))
+        for record in records(info["raw"]):
+            if (record["type"]!=0x7bcd279f or
+                record["plain"] not in OBSERVED_G1S_PLAINS):
+                continue
+            line={"archive":group,"file_ktid":f'0x{record["file"]:08x}',
+                  "plain_bytes":record["plain"],"rdb_flags":f'0x{record["flags"]:08x}',
+                  "rdb_compression":(record["flags"]>>20)&63}
+            if not(record["flags"]&0x20000) or not record["stored"]:
+                line["status"]="not_external_fdata"
+                result["matches"].append(line)
+                continue
+            location=pointer(info["raw"][record["data"]:record["offset"]+record["size"]])
+            idx=targets.get(location["marker"])
+            if not idx:
+                line["status"]="missing_rdx_marker"
+                result["matches"].append(line)
+                continue
+            paths=rom.basename(idx["file"])
+            if len(paths)!=1:
+                line["status"]="nonunique_fdata_path"
+                line["paths"]=paths
+                result["matches"].append(line)
+                continue
+            path=paths[0]
+            raw=rom.at(path,location["offset"],IDRK.size)
+            magic,entry_len,packed_len,plain_bytes,param,hash_,type_,flags=IDRK.unpack(raw)
+            if (magic!=b"IDRK0000" or entry_len!=location["size"] or
+                hash_!=record["file"] or type_!=record["type"] or
+                plain_bytes!=record["plain"] or packed_len>entry_len-IDRK.size):
+                raise ValueError("RDB/FDATA identity mismatch for G1S observed read")
+            mode=(flags>>20)&63
+            line.update({"status":"matched","fdata":idx["file"],
+                         "fdata_offset":location["offset"],
+                         "fdata_stored_bytes":packed_len,
+                         "fdata_flags":f"0x{flags:08x}",
+                         "fdata_compression":mode})
+            data_offset=location["offset"]+entry_len-packed_len
+            if mode==4 and packed_len>=12:
+                head=rom.at(path,data_offset,10)
+                n=struct.unpack_from("<H",head)[0]
+                if not 0<n<=packed_len-10:
+                    raise ValueError("Invalid zlib chunk header in observed G1S")
+                first=zlib.decompress(rom.at(path,data_offset+10,n))[:24]
+                line["first_zlib_chunk24"]=first.hex()
+                line["first_zlib_chunk_magic"]=first[:8].decode("latin1")
+                if first.startswith(b"_S2G") and len(first)>=12:
+                    line["g1s_header_declared_bytes"]=int.from_bytes(first[8:12],"little")
+                    if line["g1s_header_declared_bytes"]!=record["plain"]:
+                        raise ValueError("G1S internal size differs from RDB/FDATA")
+            elif mode==0 and packed_len>=12:
+                first=rom.at(path,data_offset,24)
+                line["raw_magic"]=first[:8].decode("latin1")
+                line["g1s_header_declared_bytes"]=int.from_bytes(first[8:12],"little")
+            result["matches"].append(line)
+    result["mode_by_plain_length"]={
+        str(n):[{"file_ktid":r["file_ktid"],"mode":r.get("fdata_compression"),
+                 "archive":r["archive"],"status":r["status"]}
+                for r in result["matches"] if r["plain_bytes"]==n]
+        for n in OBSERVED_G1S_PLAINS
+    }
+    return result
+
 def audit(rom):
     cache={}
     for name in ("system","root"):
@@ -185,6 +260,7 @@ def audit(rom):
                 found.append(x)
         out["resources"][f"0x{fileid:08x}"]={"type":f"0x{expected_type:08x}",
             "status":"found" if found else "missing","matches":found}
+    out["observed_g1s_cohort"]=audit_observed_g1s_modes(rom,cache)
     return out
 def main():
     p=argparse.ArgumentParser()
