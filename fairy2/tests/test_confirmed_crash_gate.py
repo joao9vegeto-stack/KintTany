@@ -28,6 +28,18 @@ class KnownDeviceCrash(unittest.TestCase):
                 "416b9582e27cf2ca3ae4d10e2001b07ee95717c398451766b5445efc80dd3a6e")
         self.assertIn(45064035915, module.DEVICE_CRASH_RUNS)
 
+    def test_original_zlib_ipa_crashed_twice_on_device(self):
+        # Uploaded 2026-11-22: identical fatal main+0xbfe2a8 and
+        # Hash[0xfb9ebd24] with encoder/prefetch/pipeline toggles both ways.
+        run_id = 45075542017
+        sha = "2e771e0efa89671c9525726990329916eaa71aa9a4ee006706a2d28c4734cfec"
+        self.assertIn(run_id, module.DEVICE_CRASH_RUNS)
+        self.assertIn(sha, module.DEVICE_CRASH_SHA256)
+        with self.assertRaisesRegex(RuntimeError, "CRASH CONFIRMADO"):
+            module.reject_confirmed_device_crash(run_id)
+        with self.assertRaisesRegex(RuntimeError, "CRASH CONFIRMADO"):
+            module.reject_confirmed_device_crash(100000000000, sha)
+
     def test_user_refused_experiment_is_not_a_confirmed_crash(self):
         run_id = 45068245797
         sha = "db906123fba2a6b215da72a737d5aa2da9e241a03d5eecbc843b52a30e8ad669"
