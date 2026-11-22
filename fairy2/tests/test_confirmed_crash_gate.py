@@ -40,6 +40,19 @@ class KnownDeviceCrash(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "CRASH CONFIRMADO"):
             module.reject_confirmed_device_crash(100000000000, sha)
 
+    def test_direct_reader_ipa_still_crashes_on_device_two_graphics_modes(self):
+        # 22 Nov 2026: both log.prev.txt (graphics optimizations OFF)
+        # and log.txt (optimizations ON) ended at main+0xbfe2a8,
+        # Hash[0xfb9ebd24]. A green Actions run was NOT a playable port.
+        run_id = 45078767146
+        ipa_sha = "ef2e6edff30d0072796066d9ae46eb1be0ec27248dbec5b52b958cf001f4c22b"
+        self.assertIn(run_id, module.DEVICE_CRASH_RUNS)
+        self.assertIn(ipa_sha, module.DEVICE_CRASH_SHA256)
+        with self.assertRaisesRegex(RuntimeError, "CRASH CONFIRMADO"):
+            module.reject_confirmed_device_crash(run_id)
+        with self.assertRaisesRegex(RuntimeError, "CRASH CONFIRMADO"):
+            module.reject_confirmed_device_crash(99999999999, ipa_sha)
+
     def test_user_refused_experiment_is_not_a_confirmed_crash(self):
         run_id = 45068245797
         sha = "db906123fba2a6b215da72a737d5aa2da9e241a03d5eecbc843b52a30e8ad669"
