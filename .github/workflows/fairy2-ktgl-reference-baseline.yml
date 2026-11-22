@@ -43,3 +43,50 @@ jobs:
           assert d['distinct_backing_paths'] == 2
           print('REFERENCE BASELINE FIXTURE CHECK PASSED; no claim of gameplay or iPhone fix')
           PY
+
+  verified-private-source:
+    needs: source-parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+    steps:
+      - name: Checkout exact Fairy2iOS branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install read-only Drive, LZ4 and zstd dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check 'lz4>=4,<5' google-auth requests
+          command -v zstd || { sudo apt-get update -qq && sudo apt-get install -y zstd; }
+      - name: Verify original user-owned NSO and prepared AOT from SHA-locked Colab archive
+        run: |
+          set -euo pipefail
+          python fairy2/scripts/verify_ktgl_source_work.py --handoff fairy2/handoff.json --output "${{ runner.temp }}/ktgl"
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          p=Path(os.environ['RUNNER_TEMP'])/'ktgl/ktgl-reference-real-source-report.json'
+          d=json.loads(p.read_text())
+          assert d['real_Colab_source_verified'] is True
+          assert d['original_code_verified_bytes']==4104
+          assert len(d['critical_aarch64_regions'])==10
+          assert len(d['guest_paths'])==2
+          assert d['fdata_romfs_not_downloaded'] is True
+          assert d['not_a_gameplay_fix'] is True
+          assert d['shader_rebuild'] is False
+          assert d['ipa_built'] is False
+          print('REAL SOURCE GATE PASSED, 4,104 bytes unchanged; no gameplay fix claimed')
+          PY
+      - name: Upload only JSON provenance (never original NSO, AOT or game files)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fairy2iOS-KTGL-real-source-parity-${{ github.run_number }}
+          path: ${{ runner.temp }}/ktgl/ktgl-reference-real-source-report.json
+          retention-days: 14
+          if-no-files-found: error
