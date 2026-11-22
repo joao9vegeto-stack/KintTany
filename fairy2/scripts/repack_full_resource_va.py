@@ -35,7 +35,9 @@ OUT_NAME="Fairy2iOS-FairyTail2-FullResourceVA-6GiB.ipa"
 # previous IPA is exactly 4GiB at five independently audited callsites.
 ROOT_SITES=((0x5f1b9c,9),(0x1d700bc,9),(0x225de0c,9),
             (0x2295a44,9),(0x2295a50,1))
-CAVE=0x2c5f000   # 0x2bfdb5c..0x2c60000 was all zero before gates
+CAVE=0x2c5f000    # preferred code-cave position, but not trusted on packaged main
+CAVE_FIRST=0x2c00000
+CAVE_LAST=0x2c60000  # rewritten Nintendo gate code begins precisely here
 CAVE_STRIDE=16
 # Two prior 2GiB child capacities and both prior heap/alignment patches.
 PRESERVE=((0x21b6924,"0800a4d2"),(0x21b6954,"1900a4d2"),
@@ -116,16 +118,33 @@ def main_section(exe:Path):
     require(len(data)==obj["size"],"guest section truncated")
     return obj["offset"],data
 
+def choose_cave(raw: bytes) -> int:
+    """Find a safe 0x100-byte all-zero executable padding slot IN THE FINAL IPA.
+
+    The handoff's Linux main and embedded IPA can differ inside the rewrite's
+    spare code pages; never use source-workspace emptiness as proof. Limit to
+    the known original padding 0x2c00000..0x2c60000 before all patched gates.
+    """
+    needed=0x100
+    require(len(raw)>=CAVE_LAST+needed,
+            "embedded main too short for audited padded executable code")
+    options=[CAVE]+list(range(CAVE_FIRST,CAVE_LAST-needed+1,0x1000))
+    for off in options:
+        if (off&0xf)==0 and CAVE_FIRST<=off and off+needed<=CAVE_LAST and
+                raw[off:off+needed]==bytes(needed):
+            return off
+    sample=[(hex(p),raw[p:p+16].hex()) for p in options[:7]]
+    raise RuntimeError("[Fairy2iOS GLOBAL] all audited pre-gate code-cave pages occupied; refusing patch: "+repr(sample))
+
 def patch_bytes(raw:bytes)->tuple[bytes,dict]:
-    require(len(raw)>CAVE+0x100 and set(raw[CAVE:CAVE+0x100])=={0},
-            "the chosen original guest padding is not empty; never overwrite code")
+    cave_base=choose_cave(raw)
     patched=bytearray(raw)
     stubs=[]
     for i,(site,reg) in enumerate(ROOT_SITES):
         old=ROOT_OLD[reg]
         require(raw[site:site+4]==old,
                 f"source not 4GiB at independently audited site main+0x{site:x}")
-        cave=CAVE+i*CAVE_STRIDE
+        cave=cave_base+i*CAVE_STRIDE
         first=(0xd2c00020|reg).to_bytes(4,"little")
         second=(0xf2a80000|reg).to_bytes(4,"little")
         forward=branch_opcode(site,cave)
@@ -142,16 +161,17 @@ def patch_bytes(raw:bytes)->tuple[bytes,dict]:
         require(patched[site:site+4]==bytes.fromhex(opcode),
                 f"unexpected mutation of existing relevant patch at {site:x}")
     differences=sum(a!=b for a,b in zip(raw,patched))
-    require(5*4 <= differences <=5*16 and
-            patched[CAVE+len(ROOT_SITES)*CAVE_STRIDE:CAVE+0x100] ==
-            raw[CAVE+len(ROOT_SITES)*CAVE_STRIDE:CAVE+0x100],
-            "changed outside precisely five ARM64 producer sites and five stubs")
+    require(5*4 <= differences <= 5*16 and
+            patched[cave_base+len(ROOT_SITES)*CAVE_STRIDE:cave_base+0x100] ==
+            raw[cave_base+len(ROOT_SITES)*CAVE_STRIDE:cave_base+0x100],
+            "modified more than five ARM64 producers and five stubs")
     return bytes(patched),{"old_root":0x100000000,"new_root":0x140000000,
                            "trampoline_count":len(stubs),"trampoline_stride":CAVE_STRIDE,
                            "instructions_added":3*len(stubs),
                            "sites":stubs,"actual_modified_bytes":differences,
-                           "code_cave":f"main+0x{CAVE:x}",
+                           "code_cave":f"main+0x{cave_base:x}",
                            "old_cave_all_zeros":True}
+
 def patch_main(exe:Path,src_report:dict):
     off,raw=main_section(exe)
     source=(src_report.get("guest_ktgl_2g_patch") or {})
@@ -167,8 +187,11 @@ def verify_main(exe:Path,stamp:dict):
     _,raw=main_section(exe)
     require(hashlib.sha256(raw).hexdigest()==stamp["after_sha256"],
             "rebuilt framework changed 5GiB root guest code")
+    cave_base=int(stamp["code_cave"].split("+0x",1)[1],16)
+    require(CAVE_FIRST <= cave_base and cave_base+0x100<=CAVE_LAST,
+            "reported final-IPA code cave not in verified pre-gate range")
     for i,(site,reg) in enumerate(ROOT_SITES):
-        cave=CAVE+i*CAVE_STRIDE
+        cave=cave_base+i*CAVE_STRIDE
         require(raw[site:site+4]==branch_opcode(site,cave),
                 f"root producer main+0x{site:x} trampoline lost")
         want=(0xd2c00020|reg).to_bytes(4,"little") + (0xf2a80000|reg).to_bytes(4,"little") + branch_opcode(cave+8,site+4)
