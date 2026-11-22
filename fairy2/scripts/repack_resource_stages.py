@@ -111,6 +111,55 @@ def host_trace_source():
 /* FAIRY2 G1T STAGE TRACE: Branch-for-branch equivalent; only this per-game host.
  * The 11 original branch opcodes were replaced OFFLINE with BRK #0xF202,
  * verified by SHA and re-signed in the framework IPA. No runtime patching. */
+
+/* FAIRY2 G1T HEADER RESCUE: one-shot original known-good asset memory stream.
+ * iPhone logs proved main+0x612120 rejects header, then NULL and SIGTRAP.
+ * ROMFS source was independently validated RDB/RDX/FDATA + zlib + SHA256.
+ * Normal stream remains untouched; failed guest parser is retried with the
+ * byte-identical original 48-byte G1T through its existing native parser. */
+struct fairy2_known_g1t_reader {
+  const void **vt;
+  uint64_t cursor;
+  unsigned char payload[48];
+};
+static uint64_t fairy2_known_g1t_skip(struct fairy2_known_g1t_reader *r,
+                                      uint64_t amount) {
+  if (r->cursor > sizeof r->payload || amount > sizeof r->payload - r->cursor) return 0;
+  r->cursor += amount;
+  return r->cursor;
+}
+static uint64_t fairy2_known_g1t_read(struct fairy2_known_g1t_reader *r,
+                                      void *dest, uint64_t ignored, uint64_t count) {
+  (void)ignored;
+  if (!dest || r->cursor > sizeof r->payload || count > sizeof r->payload - r->cursor) return 0;
+  memcpy(dest, r->payload + r->cursor, (size_t)count);
+  r->cursor += count;
+  return count;
+}
+static const void *fairy2_known_g1t_vt[5] = {
+  NULL, NULL, NULL, (const void *)fairy2_known_g1t_skip, (const void *)fairy2_known_g1t_read
+};
+static struct fairy2_known_g1t_reader fairy2_known_g1t = {
+  .vt = fairy2_known_g1t_vt, .cursor = 0,
+  .payload = { 0x47, 0x54, 0x31, 0x47, 0x30, 0x35, 0x30, 0x30, 0x30, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x10, 0x01, 0x00, 0x00, 0x00, 0x10, 0x21, 0x00, 0xff, 0xff, 0xff, 0xff }
+};
+static unsigned fairy2_g1t_recovery_attempted;
+static void fairy2_g1t_header_rejected(ucontext_t *uc) {
+  char log[420];
+  size_t len = 0;
+  uint64_t sp = uc->uc_mcontext->__ss.__sp;
+  const unsigned char *head = (const unsigned char *)(uintptr_t)(sp + 0x50);
+  int n = snprintf(log, sizeof log, "[dm] FAIRY2_G1T_REJECT original header28=");
+  if (n <= 0 || (size_t)n >= sizeof log) return;
+  len = (size_t)n;
+  static const char hex[] = "0123456789abcdef";
+  for (unsigned k = 0; k < 28 && len + 2 < sizeof log; ++k) {
+    log[len++] = hex[head[k] >> 4]; log[len++] = hex[head[k] & 15];
+  }
+  if (len + 2 < sizeof log) log[len++] = '\n';
+  (void)write(2, log, len);
+}
+
 struct fairy2_stage_spec { uint64_t off, target; unsigned kind; const char *label; };
 static const struct fairy2_stage_spec fairy2_stage_specs[] = {
 ''' + rows + r'''
@@ -149,6 +198,24 @@ static int fairy2_stage_trap(ucontext_t *uc) {
     e->slot = i; e->taken = taken;
     e->x0 = x0; e->x8 = x8; e->x25 = x25; e->x27 = x27;
     e->lr = uc->uc_mcontext->__ss.__lr; e->cpsr = cpsr;
+    /* Both iPhone logs: #76 header fail, #77 G1T NULL, #78 factory NULL.
+     * One-shot original-byte stream retry only in the verified guest context. */
+    if (s->off == 0x612120ULL && taken && seq >= 40 && seq < 256 &&
+        x27 == (uint64_t)(uintptr_t)m->base + 0x2c15c40ULL) {
+      unsigned expected = 0;
+      if (__atomic_compare_exchange_n(&fairy2_g1t_recovery_attempted,
+                         &expected, 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        fairy2_g1t_header_rejected(uc);
+        fairy2_known_g1t.cursor = 0;
+        /* Original BL clobbers x2; x26 retains its input for retry. */
+        uc->uc_mcontext->__ss.__x[2] = uc->uc_mcontext->__ss.__x[26];
+        uc->uc_mcontext->__ss.__x[23] = (uint64_t)(uintptr_t)&fairy2_known_g1t;
+        uc->uc_mcontext->__ss.__pc = (uint64_t)(uintptr_t)m->base + 0x61210cULL;
+        const char *note = "[dm] FAIRY2_G1T_RECOVERY retry verified 48-byte G1T via native parser (once)\n";
+        (void)write(2, note, strlen(note));
+        return 1;
+      }
+    }
     uc->uc_mcontext->__ss.__pc = (uint64_t)(uintptr_t)m->base +
        (taken ? s->target : s->off + 4);
     return 1;
@@ -203,15 +270,19 @@ def make(source: Path, report: Path, repo: Path, out: Path):
     patch_host_crash(repo/'engine/dm/host/crash.c')
     base.patch_main = trace_patch_main
     base.verify_main = trace_verify_main
-    base.OUT_NAME = 'Fairy2iOS-FairyTail2-G1T-BranchTrace.ipa'
+    base.OUT_NAME = 'Fairy2iOS-FairyTail2-G1T-HeaderRescue.ipa'
     result = base.make(source, report, repo, out)
     result.update({'resource_stage_trace': True,
                    'branch_emulation': 'iOS SIGTRAP exact original conditional semantics',
                    'branch_trace_sites': len(TRACE_SITES),
                    'g1t_header_sha256': '558ada8c563fe44fa18d894d01f39e8b1a230b26ad1bcd0782743797f815e494',
-                   'not_a_gameplay_fix': True,
-                   'reason': 'determine the precise branch returning NULL for G1T 0xfb9ebd24'})
-    (out/'g1t-branchtrace-report.json').write_text(json.dumps(result, indent=2)+'\n')
+                   'not_a_gameplay_fix': False,
+                   'device_boot_verified': False,
+                   'fallback_kind': 'one-shot input G1T stream substitution, native parser required',
+                   'fallback_runtime_guard': 'main+612120, Z=1, caller x27=main+2c15c40, 40<=seq<256',
+                   'fallback_g1t_bytes': 48,
+                   'reason': 'retry native G1T parser with verified original 48 bytes after unique header failure'})
+    (out/'g1t-headerrescue-report.json').write_text(json.dumps(result, indent=2)+'\n')
     return result
 
 

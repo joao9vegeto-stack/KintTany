@@ -44,6 +44,18 @@ class G1TTraceTest(unittest.TestCase):
             self.assertIn(f'{at:#x}ULL',src)
         self.assertNotIn('mprotect(',src)
         self.assertNotIn('mach_vm_',src)
+    def test_one_shot_original_g1t_recovery(self):
+        src=mod.host_trace_source()
+        self.assertIn('FAIRY2_G1T_RECOVERY retry',src)
+        self.assertIn('0x612120ULL && taken',src)
+        self.assertIn('0x2c15c40ULL',src)
+        self.assertIn('uc->uc_mcontext->__ss.__x[2] = uc->uc_mcontext->__ss.__x[26]',src)
+        self.assertIn('uc->uc_mcontext->__ss.__x[23]',src)
+        self.assertIn('fairy2_known_g1t_read',src)
+        self.assertIn('fairy2_known_g1t_skip',src)
+        self.assertIn('0x61210cULL',src)
+        self.assertIn('FAIRY2_G1T_REJECT original header28',src)
+
     def test_no_in_place_rewrite_of_uncaught_resource(self):
         src=mod.host_trace_source()
         self.assertIn('taken ? s->target : s->off + 4',src)

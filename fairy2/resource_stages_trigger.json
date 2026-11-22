@@ -17,5 +17,10 @@
   "romfs_aoc_external": true,
   "gameplay_fix_claimed": false,
   "workflow_expression_revision": 3,
-  "clang_atomic_builtin_fix": true
+  "clang_atomic_builtin_fix": true,
+  "g1t_header_rescue": true,
+  "g1t_header_rescue_bytes": 48,
+  "rescue_g1t_sha256": "558ada8c563fe44fa18d894d01f39e8b1a230b26ad1bcd0782743797f815e494",
+  "rescue_site": "main+0x612120",
+  "rescue_guard": "main+0x2c15c40, 40<=seq<256"
 }

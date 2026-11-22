@@ -1,4 +1,4 @@
-name: Fairy2iOS - G1T factory branch trace (host-only, no shaders)
+name: Fairy2iOS - verified G1T header rescue (host-only)
 on:
   push:
     branches: [Fairy2iOS]
@@ -26,7 +26,7 @@ jobs:
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.12'
-      - name: Validate eleven native conditional decisions and pin the NXNative engine
+      - name: Validate native conditional decisions and G1T header rescue and pin the NXNative engine
         shell: bash
         run: |
           set -euo pipefail
@@ -69,7 +69,7 @@ jobs:
           assert report['output_ipa_sha256']==d
           print('Verified original 19,210 shader IPA, SHA-256',d)
           PY
-      - name: Preserve 6GiB geometry and insert eleven exact G1T stage probes before host Xcode build
+      - name: Preserve 6GiB geometry and insert one-shot verified G1T stream rescue and eleven stage probes before host Xcode build
         shell: bash
         run: |
           set -euo pipefail
@@ -86,9 +86,12 @@ jobs:
           from pathlib import Path
           import os,json,zipfile,hashlib
           d=Path(os.environ['RUNNER_TEMP'])/'output'
-          info=json.loads((d/'g1t-branchtrace-report.json').read_text())
+          info=json.loads((d/'g1t-headerrescue-report.json').read_text())
           assert info['branch_trace_sites']==11
-          assert info['not_a_gameplay_fix'] is True
+          assert info['not_a_gameplay_fix'] is False
+          assert info['device_boot_verified'] is False
+          assert info['fallback_g1t_bytes']==48
+          assert 'one-shot' in info['fallback_kind']
           assert info['game_shaders_recompiled'] is False
           assert info['guest_modules_rewritten'] is False
           assert info['external_romfs_aoc_unchanged'] is True
@@ -106,15 +109,15 @@ jobs:
             assert 'Payload/DmShell.app/DmShell' in names
             assert z.getinfo(fw+'profile.tsv').file_size>100
             assert not any(n.endswith('/romfs.img') for n in names)
-          print('FAIRY2 TRACE IPA verified:',ipa.name,'SHA',s.hexdigest())
+          print('FAIRY2 HEADER RESCUE CANDIDATE verified:',ipa.name,'SHA',s.hexdigest())
           PY
-      - name: Upload isolated instrumentation IPA and host/guest proof
+      - name: Upload one-shot verified G1T rescue and host/guest proof
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: Fairy2iOS-G1T-BranchTrace-${{ github.run_number }}
+          name: Fairy2iOS-G1T-HeaderRescue-${{ github.run_number }}
           path: |
-            ${{ runner.temp }}/output/Fairy2iOS-FairyTail2-G1T-BranchTrace.ipa
-            ${{ runner.temp }}/output/g1t-branchtrace-report.json
+            ${{ runner.temp }}/output/Fairy2iOS-FairyTail2-G1T-HeaderRescue.ipa
+            ${{ runner.temp }}/output/g1t-headerrescue-report.json
             ${{ runner.temp }}/output/full-resource-va-report.json
           if-no-files-found: error
           retention-days: 14
@@ -122,6 +125,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: Fairy2iOS-G1T-BranchTrace-failure-${{ github.run_number }}
+          name: Fairy2iOS-G1T-HeaderRescue-failure-${{ github.run_number }}
           path: ${{ runner.temp }}/output/host-build.log
           if-no-files-found: warn
