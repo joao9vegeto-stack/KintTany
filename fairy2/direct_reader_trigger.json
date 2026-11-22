@@ -1,0 +1,20 @@
+{
+  "branch": "Fairy2iOS",
+  "title_id": "0100B9801F872000",
+  "source_run": 44995690307,
+  "engine_pin": "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb",
+  "source_ipa_sha256": "b1792f9eb522de53b2b252e3a85229584831434999edda98f31c87c7c8c256cd",
+  "only_original_stored_zlib": true,
+  "only_on_native_codec_failure": true,
+  "no_fabricated_resource": true,
+  "no_repeated_header_reads": true,
+  "shader_rebuild": false,
+  "correct_at_original_zero_read": true,
+  "confirmed_old_nativez_crash_run": 45075542017,
+  "source_reader_vtable": "main+0x2a64b50",
+  "original_direct_reader_return": "main+0xc11f9c",
+  "original_parser_unmodified": true,
+  "compressed_bytes_from_original_external_fdata": true,
+  "gameplay_fix_claimed": false,
+  "device_boot_verified": false
+}
