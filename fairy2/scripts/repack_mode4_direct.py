@@ -65,7 +65,7 @@ def patch_host_crash(path:Path, repo:Path):
     hook="    if (sig == SIGTRAP && f2_zlib_fail_path_trap(uc)) return;"
     for marker in ("FAIRY2_KTGL_DIRECT_MODE4_SOURCE_RECOVERY",
                    "f2_direct_recover_original_block(",
-                   "f2_zlib_original_chunk(cache, F2_ZLIB_MAX_OUT",
+                   "f2_zlib_original_chunk(f2_direct_verified_output, F2_ZLIB_MAX_OUT",
                    "original==0 && f2_direct_recover_original_block(&snapshot)",
                    "vt == (uint64_t)(uintptr_t)module->base + 0x2a64b50u"):
         base.require(marker in addon, "direct original-source guard missing: "+marker)
