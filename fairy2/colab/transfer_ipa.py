@@ -853,6 +853,13 @@ def try_transfer_global_memory():
                 patch.get("new_root") == 0x140000000 and
                 patch.get("trampoline_count") == 5 and
                 patch.get("old_cave_all_zeros") is True and
+                patch.get("x0_size", 0) > 0x2295a50 and
+                patch.get("w_size", 0) > 0 and
+                patch.get("x0_size", 0) + patch.get("w_size", 0) == 0x2c60000 and
+                patch.get("x1_size", 0) >= 0x40000 and
+                str(patch.get("code_cave", "")).startswith("main+0x") and
+                0x2c80000 <= int(str(patch.get("code_cave", "main+0x0")).split("+0x")[1], 16) < 0x2d6c000 and
+                len(str(patch.get("w_sha256", ""))) == 64 and
                 len(patch.get("sites", [])) == 5 and
                 record.get("host_recompiled") is True and
                 record.get("game_shaders_recompiled") is False and
