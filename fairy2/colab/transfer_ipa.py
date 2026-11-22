@@ -17,6 +17,7 @@ import threading
 import time
 import zipfile
 from pathlib import Path
+from ipa_validator import validate_ipa
 
 REPO = "joao9vegeto-stack/KintTany"
 BRANCH = "Fairy2iOS"
@@ -258,6 +259,9 @@ def main():
     require(ipa.stat().st_size == int(report.get("ipa_size_bytes") or -1),
             "IPA length differs from the signed build-report")
     ipa_sha, _ = hashes(ipa)
+    validation = validate_ipa(ipa, report, verify_crc=True)
+    print(f"[Fairy2iOS] IPA interna verificada: Payload/{validation['app']}, "
+          f"{validation['framework']}, shaders, CRC ZIP, 30/60 FPS e troca A/B.", flush=True)
     print(f"[Fairy2iOS] IPA válida: {ipa.name}, {ipa.stat().st_size:,} bytes SHA-256 {ipa_sha}", flush=True)
 
     print("[Fairy2iOS] 4/4: Drive fairy2/ipa — upload resumable de 64 MiB...", flush=True)
@@ -285,7 +289,8 @@ def main():
         "commit": commit, "artifact_id": artifact["id"], "artifact_name": artifact["name"],
         "artifact_zip_sha256": zip_sha, "artifact_zip_expected_sha256": expected_sha,
         "ipa_name": ipa.name, "ipa_size": ipa.stat().st_size, "ipa_sha256": ipa_sha,
-        "drive_ipa_id": uploaded["id"], "report": report,
+        "drive_ipa_id": uploaded["id"], "ipa_md5": uploaded["md5"],
+        "ipa_internal_validation": validation, "report": report,
     }
     record = work / (ipa.stem + "-provenance.json")
     record.write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
