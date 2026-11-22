@@ -1,0 +1,40 @@
+name: Fairy2iOS - read-only G1T and G1S source proof
+on:
+  push:
+    branches: [Fairy2iOS]
+    paths:
+      - fairy2/resource_origin_trigger.json
+permissions:
+  contents: read
+concurrency:
+  group: fairy2-origin-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  probe:
+    if: github.ref == 'refs/heads/Fairy2iOS'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+    steps:
+      - name: Checkout exact Fairy2iOS commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install read-only Drive client
+        run: python3 -m pip install --disable-pip-version-check google-auth requests
+      - name: Run local parser checks
+        run: |
+          python3 -m py_compile fairy2/scripts/probe_resource_origin.py
+          python3 -m unittest discover -s fairy2/tests -p test_resource_origin.py -v
+      - name: Inspect two failing assets via strict Drive ranges
+        run: python3 fairy2/scripts/probe_resource_origin.py --output "${{ runner.temp }}/fairy2-resource-origin.json"
+      - name: Publish source metadata only
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Fairy2iOS-ResourceOrigin-${{ github.run_number }}
+          path: ${{ runner.temp }}/fairy2-resource-origin.json
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,12 @@
+{
+  "project": "Fairy2iOS",
+  "diagnostic": "G1T and G1S RDB/FData true source",
+  "linux_only": true,
+  "read_only": true,
+  "shader_rebuild": false,
+  "ipa_build": false,
+  "hashes": [
+    "0xfb9ebd24",
+    "0xac9ed331"
+  ]
+}
