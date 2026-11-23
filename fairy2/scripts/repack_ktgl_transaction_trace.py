@@ -19,6 +19,8 @@ SOURCE_G1T=0x612120
 SOURCE_OPCODE=bytes.fromhex("a0050054")
 SOURCE_ADAPTER=0xc09728
 SOURCE_ADAPTER_OPCODE=bytes.fromhex("000840f9")  # original ldr x0,[x0,#0x10]
+SOURCE_BOUND_POST=0xc0962c
+SOURCE_BOUND_OPCODE=bytes.fromhex("880200cb")  # original SUB x8,x20,x0, NZCV unchanged
 FDATA_PACKET_OFFSET=3137776
 FDATA_PACKET_SIZE=137
 FDATA_PACKET_END=FDATA_PACKET_OFFSET+FDATA_PACKET_SIZE
@@ -40,6 +42,8 @@ def patch_guest(exe:Path,source_report:dict):
                  "the actual v458752 G1T original B.EQ differs")
     base.require(raw[SOURCE_ADAPTER:SOURCE_ADAPTER+4]==SOURCE_ADAPTER_OPCODE,
                  "real v458752 stream adapter ldr differs")
+    base.require(raw[SOURCE_BOUND_POST:SOURCE_BOUND_POST+4]==SOURCE_BOUND_OPCODE,
+                 "original c0962c bounded reader post-call opcode differs")
     with exe.open("r+b") as f:
         f.seek(x0["offset"]+SOURCE_G1T)
         base.require(f.read(4)==SOURCE_OPCODE,"G1T branch changed unexpectedly")
@@ -50,16 +54,26 @@ def patch_guest(exe:Path,source_report:dict):
                      "stream adapter changed before guest patch")
         f.seek(x0["offset"]+SOURCE_ADAPTER)
         f.write(BREAK)
+        f.seek(x0["offset"]+SOURCE_BOUND_POST)
+        base.require(f.read(4)==SOURCE_BOUND_OPCODE,"bounded read post changed")
+        f.seek(x0["offset"]+SOURCE_BOUND_POST)
+        f.write(BREAK)
     p,a=base.main_sections(exe)
     check=bytearray(raw)
     check[SOURCE_G1T:SOURCE_G1T+4]=BREAK
     check[SOURCE_ADAPTER:SOURCE_ADAPTER+4]=BREAK
+    check[SOURCE_BOUND_POST:SOURCE_BOUND_POST+4]=BREAK
     base.require(a==bytes(check),"unlisted guest code mutation")
     base.require(p["w"]["data"]==parts["w"]["data"] and
                  p["x1"]["data"]==parts["x1"]["data"],
                  "G1T diagnostic must not change game data or root trampolins")
     record["after_sha256"]=hashlib.sha256(a).hexdigest()
     record["x0_after_sha256"]=hashlib.sha256(p["x0"]["data"]).hexdigest()
+    record["one_exact_emulated_original_read_return"]={
+       "site":"main+0xc0962c","original":SOURCE_BOUND_OPCODE.hex(),
+       "trap":BREAK.hex(),"effect":"x8=x20-x0","resume":"main+0xc09630",
+       "flags_unchanged":True,"result_unchanged":True,
+    }
     record["one_exact_emulated_original_adapter_load"]={
        "site":"main+0xc09728","original":SOURCE_ADAPTER_OPCODE.hex(),
        "trap":BREAK.hex(),"emulated_load":"x0=*(uint64_t *)(x0+0x10)",
@@ -79,6 +93,10 @@ def verify_guest(exe:Path,record:dict):
                  "G1T diagnostic branch is not protected by signal")
     base.require(raw[SOURCE_ADAPTER:SOURCE_ADAPTER+4]==BREAK,
                  "stream adapter diagnostic load has no signal handler")
+    base.require(raw[SOURCE_BOUND_POST:SOURCE_BOUND_POST+4]==BREAK,
+                 "bounded stream original post-read hook missing")
+    base.require(record["one_exact_emulated_original_read_return"]["result_unchanged"],
+                 "the original read result was replaced")
     base.require(record["one_exact_emulated_original_adapter_load"]
                  ["no_read_result_override"],"guest backing stream semantics changed")
     base.require(record["one_exact_emulated_original_branch"]
@@ -149,9 +167,10 @@ unsigned long long fairy2_g1t_original_fdata_guest_address;
     base.require(host.count(anchor)==1 and "FAIRY2_KTGL_TRANSACTION_TRACE_ONLY" not in host,
                  "pinned native signal hook source changed")
     base.require("PSTATE.Z" in addon and "0x6121d4u:0x612124u" in addon and
-                 "f2_adapter_original_load" in addon,
+                 "f2_adapter_original_load" in addon and "f2_wrapper_post_read" in addon,
                  "native trace must preserve exact B.EQ and stream adapter load")
     host=host.replace(anchor,addon+"\n"+anchor+
+        "\n    if (sig == SIGTRAP && f2_wrapper_post_read(uc)) return;"
         "\n    if (sig == SIGTRAP && f2_adapter_original_load(uc)) return;"
         "\n    if (sig == SIGTRAP && f2_g1t_validator_branch(uc)) return;",1)
     crash.write_text(host)
@@ -179,6 +198,10 @@ def make(source:Path,source_report:Path,repo:Path,out:Path):
        "no_shader_compile":True,"game_data_unchanged":True,
        "original_reader_unchanged":True,"file_read_behavior_unchanged":True,
        "original_adapter_load_emulated":True,
+       "real_x3_requested_bytes":True,
+       "original_bounded_read_return_observed":True,
+       "original_bounded_sub_emulated":True,
+       "last_64_original_reads_on_failure":True,
        "source_packet_137_byte_guest_integrity_probed":True,
        "backing_virtual_dispatch_probed":True,
        "source_packet_end_exact":"0x2fe179",

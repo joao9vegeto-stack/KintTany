@@ -15,12 +15,20 @@
  * VM peeks and stdout are read-only; this is a diagnostic build ONLY. */
 extern unsigned char fairy2_g1t_original_fdata_packet[137];
 extern unsigned long long fairy2_g1t_original_fdata_guest_address;
+enum { F2_RING = 64 };
+struct f2_read_event {
+    unsigned seq, has_result;
+    uint64_t backing, vt, request_x3, quota_before, got_x0;
+    uint64_t inner, inner_vt, inner_data, inner_limit;
+};
+static __thread struct f2_read_event f2_ring[F2_RING];
 static __thread unsigned f2_adapter_reads_local;
 static __thread uint64_t f2_adapter_backing_local;
 static __thread uint64_t f2_adapter_vtable_local;
 static __thread uint64_t f2_adapter_method_local;
 static __thread uint64_t f2_adapter_arg1_local;
 static __thread uint64_t f2_adapter_arg2_local;
+static __thread uint64_t f2_adapter_x3_local;
 static int f2_adapter_peek(uint64_t addr, void *dst, size_t n) {
     vm_size_t done=0;
     if (!addr) return 0;
@@ -46,16 +54,32 @@ static int f2_adapter_original_load(ucontext_t *uc) {
     f2_adapter_method_local=method;
     f2_adapter_arg1_local=uc->uc_mcontext->__ss.__x[1];
     f2_adapter_arg2_local=uc->uc_mcontext->__ss.__x[2];
-    if (seq<=32 || (seq<=2048 &&
-          (f2_adapter_arg2_local==28 || f2_adapter_arg2_local==184))) {
+    f2_adapter_x3_local=uc->uc_mcontext->__ss.__x[3];
+    struct f2_read_event *e=&f2_ring[(seq-1)%F2_RING];
+    memset(e,0,sizeof *e);
+    e->seq=seq; e->backing=backing; e->vt=vt;
+    e->request_x3=f2_adapter_x3_local;
+    if (vt==(uint64_t)(uintptr_t)m->base+0x2a644f8u) {
+        e->quota_before=raw[2]; e->inner=raw[1];
+        uint64_t fields[3]={0};
+        if (f2_adapter_peek(raw[1],fields,sizeof fields)) {
+            e->inner_vt=fields[0]; e->inner_data=fields[1];
+            e->inner_limit=fields[2];
+        }
+    }
+    if (seq<=16 || (seq<=2048 &&
+          (f2_adapter_x3_local==20 || f2_adapter_x3_local==28 ||
+           f2_adapter_x3_local==184))) {
         char msg[570];
         int len=snprintf(msg,sizeof msg,
-          "[dm] FAIRY2_STREAM_ADAPTER seq=%u adapter=%#llx source_ok=%d backing=%#llx backing_ok=%d vt=%#llx method=%#llx method_ok=%d arg1=%#llx arg2=%#llx state=%016llx,%016llx,%016llx,%016llx\n",
+          "[dm] FAIRY2_STREAM_ADAPTER seq=%u adapter=%#llx source_ok=%d backing=%#llx backing_ok=%d vt=%#llx method=%#llx method_ok=%d arg1=%#llx arg2=%#llx x3_request=%#llx quota=%#llx state=%016llx,%016llx,%016llx,%016llx\n",
           seq,(unsigned long long)adapter,adapter_ok,
           (unsigned long long)backing,backing_ok,(unsigned long long)vt,
           (unsigned long long)method,method_ok,
           (unsigned long long)f2_adapter_arg1_local,
           (unsigned long long)f2_adapter_arg2_local,
+          (unsigned long long)f2_adapter_x3_local,
+          (unsigned long long)e->quota_before,
           (unsigned long long)raw[1],(unsigned long long)raw[2],
           (unsigned long long)raw[3],(unsigned long long)raw[4]);
         if (len>0 && (size_t)len<sizeof msg) (void)write(2,msg,(size_t)len);
@@ -66,6 +90,29 @@ static int f2_adapter_original_load(ucontext_t *uc) {
     uc->uc_mcontext->__ss.__x[0]=backing;
     uc->uc_mcontext->__ss.__pc=
        (uint64_t)(uintptr_t)m->base+0xc0972cu;
+    return 1;
+}
+/* Exact original SUB x8,x20,x0 at main+0xc0962c (not SUBS).
+ * x0 is the real bytes returned by the KTGL underlying reader.
+ * No parser result, buffer, or guest NZCV is changed. */
+static int f2_wrapper_post_read(ucontext_t *uc) {
+    uint64_t pc=uc->uc_mcontext->__ss.__pc;
+    module_t *m=module_of((void *)(uintptr_t)pc);
+    if (!m || strcmp(m->name,"main") ||
+        pc-(uint64_t)(uintptr_t)m->base!=0xc0962cu) return 0;
+    if (*(volatile uint32_t *)(uintptr_t)pc!=0xd43e4040u) return 0;
+    uint64_t wrapper=uc->uc_mcontext->__ss.__x[19];
+    uint64_t quota=uc->uc_mcontext->__ss.__x[20];
+    uint64_t got=uc->uc_mcontext->__ss.__x[0];
+    for (unsigned i=0;i<F2_RING && i<f2_adapter_reads_local;i++) {
+        unsigned seq=f2_adapter_reads_local-i;
+        struct f2_read_event *e=&f2_ring[(seq-1)%F2_RING];
+        if (e->seq==seq && e->backing==wrapper && !e->has_result) {
+            e->got_x0=got; e->has_result=1; break;
+        }
+    }
+    uc->uc_mcontext->__ss.__x[8]=quota-got;
+    uc->uc_mcontext->__ss.__pc=(uint64_t)(uintptr_t)m->base+0xc09630u;
     return 1;
 }
 static void f2_trace_original_packet_and_reader(void) {
@@ -84,6 +131,21 @@ static void f2_trace_original_packet_and_reader(void) {
       (unsigned long long)f2_adapter_arg1_local,
       (unsigned long long)f2_adapter_arg2_local);
     if (len>0 && (size_t)len<sizeof msg) (void)write(2,msg,(size_t)len);
+    unsigned n=f2_adapter_reads_local<F2_RING ? f2_adapter_reads_local:F2_RING;
+    unsigned from=f2_adapter_reads_local-n+1;
+    for (unsigned seq=from;seq<=f2_adapter_reads_local;seq++) {
+        const struct f2_read_event *e=&f2_ring[(seq-1)%F2_RING];
+        if (e->seq!=seq) continue;
+        char row[460];
+        int len=snprintf(row,sizeof row,
+          "[dm] FAIRY2_READ_PROVENANCE seq=%u vtable=%#llx backing=%#llx x3_requested=%#llx quota_before=%#llx result_seen=%u got_x0=%#llx inner=%#llx inner_vt=%#llx inner_data=%#llx inner_limit=%#llx\n",
+          seq,(unsigned long long)e->vt,(unsigned long long)e->backing,
+          (unsigned long long)e->request_x3,(unsigned long long)e->quota_before,
+          e->has_result,(unsigned long long)e->got_x0,
+          (unsigned long long)e->inner,(unsigned long long)e->inner_vt,
+          (unsigned long long)e->inner_data,(unsigned long long)e->inner_limit);
+        if (len>0 && (size_t)len<sizeof row) (void)write(2,row,(size_t)len);
+    }
 }
 
 static unsigned f2_g1t_failure_trace_seq;
