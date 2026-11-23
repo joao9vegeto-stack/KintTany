@@ -1,0 +1,80 @@
+name: HookLink2iOS 4.0 - X3 runtime recovery (no shader rebuild)
+on:
+  push:
+    branches: [HookLink2iOS]
+    paths:
+      - scripts/hooklink2ios_x3_recovery.py
+      - scripts/hooklink2ios_x3_relink.py
+      - .github/workflows/hooklink2ios-v4-recovery.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: hooklink2ios-x3-recovery-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  recovery:
+    if: github.ref == 'refs/heads/HookLink2iOS'
+    runs-on: xcode-27
+    timeout-minutes: 180
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+      IPHONEOS_DEPLOYMENT_TARGET: '26.0'
+      ENGINE_PIN: 'ee3ce6a02bc737d38795f0a96cce494cee7a799c'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify Xcode, disk and Python syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(xcodebuild -version | head -1)" = "Xcode 27.2"
+          test "$(df -Pk "$RUNNER_TEMP" | awk 'END{print $4}')" -gt $((25*1024*1024))
+          python3 -m py_compile scripts/hooklink2ios_x3_recovery.py scripts/hooklink2ios_x3_relink.py scripts/hooklink2ios_native_relink.py scripts/hooklink2ios_perf_repack.py
+          if ! command -v xcodegen >/dev/null; then brew install xcodegen; fi
+          xcrun --sdk iphoneos metal --version
+      - name: Retrieve exact successful full X3 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: HookLink2iOS-V4-5
+          run-id: 45214405727
+          github-token: ${{ github.token }}
+          repository: joao9vegeto-stack/KintTany
+          path: ${{ runner.temp }}/source-x3
+      - name: Fetch original X3 source and verify source-level patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init "$RUNNER_TEMP/nxnative-x3"
+          git -C "$RUNNER_TEMP/nxnative-x3" remote add origin https://github.com/dsi-hub/nxnative.git
+          git -C "$RUNNER_TEMP/nxnative-x3" fetch --depth 1 origin "$ENGINE_PIN"
+          git -C "$RUNNER_TEMP/nxnative-x3" checkout --detach FETCH_HEAD
+          test "$(git -C "$RUNNER_TEMP/nxnative-x3" rev-parse HEAD)" = "$ENGINE_PIN"
+      - name: Rebuild ONLY the iOS host, preserve ARM64 guest sections and original X3 Metal images
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/hooklink2ios_x3_relink.py \
+            --artifact "$RUNNER_TEMP/source-x3" \
+            --engine "$RUNNER_TEMP/nxnative-x3" \
+            --output "$RUNNER_TEMP/x3-recovery"
+          test -s "$RUNNER_TEMP/x3-recovery/OcarinaOfTime-HookLink2iOS-X3-Recovery.ipa"
+          test -s "$RUNNER_TEMP/x3-recovery/build-report.json"
+      - name: Publish X3 host recovery IPA and provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: HookLink2iOS-V4-Recovery-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/x3-recovery/OcarinaOfTime-HookLink2iOS-X3-Recovery.ipa
+            ${{ runner.temp }}/x3-recovery/build-report.json
+            ${{ runner.temp }}/x3-recovery/repack-report.json
+            ${{ runner.temp }}/x3-recovery/res_overlay/Pack/Bootup.Nin_Ounce_NVN2.pack.zs
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
