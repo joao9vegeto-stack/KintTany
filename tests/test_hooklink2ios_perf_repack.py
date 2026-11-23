@@ -96,6 +96,26 @@ class RepackTests(unittest.TestCase):
             z.writestr(repack.PREFIX+"msl/b-test.img.2",b"B"*(12*1024*1024))
         with zipfile.ZipFile(p) as z, self.assertRaises(SystemExit):
             repack.audit(z)
+    def test_codesign_does_not_invalidate_native_relink_digest(self):
+        # codesign modifies __LINKEDIT and the executable length. The IPA
+        # contains SIGNED bytes, not the original unsigned relinked bytes.
+        import hashlib
+        after_sign = b"original-native-executable" + b"ad-hoc-codesignature"
+        p = Path(self.tmp.name)/"signed.ipa"
+        with zipfile.ZipFile(p,"w") as z:
+            z.writestr(repack.PREFIX+"DmIOS",after_sign)
+        details = {
+            "new_executable_bytes":len(b"original-native-executable"),
+            "new_executable_sha256":hashlib.sha256(b"original-native-executable").hexdigest(),
+            "signed_executable_bytes":len(after_sign),
+            "signed_executable_sha256":hashlib.sha256(after_sign).hexdigest()
+        }
+        with zipfile.ZipFile(p) as z:
+            repack.verify_signed_native(z,details)
+        details["signed_executable_sha256"]="bad"
+        with zipfile.ZipFile(p) as z,self.assertRaises(SystemExit):
+            repack.verify_signed_native(z,details)
+
     def test_repack_preserves_original_split_image_compression(self):
         work = Path(self.tmp.name)/"work"
         member = work/"Payload"/"DmIOS.app"/"msl"/"b-test.img.0"
@@ -109,20 +129,6 @@ class RepackTests(unittest.TestCase):
             self.assertEqual(i.compress_type,zipfile.ZIP_DEFLATED)
             self.assertLess(i.compress_size,i.file_size//10)
             self.assertEqual(z.read(name),b"S"*(512*1024))
-    def test_signed_macho_has_separate_size_and_sha(self):
-        binary = Path(self.tmp.name)/"DmIOS"
-        binary.write_bytes(b"OLD-UNSIGNED-EXECUTABLE")
-        before = repack.sha256(binary)
-        original_size = binary.stat().st_size
-        info = {"new_executable_sha256":before,"new_executable_bytes":original_size}
-        # Apple's codesign appends/replaces the LC_CODE_SIGNATURE payload.
-        binary.write_bytes(binary.read_bytes()+b"CODEDIRECTORY-AND-ENTITLEMENTS")
-        repack.note_signed_executable(info,binary)
-        self.assertEqual(info["new_executable_sha256"],before)
-        self.assertEqual(info["new_executable_bytes"],original_size)
-        self.assertEqual(info["signed_executable_bytes"],binary.stat().st_size)
-        self.assertEqual(info["signed_executable_sha256"],repack.sha256(binary))
-        self.assertNotEqual(info["signed_executable_sha256"],before)
     def test_wrong_romfs_index_rejected(self):
         p=Path(self.tmp.name)/"wrong.ipa"
         with zipfile.ZipFile(p,"w") as z:

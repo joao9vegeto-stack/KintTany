@@ -153,15 +153,20 @@ def patch_launcher_and_env(app, changes):
     if any(key in final for key in defaults): fail("launcher key locked by env")
     return {"launcher_defaults":defaults, "bundled_env":final, "preserved":{k:v for k,v in old.items() if k not in owned}}
 
-def note_signed_executable(native_info, executable):
-    """Signing changes Mach-O bytes and size: preserve separate pre/post-sign hashes."""
-    if native_info is None:
-        return None
-    if not executable.is_file():
-        fail("relinked host missing after codesign")
-    native_info["signed_executable_bytes"] = executable.stat().st_size
-    native_info["signed_executable_sha256"] = sha256(executable)
-    return native_info
+def verify_signed_native(result, native_info):
+    """Verify the *signed* executable, not the pre-codesign relink digest."""
+    if not native_info.get("signed_executable_sha256") or not native_info.get("signed_executable_bytes"):
+        fail("missing post-codesign native executable digest")
+    native = result.getinfo(PREFIX+"DmIOS")
+    if native.file_size != native_info["signed_executable_bytes"]:
+        fail("signed executable size changed when packed into IPA")
+    h = hashlib.sha256()
+    with result.open(native) as f:
+        for part in iter(lambda:f.read(CHUNK), b""):
+            h.update(part)
+    if h.hexdigest() != native_info["signed_executable_sha256"]:
+        fail("signed executable SHA-256 changed when packed into IPA")
+
 
 def rezip(root, destination, original_compression):
     """Keep the exact source ZIP entry compression method, notably split .img.N.
@@ -259,7 +264,14 @@ def main():
         subprocess.run(["codesign","--force","--sign","-","--timestamp=none",
                         "--entitlements",str(args.entitlements.resolve()),str(app)],check=True)
         subprocess.run(["codesign","--verify","--deep","--strict",str(app)],check=True)
-        note_signed_executable(native_info, executable)
+        # codesign rewrites LC_CODE_SIGNATURE/__LINKEDIT; its digest differs.
+        # Preserve the pre-sign digest proving the relinked guest sections, and
+        # record a second digest for the signed file actually shipped.
+        if native_info is not None:
+            native_info["signed_executable_sha256"] = sha256(executable)
+            native_info["signed_executable_bytes"] = executable.stat().st_size
+            if native_info["signed_executable_bytes"] < native_info["new_executable_bytes"]:
+                fail("signed native executable unexpectedly shrank")
         rezip(temp/"package", args.output, methods)
         size_limit = min(4_000_000_000, source_ipa.stat().st_size+
                          (900 if pso_info else 256)*1024*1024)
@@ -284,14 +296,7 @@ def main():
 
         if native_info:
             with zipfile.ZipFile(args.output) as result:
-                native = result.getinfo(PREFIX+"DmIOS")
-                if native.file_size != native_info["signed_executable_bytes"]:
-                    fail("embedded rebuilt executable has wrong size")
-                h = hashlib.sha256()
-                with result.open(native) as f:
-                    for part in iter(lambda:f.read(CHUNK), b""): h.update(part)
-                if h.hexdigest()!=native_info["signed_executable_sha256"]:
-                    fail("signed rebuilt executable sha256 changed in repacked IPA")
+                verify_signed_native(result, native_info)
         if pso_info:
             with zipfile.ZipFile(args.output) as result:
                 name = PREFIX+"pso/applegpu_g18p.mtl4a"
@@ -306,7 +311,7 @@ def main():
                 if size != pso_info["archive_size_bytes"] or h.hexdigest() != pso_info["archive_sha256"]:
                     fail("PSO integrity changed during IPA packing")
         report = {
-          "project":"HookLink2iOS", "title_id":TITLE, "type":"native-selective-runtime-backport" if native_info else "settings-only-repack",
+          "project":"HookLink2iOS", "title_id":TITLE, "type":"settings-only-repack",
           "preset":args.preset, "settings":values, "launcher_patched":True,
           "source_sha256":sha256(args.source), "source_ipa_sha256":sha256(source_ipa),
           "output_name":args.output.name, "output_sha256":sha256(args.output),

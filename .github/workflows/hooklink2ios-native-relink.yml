@@ -5,6 +5,8 @@ on:
     branches: [HookLink2iOS]
     paths:
       - .github/workflows/hooklink2ios-native-relink.yml
+      - scripts/hooklink2ios_perf_repack.py
+      - tests/test_hooklink2ios_perf_repack.py
   workflow_dispatch:
 
 permissions:
@@ -98,6 +100,7 @@ jobs:
           report=json.loads((base/"native-report.json").read_text())
           assert ipa.is_file() and ipa.stat().st_size<4_000_000_000, "installer-unsafe IPA"
           assert build["native_host_relinked"]["new_executable_sha256"]==report["new_executable_sha256"]
+          assert build["native_host_relinked"]["signed_executable_sha256"], "missing post-codesign digest"
           assert build["native_host_relinked"]["signed_executable_bytes"]>0
           assert len(build["native_host_relinked"]["signed_executable_sha256"])==64
           assert build["shader_images_preserved"], "original Metal shaders changed"
