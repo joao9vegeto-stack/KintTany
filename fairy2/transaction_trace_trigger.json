@@ -24,5 +24,8 @@
   "trace_original_G1T_branch": "main+0x612120",
   "no_native_reader_retry": true,
   "not_a_gameplay_fix": true,
-  "request": "Capture actual FDATA ReadFile requests and G1T validator failure in guest; prove source delivery before attempting any engine changes."
+  "request": "Capture actual FDATA ReadFile requests and G1T validator failure in guest; prove source delivery before attempting any engine changes.",
+  "revision": 2,
+  "previous_failed_run": 45087739395,
+  "retrigger_reason": "first run blocked at isolated preflight fixture lacking G1T helper source; fixed use source-relative helper path, no change to guest code or host trace logic"
 }
