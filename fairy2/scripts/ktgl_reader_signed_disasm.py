@@ -18,7 +18,9 @@ REGIONS = (
  ("KTGL-resource-create",0xc10510,0xc10b90),
  ("chunk-producer-mode4",0xc10d80,0xc10ee8),
  ("direct-reader",0xc11b60,0xc11fc0),
+ ("direct-resource-call",0xc11800,0xc119a0),
  ("direct-block-allocator",0xc119a0,0xc11b60),
+ ("direct-failure-factory",0xc10b90,0xc10d80),
  ("mode4-codec",0xc0ef70,0xc0f0f0),
  ("G1T-header-native",0x60db9c,0x60dd10),
  ("G1T-validator",0x6120e0,0x6121dc),
@@ -91,7 +93,7 @@ def audit(ipa:Path,expected_sha:str)->dict:
         ins=list(md.disasm(raw,first))
         insist(len(ins)==(last-first)//4,"incomplete ARM64 disassembly in "+name)
         selected=[x for x in ins if
-          (name in ("buffered-stream-full","adapter-original-forward","G1T-header-native","G1T-validator","G1S-validator","KTGL-resource-create","chunk-producer-mode4","direct-reader","direct-block-allocator","mode4-codec"))
+          (name in ("buffered-stream-full","adapter-original-forward","G1T-header-native","G1T-validator","G1S-validator","KTGL-resource-create","chunk-producer-mode4","direct-reader","direct-block-allocator","direct-resource-call","direct-failure-factory","mode4-codec"))
           or x.mnemonic.startswith(("bl","b.","cb","tb")) or
           x.address in HOT or x.address in range(first, min(first+0x40,last),4)]
         rows=[{"at":hex(x.address),"hex":x.bytes.hex(),

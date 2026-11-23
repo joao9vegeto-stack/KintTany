@@ -11,7 +11,7 @@
   "question": "What exact original ARM64 code implements KTGL buffered resource reader and 0-return when guest G1T is rejected? Disassemble before changing code; do not guess.",
   "no_game_build": true,
   "no_shader_build": true,
-  "revision": 3,
+  "revision": 4,
   "previous_diagnostic_run": 45093730337,
-  "retrigger_reason": "Read actual complete ARM64 implementation of capped buffer and original mode4 producer from same SHA-pinned executable; prior static report was intentionally abbreviated. No gameplay build."
+  "retrigger_reason": "Now focus source-matched main+c11928 direct archive caller, which matches on-device crash stack. This 104-instruction region was absent from earlier static slices; no IPA build."
 }
