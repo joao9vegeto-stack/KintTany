@@ -1,5 +1,5 @@
 """Original AArch64 producer sites, exact instruction emulation and functional reader ABI."""
-import ast,unittest
+import ast,re,unittest
 from pathlib import Path
 SRC=Path(__file__).resolve().parents[1]/"scripts/repack_ktgl_source_dual_repair.py"
 class SignedProducer(unittest.TestCase):
@@ -19,7 +19,9 @@ class SignedProducer(unittest.TestCase):
     self.assertIn("FAIRY2_MODE4_PRODUCER_RETURN",self.host)
     self.assertIn("uc->uc_mcontext->__ss.__x[20]=uc->uc_mcontext->__ss.__x[25];",self.host)
     self.assertIn("uc->uc_mcontext->__ss.__pc=pc+4;",self.host)
-    self.assertNotIn("uc->uc_mcontext->__ss.__x[0]=",self.host)
+    # A comparison x0==0 is NOT an assignment; reject only a true
+    # assignment while allowing the legitimate original failure check.
+    self.assertIsNone(re.search(r"uc->uc_mcontext->__ss\.__x\[0\]\s*=(?!=)",self.host))
  def test_direct_reader_real_fault_emulation(self):
     self.assertIn("FAIRY2_DIRECT_SOURCE_RESET",self.host)
     self.assertIn("vm_read_overwrite(mach_task_self()",self.host)

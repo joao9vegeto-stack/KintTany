@@ -161,7 +161,7 @@ static int f2_producer_branch_state(ucontext_t *uc){
    /* main+c107d8: MOV x20,x25; preceding c10d80 returned x0,
       the next c107dc tests bit 0 (success/failure) of that return. */
    unsigned n=__atomic_add_fetch(&f2_mode4_return_count,1,__ATOMIC_RELAXED);
-   if(n<=64 || uc->uc_mcontext->__ss.__x[0]==0){
+   if(n<=64 || (n<=2048 && uc->uc_mcontext->__ss.__x[0]==0)){
      char buf[300];
      int k=snprintf(buf,sizeof(buf),
        "[dm] FAIRY2_MODE4_PRODUCER_RETURN seq=%u result_x0=%#llx context_x25=%#llx reader_x22=%#llx fp=%#llx\n",
