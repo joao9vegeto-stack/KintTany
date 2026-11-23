@@ -9,7 +9,7 @@ HERE=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(HERE/"scripts"))
 import repack_ktgl_transaction_trace as trace
 
-FS_TEMPLATE="""int some_neighbor(void) { return 1; }
+FS_TEMPLATE="""#include "save_sync.h"\nint some_neighbor(void) { return 1; }
 void h_fs_ReadFile_implementation(void) {
     size_t got = 0; int reprep = 0, fd = (int)h; int64_t base = 0;
     *out = got;
