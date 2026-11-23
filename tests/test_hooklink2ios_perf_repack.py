@@ -68,12 +68,22 @@ class RepackTests(unittest.TestCase):
         with zipfile.ZipFile(p,"w") as z:
             z.writestr(repack.PREFIX+"Info.plist",plistlib.dumps({"MinimumOSVersion":"26.0","CFBundleIdentifier":"org.nxnative.0400486024dec000"}))
             z.writestr(repack.PREFIX+"DmIOS",b"test binary")
-            z.writestr(repack.PREFIX+"romfs.id",f"DMROMFSID1 title={repack.TITLE} version=v131072 build=legacy size=123 index=0000000000000123")
+            z.writestr(repack.PREFIX+"romfs.id",f"DMROMFSID1 title={repack.TITLE} version=v131072 build=legacy size=26247576430 index=b6a3def414e47ca5")
             z.writestr(repack.PREFIX+"msl/b-test.img",b"test shader image")
         with zipfile.ZipFile(p) as z:
             marker,shaders=repack.audit(z)
             self.assertTrue(marker.startswith("DMROMFSID1 "))
             self.assertEqual(len(shaders),1)
+    def test_wrong_romfs_index_rejected(self):
+        p=Path(self.tmp.name)/"wrong.ipa"
+        with zipfile.ZipFile(p,"w") as z:
+            z.writestr(repack.PREFIX+"Info.plist",plistlib.dumps({"MinimumOSVersion":"26.0"}))
+            z.writestr(repack.PREFIX+"DmIOS",b"binary")
+            z.writestr(repack.PREFIX+"romfs.id",f"DMROMFSID1 title={repack.TITLE} version=1.0 build=legacy size=26247576430 index=deadbeef414e47ca5")
+            z.writestr(repack.PREFIX+"msl/b-test.img",b"metal")
+        with zipfile.ZipFile(p) as z, self.assertRaises(SystemExit):
+            repack.audit(z)
+
 
 if __name__=="__main__":
     unittest.main()

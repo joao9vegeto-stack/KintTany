@@ -88,7 +88,7 @@ jobs:
           else
             "$RUNNER_TEMP/hooklink-py/bin/python" scripts/hooklink2ios_fetch_source.py --drive-file-id "$SOURCE_DRIVE" --output "$RUNNER_TEMP/hooklink-source.bin"
           fi
-      - name: Preserve existing game code/Metal image, adjust only env, then sign
+      - name: Validate real RomFS identity + launcher, then re-sign without shader builds
         env:
           SOURCE_ARTIFACT: ${{ inputs.source_artifact_id }}
           PRESET: ${{ inputs.preset }}
@@ -99,6 +99,18 @@ jobs:
           SOURCE="$RUNNER_TEMP/hooklink-source.bin"
           if [ -n "$SOURCE_ARTIFACT" ]; then SOURCE="$RUNNER_TEMP/hooklink-source.zip"; fi
           mkdir -p "$RUNNER_TEMP/hooklink-repack"
+          export SOURCE
+          python3 - <<'PY'
+          import json,os,plistlib,zipfile
+          from pathlib import Path
+          source=Path(os.environ["SOURCE"])
+          with zipfile.ZipFile(source) as z:
+              marker=z.read("Payload/DmIOS.app/romfs.id").decode("utf-8","replace").strip()
+              launcher=json.loads(z.read("Payload/DmIOS.app/dm/launcher.json"))
+              opts={x["env"]:x.get("default") for x in launcher["settings"] if "FRAME" in x["env"] or "FPS" in x["env"]}
+              print("Source RomFS identity:",marker,flush=True)
+              print("Launcher game:",launcher.get("game"),"FPS mode defaults:",opts,flush=True)
+          PY
           python3 scripts/hooklink2ios_perf_repack.py \
             --source "$SOURCE" \
             --preset "$PRESET" \

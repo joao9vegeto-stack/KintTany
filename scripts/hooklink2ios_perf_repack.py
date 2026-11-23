@@ -36,8 +36,12 @@ def audit(z):
     if any(name not in names for name in required):
         fail("incomplete or wrong DmIOS IPA")
     marker = z.read(PREFIX+"romfs.id").decode("utf-8", "replace").strip()
-    if "title="+TITLE not in marker or "version=v131072" not in marker:
-        fail("wrong title/update in romfs.id")
+    parts = marker.split()
+    fields = dict(p.split("=",1) for p in parts[1:] if "=" in p)
+    if (not parts or parts[0] != "DMROMFSID1" or fields.get("title") != TITLE
+        or fields.get("size") != "26247576430" or fields.get("index") != "b6a3def414e47ca5"):
+        fail("RomFS identity doesn't match verified handoff (title/size/index): "+marker[:250])
+    # The version field is NACP's display version, not necessarily the NUP's v131072.
     plist = plistlib.loads(z.read(PREFIX+"Info.plist"))
     if str(plist.get("MinimumOSVersion", "")) != "26.0":
         fail("not an iOS 26.0 IPA")
