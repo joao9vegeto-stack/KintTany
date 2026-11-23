@@ -8,9 +8,9 @@ TITLE = "0400486024DEC000"
 PREFIX = "Payload/DmIOS.app/"
 CHUNK = 16 * 1024 * 1024
 PRESETS = {
-    "stable30": {"DM_FRAME_MODE":"1", "DM_DYNAMIC_RESOLUTION":"1",
+    "stable30": {"DM_FRAME_MODE":"1", "DM_FPS_TARGET":"30", "DM_FRAMEGEN":"0", "DM_DYNAMIC_RESOLUTION":"1",
                  "DM_UPSCALER":"metalfx", "DM_RT_COMP":"auto", "DM_SHOW_FPS":"1"},
-    "balanced30fg": {"DM_FRAME_MODE":"2", "DM_FRAMEGEN_SCALE":"0.75",
+    "balanced30fg": {"DM_FRAME_MODE":"2", "DM_FPS_TARGET":"30", "DM_FRAMEGEN":"1", "DM_FRAMEGEN_SCALE":"0.75",
                       "DM_DYNAMIC_RESOLUTION":"1", "DM_UPSCALER":"metalfx",
                       "DM_RT_COMP":"auto", "DM_SHOW_FPS":"1"},
     "native60": {"DM_FRAME_MODE":"0", "DM_FPS_TARGET":"60", "DM_FRAMEGEN":"0",
@@ -70,27 +70,61 @@ def unpack(z, root):
         mode = (info.external_attr >> 16) & 0o777
         if mode: out.chmod(mode)
 
-def update_env(app, changes):
-    p = app/"dm"/"env.txt"
-    current = {}
-    if p.exists():
-        for line in p.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
+def patch_launcher_and_env(app, changes):
+    """Update selectable launcher defaults, without freezing them via env.txt."""
+    config = app/"dm"/"launcher.json"
+    if not config.is_file():
+        fail("missing launcher.json; can't guarantee selectable 30/60 FPS")
+    data = json.loads(config.read_text(encoding="utf-8"))
+    if data.get("schema") != 1 or data.get("game") != TITLE:
+        fail("invalid launcher schema or game")
+    rows = data.get("settings")
+    if not isinstance(rows, list):
+        fail("invalid launcher settings")
+    lookup = {}
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("env"), str) or row["env"] in lookup:
+            fail("invalid/duplicate launcher row")
+        lookup[row["env"]] = row
+    if "DM_FRAME_MODE" not in lookup:
+        fail("original game launcher cannot switch between 30 and 60 FPS")
+    defaults, env_only = {}, {}
+    for key, value in changes.items():
+        row = lookup.get(key)
+        if row is None:
+            env_only[key] = value
+            continue
+        if row.get("kind") == "choice":
+            choices = {str(x[0]) for x in row.get("options", []) if isinstance(x, list) and len(x) == 2}
+            if value not in choices: fail("launcher missing option "+key+"="+value)
+        elif row.get("kind") == "toggle":
+            if value not in (str(row.get("on")), str(row.get("off"))):
+                fail("launcher toggle missing "+key+"="+value)
+        else:
+            fail("unsupported launcher setting: "+key)
+        row["default"] = value
+        defaults[key] = value
+    config.write_text(json.dumps(data, ensure_ascii=False, indent=1)+"\n", encoding="utf-8")
+    path = app/"dm"/"env.txt"
+    old = {}
+    if path.exists():
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
             if not line or line.startswith("#"): continue
-            if "=" not in line: fail("bad original env.txt line")
+            if "=" not in line: fail("invalid bundled env row")
             key, value = line.split("=", 1)
-            key = key.strip()
-            if key in current or not key.startswith("DM_"):
-                fail("duplicate/unexpected env key: "+key)
-            current[key] = value.strip()
-    # Remove mode-dependent old values, preserve all non-FPS existing flags.
-    owned = set().union(*(p.keys() for p in PRESETS.values()))
-    values = {key:value for key,value in current.items() if key not in owned}
-    values.update(changes)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("# HookLink2iOS repack; Documents/env.txt overrides this bundle file.\n" +
-                 "".join(f"{key}={value}\n" for key,value in values.items()), encoding="utf-8")
-    return values
+            key, value = key.strip(), value.strip()
+            if not key.startswith("DM_") or key in old: fail("duplicate or non-DM key: "+key)
+            old[key] = value
+    owned = set().union(*(x.keys() for x in PRESETS.values()))
+    final = {k:v for k,v in old.items() if k not in owned}
+    final.update(env_only)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# HookLink2iOS runtime-only defaults; FPS choices are in dm/launcher.json.\n"
+                    "# Saved launcher settings and Documents/env.txt can take priority.\n"+
+                    "".join(f"{k}={v}\n" for k,v in final.items()), encoding="utf-8")
+    if any(key in final for key in defaults): fail("launcher key locked by env")
+    return {"launcher_defaults":defaults, "bundled_env":final, "preserved":{k:v for k,v in old.items() if k not in owned}}
 
 def rezip(root, destination):
     with zipfile.ZipFile(destination, "w", allowZip64=True) as z:
@@ -137,7 +171,7 @@ def main():
         app = temp/"package"/"Payload"/"DmIOS.app"
         executable = app/"DmIOS"
         executable.chmod(executable.stat().st_mode | 0o111)
-        values = update_env(app, PRESETS[args.preset])
+        values = patch_launcher_and_env(app, PRESETS[args.preset])
         for framework in sorted((app/"Frameworks").glob("*.framework")) if (app/"Frameworks").exists() else []:
             subprocess.run(["codesign","--force","--sign","-","--timestamp=none",str(framework)],check=True)
         subprocess.run(["codesign","--force","--sign","-","--timestamp=none",
@@ -147,13 +181,21 @@ def main():
         with zipfile.ZipFile(args.output) as zipped:
             if audit(zipped) != original:
                 fail("shader library CRC/size or RomFS identity changed")
+            launcher = json.loads(zipped.read(PREFIX+"dm/launcher.json"))
+            defaults = {r["env"]:str(r["default"]) for r in launcher["settings"]}
             env = zipped.read(PREFIX+"dm/env.txt").decode("utf-8")
+            env_values = dict(line.split("=",1) for line in env.splitlines()
+                              if line and not line.startswith("#") and "=" in line)
             for key,value in PRESETS[args.preset].items():
-                if f"{key}={value}\n" not in env:
-                    fail("missing setting: "+key)
+                if key in defaults:
+                    if defaults[key] != value or key in env_values:
+                        fail("launcher preset not applied cleanly: "+key)
+                elif env_values.get(key) != value:
+                    fail("env-only preset missing: "+key)
+
         report = {
           "project":"HookLink2iOS", "title_id":TITLE, "type":"settings-only-repack",
-          "preset":args.preset, "settings":values,
+          "preset":args.preset, "settings":values, "launcher_patched":True,
           "source_sha256":sha256(args.source), "source_ipa_sha256":sha256(source_ipa),
           "output_name":args.output.name, "output_sha256":sha256(args.output),
           "output_size":args.output.stat().st_size,
@@ -161,7 +203,7 @@ def main():
           "engine_updated":False, "shader_recompiled":False, "game_code_recompiled":False,
           "source_engine_not_provable_from_bare_ipa":True,
           "signature":"ad-hoc; sideload installer may re-sign using player's identity",
-          "note":"Documents/env.txt overrides bundle's dm/env.txt"}
+          "note":"Saved launcher choices override defaults; DM_FRAME_MODE remains selectable"}
         args.report.write_text(json.dumps(report,indent=2)+"\n",encoding="utf-8")
         print(json.dumps(report,indent=2),flush=True)
         print("HOOKLINK2IOS_REPACK_OK",flush=True)

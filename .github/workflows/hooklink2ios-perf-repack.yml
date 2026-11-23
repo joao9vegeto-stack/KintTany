@@ -1,6 +1,10 @@
 name: HookLink2iOS - safe no-shader IPA repack
 
 on:
+  push:
+    branches: [HookLink2iOS]
+    paths:
+      - .github/workflows/hooklink2ios-perf-repack.yml
   workflow_dispatch:
     inputs:
       source_artifact_id:
@@ -26,7 +30,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: hooklink2ios-${{ github.ref }}
+  group: hooklink2ios-repack-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -38,6 +42,7 @@ jobs:
       DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
       GITHUB_TOKEN: ${{ github.token }}
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      SOURCE_DRIVE_DEFAULT: "1cd85ZhbrJXZo5VK1GMQPxA-8R17qpPPD"
     steps:
       - name: Checkout only HookLink2iOS
         uses: actions/checkout@v4
@@ -56,6 +61,9 @@ jobs:
           test -d "$DEVELOPER_DIR"
           test "$(xcodebuild -version | head -1)" = "Xcode 27.2"
           python3 -m py_compile scripts/hooklink2ios_perf_repack.py scripts/hooklink2ios_fetch_source.py
+          python3 -m unittest discover -s tests -p test_hooklink2ios_perf_repack.py -v
+          if [ -z "$SOURCE_ARTIFACT" ] && [ -z "$SOURCE_DRIVE" ]; then SOURCE_DRIVE="$SOURCE_DRIVE_DEFAULT"; fi
+          echo "Source validated: artifact=${SOURCE_ARTIFACT:+yes}, drive=${SOURCE_DRIVE:+yes}"
           if { [ -z "$SOURCE_ARTIFACT" ] && [ -z "$SOURCE_DRIVE" ]; } || { [ -n "$SOURCE_ARTIFACT" ] && [ -n "$SOURCE_DRIVE" ]; }; then
             echo "::error::Specify exactly one original artifact ID or Drive file ID; no full-build fallback."
             exit 1
@@ -73,6 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --disable-pip-version-check requests google-auth google-api-python-client
+          if [ -z "$SOURCE_ARTIFACT" ] && [ -z "$SOURCE_DRIVE" ]; then SOURCE_DRIVE="$SOURCE_DRIVE_DEFAULT"; fi
           if [ -n "$SOURCE_ARTIFACT" ]; then
             python3 scripts/hooklink2ios_fetch_source.py --artifact-id "$SOURCE_ARTIFACT" --output "$RUNNER_TEMP/hooklink-source.zip"
           else
@@ -85,6 +94,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          PRESET="${PRESET:-balanced30fg}"
           SOURCE="$RUNNER_TEMP/hooklink-source.bin"
           if [ -n "$SOURCE_ARTIFACT" ]; then SOURCE="$RUNNER_TEMP/hooklink-source.zip"; fi
           mkdir -p "$RUNNER_TEMP/hooklink-repack"
@@ -96,7 +106,7 @@ jobs:
       - name: Publish signed repack IPA and report
         uses: actions/upload-artifact@v4
         with:
-          name: HookLink2iOS-Repack-${{ inputs.preset }}-${{ github.run_number }}
+          name: HookLink2iOS-Repack-${{ inputs.preset || 'balanced30fg' }}-${{ github.run_number }}
           path: |
             ${{ runner.temp }}/hooklink-repack/*.ipa
             ${{ runner.temp }}/hooklink-repack/build-report.json

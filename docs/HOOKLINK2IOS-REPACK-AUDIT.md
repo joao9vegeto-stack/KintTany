@@ -1,3 +1,15 @@
+# Atualização da fonte comprovada — 22/11/2026
+
+O usuário forneceu a IPA original: https://drive.google.com/file/d/1cd85ZhbrJXZo5VK1GMQPxA-8R17qpPPD/view?usp=drivesdk. Metadados lidos pelo Drive: nome OcarinaOfTime-HookLink2iOS.ipa, 3.476.939.759 bytes, criada em 13/11/2026, na pasta HookLink2iOS; uma conta de serviço tem permissão writer. Não foi possível baixar localmente a IPA inteira pelo conector devido ao limite de 256 MiB por download; o Actions usa a própria API Google em chunks de 16 MiB e verifica MD5 oficial antes de repack.
+
+O workflow .github/workflows/hooklink2ios-perf-repack.yml aceita explicitamente o ID e por padrão usa esta IPA. O modo inicial no novo launcher é balanced30fg (30 quadros reais mais intermediários MetalFX até 60 mostrados), com opções 30 e 60 preservadas. Sem recompilação de shader, sem NUP, sem portar X2 incompatível.
+
+**Correção fundamental:** alterar apenas dm/env.txt não é suficiente nem garante que os presets surtam efeito, porque o launcher pode fixar ou substituir os mesmos parâmetros. Agora scripts/hooklink2ios_perf_repack.py valida dm/launcher.json e altera seus valores padrão, mantendo DM_FRAME_MODE selecionável, opções de FPS de 30 e 60, escolhas persistidas e Documents/env.txt. A configuração de usuário salva pode continuar substituindo o padrão; use Reset to defaults no launcher para medir o perfil novo se você já personalizou os modos.
+
+**Limite técnico:** ainda não há port de código nativo X2, pois sem relink validado da imagem do jogo e da cadeia de shaders seria arriscar a IPA original. As alterações deste commit são pipeline/repack/launcher e não afirmam otimizações de CPU/GPU de código novo. Nenhuma medição de FPS no iPhone foi feita neste commit.
+
+---
+
 # HookLink2iOS — auditoria e repack incremental (22/11/2026)
 
 ## Base e limites
