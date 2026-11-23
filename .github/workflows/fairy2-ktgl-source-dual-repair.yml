@@ -61,7 +61,7 @@ jobs:
           set -euo pipefail
           xcodebuild -version
           brew list --formula xcodegen >/dev/null 2>&1 || brew install xcodegen
-          python3 -m pip install --disable-pip-version-check lz4 'capstone>=5,<6' fonttools zbic backports.zstd
+          python3 -m pip install --disable-pip-version-check lz4 'capstone>=5,<6' fonttools zbic backports.zstd google-auth requests
           python3 tools/engine.py relink
           python3 tools/engine.py check
           python3 tools/engine.py sync

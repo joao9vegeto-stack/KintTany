@@ -25,7 +25,7 @@
   "no_native_reader_retry": true,
   "not_a_gameplay_fix": true,
   "request": "Original signed code c09604 uses X3 (not X2) requested byte count; c0962c sees X0 real result. Trace both and report last 64 before G1T failure. No return overrides, no bytes fabricated, no shader rebuild.",
-  "revision": 6,
+  "revision": 2,
   "previous_failed_run": 45094937546,
   "retrigger_reason": "Preflight asserts the existing strategy identifier; restore it without changing any guest or host source. All 23 prior tests passed. Build one host-only IPA.",
   "adapter_original_opcode": "000840f9",
@@ -39,5 +39,8 @@
   "source_dual_original_ktgl_g1s_sha256": "edb3bceed3c426cfe5b851d78f2e7f56168abe8ac5d6aac3a6927bdaf6e3535a",
   "no_shader_rebuild": true,
   "requires_real_iphone_test": true,
-  "new_functional_source_repair_candidate": true
+  "new_functional_source_repair_candidate": true,
+  "preflight_covered_existing_assets": true,
+  "previous_run": 45100071960,
+  "previous_run_failure": "Python auth client missing in xcode-27 although Linux source audit had it; install google-auth and requests explicitly before bounded Drive ranges"
 }
