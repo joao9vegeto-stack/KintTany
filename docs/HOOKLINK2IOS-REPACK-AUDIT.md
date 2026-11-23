@@ -1,3 +1,13 @@
+# Repack e compressão: correção de estabilidade da IPA (23/11/2026 UTC)
+
+O primeiro repack de settings, run `45097329583`, terminou tecnicamente com assinatura válida, mas **NÃO deve ser instalado**: o novo ZIP da IPA media `6.084.536.505` bytes, contra os `3.476.939.759` bytes da fonte. O erro foi guardar sem compressão os arquivos da biblioteca Metal particionada (`.img.0`, `.img.1`...), cujo ZIP original usa deflate. Alguns instaladores recusam IPA maior que 4 GiB / ZIP64.
+
+A correção `scripts/hooklink2ios_perf_repack.py` agora **preserva o método ZIP original por entrada**, recompactando somente dados, sem mudar qualquer shader, código ARM64 ou imagem de RomFS. Aplica limite conservador de tamanho final abaixo de 4 GB e crescimento máximo, rejeitando o artefato se isso falhar. O workflow publica com `compression-level: 0` no GitHub (a IPA já está compactada). Testes de regressão verificam os multipartes e o método ZIP.
+
+A versão experimental de PSO A19 Pro usa o mesmo repack corrigido como último passo, com o compilador Metal4 `metal-tt` para pré-compilar apenas pipelines a partir das bibliotecas existentes. **Não é o mesmo que compilar novamente os 42.848 shaders Metal.** A variante é opcional e só se torna utilizável após um run completo e artefato confirmado.
+
+---
+
 # Atualização da fonte comprovada — 22/11/2026
 
 O usuário forneceu a IPA original: https://drive.google.com/file/d/1cd85ZhbrJXZo5VK1GMQPxA-8R17qpPPD/view?usp=drivesdk. Metadados lidos pelo Drive: nome OcarinaOfTime-HookLink2iOS.ipa, 3.476.939.759 bytes, criada em 13/11/2026, na pasta HookLink2iOS; uma conta de serviço tem permissão writer. Não foi possível baixar localmente a IPA inteira pelo conector devido ao limite de 256 MiB por download; o Actions usa a própria API Google em chunks de 16 MiB e verifica MD5 oficial antes de repack.

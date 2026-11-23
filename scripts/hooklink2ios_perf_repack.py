@@ -153,14 +153,22 @@ def patch_launcher_and_env(app, changes):
     if any(key in final for key in defaults): fail("launcher key locked by env")
     return {"launcher_defaults":defaults, "bundled_env":final, "preserved":{k:v for k,v in old.items() if k not in owned}}
 
-def rezip(root, destination):
+def rezip(root, destination, original_compression):
+    """Keep the exact source ZIP entry compression method, notably split .img.N.
+
+    NXNative compresses these images (up to 2 GB each) in the IPA.
+    Storing them instead balloons a valid 3.48 GB IPA to 6.08 GB and risks
+    ZIP64/sideload rejection. Changes to launcher/env are small.
+    """
     with zipfile.ZipFile(destination, "w", allowZip64=True) as z:
         for path in sorted((root/"Payload").rglob("*")):
             if not path.is_file(): continue
-            stored = path.suffix.lower() in (".img",".zs",".metallib",".ttf",".car",".webm") or bool(re.search(r"\.img\.[0-9]+$", path.name))
-            z.write(path, path.relative_to(root).as_posix(),
-                    compress_type=zipfile.ZIP_STORED if stored else zipfile.ZIP_DEFLATED,
-                    compresslevel=None if stored else 1)
+            name = path.relative_to(root).as_posix()
+            method = original_compression.get(name, zipfile.ZIP_DEFLATED)
+            if method not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+                fail("unsupported original ZIP compression for "+name)
+            z.write(path, name, compress_type=method,
+                    compresslevel=6 if method == zipfile.ZIP_DEFLATED else None)
 
 def main():
     a = argparse.ArgumentParser()
@@ -195,6 +203,7 @@ def main():
                     shutil.copyfileobj(inp, out, CHUNK)
         with zipfile.ZipFile(source_ipa) as z:
             original = audit(z)
+            methods = {info.filename:info.compress_type for info in z.infolist() if not info.is_dir()}
             unpack(z, temp/"package")
         app = temp/"package"/"Payload"/"DmIOS.app"
         executable = app/"DmIOS"
@@ -222,7 +231,13 @@ def main():
         subprocess.run(["codesign","--force","--sign","-","--timestamp=none",
                         "--entitlements",str(args.entitlements.resolve()),str(app)],check=True)
         subprocess.run(["codesign","--verify","--deep","--strict",str(app)],check=True)
-        rezip(temp/"package", args.output)
+        rezip(temp/"package", args.output, methods)
+        size_limit = min(4_000_000_000, source_ipa.stat().st_size+
+                         (900 if pso_info else 256)*1024*1024)
+        if args.output.stat().st_size > size_limit:
+            fail(f"oversized repack ({args.output.stat().st_size:,} bytes); source "
+                 f"{source_ipa.stat().st_size:,}; limit {size_limit:,}. "
+                 "Refuse IPA that can break iOS installers or require ZIP64.")
         with zipfile.ZipFile(args.output) as zipped:
             if audit(zipped) != original:
                 fail("shader library CRC/size or RomFS identity changed")

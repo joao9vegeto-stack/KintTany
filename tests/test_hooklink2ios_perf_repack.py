@@ -96,6 +96,19 @@ class RepackTests(unittest.TestCase):
             z.writestr(repack.PREFIX+"msl/b-test.img.2",b"B"*(12*1024*1024))
         with zipfile.ZipFile(p) as z, self.assertRaises(SystemExit):
             repack.audit(z)
+    def test_repack_preserves_original_split_image_compression(self):
+        work = Path(self.tmp.name)/"work"
+        member = work/"Payload"/"DmIOS.app"/"msl"/"b-test.img.0"
+        member.parent.mkdir(parents=True,exist_ok=True)
+        member.write_bytes(b"S"*(512*1024))
+        output = Path(self.tmp.name)/"repacked.ipa"
+        name = member.relative_to(work).as_posix()
+        repack.rezip(work,output,{name:zipfile.ZIP_DEFLATED})
+        with zipfile.ZipFile(output) as z:
+            i=z.getinfo(name)
+            self.assertEqual(i.compress_type,zipfile.ZIP_DEFLATED)
+            self.assertLess(i.compress_size,i.file_size//10)
+            self.assertEqual(z.read(name),b"S"*(512*1024))
     def test_wrong_romfs_index_rejected(self):
         p=Path(self.tmp.name)/"wrong.ipa"
         with zipfile.ZipFile(p,"w") as z:
