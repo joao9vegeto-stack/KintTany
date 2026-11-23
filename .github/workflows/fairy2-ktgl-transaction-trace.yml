@@ -1,0 +1,165 @@
+name: Fairy2iOS - read-only G1T FDATA/validator transaction capture (NO GAMEPLAY CLAIM)
+on:
+  push:
+    branches: [Fairy2iOS]
+    paths: ['fairy2/transaction_trace_trigger.json']
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: fairy2-fdata-transaction-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  coherent:
+    runs-on: xcode-27
+    timeout-minutes: 120
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout exact Fairy2iOS head (single workflow)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Prove actual FDATA entry and exact original G1T NZCV branch condition
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat .upstream-ref)" = b526a50b85e4cfa3142c111e1ad491d9fd11f0eb
+          python3 -m py_compile fairy2/scripts/repack_full_resource_va.py fairy2/scripts/repack_ktgl_coherent_config.py fairy2/scripts/repack_ktgl_transaction_trace.py fairy2/scripts/ios_allocator_probe.py
+          python3 -m unittest discover -s fairy2/tests -p test_full_resource_va.py -v
+          python3 -m unittest discover -s fairy2/tests -p test_ktgl_coherent_config.py -v
+          python3 -m unittest discover -s fairy2/tests -p test_ktgl_transaction_trace.py -v
+          python3 -m unittest discover -s fairy2/tests -p test_confirmed_crash_gate.py -v
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          a=json.loads(Path('fairy2/transaction_trace_trigger.json').read_text())
+          assert a['source_run']==44995690307
+          assert a['guest_reserve']==0x180000000 and a['guest_alias']==0x158000000
+          assert a['new_guest_root']==0x140000000 and a['keep_ktgl']==0x80000000
+          assert a['compile_shaders'] is False and a['runtime_resource_diagnostics'] is True
+          assert a['strategy']=='trace_original_fdata_then_guest_validator'
+          assert a['diagnostic_only'] is True and a['no_synthetic_assets'] is True
+          assert a['source_artifact_id']==14744355077
+          assert a['no_reader_codec_BRK'] is True
+          assert a['baseline_run']==44995690307
+          print('G1T FDATA transaction: targeted ReadFile and native flag-preserving parser branch. NO result override.')
+          PY
+      - name: Install Xcode host tools and exact pinned NXNative
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          brew list --formula xcodegen >/dev/null 2>&1 || brew install xcodegen
+          python3 -m pip install --disable-pip-version-check lz4 'capstone>=5,<6' fonttools zbic backports.zstd
+          python3 tools/engine.py relink
+          python3 tools/engine.py check
+          python3 tools/engine.py sync
+          python3 fairy2/scripts/ios_allocator_probe.py \
+            --source engine/dm/host/probe.c --bin-offset 0xc5800178
+          grep -q '0xc5800178ull' engine/dm/host/probe.c
+          grep -q 'DM_CRASH_PEEK' engine/dm/host/crash.c
+      - name: Retrieve exact iPhone resource-trap IPA and verify source SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/source"
+          gh run download 44995690307 -R joao9vegeto-stack/KintTany \
+            -n Fairy2iOS-KTGL-NoOverlap-1 -D "$RUNNER_TEMP/source"
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,json,os
+          root=Path(os.environ['RUNNER_TEMP'])/'source'
+          ipa=root/'Fairy2iOS-FairyTail2-KTGL-2GiB-NoOverlap.ipa'
+          assert ipa.stat().st_size==1622226531
+          sha=hashlib.sha256()
+          with ipa.open('rb') as f:
+           for chunk in iter(lambda:f.read(8*1024*1024),b''):sha.update(chunk)
+          assert sha.hexdigest()=='b1792f9eb522de53b2b252e3a85229584831434999edda98f31c87c7c8c256cd'
+          report=json.loads((root/'ktgl-nooverlap-report.json').read_text())
+          assert report['output_ipa_sha256']==sha.hexdigest()
+          assert report['guest_ktgl_2g_patch']['after_sha256']
+          print('Verified exact source with known resource creation failure')
+          PY
+      - name: Compile one bounded, read-only FDATA transaction trace and preserve 19,210 Metal shaders
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/output"
+          python3 fairy2/scripts/repack_ktgl_transaction_trace.py \
+            --source-ipa "$RUNNER_TEMP/source/Fairy2iOS-FairyTail2-KTGL-2GiB-NoOverlap.ipa" \
+            --source-report "$RUNNER_TEMP/source/ktgl-nooverlap-report.json" \
+            --repo "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/output"
+      - name: Verify IPA CRC, original 19,210 shader map, five stubs, FS/crash telemetry, controllers
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,os,sys,zipfile
+          from pathlib import Path
+          sys.path.insert(0,str(Path('fairy2/colab').resolve()))
+          from ipa_validator import validate_ipa
+          folder=Path(os.environ['RUNNER_TEMP'])/'output'
+          report=json.loads((folder/'ktgl-transaction-trace-report.json').read_text())
+          from_p={'framework':'DmGame0100B9801F872000.framework',
+            'shader_payload':{'ipa_path':'Frameworks/DmGame0100B9801F872000.framework/msl/b-0724088d3779.img',
+                              'size_bytes':2640519506}}
+          checked=validate_ipa(folder/report['output_ipa'],from_p,verify_crc=True)
+          g=report['global_geometry'];stamp=report['guest_root_5g_patch']
+          assert g['guest_reserve']==0x180000000 and g['alias_after']==0x158000000
+          assert g['heap_after']==0x8000000 and g['root_after']==0x140000000
+          assert g['root_free_after_initial_regions']==0x6ae00000
+          assert stamp['trampoline_count']==5 and stamp['new_root']==0x140000000
+          assert stamp['old_cave_all_zeros'] is True
+          coherent=report['coherent_ktgl_shared_capacity']
+          assert coherent['new_capacity_bytes']==0x80000000
+          assert coherent['guest_instruction_changes_after_5g']==5
+          assert coherent['no_bypass_of_original_g1t_g1s_parsers'] is True
+          assert coherent['no_inflator_or_direct_reader_brk'] is True
+          assert report['compiled_guest_reader_codec_traps']==0
+          assert report['no_gameplay_claim'] is True
+          assert report['not_for_auto_transfer'] is True
+          assert report['repair_claimed'] is False and report['gameplay_verified'] is False
+          assert report['file_read_behavior_unchanged'] is True
+          assert report['original_G1T_branch_result_unchanged'] is True
+          assert report['source_fdata_entry']==12943
+          assert report['source_fdata_record_offset']==3137776
+          assert report['source_fdata_payload_offset']==3137864
+          assert report['g1t_original_branch_emulated']=='main+0x612120'
+          assert report['host_recompiled'] and report['game_shaders_recompiled'] is False
+          assert report['metal_shader_sha256']=='ab35b0ef89c907a38c8462da78ba6864153c86f8c203d613b321d45ce0aa262b'
+          assert report['runtime_fs_trace'] and report['runtime_resource_hash_trace']
+          assert report['bin47_alias_offset']=='0xc5800178'
+          assert checked['fps']==[30,60] and checked['swap_ab']
+          with zipfile.ZipFile(folder/report['output_ipa']) as z:
+           path='Payload/DmShell.app/Frameworks/DmGame0100B9801F872000.framework/'
+           cfg=json.loads(z.read(path+'dm/launcher.json'))
+           env={x['env']:x for x in cfg['settings']}
+           assert env['DM_FS']['default']=='1'
+           assert env['DM_CRASH_PEEK']['default']=='x1'
+           cfg=z.read(path+'profile.tsv').decode()
+           assert 'mem_reserve\t0x180000000' in cfg and 'mem_alias\t0x158000000' in cfg
+          print('RDB FDATA TRANSACTION TRACE diagnostic IPA ONLY: original G1T parser branch emulated, trace awaits iPhone log.')
+          PY
+      - name: Publish ONE DIAGNOSTIC only, excluded from Colab auto-IPA selection
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Fairy2iOS-Diagnostic-KTGL-FDATA-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/output/Fairy2iOS-FairyTail2-KTGL-CoherentConfig-NoFallback.ipa
+            ${{ runner.temp }}/output/ktgl-transaction-trace-report.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve native host build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Fairy2iOS-Diagnostic-KTGL-FDATA-failure-${{ github.run_number }}
+          path: ${{ runner.temp }}/output/host-build.log
+          if-no-files-found: warn
