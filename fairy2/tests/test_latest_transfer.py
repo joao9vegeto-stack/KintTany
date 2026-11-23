@@ -129,7 +129,7 @@ class RepackTransferRegression(unittest.TestCase):
         self.assertIn('callable(transfer_latest.select_diagnostic_ipa_artifact)', src)
         self.assertIn('RESULTADO_IPA = transfer_latest.main(diagnostic_run_id=45095021613)', src)
         self.assertIn('assert transfer_latest.DIAGNOSTIC_ARTIFACT_ID == 14783541081', src)
-        self.assertIn('last_64_original_reads_on_failure', (HERE / 'colab' / 'transfer_ipa.py').read_text())
+        self.assertIn('last_64_original_reads_on_failure', (ROOT / 'colab' / 'transfer_ipa.py').read_text())
         self.assertIn('assert transfer_latest.DIAGNOSTIC_HEAD_SHA == "3bf5b2c7dc978976fb7c7d2b569389fcd5b4f77a"', src)
         self.assertNotIn("def try_transfer_g1t_header_rescue()", src)
         self.assertNotIn("45056917685", src)
