@@ -80,12 +80,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m pip install --disable-pip-version-check requests google-auth google-api-python-client
+          python3 -m venv "$RUNNER_TEMP/hooklink-py"
+          "$RUNNER_TEMP/hooklink-py/bin/python" -m pip install --disable-pip-version-check requests google-auth google-api-python-client
           if [ -z "$SOURCE_ARTIFACT" ] && [ -z "$SOURCE_DRIVE" ]; then SOURCE_DRIVE="$SOURCE_DRIVE_DEFAULT"; fi
           if [ -n "$SOURCE_ARTIFACT" ]; then
-            python3 scripts/hooklink2ios_fetch_source.py --artifact-id "$SOURCE_ARTIFACT" --output "$RUNNER_TEMP/hooklink-source.zip"
+            "$RUNNER_TEMP/hooklink-py/bin/python" scripts/hooklink2ios_fetch_source.py --artifact-id "$SOURCE_ARTIFACT" --output "$RUNNER_TEMP/hooklink-source.zip"
           else
-            python3 scripts/hooklink2ios_fetch_source.py --drive-file-id "$SOURCE_DRIVE" --output "$RUNNER_TEMP/hooklink-source.bin"
+            "$RUNNER_TEMP/hooklink-py/bin/python" scripts/hooklink2ios_fetch_source.py --drive-file-id "$SOURCE_DRIVE" --output "$RUNNER_TEMP/hooklink-source.bin"
           fi
       - name: Preserve existing game code/Metal image, adjust only env, then sign
         env:
