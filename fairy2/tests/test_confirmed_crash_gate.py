@@ -53,6 +53,18 @@ class KnownDeviceCrash(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "CRASH CONFIRMADO"):
             module.reject_confirmed_device_crash(99999999999, ipa_sha)
 
+    def test_coherent_config_still_crashes_on_real_iphone(self):
+        # New user log 22 Nov 2026, 21:01 local: exact G1T creator
+        # SIGTRAP main+0xbfe2a8, same as earlier host/reader experiments.
+        run_id=45083487666
+        sha="2e0cbbf938cbba40e6a36be8c1d0ce9704a8502ac88557da7e62de79310c8fd5"
+        self.assertIn(run_id,module.DEVICE_CRASH_RUNS)
+        self.assertIn(sha,module.DEVICE_CRASH_SHA256)
+        with self.assertRaisesRegex(RuntimeError,"CRASH CONFIRMADO"):
+            module.reject_confirmed_device_crash(run_id)
+        with self.assertRaisesRegex(RuntimeError,"CRASH CONFIRMADO"):
+            module.reject_confirmed_device_crash(123456789000,sha)
+
     def test_user_refused_experiment_is_not_a_confirmed_crash(self):
         run_id = 45068245797
         sha = "db906123fba2a6b215da72a737d5aa2da9e241a03d5eecbc843b52a30e8ad669"
