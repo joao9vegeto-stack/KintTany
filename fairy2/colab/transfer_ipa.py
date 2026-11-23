@@ -38,6 +38,13 @@ DIAGNOSTIC_WORKFLOW_NAME = (
     "(NO GAMEPLAY CLAIM)"
 )
 
+# New SOURCE-RECOVERY CANDIDATE: immutable successful source commit and artifact.
+# Not gameplay certified; explicitly opt in with transfer_authentic_source_candidate.
+AUTHENTIC_RUN_ID = 45100431103
+AUTHENTIC_ARTIFACT_ID = 14784783270
+AUTHENTIC_ARTIFACT_NAME = "Fairy2iOS-Original-G1T-G1S-Source-Candidate-2"
+AUTHENTIC_HEAD_SHA = "9298fe8eb3a26159538b4d456007f96b83c11ebe"
+AUTHENTIC_WORKFLOW_NAME = "Fairy2iOS - original SHA-verified G1T/G1S native source repair (NO SHADERS)"
 
 # Quarantined by actual A19 Pro crash log, not by CI build status.
 DEVICE_CRASH_RUNS = frozenset({44990224107, 44992666178, 44995690307, 45000495987, 45046524330, 45050364099, 45056917685, 45064035915, 45075542017, 45078767146, 45083487666})
@@ -1369,6 +1376,36 @@ def select_diagnostic_ipa_artifact(github_get, run_id=DIAGNOSTIC_RUN_ID):
     return run, choices[0], []
 
 
+
+def select_authentic_source_candidate_artifact(github_get, run_id=AUTHENTIC_RUN_ID):
+    """Only the actual original FDATA G1T+G1S functional candidate, no fallback."""
+    rid=int(run_id)
+    require(rid==AUTHENTIC_RUN_ID,
+            "Reparo G1T/G1S só pode selecionar o run 45100431103")
+    reject_confirmed_device_crash(rid)
+    reject_user_rejected_unverified(rid)
+    run=github_get(f"/actions/runs/{rid}")
+    require(isinstance(run,dict) and
+            int(run.get("id") or 0)==rid and
+            run.get("head_branch")==BRANCH and
+            run.get("head_sha")==AUTHENTIC_HEAD_SHA and
+            run.get("name")==AUTHENTIC_WORKFLOW_NAME and
+            run.get("status")=="completed" and
+            run.get("conclusion")=="success",
+            "Build de reparo original mudou de commit/identidade ou não teve sucesso")
+    response=github_get(f"/actions/runs/{rid}/artifacts",{"per_page":100})
+    matches=[a for a in response.get("artifacts",[]) if
+             int(a.get("id") or 0)==AUTHENTIC_ARTIFACT_ID and
+             a.get("name")==AUTHENTIC_ARTIFACT_NAME and
+             not a.get("expired") and
+             int(a.get("size_in_bytes") or 0)>100*1024*1024 and
+             int((a.get("workflow_run") or {}).get("id") or 0)==rid and
+             (a.get("workflow_run") or {}).get("head_sha")==AUTHENTIC_HEAD_SHA]
+    require(len(matches)==1,
+            "Artefato de reparo original 14784783270 ausente, expirado ou trocado")
+    return run,matches[0],[]
+
+
 def verified_ipa_report(z, ipa_name):
     """Select the report linked to this exact IPA, not the first JSON in ZIP."""
     reports = []
@@ -1404,7 +1441,7 @@ def verified_ipa_report(z, ipa_name):
     return reports[0]
 
 
-def transfer_latest_successful_ipa(diagnostic_run_id=None):
+def transfer_latest_successful_ipa(diagnostic_run_id=None, candidate_run_id=None):
     """GitHub latest successful Fairy2iOS IPA -> Drive, cryptographically checked.
 
     This function never rebuilds shaders or a game. CI success is deliberately
@@ -1432,7 +1469,15 @@ def transfer_latest_successful_ipa(diagnostic_run_id=None):
         return response.json()
 
     diagnostic_only = diagnostic_run_id is not None
-    if diagnostic_only:
+    authentic_only = candidate_run_id is not None
+    require(not (diagnostic_only and authentic_only),
+            "Selecione somente um: diagnóstico OU reparo original")
+    if authentic_only:
+        print("[Fairy2iOS] 1/4: Reparo G1T/G1S com fonte ORIGINAL verificada, "
+              "execução fixada 45100431103, sem fallback.", flush=True)
+        run, artifact, skipped = select_authentic_source_candidate_artifact(
+            github_get, candidate_run_id)
+    elif diagnostic_only:
         print("[Fairy2iOS] 1/4: IPA de DIAGNÓSTICO EXPLÍCITA; "
               "sem fallback para builds anteriores.", flush=True)
         run, artifact, skipped = select_diagnostic_ipa_artifact(
@@ -1482,6 +1527,27 @@ def transfer_latest_successful_ipa(diagnostic_run_id=None):
         require(len(ipa_files) == 1, "Artefato não possui exatamente uma IPA")
         ipa_name = Path(ipa_files[0]).name
         report_path, report = verified_ipa_report(z, ipa_name)
+        if authentic_only:
+            matched = [n for n in members
+                       if Path(n).name == "ktgl-original-source-dual-report.json"]
+            require(len(matched)==1,
+                    "IPА de reparo sem relatório de G1T/G1S original")
+            authentic_report = json.loads(z.read(matched[0]))
+            require(authentic_report.get("project")==BRANCH and
+                    authentic_report.get("title_id")==TITLE_ID and
+                    authentic_report.get("output_ipa")==ipa_name and
+                    authentic_report.get("output_ipa_sha256")==
+                       report.get("output_ipa_sha256") and
+                    authentic_report.get("source_dual_repair_candidate") is True and
+                    authentic_report.get("original_parser_preserved") is True and
+                    authentic_report.get("original_source_bytes_used_on_failure") is True and
+                    authentic_report.get("no_shader_compile") is True and
+                    authentic_report.get("gameplay_verified") is False and
+                    authentic_report.get("authentic_source_g1t_sha256")==
+                    "558ada8c563fe44fa18d894d01f39e8b1a230b26ad1bcd0782743797f815e494" and
+                    authentic_report.get("authentic_source_g1s_sha256")==
+                    "edb3bceed3c426cfe5b851d78f2e7f56168abe8ac5d6aac3a6927bdaf6e3535a",
+                    "Relatório de reparo G1T/G1S não corresponde ao código/IPA")
         if diagnostic_only:
             require(Path(report_path).name == "ktgl-transaction-trace-report.json" and
                     report.get("not_for_auto_transfer") is True and
@@ -1565,7 +1631,9 @@ def transfer_latest_successful_ipa(diagnostic_run_id=None):
               drive.files().create(body={"name": "ipa", "parents": [DRIVE_GAME_FOLDER],
                                          "mimeType": "application/vnd.google-apps.folder"},
                                    fields="id", supportsAllDrives=True).execute()["id"])
-    dest_name = (f"Fairy2iOS-DIAGNOSTICO-run{rid}-{ipa_name}"
+    dest_name = (f"Fairy2iOS-REPARO-ORIGINAL-G1T-G1S-run{rid}-{ipa_name}"
+                 if authentic_only else
+                 f"Fairy2iOS-DIAGNOSTICO-run{rid}-{ipa_name}"
                  if diagnostic_only else f"Fairy2iOS-run{rid}-{ipa_name}")
     uploaded = upload(drive, target, folder, dest_name)
     provenance = {
@@ -1578,7 +1646,10 @@ def transfer_latest_successful_ipa(diagnostic_run_id=None):
         "ipa_size": target.stat().st_size, "drive_file_id": uploaded["id"],
         "device_tested": False, "gameplay_fix_claimed": False,
         "build_succeeded": True, "diagnostic_only": diagnostic_only,
-        "runtime_status": ("DIAGNOSTIC_ONLY_NOT_PLAYABLE_VERIFIED"
+        "original_source_repair_candidate": authentic_only,
+        "runtime_status": ("ORIGINAL_G1T_G1S_CANDIDATE_NOT_DEVICE_VERIFIED"
+                           if authentic_only else
+                           "DIAGNOSTIC_ONLY_NOT_PLAYABLE_VERIFIED"
                            if diagnostic_only else "NOT_DEVICE_VERIFIED"),
         "ipa_validation": validation, "build_report": report,
     }
@@ -1591,6 +1662,11 @@ def transfer_latest_successful_ipa(diagnostic_run_id=None):
           "AVISO: build bem-sucedido não significa jogo funcionando no iPhone.",
           flush=True)
     return provenance
+
+def transfer_authentic_source_candidate(candidate_run_id=AUTHENTIC_RUN_ID):
+    """Run + artifact + exact source commit locked; never select older crashes."""
+    return transfer_latest_successful_ipa(candidate_run_id=candidate_run_id)
+
 
 def main(diagnostic_run_id=DIAGNOSTIC_RUN_ID):
     """Default to the exact diagnostic IPA even from an already-open old notebook.
