@@ -97,7 +97,7 @@ def patch_host(repo:Path):
 
     crash=repo/"engine/dm/host/crash.c"
     host=crash.read_text()
-    addon=(repo/"fairy2/scripts/ktgl_transaction_trace_host.h").read_text()
+    addon=(Path(__file__).resolve().parent/"ktgl_transaction_trace_host.h").read_text()
     anchor="static void on_crash(int sig, siginfo_t *si, void *uc_) {\n    ucontext_t *uc = uc_;"
     base.require(host.count(anchor)==1 and "FAIRY2_KTGL_TRANSACTION_TRACE_ONLY" not in host,
                  "pinned native signal hook source changed")
