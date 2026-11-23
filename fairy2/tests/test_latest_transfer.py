@@ -148,16 +148,14 @@ class RepackTransferRegression(unittest.TestCase):
             if path==f"/actions/runs/{module.AUTHENTIC_RUN_ID}/artifacts":
                 return {"artifacts":[item]}
             raise AssertionError("No fallback to other IPA "+path)
-        found,art,skipped = module.select_authentic_source_candidate_artifact(api)
-        self.assertEqual(found["id"], 45100431103)
-        self.assertEqual(art["id"], 14784783270)
-        self.assertEqual(skipped,[])
+        with self.assertRaisesRegex(RuntimeError,"CRASH CONFIRMADO"):
+            module.select_authentic_source_candidate_artifact(api)
         with self.assertRaisesRegex(RuntimeError,"só pode selecionar"):
             module.select_authentic_source_candidate_artifact(api,45095021613)
         with patch.object(module,"transfer_latest_successful_ipa",
-                          return_value={"run_id":45100431103}) as fn:
-            self.assertEqual(module.transfer_authentic_source_candidate()["run_id"],
-                             45100431103)
+                          side_effect=RuntimeError("CRASH CONFIRMADO")) as fn:
+            with self.assertRaisesRegex(RuntimeError,"CRASH CONFIRMADO"):
+                module.transfer_authentic_source_candidate()
             fn.assert_called_once_with(candidate_run_id=45100431103)
 
     def test_notebook_cell9_pins_repair_and_no_diagnostic_fallback(self):
@@ -171,6 +169,7 @@ class RepackTransferRegression(unittest.TestCase):
         self.assertIn("AUTHENTIC_ARTIFACT_ID == 14784783270",src)
         self.assertIn("AUTHENTIC_HEAD_SHA == \"9298fe8eb3a26159538b4d456007f96b83c11ebe\"",src)
         self.assertIn("candidate_run_id=45100431103",src)
+        self.assertIn('raise RuntimeError("NÃO EXECUTAR: run 45100431103',src)
         self.assertNotIn("main(diagnostic_run_id=",src)
         self.assertNotIn("result\":[\"diagnostic_only\"] is True",src)
 

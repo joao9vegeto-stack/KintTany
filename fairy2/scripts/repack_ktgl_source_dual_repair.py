@@ -75,14 +75,24 @@ HOST_C=r"""
 #include <string.h>
 /* ORIGINAL_SOURCE_BYTES */
 typedef struct {const void **vt;uint64_t cur;const unsigned char *p;uint64_t n;} f2_reader_t;
+/* Pinned signed Fairy Tail 2 guest A64 main+c095c8/c09604:
+ * vtable slot +0x18/+0x20 returns BYTES CONSUMED on this call, NOT
+ * the absolute cursor, with the request clamped to remaining bytes. */
 static uint64_t f2_skip(f2_reader_t *r,uint64_t n){
- if(!r||n>r->n||r->cur>r->n-n)return 0;
- r->cur+=n;return r->cur;
+ if(!r||r->cur>r->n)return 0;
+ uint64_t available=r->n-r->cur;
+ uint64_t consumed=n<available?n:available;
+ r->cur+=consumed;
+ return consumed;
 }
 static uint64_t f2_read(f2_reader_t *r,void *dst,uint64_t unused,uint64_t n){
  (void)unused;
- if(!r||!dst||n>r->n||r->cur>r->n-n)return 0;
- memcpy(dst,r->p+r->cur,(size_t)n);r->cur+=n;return n;
+ if(!r||(!dst&&n)||r->cur>r->n)return 0;
+ uint64_t available=r->n-r->cur;
+ uint64_t consumed=n<available?n:available;
+ if(consumed)memcpy(dst,r->p+r->cur,(size_t)consumed);
+ r->cur+=consumed;
+ return consumed;
 }
 static const void *f2_vt[5]={0,0,0,(const void *)f2_skip,(const void *)f2_read};
 static __thread f2_reader_t f2_g1t_reader,f2_g1s_reader;
@@ -202,6 +212,8 @@ def selftest():
     assert 'f2_auth_g1s,18340' in HOST_C and '0x6e7b94u' in HOST_C
     assert 'f2_auth_g1t,48' in HOST_C and '0x61210cu' in HOST_C
     assert '(z?0x6e7bb4u:0x6e8ac0u)' in HOST_C
+    assert HOST_C.count('return consumed;')==2
+    assert 'return r->cur;' not in HOST_C
     # Synthetic only for unit testing codec, never accepted as production SHA.
     data=b'GT1G0500'+bytes(40)
     comp=zlib.compress(data)
