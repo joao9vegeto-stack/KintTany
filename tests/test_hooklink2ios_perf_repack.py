@@ -69,11 +69,33 @@ class RepackTests(unittest.TestCase):
             z.writestr(repack.PREFIX+"Info.plist",plistlib.dumps({"MinimumOSVersion":"26.0","CFBundleIdentifier":"org.nxnative.0400486024dec000"}))
             z.writestr(repack.PREFIX+"DmIOS",b"test binary")
             z.writestr(repack.PREFIX+"romfs.id",f"DMROMFSID1 title={repack.TITLE} version=v131072 build=legacy size=26247576430 index=b6a3def414e47ca5")
-            z.writestr(repack.PREFIX+"msl/b-test.img",b"test shader image")
+            z.writestr(repack.PREFIX+"msl/b-test.img",b"S"*(21*1024*1024))
         with zipfile.ZipFile(p) as z:
             marker,shaders=repack.audit(z)
             self.assertTrue(marker.startswith("DMROMFSID1 "))
             self.assertEqual(len(shaders),1)
+    def test_split_metal_shader_image_parts(self):
+        p=Path(self.tmp.name)/"split.ipa"
+        with zipfile.ZipFile(p,"w") as z:
+            z.writestr(repack.PREFIX+"Info.plist",plistlib.dumps({"MinimumOSVersion":"26.0"}))
+            z.writestr(repack.PREFIX+"DmIOS",b"binary")
+            z.writestr(repack.PREFIX+"romfs.id",f"DMROMFSID1 title={repack.TITLE} version=1.0 build=v131072 size=26247576430 index=b6a3def414e47ca5")
+            z.writestr(repack.PREFIX+"msl/b-test.img.0",b"A"*(12*1024*1024))
+            z.writestr(repack.PREFIX+"msl/b-test.img.1",b"B"*(12*1024*1024))
+        with zipfile.ZipFile(p) as z:
+            marker,shaders=repack.audit(z)
+            self.assertEqual(len(shaders),2)
+            self.assertEqual(sum(v[0] for v in shaders.values()),24*1024*1024)
+    def test_gapped_split_image_rejected(self):
+        p=Path(self.tmp.name)/"gap.ipa"
+        with zipfile.ZipFile(p,"w") as z:
+            z.writestr(repack.PREFIX+"Info.plist",plistlib.dumps({"MinimumOSVersion":"26.0"}))
+            z.writestr(repack.PREFIX+"DmIOS",b"binary")
+            z.writestr(repack.PREFIX+"romfs.id",f"DMROMFSID1 title={repack.TITLE} version=1.0 size=26247576430 index=b6a3def414e47ca5")
+            z.writestr(repack.PREFIX+"msl/b-test.img.0",b"A"*(12*1024*1024))
+            z.writestr(repack.PREFIX+"msl/b-test.img.2",b"B"*(12*1024*1024))
+        with zipfile.ZipFile(p) as z, self.assertRaises(SystemExit):
+            repack.audit(z)
     def test_wrong_romfs_index_rejected(self):
         p=Path(self.tmp.name)/"wrong.ipa"
         with zipfile.ZipFile(p,"w") as z:

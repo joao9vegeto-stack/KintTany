@@ -107,6 +107,8 @@ jobs:
           with zipfile.ZipFile(source) as z:
               marker=z.read("Payload/DmIOS.app/romfs.id").decode("utf-8","replace").strip()
               launcher=json.loads(z.read("Payload/DmIOS.app/dm/launcher.json"))
+              msl=[x for x in z.infolist() if x.filename.startswith("Payload/DmIOS.app/msl/") and not x.is_dir()]
+              print("Metal images / parts:",[(x.filename,x.file_size) for x in msl[:12]],"total",len(msl),flush=True)
               opts={x["env"]:x.get("default") for x in launcher["settings"] if "FRAME" in x["env"] or "FPS" in x["env"]}
               print("Source RomFS identity:",marker,flush=True)
               print("Launcher game:",launcher.get("game"),"FPS mode defaults:",opts,flush=True)

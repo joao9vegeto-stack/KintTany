@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """HookLink2iOS: settings-only repack of an already-built IPA; no shader or game build."""
 from __future__ import annotations
-import argparse, hashlib, json, os, plistlib, shutil, subprocess, tempfile, zipfile
+import argparse, hashlib, json, os, plistlib, shutil, subprocess, tempfile, zipfile, re
 from pathlib import Path, PurePosixPath
 
 TITLE = "0400486024DEC000"
@@ -46,9 +46,32 @@ def audit(z):
     if str(plist.get("MinimumOSVersion", "")) != "26.0":
         fail("not an iOS 26.0 IPA")
     shader_images = {x.filename:(x.file_size, x.CRC) for x in z.infolist()
-                     if x.filename.startswith(PREFIX+"msl/b-") and x.filename.endswith(".img")}
+                     if re.fullmatch(r"Payload/DmIOS\.app/msl/b-[^/]+\.img(?:\.[0-9]+)?", x.filename)}
     if not shader_images:
-        fail("no NVN Metal image; refusing invalid thin IPA")
+        fail("no NVN Metal image or split image parts; refusing invalid thin IPA")
+    bases = {}
+    for name in shader_images:
+        base, dot, suffix = name.rpartition(".img")
+        stem = base + ".img"
+        part = suffix[1:] if suffix.startswith(".") else None
+        if part is not None and not part.isdigit():
+            fail("invalid shader image part name: "+name)
+        bases.setdefault(stem, []).append(part)
+    if len(bases)!=1:
+        fail("expected exactly one NVN shader image chain")
+    parts = list(bases.values())[0]
+    if len(parts)==1 and parts[0] is None:
+        pass  # one original image
+    elif None not in parts and all(p is not None for p in parts):
+        numbered = sorted(int(p) for p in parts)
+        if numbered!=list(range(len(numbered))):
+            fail("missing/duplicate split shader image part")
+        if len(numbered)<2:
+            fail("unexpected single numbered shader image part")
+    else:
+        fail("mixed or unexpected Metal image parts")
+    if sum(size for size,_ in shader_images.values()) < 20 * 1024 * 1024:
+        fail("Metal image implausibly small")
     if any(x.lower().endswith("romfs.img") for x in names):
         fail("RomFS unexpectedly embedded; requires external RomFS")
     return marker, shader_images
@@ -134,7 +157,7 @@ def rezip(root, destination):
     with zipfile.ZipFile(destination, "w", allowZip64=True) as z:
         for path in sorted((root/"Payload").rglob("*")):
             if not path.is_file(): continue
-            stored = path.suffix.lower() in (".img",".zs",".metallib",".ttf",".car",".webm")
+            stored = path.suffix.lower() in (".img",".zs",".metallib",".ttf",".car",".webm") or bool(re.search(r"\.img\.[0-9]+$", path.name))
             z.write(path, path.relative_to(root).as_posix(),
                     compress_type=zipfile.ZIP_STORED if stored else zipfile.ZIP_DEFLATED,
                     compresslevel=None if stored else 1)
