@@ -109,6 +109,20 @@ class RepackTests(unittest.TestCase):
             self.assertEqual(i.compress_type,zipfile.ZIP_DEFLATED)
             self.assertLess(i.compress_size,i.file_size//10)
             self.assertEqual(z.read(name),b"S"*(512*1024))
+    def test_signed_macho_has_separate_size_and_sha(self):
+        binary = Path(self.tmp.name)/"DmIOS"
+        binary.write_bytes(b"OLD-UNSIGNED-EXECUTABLE")
+        before = repack.sha256(binary)
+        original_size = binary.stat().st_size
+        info = {"new_executable_sha256":before,"new_executable_bytes":original_size}
+        # Apple's codesign appends/replaces the LC_CODE_SIGNATURE payload.
+        binary.write_bytes(binary.read_bytes()+b"CODEDIRECTORY-AND-ENTITLEMENTS")
+        repack.note_signed_executable(info,binary)
+        self.assertEqual(info["new_executable_sha256"],before)
+        self.assertEqual(info["new_executable_bytes"],original_size)
+        self.assertEqual(info["signed_executable_bytes"],binary.stat().st_size)
+        self.assertEqual(info["signed_executable_sha256"],repack.sha256(binary))
+        self.assertNotEqual(info["signed_executable_sha256"],before)
     def test_wrong_romfs_index_rejected(self):
         p=Path(self.tmp.name)/"wrong.ipa"
         with zipfile.ZipFile(p,"w") as z:
