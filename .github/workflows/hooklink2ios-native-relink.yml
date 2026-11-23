@@ -1,0 +1,117 @@
+name: HookLink2iOS - REAL native X1/X2/X3 backport (no shader rebuild)
+
+on:
+  push:
+    branches: [HookLink2iOS]
+    paths:
+      - .github/workflows/hooklink2ios-native-relink.yml
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: hooklink2ios-native-relink-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-relink:
+    if: github.ref == 'refs/heads/HookLink2iOS'
+    runs-on: xcode-27
+    timeout-minutes: 180
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+      ENGINE_PIN: "cf2a2fecc6ce3fb841131ffeffa90915cdadf109"
+      DRIVE_IPA_ID: "1cd85ZhbrJXZo5VK1GMQPxA-8R17qpPPD"
+      SOURCE_IPA_SHA256: "448b28b4217b397299a1ec48fad03a3690fd29c60422aabacad181fb45b15bf7"
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+    steps:
+      - name: Checkout exact HookLink2iOS head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Preflight native toolchain, immutable source SHA and Python regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/HookLink2iOS"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(xcodebuild -version | head -1)" = "Xcode 27.2"
+          xcrun --sdk iphoneos metal --version
+          python3 -m py_compile scripts/hooklink2ios_backport_native.py scripts/hooklink2ios_native_relink.py scripts/hooklink2ios_perf_repack.py
+          python3 -m unittest discover -s tests -p 'test_hooklink2ios_*.py' -v
+          test -n "$GOOGLE_SERVICE_ACCOUNT_JSON" || { echo "::error::Missing Drive service account"; exit 1; }
+          AVAILABLE=$(df -Pk "$RUNNER_TEMP" | awk 'END{print $4}')
+          test "$AVAILABLE" -gt $((35*1024*1024)) || { echo "::error::Need 35 GiB free for relink workspace and IPA"; exit 1; }
+          if ! command -v xcodegen >/dev/null; then brew install xcodegen; fi
+          xcodegen --version
+      - name: Download the proven 3.48GB IPA in resumable 16 MiB chunks from Drive
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/hooklink-venv"
+          "$RUNNER_TEMP/hooklink-venv/bin/python" -m pip install --disable-pip-version-check requests google-auth google-api-python-client
+          "$RUNNER_TEMP/hooklink-venv/bin/python" scripts/hooklink2ios_fetch_source.py \
+             --drive-file-id "$DRIVE_IPA_ID" --output "$RUNNER_TEMP/hooklink-original.ipa"
+          echo "$SOURCE_IPA_SHA256  $RUNNER_TEMP/hooklink-original.ipa" | shasum -a 256 -c -
+      - name: Checkout original proven engine ABI, not a new shader compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C "$RUNNER_TEMP" clone --quiet --no-checkout --filter=blob:none https://github.com/dsi-hub/nxnative.git hooklink-native-engine
+          git -C "$RUNNER_TEMP/hooklink-native-engine" fetch --quiet --depth 1 origin "$ENGINE_PIN"
+          git -C "$RUNNER_TEMP/hooklink-native-engine" checkout --quiet --detach "$ENGINE_PIN"
+          test "$(git -C "$RUNNER_TEMP/hooklink-native-engine" rev-parse HEAD)" = "$ENGINE_PIN"
+          test "$(git -C "$RUNNER_TEMP/hooklink-native-engine" status --porcelain | wc -l | tr -d ' ')" = 0
+      - name: Extract original ARM64 guest pages; backport native GPU optimizations; link Xcode host only
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/hooklink-native"
+          python3 scripts/hooklink2ios_native_relink.py \
+            --source "$RUNNER_TEMP/hooklink-original.ipa" \
+            --engine "$RUNNER_TEMP/hooklink-native-engine" \
+            --work "$RUNNER_TEMP/hooklink-native/work" \
+            --output "$RUNNER_TEMP/hooklink-native/DmIOS-relinked" \
+            --report "$RUNNER_TEMP/hooklink-native/native-report.json"
+          test -s "$RUNNER_TEMP/hooklink-native/DmIOS-relinked"
+          test -s "$RUNNER_TEMP/hooklink-native/native-report.json"
+      - name: Repack existing iOS Metal shaders + original RomFS marker with newly linked native host
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/hooklink-native/final"
+          python3 scripts/hooklink2ios_perf_repack.py \
+            --source "$RUNNER_TEMP/hooklink-original.ipa" \
+            --replacement-executable "$RUNNER_TEMP/hooklink-native/DmIOS-relinked" \
+            --preset balanced30fg \
+            --output "$RUNNER_TEMP/hooklink-native/final/HookLink2iOS-X3-Native-Backports.ipa" \
+            --report "$RUNNER_TEMP/hooklink-native/final/build-report.json"
+          cp "$RUNNER_TEMP/hooklink-native/native-report.json" "$RUNNER_TEMP/hooklink-native/final/native-report.json"
+          python3 - <<'PY'
+          import json,os,pathlib,zipfile
+          base=pathlib.Path(os.environ["RUNNER_TEMP"])/"hooklink-native"/"final"
+          ipa=base/"HookLink2iOS-X3-Native-Backports.ipa"
+          build=json.loads((base/"build-report.json").read_text())
+          report=json.loads((base/"native-report.json").read_text())
+          assert ipa.is_file() and ipa.stat().st_size<4_000_000_000, "installer-unsafe IPA"
+          assert build["native_host_relinked"]["new_executable_sha256"]==report["new_executable_sha256"]
+          assert build["shader_images_preserved"], "original Metal shaders changed"
+          assert not report["guest_metal_shaders_recompiled"] and not report["game_code_rewritten"]
+          with zipfile.ZipFile(ipa) as z:
+              assert z.testzip() is None, "failed ZIP integrity"
+          print("HOOKLINK2IOS_REAL_NATIVE_PORT_OK",ipa.stat().st_size,report["new_executable_sha256"],flush=True)
+          PY
+      - name: Publish genuine native optimization IPA and full audit reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: HookLink2iOS-X3-Native-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/hooklink-native/final/HookLink2iOS-X3-Native-Backports.ipa
+            ${{ runner.temp }}/hooklink-native/final/build-report.json
+            ${{ runner.temp }}/hooklink-native/final/native-report.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
