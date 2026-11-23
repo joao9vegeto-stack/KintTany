@@ -1,0 +1,136 @@
+name: HookLink2iOS 4.0 - official nxnative X3 full rebuild
+
+on:
+  push:
+    branches: [HookLink2iOS]
+    paths:
+      - .github/workflows/hooklink2ios-v4.yml
+      - scripts/hooklink2ios_v4_build.py
+      - tests/test_hooklink2ios_v4_build.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hooklink2ios-v4-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  x3-full-build:
+    if: github.ref == 'refs/heads/HookLink2iOS'
+    runs-on: xcode-27
+    timeout-minutes: 360
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+      IPHONEOS_DEPLOYMENT_TARGET: '26.0'
+      ENGINE_PIN: 'ee3ce6a02bc737d38795f0a96cce494cee7a799c'
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+    steps:
+      - name: Check out the exact HookLink2iOS commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Preflight pinned X3 ABI, verified input, syntax and regression guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/HookLink2iOS
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(xcodebuild -version | head -1)" = "Xcode 27.2"
+          xcrun --sdk iphoneos metal --version
+          python3 -m py_compile scripts/hooklink2ios_v4_build.py scripts/hooklink2ios_build.py
+          python3 -m unittest discover -s tests -p 'test_hooklink2ios_v4*.py' -v
+          test -n "$GOOGLE_SERVICE_ACCOUNT_JSON" || { echo "::error::Missing Drive service account"; exit 1; }
+          python3 - <<'PY'
+          import json, pathlib
+          h=json.loads(pathlib.Path("hooklink2ios/handoff.json").read_text())
+          assert h["project"]=="HookLink2iOS" and h["branch"]=="HookLink2iOS"
+          assert h["title_id"]=="0400486024DEC000" and h["package_version"]=="v131072"
+          assert h["nup"]["size"]==25622267860
+          assert h["nup"]["sha256"]=="85b08e81a2a08612f88de1063c8581fe088f7554303aa1ff207972d729b5916f"
+          print("HookLink 4.0 input NUP integrity manifest confirmed")
+          PY
+
+      - name: Reclaim unused simulator/Xcode storage without touching Xcode 27.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun simctl runtime delete all || true
+          xcrun simctl delete all || true
+          for candidate in /Applications/Xcode_27.app /Applications/Xcode_27.1.app; do
+            if [ -d "$candidate" ]; then
+              [ "$(cd "$candidate" && pwd -P)" = /Applications/Xcode_27.2.app ] || sudo rm -rf "$candidate"
+            fi
+          done
+          for candidate in "$HOME/Library/Android/sdk" "$HOME/.android"; do
+            [ ! -d "$candidate" ] || rm -rf "$candidate"
+          done
+          sudo xcode-select --switch "$DEVELOPER_DIR"
+          test "$(xcodebuild -version | head -1)" = "Xcode 27.2"
+          df -h "$RUNNER_TEMP"
+
+      - name: Confirm enough workspace before any 25.6GB input transfer
+        shell: bash
+        run: |
+          set -euo pipefail
+          AVAILABLE_KB=$(df -Pk "$RUNNER_TEMP" | awk 'END{print $4}')
+          [ "$AVAILABLE_KB" -gt $((75*1024*1024)) ] || {
+            echo "::error::Need 75GiB free for genuine X3 shader rebuild, not native-only relink"
+            exit 1
+          }
+          echo "Storage gate: $((AVAILABLE_KB/1024/1024)) GiB free"
+
+      - name: Install verified X3 Metal/NSO build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install xcodegen zstd glslang
+          dotnet --list-sdks | grep -Eq '^(8|9|10|11)[.]'
+          python3 -m pip install --disable-pip-version-check lz4 "capstone>=5,<6" fonttools nsz zbic backports.zstd google-api-python-client google-auth requests
+          xcodegen --version
+          xcrun --sdk iphoneos metal --version
+
+      - name: Clone the exact HookLink v4.0 nxnative commit, never main HEAD
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init "$RUNNER_TEMP/nxnative-x3"
+          git -C "$RUNNER_TEMP/nxnative-x3" remote add origin https://github.com/dsi-hub/nxnative.git
+          git -C "$RUNNER_TEMP/nxnative-x3" fetch --depth 1 origin "$ENGINE_PIN"
+          git -C "$RUNNER_TEMP/nxnative-x3" checkout --detach FETCH_HEAD
+          test "$(git -C "$RUNNER_TEMP/nxnative-x3" rev-parse HEAD)" = "$ENGINE_PIN"
+          python3 - <<'PY'
+          import importlib.util, pathlib, os
+          p=pathlib.Path("scripts/hooklink2ios_v4_build.py")
+          spec=importlib.util.spec_from_file_location("v4",p)
+          m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+          m.verify_v4_engine(pathlib.Path(os.environ["RUNNER_TEMP"])/"nxnative-x3")
+          PY
+          python3 "$RUNNER_TEMP/nxnative-x3/dm/gfx/tools/own_compilers.py" --check-metal
+
+      - name: Build original HookLink 4.0 host plus entirely NEW Metal shader chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/hooklink2ios-v4"
+          python3 scripts/hooklink2ios_v4_build.py \
+            --handoff hooklink2ios/handoff.json \
+            --engine "$RUNNER_TEMP/nxnative-x3" \
+            --output "$RUNNER_TEMP/hooklink2ios-v4"
+          test -s "$RUNNER_TEMP/hooklink2ios-v4/OcarinaOfTime-HookLink2iOS.ipa"
+          test -s "$RUNNER_TEMP/hooklink2ios-v4/build-report.json"
+          echo HOOKLINK2IOS_V4_PUBLISH_READY
+
+      - name: Publish HookLink 4.0 IPA with provenance and external RomFS overlay
+        uses: actions/upload-artifact@v4
+        with:
+          name: HookLink2iOS-V4-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/hooklink2ios-v4/OcarinaOfTime-HookLink2iOS.ipa
+            ${{ runner.temp }}/hooklink2ios-v4/build-report.json
+            ${{ runner.temp }}/hooklink2ios-v4/res_overlay/Pack/Bootup.Nin_Ounce_NVN2.pack.zs
+          if-no-files-found: error
+          retention-days: 30
