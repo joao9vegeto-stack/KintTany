@@ -1,0 +1,104 @@
+name: HookLink2iOS - safe no-shader IPA repack
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_artifact_id:
+        description: "Non-expired GitHub Actions artifact ID containing the proven IPA"
+        required: false
+        type: string
+      source_drive_file_id:
+        description: "Drive IPA/ZIP file ID accessible to existing service account"
+        required: false
+        type: string
+      preset:
+        description: "Performance and stability preset"
+        required: true
+        default: balanced30fg
+        type: choice
+        options:
+          - balanced30fg
+          - stable30
+          - native60
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: hooklink2ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repack:
+    if: github.ref == 'refs/heads/HookLink2iOS'
+    runs-on: xcode-27
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+      GITHUB_TOKEN: ${{ github.token }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+    steps:
+      - name: Checkout only HookLink2iOS
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Fail fast on an absent source, wrong branch or toolchain
+        env:
+          SOURCE_ARTIFACT: ${{ inputs.source_artifact_id }}
+          SOURCE_DRIVE: ${{ inputs.source_drive_file_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/HookLink2iOS"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -d "$DEVELOPER_DIR"
+          test "$(xcodebuild -version | head -1)" = "Xcode 27.2"
+          python3 -m py_compile scripts/hooklink2ios_perf_repack.py scripts/hooklink2ios_fetch_source.py
+          if { [ -z "$SOURCE_ARTIFACT" ] && [ -z "$SOURCE_DRIVE" ]; } || { [ -n "$SOURCE_ARTIFACT" ] && [ -n "$SOURCE_DRIVE" ]; }; then
+            echo "::error::Specify exactly one original artifact ID or Drive file ID; no full-build fallback."
+            exit 1
+          fi
+          if [ -n "$SOURCE_ARTIFACT" ]; then
+            [[ "$SOURCE_ARTIFACT" =~ ^[0-9]+$ ]] || { echo "::error::Invalid artifact ID"; exit 1; }
+          else
+            test -n "$GOOGLE_SERVICE_ACCOUNT_JSON" || { echo "::error::Service account secret missing"; exit 1; }
+          fi
+      - name: Download original artifact/IPA with 16 MiB HTTP ranges
+        env:
+          SOURCE_ARTIFACT: ${{ inputs.source_artifact_id }}
+          SOURCE_DRIVE: ${{ inputs.source_drive_file_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check requests google-auth google-api-python-client
+          if [ -n "$SOURCE_ARTIFACT" ]; then
+            python3 scripts/hooklink2ios_fetch_source.py --artifact-id "$SOURCE_ARTIFACT" --output "$RUNNER_TEMP/hooklink-source.zip"
+          else
+            python3 scripts/hooklink2ios_fetch_source.py --drive-file-id "$SOURCE_DRIVE" --output "$RUNNER_TEMP/hooklink-source.bin"
+          fi
+      - name: Preserve existing game code/Metal image, adjust only env, then sign
+        env:
+          SOURCE_ARTIFACT: ${{ inputs.source_artifact_id }}
+          PRESET: ${{ inputs.preset }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE="$RUNNER_TEMP/hooklink-source.bin"
+          if [ -n "$SOURCE_ARTIFACT" ]; then SOURCE="$RUNNER_TEMP/hooklink-source.zip"; fi
+          mkdir -p "$RUNNER_TEMP/hooklink-repack"
+          python3 scripts/hooklink2ios_perf_repack.py \
+            --source "$SOURCE" \
+            --preset "$PRESET" \
+            --output "$RUNNER_TEMP/hooklink-repack/OcarinaOfTime-HookLink2iOS-${PRESET}.ipa" \
+            --report "$RUNNER_TEMP/hooklink-repack/build-report.json"
+      - name: Publish signed repack IPA and report
+        uses: actions/upload-artifact@v4
+        with:
+          name: HookLink2iOS-Repack-${{ inputs.preset }}-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/hooklink-repack/*.ipa
+            ${{ runner.temp }}/hooklink-repack/build-report.json
+          if-no-files-found: error
+          retention-days: 30
