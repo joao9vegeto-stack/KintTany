@@ -1,4 +1,4 @@
-name: Fairy2iOS - original SHA-verified G1T/G1S native source repair (NO SHADERS)
+name: Fairy2iOS - corrected KTGL read ABI and original producer return trace (NO SHADERS)
 on:
   push:
     branches: [Fairy2iOS]
@@ -38,6 +38,8 @@ jobs:
           python3 -m unittest discover -s fairy2/tests -p test_ktgl_coherent_config.py -v
           python3 -m unittest discover -s fairy2/tests -p test_ktgl_transaction_trace.py -v
           python3 -m unittest discover -s fairy2/tests -p test_confirmed_crash_gate.py -v
+          python3 -m unittest discover -s fairy2/tests -p test_ktgl_reader_abi_contract.py -v
+          python3 -m unittest discover -s fairy2/tests -p test_ktgl_producer_signed_hooks.py -v
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -128,6 +130,9 @@ jobs:
           assert coherent['no_inflator_or_direct_reader_brk'] is True
           assert report['compiled_guest_reader_codec_traps']==0
           from_auth=json.loads((folder/'ktgl-original-source-dual-report.json').read_text())
+          assert from_auth['signed_guest_producer_observed_without_changing_return'] is True
+          assert from_auth['original_mode4_return_site']=='main+0xc107d8'
+          assert from_auth['original_direct_reader_source_reset_site']=='main+0xc11f54'
           assert from_auth['source_dual_repair_candidate'] and from_auth['original_parser_preserved']
           assert from_auth['authentic_source_g1t_sha256']=='558ada8c563fe44fa18d894d01f39e8b1a230b26ad1bcd0782743797f815e494'
           assert from_auth['authentic_source_g1s_sha256']=='edb3bceed3c426cfe5b851d78f2e7f56168abe8ac5d6aac3a6927bdaf6e3535a'
@@ -158,7 +163,7 @@ jobs:
       - name: Publish source repair CANDIDATE for iPhone validation, not certified playable
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: Fairy2iOS-Original-G1T-G1S-Source-Candidate-${{ github.run_number }}
+          name: Fairy2iOS-KTGL-ABI-and-Producer-Candidate-${{ github.run_number }}
           path: |
             ${{ runner.temp }}/output/Fairy2iOS-FairyTail2-KTGL-CoherentConfig-NoFallback.ipa
             ${{ runner.temp }}/output/ktgl-transaction-trace-report.json
@@ -169,6 +174,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: Fairy2iOS-Original-G1T-G1S-Source-Failure-${{ github.run_number }}
+          name: Fairy2iOS-KTGL-ABI-Producer-Failure-${{ github.run_number }}
           path: ${{ runner.temp }}/output/host-build.log
           if-no-files-found: warn

@@ -19,6 +19,10 @@ RECORDS={
 FDATA='Motor/ReleasePackage/KIDS_PLATFORM_NX/release/0x38f972af.fdata'
 BNE_G1S=0x6e7bb0
 BNE_OPCODE=bytes.fromhex('81780054')
+PRODUCER_SIGNED_OPCODES={
+  0xc107d8:bytes.fromhex("f40319aa"), # mov x20,x25; mode4 context created
+  0xc11f54:bytes.fromhex("880640f9"), # ldr x8,[x20,#8]; read failure clears source
+}
 SOURCE_PATCH=trace.patch_guest
 SOURCE_VERIFY=trace.verify_guest
 SOURCE_HOST=trace.patch_host
@@ -139,20 +143,89 @@ static int f2_auth_source_repair(ucontext_t *uc){
     (z?0x6e7bb4u:0x6e8ac0u);
  return 1;
 }
+
+/* FAIRY2_SIGNED_PRODUCER_PROVENANCE: original guest code values are checked
+ * against read-only signed v458752 disassembly (45094304340). Both hooks
+ * emulate the ORIGINAL AArch64 instructions. No rerouting of file reads,
+ * no changes to PSTATE or allocator, no retries in the producer. */
+static unsigned f2_mode4_return_count;
+static unsigned f2_direct_reset_count;
+static int f2_producer_branch_state(ucontext_t *uc){
+ uint64_t pc=uc->uc_mcontext->__ss.__pc;
+ module_t *m=module_of((void *)(uintptr_t)pc);
+ if(!m||strcmp(m->name,"main"))return 0;
+ uint64_t at=pc-(uint64_t)(uintptr_t)m->base;
+ if(at!=0xc107d8u&&at!=0xc11f54u)return 0;
+ if(*(volatile uint32_t *)(uintptr_t)pc!=0xd43e4040u)return 0;
+ if(at==0xc107d8u){
+   /* main+c107d8: MOV x20,x25; preceding c10d80 returned x0,
+      the next c107dc tests bit 0 (success/failure) of that return. */
+   unsigned n=__atomic_add_fetch(&f2_mode4_return_count,1,__ATOMIC_RELAXED);
+   if(n<=64 || uc->uc_mcontext->__ss.__x[0]==0){
+     char buf[300];
+     int k=snprintf(buf,sizeof(buf),
+       "[dm] FAIRY2_MODE4_PRODUCER_RETURN seq=%u result_x0=%#llx context_x25=%#llx reader_x22=%#llx fp=%#llx\n",
+       n,(unsigned long long)uc->uc_mcontext->__ss.__x[0],
+       (unsigned long long)uc->uc_mcontext->__ss.__x[25],
+       (unsigned long long)uc->uc_mcontext->__ss.__x[22],
+       (unsigned long long)uc->uc_mcontext->__ss.__fp);
+     if(k>0&&(size_t)k<sizeof buf)(void)write(2,buf,(size_t)k);
+   }
+   uc->uc_mcontext->__ss.__x[20]=uc->uc_mcontext->__ss.__x[25];
+   uc->uc_mcontext->__ss.__pc=pc+4;
+   return 1;
+ }
+ /* main+c11f54: LDR x8,[x20,#8]; downstream C11F5C zeros [x20+8]
+    on original direct stream failure. Probe the ACTUAL stream object
+    at its original failure point before it is cleared. */
+ uint64_t reader=uc->uc_mcontext->__ss.__x[20],source=0,raw[6]={0};
+ vm_size_t nread=0;
+ kern_return_t kr=reader?vm_read_overwrite(mach_task_self(),
+    (vm_address_t)(reader+8),8,(vm_address_t)&source,&nread):
+    KERN_INVALID_ADDRESS;
+ if(kr!=KERN_SUCCESS||nread!=8)return 0; /* preserve fault semantics */
+ nread=0;
+ int snapshot_ok=(vm_read_overwrite(mach_task_self(),
+    (vm_address_t)reader,sizeof raw,(vm_address_t)raw,&nread)==
+    KERN_SUCCESS && nread==sizeof raw);
+ unsigned seq=__atomic_add_fetch(&f2_direct_reset_count,1,__ATOMIC_RELAXED);
+ if(seq<=128){
+   char buf[550];
+   int k=snprintf(buf,sizeof(buf),
+    "[dm] FAIRY2_DIRECT_SOURCE_RESET seq=%u reader=%#llx input_source=%#llx snapshot_ok=%d vt=%#llx cursor0=%#llx cursor1=%#llx buffered_end=%#llx consumed_x19=%#llx requested_x21=%#llx remaining_x23=%#llx\n",
+    seq,(unsigned long long)reader,(unsigned long long)source,
+    snapshot_ok,(unsigned long long)raw[0],
+    (unsigned long long)raw[4],(unsigned long long)raw[5],
+    (unsigned long long)raw[3],
+    (unsigned long long)uc->uc_mcontext->__ss.__x[19],
+    (unsigned long long)uc->uc_mcontext->__ss.__x[21],
+    (unsigned long long)uc->uc_mcontext->__ss.__x[23]);
+   if(k>0&&(size_t)k<sizeof buf)(void)write(2,buf,(size_t)k);
+ }
+ uc->uc_mcontext->__ss.__x[8]=source;
+ uc->uc_mcontext->__ss.__pc=pc+4;
+ return 1;
+}
 """
 
 def patch_guest(exe,old):
     stamp=SOURCE_PATCH(exe,old)
     pieces,code=base.main_sections(exe)
     x0=pieces['x0']
-    base.require(code[BNE_G1S:BNE_G1S+4]==BNE_OPCODE and
-                 BNE_G1S+4<=x0['size'],'Original G1S B.NE opcode drift')
+    site_opcodes={BNE_G1S:BNE_OPCODE,**PRODUCER_SIGNED_OPCODES}
+    for off,opcode in site_opcodes.items():
+        base.require(off+4<=x0['size'] and code[off:off+4]==opcode,
+            f"Signed guest production/read opcode drift main+0x{off:x}")
     with exe.open('r+b') as f:
-        f.seek(x0['offset']+BNE_G1S)
-        base.require(f.read(4)==BNE_OPCODE,'G1S original code modified')
-        f.seek(x0['offset']+BNE_G1S);f.write(trace.BREAK)
+        for off,opcode in site_opcodes.items():
+            f.seek(x0['offset']+off)
+            base.require(f.read(4)==opcode,
+                f"Guest production site changed before write main+0x{off:x}")
+            f.seek(x0['offset']+off)
+            f.write(trace.BREAK)
     pieces_new,new=base.main_sections(exe)
-    changed=bytearray(code);changed[BNE_G1S:BNE_G1S+4]=trace.BREAK
+    changed=bytearray(code)
+    for off in site_opcodes:changed[off:off+4]=trace.BREAK
     base.require(new==bytes(changed) and
           pieces_new['w']['data']==pieces['w']['data'] and
           pieces_new['x1']['data']==pieces['x1']['data'],
@@ -160,6 +233,9 @@ def patch_guest(exe,old):
     stamp['after_sha256']=hashlib.sha256(new).hexdigest()
     stamp['x0_after_sha256']=hashlib.sha256(pieces_new['x0']['data']).hexdigest()
     stamp['g1s_native_branch_original']='81780054'
+    stamp['signed_producer_observation_hooks']={f"main+0x{at:x}":{
+       "original":op.hex(),"emulated":True,"returns_unchanged":True}
+       for at,op in PRODUCER_SIGNED_OPCODES.items()}
     return stamp
 
 def verify_guest(exe,stamp):
@@ -167,6 +243,10 @@ def verify_guest(exe,stamp):
     _,raw=base.main_sections(exe)
     base.require(raw[BNE_G1S:BNE_G1S+4]==trace.BREAK and
        stamp['g1s_native_branch_original']=='81780054','G1S B.NE source hook missing')
+    for at,op in PRODUCER_SIGNED_OPCODES.items():
+        base.require(raw[at:at+4]==trace.BREAK and
+          stamp['signed_producer_observation_hooks'][f"main+0x{at:x}"]["original"]==op.hex(),
+          "Signed producer hook missing or original opcode not verified")
 
 def patch_host(repo):
     SOURCE_HOST(repo)
@@ -180,6 +260,7 @@ def patch_host(repo):
                  'Original host trap anchor differs')
     s=s.replace(anchor,extra+'\n'+anchor,1)
     s=s.replace(handler,
+       '    if (sig == SIGTRAP && f2_producer_branch_state(uc)) return;\n'
        '    if (sig == SIGTRAP && f2_auth_source_repair(uc)) return;\n'+handler,1)
     crash.write_text(s)
 
@@ -201,6 +282,10 @@ def make(src,origin,repo,out):
     report['no_shader_compile']=True
     report['gameplay_verified']=False
     report['source_dual_repair_candidate']=True
+    report['signed_guest_producer_observed_without_changing_return']=True
+    report['original_mode4_return_site']='main+0xc107d8'
+    report['original_direct_reader_source_reset_site']='main+0xc11f54'
+    report['original_guest_source_probes']={hex(k):v.hex() for k,v in PRODUCER_SIGNED_OPCODES.items()}
     (out/'ktgl-original-source-dual-report.json').write_text(json.dumps(report,indent=2)+'\n')
     return report
 
@@ -209,6 +294,13 @@ def selftest():
     assert RECORDS['g1s'][3:6]==(18340,0xac9ed13e,0x7bcd279f)
     assert trace.BREAK.hex()=='40403ed4'
     assert BNE_OPCODE.hex()=='81780054'
+    assert PRODUCER_SIGNED_OPCODES=={
+        0xc107d8:bytes.fromhex('f40319aa'),
+        0xc11f54:bytes.fromhex('880640f9')}
+    assert 'FAIRY2_MODE4_PRODUCER_RETURN' in HOST_C
+    assert 'FAIRY2_DIRECT_SOURCE_RESET' in HOST_C
+    assert 'uc->uc_mcontext->__ss.__x[20]=uc->uc_mcontext->__ss.__x[25];' in HOST_C
+    assert 'uc->uc_mcontext->__ss.__x[8]=source;' in HOST_C
     assert 'f2_auth_g1s,18340' in HOST_C and '0x6e7b94u' in HOST_C
     assert 'f2_auth_g1t,48' in HOST_C and '0x61210cu' in HOST_C
     assert '(z?0x6e7bb4u:0x6e8ac0u)' in HOST_C

@@ -41,6 +41,11 @@
   "requires_real_iphone_test": true,
   "new_functional_source_repair_candidate": true,
   "preflight_covered_existing_assets": true,
-  "previous_run": 45100071960,
-  "previous_run_failure": "Python auth client missing in xcode-27 although Linux source audit had it; install google-auth and requests explicitly before bounded Drive ranges"
+  "previous_run": 45100431103,
+  "previous_run_failure": "iPhone confirmed same abort after G1T/G1S source retry; original guest vtable ABI was violated: skip returned cumulative cursor and read discarded partial reads. clang C differential test now passes. Also retain original producer failure tracing to avoid another blind build.",
+  "producer_signed_a64_revision": 3,
+  "candidate_abi_fixed": true,
+  "original_producer_preserved": true,
+  "producer_return_site": "main+0xc107d8",
+  "direct_reader_source_null_site": "main+0xc11f54"
 }
