@@ -57,6 +57,21 @@ static int up_mfx_named(NvShader *cs); static int up_mfx_on(void);
 // HookLink X3 (c9aaed502b3d): bypass the whole NDSR network, not just
 // its final upscale pass. Keep the first pass's colour input for MetalFX.
 static int g_up_chain_in, g_up_chain_refused;
+// Regression guard (HookLink2iOS 2026-11-23): unlike the full upstream X3,
+// this legacy shader/runtime ABI has not been proven with every NDSR variant.
+// Default OFF preserves the original 1.8.5 behaviour: run the game's
+// intermediate NDSR passes and replace only its final compatible scaler.
+// DM_HOOKLINK_X3_CHAIN=1 opts into the experimental complete-chain bypass.
+static int up_chain_enabled(void) {
+    static int mode = -1;
+    if (mode < 0) {
+        const char *e = getenv("DM_HOOKLINK_X3_CHAIN");
+        mode = e && !strcmp(e, "1");
+        MLOG("HookLink2iOS NDSR whole-chain bypass: %s; final-stage MetalFX remains available",
+             mode ? "EXPERIMENTAL ON" : "OFF (legacy rendering compatibility)");
+    }
+    return mode;
+}
 static int up_chain_role(NvShader *cs) {
     const char *c = DM_GAME_UPSCALER_CHAIN;
     if (!*c || !cs->key[0]) return 0;
@@ -77,7 +92,7 @@ static int up_chain_role(NvShader *cs) {
     // dispatches. If it refuses the final pass, use the game's chain on
     // following frames rather than keep skipping it.
     {
-        int role = up_mfx_on() && !g_up_chain_refused ? up_chain_role(cs) : 0;
+        int role = up_chain_enabled() && up_mfx_on() && !g_up_chain_refused ? up_chain_role(cs) : 0;
         if (role == 2) {
             g_up_chain_in = 0;
             for (int i=0; i<cs->rf.nb; i++) if (cs->rf.b[i].kind==NVN_RB_TEX) {

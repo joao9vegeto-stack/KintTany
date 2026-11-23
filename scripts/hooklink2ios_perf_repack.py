@@ -9,13 +9,16 @@ PREFIX = "Payload/DmIOS.app/"
 CHUNK = 16 * 1024 * 1024
 PRESETS = {
     "stable30": {"DM_FRAME_MODE":"1", "DM_FPS_TARGET":"30", "DM_FRAMEGEN":"0", "DM_DYNAMIC_RESOLUTION":"1",
-                 "DM_UPSCALER":"metalfx", "DM_RT_COMP":"auto", "DM_SHOW_FPS":"1"},
+                 "DM_UPSCALER":"metalfx", "DM_RT_COMP":"auto", "DM_SHOW_FPS":"1",
+                 "DM_HOOKLINK_X3_CHAIN":"0", "DM_NVN_WS_MB":"4800"},
     "balanced30fg": {"DM_FRAME_MODE":"2", "DM_FPS_TARGET":"30", "DM_FRAMEGEN":"1", "DM_FRAMEGEN_SCALE":"0.75",
                       "DM_DYNAMIC_RESOLUTION":"1", "DM_UPSCALER":"metalfx",
-                      "DM_RT_COMP":"auto", "DM_SHOW_FPS":"1"},
+                      "DM_RT_COMP":"auto", "DM_SHOW_FPS":"1",
+                 "DM_HOOKLINK_X3_CHAIN":"0", "DM_NVN_WS_MB":"4800"},
     "native60": {"DM_FRAME_MODE":"0", "DM_FPS_TARGET":"60", "DM_FRAMEGEN":"0",
                  "DM_DYNAMIC_RESOLUTION":"1", "DM_UPSCALER":"metalfx",
-                 "DM_RT_COMP":"auto", "DM_SHOW_FPS":"1"}
+                 "DM_RT_COMP":"auto", "DM_SHOW_FPS":"1",
+                 "DM_HOOKLINK_X3_CHAIN":"0", "DM_NVN_WS_MB":"4800"}
 }
 
 def fail(message):

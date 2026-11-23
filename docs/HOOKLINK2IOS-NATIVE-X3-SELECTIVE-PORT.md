@@ -39,3 +39,16 @@ O ganho real de CPU/GPU, a ausência de novos bugs e 30/60 FPS constantes **só 
 - [Upstream aumento de tabelas de textura](https://github.com/dsi-hub/nxnative/commit/2ce8521f3cd7)
 - [Upstream alias 16 GiB](https://github.com/dsi-hub/nxnative/commit/c03d45bd64d2)
 - [Upstream bypass completo do upscaler NDSR](https://github.com/dsi-hub/nxnative/commit/c9aaed502b3d)
+
+
+## 2026-11-23 — correção da regressão gráfica / pressão de memória
+
+**Evidência do log real no iPhone 17 Pro:** o renderizador passou de 1.299 MB residentes (frame 600) para 4.432 MB (frame 900); chegou a 5.461 MB (frame 1500). `MapPhysicalMemory` recusou oito pedidos de `0x15000` com 6,96 GB já retidos e apenas 0,68 GB de folga. Resolução dinâmica variou de 1440×810 até 960×540. O jogo continuou apresentando frames; não houve shader ausente nem GPU hang explícito. Isso não prova que o corte de memória, isoladamente, produziu a tela preta.
+
+**Correção de regressão (no host):** `DM_HOOKLINK_X3_CHAIN` agora fica **0 por padrão**. O código X3 completo permanece disponível como modo experimental (`1`), mas seu bypass de passes NDSR deixa de atuar silenciosamente. Preserva-se o comportamento funcional do host 1.8.5: o jogo produz os passes intermediários; `DM_UPSCALER=metalfx` pode continuar substituindo somente o estágio final reconhecido, sem exigir imagens intermediárias que o X3 tenha omitido. O renderizador registra explicitamente no log `NDSR whole-chain bypass: OFF`. `DM_FRAME_MODE` 30, 30+FG e 60 não foram removidos; shaders, RomFS, guest ARM64 continuam byte-idênticos à IPA fonte.
+
+**Recuperação de memória:** perfil de iPhone passa a usar `DM_NVN_WS_MB=4800` como orçamento de atuação **antecipada**, não como limite físico de alocação. A função nativa preexistente `alias_retire_idle` considera 85% desse orçamento para começar a remover texturas *compartilhadas que não sejam referidas por nenhum objeto vivo e estejam ociosas por pelo menos 64 submissões*; tenta voltar a 75%. Isso evita elevar o limite de jetsam ou cancelar o cutoff de segurança. A eficácia depende do conjunto de texturas realmente elegíveis; não é garantida. Override de usuário em `Documents/env.txt` pode substituir esse valor. Não alteramos a reciclagem dos heaps (`DM_NVN_RT_RECYCLE`) nem ativamos GPU occlusion experimental.
+
+**Validação necessária:** num novo log deve aparecer `NDSR whole-chain bypass: OFF`, nenhuma recusa de `MapPhysicalMemory` durante o teste, frame-resident mais baixo nas entradas/saídas de áreas, e cena 3D preservada durante a variação de resolução. O build de host-only relink precisa passar testes, SHA dos guest pages e SHA dos shaders. A execução no iPhone continua indispensável antes de declarar o defeito resolvido.
+
+**Fontes comparadas:** [changelog HookLink X2.0.1/X3](https://github.com/dsi-hub/HookLink/blob/main/CHANGELOG.md), [nxnative NDSR X3](https://github.com/dsi-hub/nxnative/commit/c9aaed502b3d), [nxnative host original `cf2a2fecc6ce`](https://github.com/dsi-hub/nxnative/tree/cf2a2fecc6ce3fb841131ffeffa90915cdadf109).

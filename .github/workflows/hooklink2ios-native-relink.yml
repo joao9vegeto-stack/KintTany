@@ -5,8 +5,10 @@ on:
     branches: [HookLink2iOS]
     paths:
       - .github/workflows/hooklink2ios-native-relink.yml
+      - scripts/hooklink2ios_backport_native.py
+      - scripts/hooklink2ios_native_relink.py
       - scripts/hooklink2ios_perf_repack.py
-      - tests/test_hooklink2ios_perf_repack.py
+      - tests/test_hooklink2ios_*.py
   workflow_dispatch:
 
 permissions:
