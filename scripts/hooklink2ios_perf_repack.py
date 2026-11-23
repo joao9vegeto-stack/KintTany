@@ -168,6 +168,7 @@ def main():
     a.add_argument("--output", type=Path, required=True)
     a.add_argument("--report", type=Path, required=True)
     a.add_argument("--preset", choices=list(PRESETS), default="balanced30fg")
+    a.add_argument("--pso-dir", type=Path, default=None, help="Optional validated A19 Pro Metal4 PSO bundle")
     a.add_argument("--entitlements", type=Path,
                    default=Path("hooklink/Resources/presets/entitlements.plist"))
     args = a.parse_args()
@@ -199,6 +200,23 @@ def main():
         executable = app/"DmIOS"
         executable.chmod(executable.stat().st_mode | 0o111)
         values = patch_launcher_and_env(app, PRESETS[args.preset])
+        pso_info = None
+        if args.pso_dir is not None:
+            pso = args.pso_dir.resolve()
+            arch, stamp = pso/"applegpu_g18p.mtl4a", pso/"prebuilt.tsv"
+            if not arch.is_file() or arch.stat().st_size < 1024 or not stamp.is_file():
+                fail("optional A19 Pro pipeline archive missing/incomplete")
+            if (app/"pso").exists():
+                fail("the source IPA already has a PSO directory; refusing replacement")
+            for member in pso.iterdir():
+                if member.is_symlink() or not member.is_file() or member.suffix not in (".mtl4a",".tsv"):
+                    fail("untrusted member in optional PSO directory: " + member.name)
+                if member.suffix == ".mtl4a" and member.name != "applegpu_g18p.mtl4a":
+                    fail("unexpected GPU architecture in offline PSO")
+            shutil.copytree(pso, app/"pso")
+            pso_info = {"gpu":"applegpu_g18p","archive_sha256":sha256(arch),
+                        "archive_size_bytes":arch.stat().st_size,
+                        "source":"Metal4 offline PSO built from unchanged original Metal libraries"}
         for framework in sorted((app/"Frameworks").glob("*.framework")) if (app/"Frameworks").exists() else []:
             subprocess.run(["codesign","--force","--sign","-","--timestamp=none",str(framework)],check=True)
         subprocess.run(["codesign","--force","--sign","-","--timestamp=none",
@@ -220,6 +238,19 @@ def main():
                 elif env_values.get(key) != value:
                     fail("env-only preset missing: "+key)
 
+        if pso_info:
+            with zipfile.ZipFile(args.output) as result:
+                name = PREFIX+"pso/applegpu_g18p.mtl4a"
+                if name not in result.namelist():
+                    fail("offline pipeline archive missing from repacked IPA")
+                h = hashlib.sha256()
+                size = 0
+                with result.open(name) as data:
+                    for block in iter(lambda: data.read(CHUNK), b""):
+                        h.update(block)
+                        size += len(block)
+                if size != pso_info["archive_size_bytes"] or h.hexdigest() != pso_info["archive_sha256"]:
+                    fail("PSO integrity changed during IPA packing")
         report = {
           "project":"HookLink2iOS", "title_id":TITLE, "type":"settings-only-repack",
           "preset":args.preset, "settings":values, "launcher_patched":True,
@@ -229,6 +260,7 @@ def main():
           "shader_images_preserved":len(original[1]), "romfs_external":True,
           "engine_updated":False, "shader_recompiled":False, "game_code_recompiled":False,
           "source_engine_not_provable_from_bare_ipa":True,
+          "offline_pso":pso_info,
           "signature":"ad-hoc; sideload installer may re-sign using player's identity",
           "note":"Saved launcher choices override defaults; DM_FRAME_MODE remains selectable"}
         args.report.write_text(json.dumps(report,indent=2)+"\n",encoding="utf-8")

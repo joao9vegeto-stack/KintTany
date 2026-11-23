@@ -1,0 +1,96 @@
+name: HookLink2iOS - A19 Pro offline Metal4 PSO (NO SHADER REBUILD)
+
+on:
+  push:
+    branches: [HookLink2iOS]
+    paths: [.github/workflows/hooklink2ios-pso.yml]
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: hooklink2ios-pso-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  optimized-ipa:
+    if: github.ref == 'refs/heads/HookLink2iOS'
+    runs-on: xcode-27
+    timeout-minutes: 180
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      SOURCE_DRIVE_FILE_ID: "1cd85ZhbrJXZo5VK1GMQPxA-8R17qpPPD"
+      ENGINE_PIN: "cf2a2fecc6ce3fb841131ffeffa90915cdadf109"
+    steps:
+      - name: Checkout exact isolated HookLink2iOS branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify existing Metal4 pipeline compiler and enough disk (no game rebuild)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/HookLink2iOS
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -d "$DEVELOPER_DIR"
+          test "$(xcodebuild -version | head -1)" = "Xcode 27.2"
+          xcrun --sdk iphoneos metal-tt -version
+          xcrun --sdk iphoneos --find metal-pack
+          python3 -m py_compile scripts/hooklink2ios_offline_pso.py scripts/hooklink2ios_perf_repack.py
+          python3 -m unittest discover -s tests -p test_hooklink2ios_perf_repack.py -v
+          AVAILABLE=$(df -Pk "$RUNNER_TEMP" | awk 'END {print $4}')
+          test "$AVAILABLE" -gt $((20 * 1024 * 1024)) || { echo "::error::Need 20 GiB free for existing IPA + PSO workspace"; exit 1; }
+          test -n "$GOOGLE_SERVICE_ACCOUNT_JSON" || { echo "::error::Actions service-account secret absent"; exit 1; }
+      - name: Python venv and chunked Drive download of verified original IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/hooklink-py"
+          "$RUNNER_TEMP/hooklink-py/bin/python" -m pip install --disable-pip-version-check requests google-auth google-api-python-client
+          "$RUNNER_TEMP/hooklink-py/bin/python" scripts/hooklink2ios_fetch_source.py \
+            --drive-file-id "$SOURCE_DRIVE_FILE_ID" --output "$RUNNER_TEMP/original-hooklink.ipa"
+      - name: Fetch exactly pinned old engine for compatible PSO descriptions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/nxnative-old"
+          git -C "$RUNNER_TEMP/nxnative-old" init -q
+          git -C "$RUNNER_TEMP/nxnative-old" remote add origin https://github.com/dsi-hub/nxnative.git
+          git -C "$RUNNER_TEMP/nxnative-old" fetch --depth=1 origin "$ENGINE_PIN"
+          git -C "$RUNNER_TEMP/nxnative-old" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$RUNNER_TEMP/nxnative-old" rev-parse HEAD)" = "$ENGINE_PIN"
+      - name: Produce g18p Metal4 pipeline archive from the existing Metal libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/hooklink2ios_offline_pso.py \
+            --source "$RUNNER_TEMP/original-hooklink.ipa" \
+            --engine "$RUNNER_TEMP/nxnative-old" \
+            --work "$RUNNER_TEMP/hooklink-pso-work" \
+            --output "$RUNNER_TEMP/hooklink-pso"
+      - name: Repack old game without recompiling shaders and embed only validated g18p PSO
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/hooklink-pso-output"
+          python3 scripts/hooklink2ios_perf_repack.py \
+            --source "$RUNNER_TEMP/original-hooklink.ipa" \
+            --preset balanced30fg --pso-dir "$RUNNER_TEMP/hooklink-pso" \
+            --output "$RUNNER_TEMP/hooklink-pso-output/OcarinaOfTime-HookLink2iOS-g18pPSO.ipa" \
+            --report "$RUNNER_TEMP/hooklink-pso-output/build-report.json"
+          cp "$RUNNER_TEMP/hooklink-pso/pso-report.json" "$RUNNER_TEMP/hooklink-pso-output/pso-report.json"
+      - name: Publish independently verified no-shader optimized IPA + reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: HookLink2iOS-A19Pro-PSO-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/hooklink-pso-output/OcarinaOfTime-HookLink2iOS-g18pPSO.ipa
+            ${{ runner.temp }}/hooklink-pso-output/build-report.json
+            ${{ runner.temp }}/hooklink-pso-output/pso-report.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
