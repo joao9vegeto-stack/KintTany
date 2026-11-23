@@ -23,6 +23,7 @@ jobs:
       DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       SOURCE_DRIVE_FILE_ID: "1cd85ZhbrJXZo5VK1GMQPxA-8R17qpPPD"
+      SOURCE_IPA_SHA256: "448b28b4217b397299a1ec48fad03a3690fd29c60422aabacad181fb45b15bf7"
       ENGINE_PIN: "cf2a2fecc6ce3fb841131ffeffa90915cdadf109"
     steps:
       - name: Checkout exact isolated HookLink2iOS branch
@@ -53,6 +54,7 @@ jobs:
           "$RUNNER_TEMP/hooklink-py/bin/python" -m pip install --disable-pip-version-check requests google-auth google-api-python-client
           "$RUNNER_TEMP/hooklink-py/bin/python" scripts/hooklink2ios_fetch_source.py \
             --drive-file-id "$SOURCE_DRIVE_FILE_ID" --output "$RUNNER_TEMP/original-hooklink.ipa"
+          echo "$SOURCE_IPA_SHA256  $RUNNER_TEMP/original-hooklink.ipa" | shasum -a 256 -c -
       - name: Fetch exactly pinned old engine for compatible PSO descriptions
         shell: bash
         run: |
@@ -72,7 +74,7 @@ jobs:
             --engine "$RUNNER_TEMP/nxnative-old" \
             --work "$RUNNER_TEMP/hooklink-pso-work" \
             --output "$RUNNER_TEMP/hooklink-pso"
-      - name: Repack old game without recompiling shaders and embed only validated g18p PSO
+      - name: Repack with original ZIP compression, size under 4 GB, original shaders and verified g18p PSO
         shell: bash
         run: |
           set -euo pipefail
