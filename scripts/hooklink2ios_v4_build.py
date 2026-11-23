@@ -86,8 +86,7 @@ def release_verified_nup_after_extract(engine):
         + "        _hl4_nup.close()\n"
         + "        fam['nup'] = None\n"
         + "        _hl4_path.unlink()\n"
-        + "        say(f'HookLink2iOS 4.0: NUP extraído e liberado ({_hl4_path.name}); '
-"
+        + "        say(f'HookLink2iOS 4.0: NUP extraído e liberado ({_hl4_path.name}); '\n"
         + "            f'{shutil.disk_usage(work).free / 2**30:.1f} GiB livres para Metal')\n"
     )
     path.write_text(source.replace(NEW_AOC_ANCHOR, NEW_AOC_ANCHOR + extra), encoding="utf-8")
