@@ -87,7 +87,7 @@ class RepackTransferRegression(unittest.TestCase):
         selected_run["head_sha"] = module.DIAGNOSTIC_HEAD_SHA
         item = artifact(module.DIAGNOSTIC_RUN_ID,
                         name=module.DIAGNOSTIC_ARTIFACT_NAME,
-                        size=1622004549, sha=module.DIAGNOSTIC_HEAD_SHA)
+                        size=1622005189, sha=module.DIAGNOSTIC_HEAD_SHA)
         item["id"] = module.DIAGNOSTIC_ARTIFACT_ID
         def api(path, params=None):
             if path == f"/actions/runs/{module.DIAGNOSTIC_RUN_ID}":
@@ -111,11 +111,11 @@ class RepackTransferRegression(unittest.TestCase):
 
     def test_diagnostic_main_does_not_use_automatic_fallback(self):
         with patch.object(module, "transfer_latest_successful_ipa",
-                          return_value={"run_id": 45091521018,
+                          return_value={"run_id": 45095021613,
                                         "diagnostic_only": True}) as fn:
-            self.assertEqual(module.main(diagnostic_run_id=45091521018)["run_id"],
-                             45091521018)
-            fn.assert_called_once_with(diagnostic_run_id=45091521018)
+            self.assertEqual(module.main(diagnostic_run_id=45095021613)["run_id"],
+                             45095021613)
+            fn.assert_called_once_with(diagnostic_run_id=45095021613)
 
     def test_notebook_loads_current_branch_and_no_old_function_assertion(self):
         notebook = json.loads(
@@ -127,9 +127,10 @@ class RepackTransferRegression(unittest.TestCase):
         self.assertIn('subprocess.run(["git", "-C", str(REPO), "fetch"', src)
         self.assertIn('subprocess.run(["git", "-C", str(REPO), "reset"', src)
         self.assertIn('callable(transfer_latest.select_diagnostic_ipa_artifact)', src)
-        self.assertIn('RESULTADO_IPA = transfer_latest.main(diagnostic_run_id=45091521018)', src)
-        self.assertIn('assert transfer_latest.DIAGNOSTIC_ARTIFACT_ID == 14781099857', src)
-        self.assertIn('assert transfer_latest.DIAGNOSTIC_HEAD_SHA == "f236f3025f5aaeb549e9ced281a63a078bd01728"', src)
+        self.assertIn('RESULTADO_IPA = transfer_latest.main(diagnostic_run_id=45095021613)', src)
+        self.assertIn('assert transfer_latest.DIAGNOSTIC_ARTIFACT_ID == 14783541081', src)
+        self.assertIn('last_64_original_reads_on_failure', (HERE / 'colab' / 'transfer_ipa.py').read_text())
+        self.assertIn('assert transfer_latest.DIAGNOSTIC_HEAD_SHA == "3bf5b2c7dc978976fb7c7d2b569389fcd5b4f77a"', src)
         self.assertNotIn("def try_transfer_g1t_header_rescue()", src)
         self.assertNotIn("45056917685", src)
 

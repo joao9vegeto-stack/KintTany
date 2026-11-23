@@ -29,10 +29,10 @@ WORKERS = 6
 
 # Explicit opt-in ONLY: immutable diagnostic run, artifact and source commit.
 # It has no gameplay proof and must remain excluded from auto-selection.
-DIAGNOSTIC_RUN_ID = 45091521018
-DIAGNOSTIC_ARTIFACT_ID = 14781099857
-DIAGNOSTIC_ARTIFACT_NAME = "Fairy2iOS-Diagnostic-KTGL-FDATA-4"
-DIAGNOSTIC_HEAD_SHA = "f236f3025f5aaeb549e9ced281a63a078bd01728"
+DIAGNOSTIC_RUN_ID = 45095021613
+DIAGNOSTIC_ARTIFACT_ID = 14783541081
+DIAGNOSTIC_ARTIFACT_NAME = "Fairy2iOS-Diagnostic-KTGL-FDATA-6"
+DIAGNOSTIC_HEAD_SHA = "3bf5b2c7dc978976fb7c7d2b569389fcd5b4f77a"
 DIAGNOSTIC_WORKFLOW_NAME = (
     "Fairy2iOS - read-only G1T FDATA/validator transaction capture "
     "(NO GAMEPLAY CLAIM)"
@@ -1343,7 +1343,7 @@ def select_diagnostic_ipa_artifact(github_get, run_id=DIAGNOSTIC_RUN_ID):
     """Explicit FDATA/G1T diagnostic only; no latest/old-crashing fallback."""
     rid = int(run_id)
     require(rid == DIAGNOSTIC_RUN_ID,
-            "Só o run diagnóstico 45091521018 pode usar esta seleção")
+            "Só o run diagnóstico 45095021613 pode usar esta seleção")
     reject_confirmed_device_crash(rid)
     reject_user_rejected_unverified(rid)
     run = github_get(f"/actions/runs/{rid}")
@@ -1365,7 +1365,7 @@ def select_diagnostic_ipa_artifact(github_get, run_id=DIAGNOSTIC_RUN_ID):
                and int((a.get("workflow_run") or {}).get("id") or 0) == rid
                and (a.get("workflow_run") or {}).get("head_sha") == DIAGNOSTIC_HEAD_SHA]
     require(len(choices) == 1,
-            "Artefato diagnóstico 14781099857 ausente, expirado ou sem proveniência")
+            "Artefato diagnóstico 14783541081 ausente, expirado ou sem proveniência")
     return run, choices[0], []
 
 
@@ -1492,6 +1492,10 @@ def transfer_latest_successful_ipa(diagnostic_run_id=None):
                     report.get("file_read_behavior_unchanged") is True and
                     report.get("no_shader_compile") is True and
                     report.get("original_adapter_load_emulated") is True and
+                    report.get("original_bounded_sub_emulated") is True and
+                    report.get("real_x3_requested_bytes") is True and
+                    report.get("original_bounded_read_return_observed") is True and
+                    report.get("last_64_original_reads_on_failure") is True and
                     report.get("source_packet_137_byte_guest_integrity_probed") is True and
                     report.get("backing_virtual_dispatch_probed") is True and
                     report.get("guest_read_return_forged") is False and
