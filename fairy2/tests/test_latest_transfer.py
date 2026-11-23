@@ -62,15 +62,23 @@ class RepackTransferRegression(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Nenhuma IPA candidata"):
             module.select_latest_successful_ipa_artifact(api)
 
-    def test_main_invokes_dynamic_selector_only(self):
+    def test_old_notebook_main_no_args_now_pins_diagnostic_run(self):
+        # Already-open Colab cells call main() with no args; they must not
+        # auto-fallback to the old KTGL-3250MiB IPA with inconsistent reports.
         with patch.object(module, "transfer_latest_successful_ipa",
-                          return_value={"run_id": 999990001}) as new, \
+                          return_value={"run_id": module.DIAGNOSTIC_RUN_ID}) as fn, \
              patch.object(module, "try_transfer_g1s_reader_trace",
                           side_effect=AssertionError("pinned old run")), \
              patch.object(module, "transfer_original_explicit",
                           side_effect=AssertionError("crashing original IPA")):
-            self.assertEqual(module.main()["run_id"], 999990001)
-            new.assert_called_once_with()
+            self.assertEqual(module.main()["run_id"], module.DIAGNOSTIC_RUN_ID)
+            fn.assert_called_once_with(diagnostic_run_id=module.DIAGNOSTIC_RUN_ID)
+
+    def test_explicit_auto_selector_is_still_available_but_not_default(self):
+        with patch.object(module, "transfer_latest_successful_ipa",
+                          return_value={"run_id": 999990001}) as fn:
+            self.assertEqual(module.main(diagnostic_run_id=None)["run_id"], 999990001)
+            fn.assert_called_once_with()
 
 
     def test_exact_diagnostic_selector_rejects_stale_or_wrong_artifact(self):

@@ -1584,8 +1584,14 @@ def transfer_latest_successful_ipa(diagnostic_run_id=None):
           flush=True)
     return provenance
 
-def main(diagnostic_run_id=None):
-    """Use a pinned diagnostic IPA only if requested explicitly."""
+def main(diagnostic_run_id=DIAGNOSTIC_RUN_ID):
+    """Default to the exact diagnostic IPA even from an already-open old notebook.
+
+    Older Colab copies still call main() without an argument after cloning HEAD.
+    Until Fairy2iOS has any device-validated gameplay build, do NOT silently
+    select an older artifact from the generic success feed. Pass None only for
+    an intentional explicit legacy-selection audit; never in this notebook.
+    """
     if diagnostic_run_id is not None:
         return transfer_latest_successful_ipa(diagnostic_run_id=diagnostic_run_id)
     return transfer_latest_successful_ipa()
