@@ -15,7 +15,7 @@
   "diagnostic_only": true,
   "no_synthetic_assets": true,
   "no_reader_codec_BRK": true,
-  "device_last_crash_run": 45083487666,
+  "device_last_crash_run": 45087848103,
   "resource_g1t_hash": "0xfb9ebd24",
   "resource_g1t_type": "0xafbec60c",
   "source_fdata_entry": 12943,
@@ -24,8 +24,12 @@
   "trace_original_G1T_branch": "main+0x612120",
   "no_native_reader_retry": true,
   "not_a_gameplay_fix": true,
-  "request": "Capture actual FDATA ReadFile requests and G1T validator failure in guest; prove source delivery before attempting any engine changes.",
-  "revision": 2,
+  "request": "Global paired source-to-reader audit: exact 137 byte FDATA IDRK snapshot, guest persistence at failing G1T, original virtual backing reader dispatch, no fake resources or modified read results.",
+  "revision": 3,
   "previous_failed_run": 45087739395,
-  "retrigger_reason": "first run blocked at isolated preflight fixture lacking G1T helper source; fixed use source-relative helper path, no change to guest code or host trace logic"
+  "retrigger_reason": "iPhone log 2026-11-22: 45/45 full FDATA reads, G1T validator w0=0 PSTATE.Z=1; FDATA byte 0x2fe179 exactly ends validated G1T record. Add one paired reader-dispatch probe; no shader compilation.",
+  "adapter_original_opcode": "000840f9",
+  "adapter_read_probe": "main+0xc09728",
+  "fdata_packet_end": 3137913,
+  "shaders_reused": 19210
 }

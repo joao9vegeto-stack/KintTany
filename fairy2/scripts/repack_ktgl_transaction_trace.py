@@ -16,7 +16,13 @@ import repack_ktgl_coherent_config as coherent
 
 base=coherent.base
 SOURCE_G1T=0x612120
-SOURCE_OPCODE=bytes.fromhex("a0050054")  # original B.EQ main+0x6121d4
+SOURCE_OPCODE=bytes.fromhex("a0050054")
+SOURCE_ADAPTER=0xc09728
+SOURCE_ADAPTER_OPCODE=bytes.fromhex("000840f9")  # original ldr x0,[x0,#0x10]
+FDATA_PACKET_OFFSET=3137776
+FDATA_PACKET_SIZE=137
+FDATA_PACKET_END=FDATA_PACKET_OFFSET+FDATA_PACKET_SIZE
+assert FDATA_PACKET_END == 0x2fe179  # original B.EQ main+0x6121d4
 BREAK=bytes.fromhex("40403ed4")
 G1T_FDATA_IMG_ENTRY=12943
 G1T_FDATA_RECORD_OFFSET=3137776
@@ -32,20 +38,33 @@ def patch_guest(exe:Path,source_report:dict):
     x0=parts["x0"]
     base.require(raw[SOURCE_G1T:SOURCE_G1T+4]==SOURCE_OPCODE,
                  "the actual v458752 G1T original B.EQ differs")
+    base.require(raw[SOURCE_ADAPTER:SOURCE_ADAPTER+4]==SOURCE_ADAPTER_OPCODE,
+                 "real v458752 stream adapter ldr differs")
     with exe.open("r+b") as f:
         f.seek(x0["offset"]+SOURCE_G1T)
         base.require(f.read(4)==SOURCE_OPCODE,"G1T branch changed unexpectedly")
         f.seek(x0["offset"]+SOURCE_G1T)
         f.write(BREAK)
+        f.seek(x0["offset"]+SOURCE_ADAPTER)
+        base.require(f.read(4)==SOURCE_ADAPTER_OPCODE,
+                     "stream adapter changed before guest patch")
+        f.seek(x0["offset"]+SOURCE_ADAPTER)
+        f.write(BREAK)
     p,a=base.main_sections(exe)
     check=bytearray(raw)
     check[SOURCE_G1T:SOURCE_G1T+4]=BREAK
+    check[SOURCE_ADAPTER:SOURCE_ADAPTER+4]=BREAK
     base.require(a==bytes(check),"unlisted guest code mutation")
     base.require(p["w"]["data"]==parts["w"]["data"] and
                  p["x1"]["data"]==parts["x1"]["data"],
                  "G1T diagnostic must not change game data or root trampolins")
     record["after_sha256"]=hashlib.sha256(a).hexdigest()
     record["x0_after_sha256"]=hashlib.sha256(p["x0"]["data"]).hexdigest()
+    record["one_exact_emulated_original_adapter_load"]={
+       "site":"main+0xc09728","original":SOURCE_ADAPTER_OPCODE.hex(),
+       "trap":BREAK.hex(),"emulated_load":"x0=*(uint64_t *)(x0+0x10)",
+       "resume":"main+0xc0972c","no_read_result_override":True,
+    }
     record["one_exact_emulated_original_branch"]={
       "site":"main+0x612120","original":SOURCE_OPCODE.hex(),
       "trap":BREAK.hex(),"if_Z":"main+0x6121d4",
@@ -58,12 +77,25 @@ def verify_guest(exe:Path,record:dict):
     _,raw=base.main_sections(exe)
     base.require(raw[SOURCE_G1T:SOURCE_G1T+4]==BREAK,
                  "G1T diagnostic branch is not protected by signal")
+    base.require(raw[SOURCE_ADAPTER:SOURCE_ADAPTER+4]==BREAK,
+                 "stream adapter diagnostic load has no signal handler")
+    base.require(record["one_exact_emulated_original_adapter_load"]
+                 ["no_read_result_override"],"guest backing stream semantics changed")
     base.require(record["one_exact_emulated_original_branch"]
                  ["no_branch_result_override"],"G1T parser semantics changed")
 
 def patch_host(repo:Path):
     fs=repo/"engine/dm/host/hle_fs.c"
     code=fs.read_text()
+    include_anchor='#include "save_sync.h"'
+    base.require(code.count(include_anchor)==1,
+                 "pinned fs include changed")
+    globals_src = """
+/* FAIRY2_G1T_SOURCE_PACKET: read-only proof of complete 137 B original IDRK */
+unsigned char fairy2_g1t_original_fdata_packet[137];
+unsigned long long fairy2_g1t_original_fdata_guest_address;
+"""
+    code=code.replace(include_anchor,include_anchor+"\n"+globals_src,1)
     anchor="    size_t got = 0; int reprep = 0, fd = (int)h; int64_t base = 0;"
     exit_anchor="    *out = got;\n    if (g_fslog)"
     assert code.count(anchor)==1 and code.count(exit_anchor)==1
@@ -78,6 +110,21 @@ def patch_host(repo:Path):
       "    size_t f2_original_wanted=sz;\n"
     )
     suffix=(
+      "    if (f2_watch && f2_key==12943 && f2_original_offset>=0 && got &&\n"
+      "        (uint64_t)f2_original_offset <= 3137776ull &&\n"
+      "        (uint64_t)f2_original_offset + got >= 3137913ull) {\n"
+      "        size_t delta=(size_t)(3137776ull-(uint64_t)f2_original_offset);\n"
+      "        const uint8_t *packet=(const uint8_t *)buf+delta;\n"
+      "        uint32_t filehash=0,typehash=0;\n"
+      "        memcpy(&filehash,packet+36,4); memcpy(&typehash,packet+40,4);\n"
+      "        if (!memcmp(packet,\"IDRK0000\",8) &&\n"
+      "            filehash==0xfb9ebd24u && typehash==0xafbec60cu) {\n"
+      "            memcpy(fairy2_g1t_original_fdata_packet,packet,137);\n"
+      "            __atomic_store_n(&fairy2_g1t_original_fdata_guest_address,\n"
+      "                (unsigned long long)(uintptr_t)packet,__ATOMIC_RELEASE);\n"
+      "            LOG(\"FAIRY2_G1T_SOURCE_PACKET original IDRK+zlib guest=%p len=137 end=0x2fe179\",packet);\n"
+      "        } else LOG(\"FAIRY2_G1T_SOURCE_PACKET identity-mismatch file=%#x type=%#x\",filehash,typehash);\n"
+      "    }\n"
       "    if (f2_watch && f2_seq<=256) {\n"
       "        uint64_t words[2]={0};\n"
       "        if (got) memcpy(words,buf,got<sizeof words?got:sizeof words);\n"
@@ -101,9 +148,11 @@ def patch_host(repo:Path):
     anchor="static void on_crash(int sig, siginfo_t *si, void *uc_) {\n    ucontext_t *uc = uc_;"
     base.require(host.count(anchor)==1 and "FAIRY2_KTGL_TRANSACTION_TRACE_ONLY" not in host,
                  "pinned native signal hook source changed")
-    base.require("PSTATE.Z" in addon and "0x6121d4u:0x612124u" in addon,
-                 "native trace must preserve exact ARM64 B.EQ outcome")
+    base.require("PSTATE.Z" in addon and "0x6121d4u:0x612124u" in addon and
+                 "f2_adapter_original_load" in addon,
+                 "native trace must preserve exact B.EQ and stream adapter load")
     host=host.replace(anchor,addon+"\n"+anchor+
+        "\n    if (sig == SIGTRAP && f2_adapter_original_load(uc)) return;"
         "\n    if (sig == SIGTRAP && f2_g1t_validator_branch(uc)) return;",1)
     crash.write_text(host)
 
@@ -129,6 +178,11 @@ def make(source:Path,source_report:Path,repo:Path,out:Path):
        "gameplay_verified":False,"repair_claimed":False,
        "no_shader_compile":True,"game_data_unchanged":True,
        "original_reader_unchanged":True,"file_read_behavior_unchanged":True,
+       "original_adapter_load_emulated":True,
+       "source_packet_137_byte_guest_integrity_probed":True,
+       "backing_virtual_dispatch_probed":True,
+       "source_packet_end_exact":"0x2fe179",
+       "guest_read_return_forged":False,
        "original_G1T_branch_result_unchanged":True,
        "not_for_auto_transfer":True,
     })
