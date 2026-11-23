@@ -10,5 +10,8 @@
   "device_live_137_byte_same": false,
   "question": "What exact original ARM64 code implements KTGL buffered resource reader and 0-return when guest G1T is rejected? Disassemble before changing code; do not guess.",
   "no_game_build": true,
-  "no_shader_build": true
+  "no_shader_build": true,
+  "revision": 2,
+  "previous_diagnostic_run": 45093730337,
+  "retrigger_reason": "Fix read-only Mach-O parser's NUL terminator and JSON report newline before disassembly; no runtime code or game asset change."
 }

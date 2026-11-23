@@ -52,12 +52,12 @@ def get_sections(data:bytes):
         insist(size>=8 and off+size<=len(data),"bad Mach-O command")
         if cmd==0x19:
             insist(size>=72,"bad LC_SEGMENT_64")
-            segname=data[off+8:off+24].split(b"\\0",1)[0].decode("ascii","replace")
+            segname=data[off+8:off+24].split(b"\0",1)[0].decode("ascii","replace")
             count=struct.unpack_from("<I",data,off+64)[0]
             insist(size>=72+80*count,"truncated section list")
             for i in range(count):
                 at=off+72+i*80
-                sect=data[at:at+16].split(b"\\0",1)[0].decode("ascii","replace")
+                sect=data[at:at+16].split(b"\0",1)[0].decode("ascii","replace")
                 disk_size=struct.unpack_from("<Q",data,at+40)[0]
                 disk_off=struct.unpack_from("<I",data,at+48)[0]
                 if disk_size and disk_off:
@@ -112,13 +112,13 @@ def main():
     opts=arg.parse_args()
     report=audit(opts.ipa,opts.expected_sha)
     opts.out.parent.mkdir(parents=True,exist_ok=True)
-    opts.out.write_text(json.dumps(report,indent=2)+"\\n")
+    opts.out.write_text(json.dumps(report,indent=2)+"\n")
     print("SOURCE IPA SHA256",report["ipa_sha256"])
     print("GUEST RX SHA256",report["guest_x0_sha256"])
     for reg in report["regions"]:
-        print("\\n=== KTGL FUNCTION",reg["name"],reg["start"],reg["end"],
+        print("\n=== KTGL FUNCTION",reg["name"],reg["start"],reg["end"],
               "instructions",reg["instructions"],"===")
         for instruction in reg["disasm"]:
             print(instruction["at"],instruction["hex"],instruction["op"])
-    print("\\nREAD ONLY, NO SHADERS, NO IPA BUILT")
+    print("\nREAD ONLY, NO SHADERS, NO IPA BUILT")
 if __name__=="__main__":main()
