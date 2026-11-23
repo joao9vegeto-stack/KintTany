@@ -1,0 +1,54 @@
+name: Fairy2iOS - exact signed KTGL reader ARM64 source analysis (NO IPA)
+on:
+  push:
+    branches: [Fairy2iOS]
+    paths: ['fairy2/reader_disasm_trigger.json']
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: fairy2-ktgl-reader-arm64-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pin guest executable and validate local analyzer
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile fairy2/scripts/ktgl_reader_signed_disasm.py
+          python3 -m pip install --disable-pip-version-check --quiet 'capstone>=5,<6'
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          p=json.loads(Path("fairy2/reader_disasm_trigger.json").read_text())
+          assert p["source_run"]==44995690307
+          assert p["exact_signed_ipa_sha256"]=="b1792f9eb522de53b2b252e3a85229584831434999edda98f31c87c7c8c256cd"
+          assert p["no_game_build"] and p["no_shader_build"]
+          print("STRICT PIN and NO GAME REBUILD")
+          PY
+      - name: Fetch EXACT already-built iPhone crash source IPA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ipa"
+          gh run download 44995690307 -R joao9vegeto-stack/KintTany -n Fairy2iOS-KTGL-NoOverlap-1 -D "$RUNNER_TEMP/ipa"
+      - name: Disassemble source-matched buffered reader, G1T parser and mode4 stream only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 fairy2/scripts/ktgl_reader_signed_disasm.py \
+            --ipa "$RUNNER_TEMP/ipa/Fairy2iOS-FairyTail2-KTGL-2GiB-NoOverlap.ipa" \
+            --expected-sha b1792f9eb522de53b2b252e3a85229584831434999edda98f31c87c7c8c256cd \
+            --out "$RUNNER_TEMP/ktgl-reader-guest-signatures.json"
+      - name: Publish bounded reader-only static evidence (not a game or gameplay proof)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fairy2iOS-ReaderA64-Audit
+          path: ${{ runner.temp }}/ktgl-reader-guest-signatures.json
+          retention-days: 7
