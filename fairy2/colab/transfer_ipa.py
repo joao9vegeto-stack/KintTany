@@ -29,10 +29,10 @@ WORKERS = 6
 
 # Explicit opt-in ONLY: immutable diagnostic run, artifact and source commit.
 # It has no gameplay proof and must remain excluded from auto-selection.
-DIAGNOSTIC_RUN_ID = 45087848103
-DIAGNOSTIC_ARTIFACT_ID = 14780505681
-DIAGNOSTIC_ARTIFACT_NAME = "Fairy2iOS-Diagnostic-KTGL-FDATA-2"
-DIAGNOSTIC_HEAD_SHA = "add2d9b15e9e8fff91446674af7c10eb91e51342"
+DIAGNOSTIC_RUN_ID = 45091521018
+DIAGNOSTIC_ARTIFACT_ID = 14781099857
+DIAGNOSTIC_ARTIFACT_NAME = "Fairy2iOS-Diagnostic-KTGL-FDATA-4"
+DIAGNOSTIC_HEAD_SHA = "f236f3025f5aaeb549e9ced281a63a078bd01728"
 DIAGNOSTIC_WORKFLOW_NAME = (
     "Fairy2iOS - read-only G1T FDATA/validator transaction capture "
     "(NO GAMEPLAY CLAIM)"
@@ -1343,7 +1343,7 @@ def select_diagnostic_ipa_artifact(github_get, run_id=DIAGNOSTIC_RUN_ID):
     """Explicit FDATA/G1T diagnostic only; no latest/old-crashing fallback."""
     rid = int(run_id)
     require(rid == DIAGNOSTIC_RUN_ID,
-            "Só o run diagnóstico 45087848103 pode usar esta seleção")
+            "Só o run diagnóstico 45091521018 pode usar esta seleção")
     reject_confirmed_device_crash(rid)
     reject_user_rejected_unverified(rid)
     run = github_get(f"/actions/runs/{rid}")
@@ -1365,7 +1365,7 @@ def select_diagnostic_ipa_artifact(github_get, run_id=DIAGNOSTIC_RUN_ID):
                and int((a.get("workflow_run") or {}).get("id") or 0) == rid
                and (a.get("workflow_run") or {}).get("head_sha") == DIAGNOSTIC_HEAD_SHA]
     require(len(choices) == 1,
-            "Artefato diagnóstico 14780505681 ausente, expirado ou sem proveniência")
+            "Artefato diagnóstico 14781099857 ausente, expirado ou sem proveniência")
     return run, choices[0], []
 
 
@@ -1491,6 +1491,10 @@ def transfer_latest_successful_ipa(diagnostic_run_id=None):
                     report.get("original_G1T_branch_result_unchanged") is True and
                     report.get("file_read_behavior_unchanged") is True and
                     report.get("no_shader_compile") is True and
+                    report.get("original_adapter_load_emulated") is True and
+                    report.get("source_packet_137_byte_guest_integrity_probed") is True and
+                    report.get("backing_virtual_dispatch_probed") is True and
+                    report.get("guest_read_return_forged") is False and
                     report.get("source_fdata_entry") == 12943 and
                     report.get("g1t_original_branch_emulated") == "main+0x612120",
                     "Relatório divergente do diagnóstico original FDATA/G1T")
