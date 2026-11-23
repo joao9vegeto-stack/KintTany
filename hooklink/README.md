@@ -1,30 +1,15 @@
-# HookLink2iOS — recursos do port
+# HookLink2iOS resources — HookLink 4.0 (X3)
 
-Esta pasta contém os recursos do perfil HookLink usados pelo port nativo iOS de **The Legend of Zelda: Ocarina of Time — Nintendo Switch 2 Edition**. O fluxo de compilação, o Drive e o Actions estão descritos no [README principal](../README.md).
+This folder contains the native iOS resources for Ocarina of Time Switch 2, update v131072.
 
-## Perfil de destino
+**Verified official pins:** HookLink 4.0 `b5c41acf469edb99abc5156f1f6f18397261f54a`, nxnative `ee3ce6a02bc737d38795f0a96cce494cee7a799c`, Metal shader chain `b6112b954691`.
 
-- Title ID: \`0400486024DEC000\`
-- Versão do pacote: \`v131072\`
-- Engine: nxnative, commit \`cf2a2fecc6ce3fb841131ffeffa90915cdadf109\`
-- Deployment target: **iOS 26.0**
-- Toolchain: Xcode 27.2 no runner \`xcode-27\`
-- GPU: \`none\` — sem PSO offline; bibliotecas Metal iOS continuam obrigatórias
-- RomFS: externo à IPA (\`--romfs separate\`)
+- `Resources/engine.json`: matching upstream engine version; NOT the legacy 1.8.5 code.
+- `Resources/presets/iphone.env`: X3-compatible runtime settings. QoS/dynamic resolution/thermal limits are **launcher defaults** defined in the X3 builder, not locked in env.txt.
+- `Resources/presets/entitlements.plist`: ad-hoc signed increased-memory entitlement.
+- `Resources/tools/hl_resolution.py`: resolution overlay generator; original previously verified overlay reused.
+- `scripts/push_romfs.sh`: external RomFS installation helper.
 
-## Pipeline
+Source games, keys, RomFS and converted shaders are not committed to Git. The NUP is read by the macOS full rebuild pipeline from the user's verified private Drive handoff and authenticated/hashed before extraction. iOS target: 26.0; runner xcode-27; offline PSO: none; 42,848 game shader map entries need the **new** X3 translator and fresh Metal libraries. Build output alone is not proof of runtime stability.
 
-A preparação Colab/Linux reproduz as etapas usadas pelo Link2iOS: extração do NUP, rewrite dos módulos AArch64, separação dos shaders NVN e criação do workspace tar.zst. O Actions restaura esse workspace, compila as bibliotecas Metal iOS e executa a finalização simplificada do HookLink/nxnative por \`dm/ios/tools/build_ipa.sh\`. Não baixa o NUP bruto nem refaz as etapas Linux. Não usa Shared Shell/Route C.
-
-## Conteúdo
-
-- \`Resources/tools/hl_resolution.py\`: gera o overlay de resolução a partir do RomFS e do perfil HookLink.
-- \`Resources/presets/iphone.env\`: variáveis de ambiente do alvo iOS.
-- \`Resources/presets/entitlements.plist\`: entitlements usados na assinatura ad-hoc.
-- \`Resources/engine.json\`: metadados do snapshot de engine utilizado.
-- \`scripts/push_romfs.sh\`: utilitário de envio do RomFS/overlay ao container do aplicativo em um dispositivo conectado a um Mac.
-- \`LICENSE-HookLink\` e \`LICENSE-nxnative\`: licenças dos componentes upstream.
-
-## Regra de distribuição dos dados
-
-NUP, RomFS, IPA e recursos derivados do jogo não devem ser adicionados ao Git. O NUP fica no cache privado do Google Drive e é usado na preparação do Colab. O workspace preparado, RomFS e overlay são transferidos ao Actions para compilação; RomFS e overlay permanecem externos à IPA. No iPhone, os dados devem ficar em \`Documents/romfs.img\` e \`Documents/res_overlay/Pack/Bootup.Nin_Ounce_NVN2.pack.zs\` dentro do container de dados do app.
+See [the complete X3 migration report](../docs/HOOKLINK2IOS-V4-MIGRATION.md). The old 1.8.5 runtime can still be examined using [the historical native relink report](../docs/HOOKLINK2IOS-NATIVE-X3-SELECTIVE-PORT.md); it is not the same as the native 4.0 upgrade.

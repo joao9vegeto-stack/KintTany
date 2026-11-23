@@ -1,4 +1,23 @@
-# HookLink2iOS — The Legend of Zelda: Ocarina of Time
+# HookLink2iOS — Ocarina of Time Switch 2 → iOS 26
+
+## Current migration: HookLink 4.0 / X3 (2026-11-23)
+
+The **current production target is HookLink 4.0**, upstream `dsi-hub/HookLink@b5c41acf`, with the **original matching nxnative X3** `ee3ce6a02bc737d38795f0a96cce494cee7a799c`, shader chain `b6112b954691`.
+
+- [Actual X3 build workflow](.github/workflows/hooklink2ios-v4.yml): complete shader retranslation, Metal for iPhone, native host, IPA; exactly pinned upstream ABI.
+- [V4 build shim](scripts/hooklink2ios_v4_build.py): reuses only NUP/Drive identity from the earlier verified handoff, never the old shader image.
+- [V4 migration audit](docs/HOOKLINK2IOS-V4-MIGRATION.md): source, ROMFS, new shader cache, controls and exact limits.
+- [Source/transfer helper notebook](colab/HookLink2iOS_IPA_Chunks.ipynb): transfers checked IPA artifacts after Actions success; **do not confuse an old artifact with v4**.
+- **RomFS external**; iOS 26.0, Xcode 27.2, GPU none (no offline PSO), 30 / 30+FG / 60 modes selectable. No change to user's verified NUP or external RomFS.
+- **New features come from genuine upstream runtime**, including texture mip saver, pool retirement and full NDSR, not from the incomplete 1.8.5 selective patch. These are not guaranteed to resolve the 3D-black problem until device verification.
+- The HookLink Mac desktop launcher (SwiftUI) is **not** automatically transplanted to the iOS launcher's interface. The upstream native iOS settings are built from nxnative's own `dm/games/settings.tsv`.
+
+Build process note: the initial v4 migration builds from the NUP on macOS because the current prepared workspace predates the new shader chain. Offloading the Linux-heavy stages to Colab requires re-preparing the workspace under X3; the old one cannot be reused.
+
+## Historical 1.8.5 documentation — reference only
+
+The instructions below describe the **older** `cf2a2fecc6ce` route. Do not use them as provenance for a HookLink 4.0 IPA.
+
 
 Port nativo para iOS de **The Legend of Zelda: Ocarina of Time — Nintendo Switch 2 Edition**, usando a estrutura nxnative do HookLink. Todo o trabalho desta implementação fica isolado na branch \`HookLink2iOS\`.
 

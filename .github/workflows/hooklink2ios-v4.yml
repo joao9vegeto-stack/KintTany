@@ -7,6 +7,8 @@ on:
       - .github/workflows/hooklink2ios-v4.yml
       - scripts/hooklink2ios_v4_build.py
       - tests/test_hooklink2ios_v4_build.py
+      - hooklink/Resources/engine.json
+      - hooklink/Resources/presets/iphone.env
   workflow_dispatch:
 
 permissions:
