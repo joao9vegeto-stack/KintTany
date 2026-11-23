@@ -140,7 +140,7 @@ class RepackTransferRegression(unittest.TestCase):
         selected["head_sha"]=module.AUTHENTIC_HEAD_SHA
         item = artifact(module.AUTHENTIC_RUN_ID,
                         name=module.AUTHENTIC_ARTIFACT_NAME,
-                        size=1622016632, sha=module.AUTHENTIC_HEAD_SHA)
+                        size=1622016504, sha=module.AUTHENTIC_HEAD_SHA)
         item["id"]=module.AUTHENTIC_ARTIFACT_ID
         def api(path,params=None):
             if path==f"/actions/runs/{module.AUTHENTIC_RUN_ID}":
@@ -148,20 +148,23 @@ class RepackTransferRegression(unittest.TestCase):
             if path==f"/actions/runs/{module.AUTHENTIC_RUN_ID}/artifacts":
                 return {"artifacts":[item]}
             raise AssertionError("No fallback to other IPA "+path)
-        with self.assertRaisesRegex(RuntimeError,"CRASH CONFIRMADO"):
-            module.select_authentic_source_candidate_artifact(api)
+        got,matched,skipped=module.select_authentic_source_candidate_artifact(api)
+        self.assertEqual(got["id"],module.AUTHENTIC_RUN_ID)
+        self.assertEqual(matched["id"],module.AUTHENTIC_ARTIFACT_ID)
+        self.assertEqual(skipped,[])
+        self.assertIn(45100431103,module.DEVICE_CRASH_RUNS)
         with self.assertRaisesRegex(RuntimeError,"só pode selecionar"):
-            module.select_authentic_source_candidate_artifact(api,45095021613)
+            module.select_authentic_source_candidate_artifact(api,45100431103)
         with patch.object(module,"transfer_latest_successful_ipa",
-                          side_effect=RuntimeError("CRASH CONFIRMADO")) as fn:
-            with self.assertRaisesRegex(RuntimeError,"CRASH CONFIRMADO"):
-                module.transfer_authentic_source_candidate()
-            fn.assert_called_once_with(candidate_run_id=45100431103)
+                          return_value={"run_id":45177345329}) as fn:
+            self.assertEqual(module.transfer_authentic_source_candidate()["run_id"],
+                             45177345329)
+            fn.assert_called_once_with(candidate_run_id=45177345329)
 
     def test_notebook_cell9_pins_repair_and_no_diagnostic_fallback(self):
         nb=json.loads((ROOT/"colab/Fairy2iOS_FairyTail2.ipynb").read_text())
         cells=[c for c in nb["cells"] if c["cell_type"]=="code"
-             and "transfer_authentic_source_candidate(candidate_run_id=" in
+             and "transfer_authentic_source_candidate(candidate_run_id=45100431103)" in
                  "".join(c["source"])]
         self.assertEqual(len(cells),1)
         src="".join(cells[0]["source"])
@@ -172,6 +175,24 @@ class RepackTransferRegression(unittest.TestCase):
         self.assertIn('raise RuntimeError("NÃO EXECUTAR: run 45100431103',src)
         self.assertNotIn("main(diagnostic_run_id=",src)
         self.assertNotIn("result\":[\"diagnostic_only\"] is True",src)
+
+    def test_cell10_pins_abi_corrected_candidate_and_retains_old_quarantine(self):
+        nb=json.loads((ROOT/"colab/Fairy2iOS_FairyTail2.ipynb").read_text())
+        cells=[c for c in nb["cells"] if c["cell_type"]=="code"
+             and "transfer_authentic_source_candidate(candidate_run_id=45177345329)" in
+                 "".join(c["source"])]
+        self.assertEqual(len(cells),1)
+        src="".join(cells[0]["source"])
+        self.assertNotIn("raise RuntimeError",src)
+        self.assertIn('subprocess.run(["git", "-C", str(REPO), "reset"',src)
+        self.assertIn("AUTHENTIC_RUN_ID == 45177345329",src)
+        self.assertIn("AUTHENTIC_ARTIFACT_ID == 14819613952",src)
+        self.assertIn('AUTHENTIC_ARTIFACT_NAME == "Fairy2iOS-KTGL-ABI-and-Producer-Candidate-4"',src)
+        self.assertIn('AUTHENTIC_HEAD_SHA == "b2aa579a22ca2e24889d0d6e1ab0b74ff3ee10ea"',src)
+        self.assertIn("original_source_repair_candidate",src)
+        self.assertNotIn("main(diagnostic_run_id=",src)
+        self.assertIn(45100431103,module.DEVICE_CRASH_RUNS)
+        self.assertTrue(callable(module.select_authentic_source_candidate_artifact))
 
 
 if __name__ == "__main__":

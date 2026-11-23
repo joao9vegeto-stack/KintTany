@@ -40,11 +40,11 @@ DIAGNOSTIC_WORKFLOW_NAME = (
 
 # New SOURCE-RECOVERY CANDIDATE: immutable successful source commit and artifact.
 # Not gameplay certified; explicitly opt in with transfer_authentic_source_candidate.
-AUTHENTIC_RUN_ID = 45100431103
-AUTHENTIC_ARTIFACT_ID = 14784783270
-AUTHENTIC_ARTIFACT_NAME = "Fairy2iOS-Original-G1T-G1S-Source-Candidate-2"
-AUTHENTIC_HEAD_SHA = "9298fe8eb3a26159538b4d456007f96b83c11ebe"
-AUTHENTIC_WORKFLOW_NAME = "Fairy2iOS - original SHA-verified G1T/G1S native source repair (NO SHADERS)"
+AUTHENTIC_RUN_ID = 45177345329
+AUTHENTIC_ARTIFACT_ID = 14819613952
+AUTHENTIC_ARTIFACT_NAME = "Fairy2iOS-KTGL-ABI-and-Producer-Candidate-4"
+AUTHENTIC_HEAD_SHA = "b2aa579a22ca2e24889d0d6e1ab0b74ff3ee10ea"
+AUTHENTIC_WORKFLOW_NAME = "Fairy2iOS - corrected KTGL read ABI and original producer return trace (NO SHADERS)"
 
 # Quarantined by actual A19 Pro crash log, not by CI build status.
 DEVICE_CRASH_RUNS = frozenset({44990224107, 44992666178, 44995690307, 45000495987, 45046524330, 45050364099, 45056917685, 45064035915, 45075542017, 45078767146, 45083487666, 45100431103})
@@ -1381,7 +1381,7 @@ def select_authentic_source_candidate_artifact(github_get, run_id=AUTHENTIC_RUN_
     """Only the actual original FDATA G1T+G1S functional candidate, no fallback."""
     rid=int(run_id)
     require(rid==AUTHENTIC_RUN_ID,
-            "Reparo G1T/G1S só pode selecionar o run 45100431103")
+            "Reparo G1T/G1S só pode selecionar o run 45177345329")
     reject_confirmed_device_crash(rid)
     reject_user_rejected_unverified(rid)
     run=github_get(f"/actions/runs/{rid}")
@@ -1402,7 +1402,7 @@ def select_authentic_source_candidate_artifact(github_get, run_id=AUTHENTIC_RUN_
              int((a.get("workflow_run") or {}).get("id") or 0)==rid and
              (a.get("workflow_run") or {}).get("head_sha")==AUTHENTIC_HEAD_SHA]
     require(len(matches)==1,
-            "Artefato de reparo original 14784783270 ausente, expirado ou trocado")
+            "Artefato de reparo original 14819613952 ausente, expirado ou trocado")
     return run,matches[0],[]
 
 
@@ -1542,6 +1542,9 @@ def transfer_latest_successful_ipa(diagnostic_run_id=None, candidate_run_id=None
                     authentic_report.get("original_parser_preserved") is True and
                     authentic_report.get("original_source_bytes_used_on_failure") is True and
                     authentic_report.get("no_shader_compile") is True and
+                    authentic_report.get("signed_guest_producer_observed_without_changing_return") is True and
+                    authentic_report.get("original_mode4_return_site")=="main+0xc107d8" and
+                    authentic_report.get("original_direct_reader_source_reset_site")=="main+0xc11f54" and
                     authentic_report.get("gameplay_verified") is False and
                     authentic_report.get("authentic_source_g1t_sha256")==
                     "558ada8c563fe44fa18d894d01f39e8b1a230b26ad1bcd0782743797f815e494" and
