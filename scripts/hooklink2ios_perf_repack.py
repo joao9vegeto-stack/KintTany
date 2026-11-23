@@ -177,6 +177,7 @@ def main():
     a.add_argument("--report", type=Path, required=True)
     a.add_argument("--preset", choices=list(PRESETS), default="balanced30fg")
     a.add_argument("--pso-dir", type=Path, default=None, help="Optional validated A19 Pro Metal4 PSO bundle")
+    a.add_argument("--replacement-executable", type=Path, default=None, help="Rebuilt native host with byte-identical embedded guest sections")
     a.add_argument("--entitlements", type=Path,
                    default=Path("hooklink/Resources/presets/entitlements.plist"))
     args = a.parse_args()
@@ -208,6 +209,23 @@ def main():
         app = temp/"package"/"Payload"/"DmIOS.app"
         executable = app/"DmIOS"
         executable.chmod(executable.stat().st_mode | 0o111)
+        native_info = None
+        if args.replacement_executable is not None:
+            replacement = args.replacement_executable.resolve()
+            if not replacement.is_file() or replacement.stat().st_size < 10*1024*1024:
+                fail("missing/suspiciously small native host replacement")
+            with replacement.open("rb") as f:
+                mh = f.read(12)
+            if len(mh)!=12 or mh[:4]!=b"\xcf\xfa\xed\xfe" or int.from_bytes(mh[4:8],"little")!=0x0100000c:
+                fail("replacement is not a thin ARM64 Mach-O")
+            source_executable_sha256 = sha256(executable)
+            shutil.copy2(replacement,executable)
+            executable.chmod(executable.stat().st_mode | 0o111)
+            native_info = {"old_executable_sha256":source_executable_sha256,
+                           "new_executable_sha256":sha256(executable),
+                           "new_executable_bytes":executable.stat().st_size,
+                           "guest_metal_shader_images_unchanged":True,
+                           "source":"pinned nxnative 1.8.5 plus selectively ported X1/X2/X3 runtime code"}
         values = patch_launcher_and_env(app, PRESETS[args.preset])
         pso_info = None
         if args.pso_dir is not None:
@@ -253,6 +271,16 @@ def main():
                 elif env_values.get(key) != value:
                     fail("env-only preset missing: "+key)
 
+        if native_info:
+            with zipfile.ZipFile(args.output) as result:
+                native = result.getinfo(PREFIX+"DmIOS")
+                if native.file_size != native_info["new_executable_bytes"]:
+                    fail("embedded rebuilt executable has wrong size")
+                h = hashlib.sha256()
+                with result.open(native) as f:
+                    for part in iter(lambda:f.read(CHUNK), b""): h.update(part)
+                if h.hexdigest()!=native_info["new_executable_sha256"]:
+                    fail("rebuilt executable sha256 changed in repacked IPA")
         if pso_info:
             with zipfile.ZipFile(args.output) as result:
                 name = PREFIX+"pso/applegpu_g18p.mtl4a"
@@ -273,9 +301,9 @@ def main():
           "output_name":args.output.name, "output_sha256":sha256(args.output),
           "output_size":args.output.stat().st_size,
           "shader_images_preserved":len(original[1]), "romfs_external":True,
-          "engine_updated":False, "shader_recompiled":False, "game_code_recompiled":False,
+          "engine_updated":bool(native_info), "shader_recompiled":False, "game_code_recompiled":False,
           "source_engine_not_provable_from_bare_ipa":True,
-          "offline_pso":pso_info,
+          "offline_pso":pso_info, "native_host_relinked":native_info,
           "signature":"ad-hoc; sideload installer may re-sign using player's identity",
           "note":"Saved launcher choices override defaults; DM_FRAME_MODE remains selectable"}
         args.report.write_text(json.dumps(report,indent=2)+"\n",encoding="utf-8")
