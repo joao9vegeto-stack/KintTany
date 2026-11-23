@@ -47,7 +47,7 @@ class RealTransactionTest(unittest.TestCase):
             self.assertIn("f2_key==12943 || f2_key==13660",fs)
             self.assertIn("f2_seq<=256",fs)
             self.assertIn("*out = got;",fs)
-            self.assertIn("ssize_t",trace.base.__file__ if False else "ssize_t") # no fs code deletion
+            self.assertIn("if (g_fslog) { return; }",fs)  # original log path preserved
             self.assertEqual(fs.count("size_t got = 0; int reprep = 0"),1)
             self.assertIn("f2_g1t_validator_branch(uc)",crash)
             self.assertIn("g_trap_hook && g_trap_hook(uc)",crash)
