@@ -72,16 +72,54 @@ class RepackTransferRegression(unittest.TestCase):
             self.assertEqual(module.main()["run_id"], 999990001)
             new.assert_called_once_with()
 
+
+    def test_exact_diagnostic_selector_rejects_stale_or_wrong_artifact(self):
+        selected_run = run(module.DIAGNOSTIC_RUN_ID, "2026-11-23T00:17:01Z",
+                           name=module.DIAGNOSTIC_WORKFLOW_NAME)
+        selected_run["head_sha"] = module.DIAGNOSTIC_HEAD_SHA
+        item = artifact(module.DIAGNOSTIC_RUN_ID,
+                        name=module.DIAGNOSTIC_ARTIFACT_NAME,
+                        size=1621998260, sha=module.DIAGNOSTIC_HEAD_SHA)
+        item["id"] = module.DIAGNOSTIC_ARTIFACT_ID
+        def api(path, params=None):
+            if path == f"/actions/runs/{module.DIAGNOSTIC_RUN_ID}":
+                return selected_run
+            if path == f"/actions/runs/{module.DIAGNOSTIC_RUN_ID}/artifacts":
+                return {"artifacts": [item]}
+            raise AssertionError("Unexpected fallback " + path)
+        actual, found, skipped = module.select_diagnostic_ipa_artifact(api)
+        self.assertEqual(actual["id"], module.DIAGNOSTIC_RUN_ID)
+        self.assertEqual(found["id"], module.DIAGNOSTIC_ARTIFACT_ID)
+        self.assertEqual(skipped, [])
+        with self.assertRaisesRegex(RuntimeError, "Só o run diagnóstico"):
+            module.select_diagnostic_ipa_artifact(api, 45083487666)
+        wrong = dict(item, name="Fairy2iOS-Diagnostic-INVALID")
+        def bad_api(path, params=None):
+            if path.endswith("/artifacts"):
+                return {"artifacts": [wrong]}
+            return selected_run
+        with self.assertRaisesRegex(RuntimeError, "ausente, expirado"):
+            module.select_diagnostic_ipa_artifact(bad_api)
+
+    def test_diagnostic_main_does_not_use_automatic_fallback(self):
+        with patch.object(module, "transfer_latest_successful_ipa",
+                          return_value={"run_id": 45087848103,
+                                        "diagnostic_only": True}) as fn:
+            self.assertEqual(module.main(diagnostic_run_id=45087848103)["run_id"],
+                             45087848103)
+            fn.assert_called_once_with(diagnostic_run_id=45087848103)
+
     def test_notebook_loads_current_branch_and_no_old_function_assertion(self):
         notebook = json.loads(
             (ROOT / "colab" / "Fairy2iOS_FairyTail2.ipynb").read_text())
         cells = [c for c in notebook["cells"] if c["cell_type"] == "code" and
-                 "transfer_latest.main()" in "".join(c["source"])]
+                 "transfer_latest.main(diagnostic_run_id=" in "".join(c["source"])]
         self.assertEqual(len(cells), 1)
         src = "".join(cells[0]["source"])
         self.assertIn('subprocess.run(["git", "-C", str(REPO), "fetch"', src)
         self.assertIn('subprocess.run(["git", "-C", str(REPO), "reset"', src)
-        self.assertIn('callable(transfer_latest.select_latest_successful_ipa_artifact)', src)
+        self.assertIn('callable(transfer_latest.select_diagnostic_ipa_artifact)', src)
+        self.assertIn('RESULTADO_IPA = transfer_latest.main(diagnostic_run_id=45087848103)', src)
         self.assertNotIn("def try_transfer_g1t_header_rescue()", src)
         self.assertNotIn("45056917685", src)
 

@@ -27,6 +27,17 @@ DRIVE_GAME_FOLDER = "1QNa5LUK7Es-evrRIAjtUVzrhGUhENn5t"
 BLOCK = 64 * 1024 * 1024
 WORKERS = 6
 
+# Explicit opt-in ONLY: immutable diagnostic run, artifact and source commit.
+# It has no gameplay proof and must remain excluded from auto-selection.
+DIAGNOSTIC_RUN_ID = 45087848103
+DIAGNOSTIC_ARTIFACT_ID = 14780505681
+DIAGNOSTIC_ARTIFACT_NAME = "Fairy2iOS-Diagnostic-KTGL-FDATA-2"
+DIAGNOSTIC_HEAD_SHA = "add2d9b15e9e8fff91446674af7c10eb91e51342"
+DIAGNOSTIC_WORKFLOW_NAME = (
+    "Fairy2iOS - read-only G1T FDATA/validator transaction capture "
+    "(NO GAMEPLAY CLAIM)"
+)
+
 
 # Quarantined by actual A19 Pro crash log, not by CI build status.
 DEVICE_CRASH_RUNS = frozenset({44990224107, 44992666178, 44995690307, 45000495987, 45046524330, 45050364099, 45056917685, 45064035915, 45075542017, 45078767146, 45083487666})
@@ -1328,6 +1339,36 @@ def select_latest_successful_ipa_artifact(github_get, max_pages=10):
     )
 
 
+def select_diagnostic_ipa_artifact(github_get, run_id=DIAGNOSTIC_RUN_ID):
+    """Explicit FDATA/G1T diagnostic only; no latest/old-crashing fallback."""
+    rid = int(run_id)
+    require(rid == DIAGNOSTIC_RUN_ID,
+            "Só o run diagnóstico 45087848103 pode usar esta seleção")
+    reject_confirmed_device_crash(rid)
+    reject_user_rejected_unverified(rid)
+    run = github_get(f"/actions/runs/{rid}")
+    require(isinstance(run, dict) and
+            int(run.get("id") or 0) == rid and
+            run.get("head_branch") == BRANCH and
+            run.get("head_sha") == DIAGNOSTIC_HEAD_SHA and
+            run.get("name") == DIAGNOSTIC_WORKFLOW_NAME and
+            run.get("status") == "completed" and
+            run.get("conclusion") == "success",
+            "Run diagnóstico mudou de identidade ou não terminou com sucesso")
+    all_artifacts = github_get(f"/actions/runs/{rid}/artifacts",
+                               {"per_page": 100})
+    choices = [a for a in all_artifacts.get("artifacts", [])
+               if int(a.get("id") or 0) == DIAGNOSTIC_ARTIFACT_ID
+               and a.get("name") == DIAGNOSTIC_ARTIFACT_NAME
+               and not a.get("expired")
+               and int(a.get("size_in_bytes") or 0) > 100 * 1024 * 1024
+               and int((a.get("workflow_run") or {}).get("id") or 0) == rid
+               and (a.get("workflow_run") or {}).get("head_sha") == DIAGNOSTIC_HEAD_SHA]
+    require(len(choices) == 1,
+            "Artefato diagnóstico 14780505681 ausente, expirado ou sem proveniência")
+    return run, choices[0], []
+
+
 def verified_ipa_report(z, ipa_name):
     """Select the report linked to this exact IPA, not the first JSON in ZIP."""
     reports = []
@@ -1363,7 +1404,7 @@ def verified_ipa_report(z, ipa_name):
     return reports[0]
 
 
-def transfer_latest_successful_ipa():
+def transfer_latest_successful_ipa(diagnostic_run_id=None):
     """GitHub latest successful Fairy2iOS IPA -> Drive, cryptographically checked.
 
     This function never rebuilds shaders or a game. CI success is deliberately
@@ -1390,9 +1431,16 @@ def transfer_latest_successful_ipa():
                 f"{response.text[:240]}")
         return response.json()
 
-    print("[Fairy2iOS] 1/4: Buscando a última IPA válida em TODOS os workflows "
-          "bem-sucedidos da branch...", flush=True)
-    run, artifact, skipped = select_latest_successful_ipa_artifact(github_get)
+    diagnostic_only = diagnostic_run_id is not None
+    if diagnostic_only:
+        print("[Fairy2iOS] 1/4: IPA de DIAGNÓSTICO EXPLÍCITA; "
+              "sem fallback para builds anteriores.", flush=True)
+        run, artifact, skipped = select_diagnostic_ipa_artifact(
+            github_get, diagnostic_run_id)
+    else:
+        print("[Fairy2iOS] 1/4: Buscando última IPA candidata (sem diagnósticos)...",
+              flush=True)
+        run, artifact, skipped = select_latest_successful_ipa_artifact(github_get)
     rid = int(run["id"])
     reject_confirmed_device_crash(rid)
     reject_user_rejected_unverified(rid)
@@ -1434,6 +1482,18 @@ def transfer_latest_successful_ipa():
         require(len(ipa_files) == 1, "Artefato não possui exatamente uma IPA")
         ipa_name = Path(ipa_files[0]).name
         report_path, report = verified_ipa_report(z, ipa_name)
+        if diagnostic_only:
+            require(Path(report_path).name == "ktgl-transaction-trace-report.json" and
+                    report.get("not_for_auto_transfer") is True and
+                    report.get("gameplay_verified") is False and
+                    report.get("repair_claimed") is False and
+                    report.get("original_reader_unchanged") is True and
+                    report.get("original_G1T_branch_result_unchanged") is True and
+                    report.get("file_read_behavior_unchanged") is True and
+                    report.get("no_shader_compile") is True and
+                    report.get("source_fdata_entry") == 12943 and
+                    report.get("g1t_original_branch_emulated") == "main+0x612120",
+                    "Relatório divergente do diagnóstico original FDATA/G1T")
         expected_size = report.get("output_ipa_size_bytes", report.get("ipa_size_bytes"))
         expected_sha = report.get("output_ipa_sha256", report.get("ipa_sha256"))
         require(expected_size and int(expected_size) > 100 * 1024 * 1024,
@@ -1497,7 +1557,8 @@ def transfer_latest_successful_ipa():
               drive.files().create(body={"name": "ipa", "parents": [DRIVE_GAME_FOLDER],
                                          "mimeType": "application/vnd.google-apps.folder"},
                                    fields="id", supportsAllDrives=True).execute()["id"])
-    dest_name = f"Fairy2iOS-run{rid}-{ipa_name}"
+    dest_name = (f"Fairy2iOS-DIAGNOSTICO-run{rid}-{ipa_name}"
+                 if diagnostic_only else f"Fairy2iOS-run{rid}-{ipa_name}")
     uploaded = upload(drive, target, folder, dest_name)
     provenance = {
         "project": BRANCH, "title_id": TITLE_ID, "run_id": rid,
@@ -1508,7 +1569,9 @@ def transfer_latest_successful_ipa():
         "ipa_name": dest_name, "ipa_sha256": sha,
         "ipa_size": target.stat().st_size, "drive_file_id": uploaded["id"],
         "device_tested": False, "gameplay_fix_claimed": False,
-        "build_succeeded": True, "runtime_status": "NOT_DEVICE_VERIFIED",
+        "build_succeeded": True, "diagnostic_only": diagnostic_only,
+        "runtime_status": ("DIAGNOSTIC_ONLY_NOT_PLAYABLE_VERIFIED"
+                           if diagnostic_only else "NOT_DEVICE_VERIFIED"),
         "ipa_validation": validation, "build_report": report,
     }
     prov = work / f"{dest_name}-provenance.json"
@@ -1521,8 +1584,10 @@ def transfer_latest_successful_ipa():
           flush=True)
     return provenance
 
-def main():
-    """Always discover newest valid Fairy2iOS IPA across successful branch runs."""
+def main(diagnostic_run_id=None):
+    """Use a pinned diagnostic IPA only if requested explicitly."""
+    if diagnostic_run_id is not None:
+        return transfer_latest_successful_ipa(diagnostic_run_id=diagnostic_run_id)
     return transfer_latest_successful_ipa()
 
 
