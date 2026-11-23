@@ -91,7 +91,12 @@ jobs:
           set -euo pipefail
           brew install xcodegen zstd glslang
           dotnet --list-sdks | grep -Eq '^(8|9|10|11)[.]'
-          python3 -m pip install --disable-pip-version-check lz4 "capstone>=5,<6" fonttools nsz zbic backports.zstd google-api-python-client google-auth requests
+          # PEP 668: Homebrew's Python is externally managed. Build tools
+          # must run from an isolated, persisted runner venv, not system pip.
+          python3 -m venv "$RUNNER_TEMP/hooklink-v4-py"
+          "$RUNNER_TEMP/hooklink-v4-py/bin/python" -m pip install --disable-pip-version-check lz4 "capstone>=5,<6" fonttools nsz zbic backports.zstd google-api-python-client google-auth requests
+          echo "$RUNNER_TEMP/hooklink-v4-py/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/hooklink-v4-py/bin/python" -c 'import lz4.block, capstone, fontTools, zbic, backports.zstd, google.auth, requests; print("X3 Python dependencies: OK")'
           xcodegen --version
           xcrun --sdk iphoneos metal --version
 
