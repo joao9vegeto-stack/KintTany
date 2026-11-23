@@ -1,14 +1,8 @@
 name: HookLink2iOS - REAL native X1/X2/X3 backport (no shader rebuild)
 
+# Legacy 1.8.5/partial-X3 recovery. Opt-in only: v4 shader ABI must not
+# trigger this old-source relink or consume a second 3.5 GB workflow run.
 on:
-  push:
-    branches: [HookLink2iOS]
-    paths:
-      - .github/workflows/hooklink2ios-native-relink.yml
-      - scripts/hooklink2ios_backport_native.py
-      - scripts/hooklink2ios_native_relink.py
-      - scripts/hooklink2ios_perf_repack.py
-      - tests/test_hooklink2ios_*.py
   workflow_dispatch:
 
 permissions:
