@@ -85,6 +85,11 @@ jobs:
           }
           echo "Storage gate: $((AVAILABLE_KB/1024/1024)) GiB free"
 
+      - name: Select supported Python 3.12 (X3 backports.zstd requires Python <3.14)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Install verified X3 Metal/NSO build dependencies
         shell: bash
         run: |
@@ -93,6 +98,7 @@ jobs:
           dotnet --list-sdks | grep -Eq '^(8|9|10|11)[.]'
           # PEP 668: Homebrew's Python is externally managed. Build tools
           # must run from an isolated, persisted runner venv, not system pip.
+          python3 -c 'import sys; assert sys.version_info[:2] == (3,12), f"Unsupported Python {sys.version}"'
           python3 -m venv "$RUNNER_TEMP/hooklink-v4-py"
           "$RUNNER_TEMP/hooklink-v4-py/bin/python" -m pip install --disable-pip-version-check lz4 "capstone>=5,<6" fonttools nsz zbic backports.zstd google-api-python-client google-auth requests
           echo "$RUNNER_TEMP/hooklink-v4-py/bin" >> "$GITHUB_PATH"
