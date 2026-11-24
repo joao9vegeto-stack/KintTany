@@ -47,7 +47,7 @@ AUTHENTIC_HEAD_SHA = "b2aa579a22ca2e24889d0d6e1ab0b74ff3ee10ea"
 AUTHENTIC_WORKFLOW_NAME = "Fairy2iOS - corrected KTGL read ABI and original producer return trace (NO SHADERS)"
 
 # Quarantined by actual A19 Pro crash log, not by CI build status.
-DEVICE_CRASH_RUNS = frozenset({44990224107, 44992666178, 44995690307, 45000495987, 45046524330, 45050364099, 45056917685, 45064035915, 45075542017, 45078767146, 45083487666, 45100431103, 45177345329, 45314701703})
+DEVICE_CRASH_RUNS = frozenset({44990224107, 44992666178, 44995690307, 45000495987, 45046524330, 45050364099, 45056917685, 45064035915, 45075542017, 45078767146, 45083487666, 45100431103, 45177345329, 45314701703, 45348667203})
 DEVICE_CRASH_SHA256 = frozenset({"6faba771ab897cec3c19277a03815e42c3428be1c6c92e522195a0133db196d1", "6b3803ac5359c724fb43781688c1e3eab7cb3b80dde723a64f73e945c0574c0c", "b1792f9eb522de53b2b252e3a85229584831434999edda98f31c87c7c8c256cd", "df6cd6c826a3218fd965b03161ea2355cf348c13c369e13f2afb7dff74c953c2", "5f713b1a06bdf8d8fcff63bd29d69cd3a5cff280f5cd42065973919c0d81c94a", "416b9582e27cf2ca3ae4d10e2001b07ee95717c398451766b5445efc80dd3a6e", "2e771e0efa89671c9525726990329916eaa71aa9a4ee006706a2d28c4734cfec", "ef2e6edff30d0072796066d9ae46eb1be0ec27248dbec5b52b958cf001f4c22b", "2e0cbbf938cbba40e6a36be8c1d0ce9704a8502ac88557da7e62de79310c8fd5"})
 
 
@@ -1573,6 +1573,8 @@ def transfer_latest_successful_ipa(diagnostic_run_id=None, candidate_run_id=None
             require(Path(report_path).name=="ktgl-pdrk-direct-io-report.json" and
                     report.get("pdrk_direct_io_candidate") is True and
                     report.get("bounded_ktgl_allocator_candidate") is True and
+                    report.get("transform_hierarchy_repair") is True and
+                    report.get("prior_boot_render_verified") is True and
                     report.get("allocator_growth_guard_count")==4 and
                     report.get("new_child_bytes")==0xc0000000 and
                     report.get("no_corrupt_pointer_repair") is True and
