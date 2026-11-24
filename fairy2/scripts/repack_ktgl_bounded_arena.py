@@ -19,7 +19,7 @@ import repack_ktgl_pdrk_direct_io as pdrk
 base=coherent.base
 CAP=0xc0000000
 UNITS=CAP//4
-OUT="Fairy2iOS-FairyTail2-KTGL-Cutscene.ipa"
+OUT="Fairy2iOS-FairyTail2-KTGL-NativeFPS.ipa"
 CAVE=0x2d6b100
 STRIDE=0x100
 # site, original instruction, aligned path?, existing-tail-free path?, fail
@@ -174,6 +174,8 @@ def modify(raw,stamp):
     from ktgl_transform_hierarchy import apply as repair_hierarchy
     fixed,hierarchy=repair_hierarchy(bytes(out))
     proof["transform_hierarchy"]=hierarchy
+    from ktgl_native_fps import references
+    proof["native_fps_source_references"]=references(fixed)
     return fixed,proof
 
 old_patch=coherent.coherent_patch
@@ -193,6 +195,8 @@ def verify(exe,stamp):
     verify_hierarchy(raw)
 
 def make(source,source_report,repo,out):
+    from ktgl_native_fps import patch_host
+    fps_proof=patch_host(repo)
     base.memory_geometry=geometry
     coherent.coherent_patch=modify
     coherent.verify_main=verify
@@ -209,7 +213,8 @@ def make(source,source_report,repo,out):
         new_child_bytes=CAP,bin47_alias_offset=hex(geometry()["bin47_alias_offset"]),
         no_corrupt_pointer_repair=True,gameplay_verified=False,
         transform_hierarchy_repair=True,prior_boot_render_verified=True,
-        startup_prepare_background=True)
+        startup_prepare_background=True, native_fps_engine=fps_proof,
+        native_fps_device_verified=False, prior_stable_run=45355764268)
     (out/"ktgl-pdrk-direct-io-report.json").write_text(json.dumps(report,indent=2)+"\n")
     print("FAIRY2 BOUNDED KTGL ALLOCATOR",report["output_ipa_sha256"],flush=True)
     return report
