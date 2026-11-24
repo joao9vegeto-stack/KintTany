@@ -210,6 +210,7 @@ def main():
     a.add_argument("--preset", choices=list(PRESETS), default="balanced30fg")
     a.add_argument("--pso-dir", type=Path, default=None, help="Optional validated A19 Pro Metal4 PSO bundle")
     a.add_argument("--replacement-executable", type=Path, default=None, help="Rebuilt native host with byte-identical embedded guest sections")
+    a.add_argument("--game-icon", type=Path, default=None)
     a.add_argument("--entitlements", type=Path,
                    default=Path("hooklink/Resources/presets/entitlements.plist"))
     args = a.parse_args()
@@ -259,6 +260,10 @@ def main():
                            "guest_metal_shader_images_unchanged":True,
                            "source":"pinned nxnative 1.8.5 plus selectively ported X1/X2/X3 runtime code"}
         values = patch_launcher_and_env(app, PRESETS[args.preset])
+        game_icon_info = None
+        if args.game_icon is not None:
+            import hooklink2ios_game_icon as game_icon
+            game_icon_info = game_icon.install(app, args.game_icon)
         pso_info = None
         if args.pso_dir is not None:
             pso = args.pso_dir.resolve()
@@ -299,6 +304,11 @@ def main():
         with zipfile.ZipFile(args.output) as zipped:
             if audit(zipped) != original:
                 fail("shader library CRC/size or RomFS identity changed")
+            if game_icon_info:
+                for name,digest in game_icon_info.items():
+                    if hashlib.sha256(zipped.read(PREFIX+name)).hexdigest()!=digest:fail("icon bytes changed in IPA")
+                icon_plist=plistlib.loads(zipped.read(PREFIX+"Info.plist"))
+                if icon_plist["CFBundleIcons"]["CFBundlePrimaryIcon"]["CFBundleIconFiles"]!=["GameIcon60"]:fail("missing primary icon metadata")
             launcher = json.loads(zipped.read(PREFIX+"dm/launcher.json"))
             defaults = {r["env"]:str(r["default"]) for r in launcher["settings"]}
             env = zipped.read(PREFIX+"dm/env.txt").decode("utf-8")
@@ -336,7 +346,7 @@ def main():
           "shader_images_preserved":len(original[1]), "romfs_external":True,
           "engine_updated":bool(native_info), "shader_recompiled":False, "game_code_recompiled":False,
           "source_engine_not_provable_from_bare_ipa":True,
-          "offline_pso":pso_info, "native_host_relinked":native_info,
+          "offline_pso":pso_info, "native_host_relinked":native_info, "game_icon":game_icon_info,
           "signature":"ad-hoc; sideload installer may re-sign using player's identity",
           "note":"Saved launcher choices override defaults; DM_FRAME_MODE remains selectable"}
         args.report.write_text(json.dumps(report,indent=2)+"\n",encoding="utf-8")

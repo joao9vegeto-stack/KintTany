@@ -15,6 +15,7 @@ import hooklink2ios_native_relink as native
 import hooklink2ios_perf_repack as repack
 import hooklink2ios_v4_build as v4
 import hooklink2ios_x3_recovery as recovery
+import hooklink2ios_game_icon as game_icon
 
 RUN="45214405727"
 SOURCE_HEAD="c2aa86b2172ad337e811ff2c43ca695c59d55ff4"
@@ -75,6 +76,9 @@ def main():
                 require(rel and ".." not in Path(rel).parts and "\\" not in rel,"bad source resource path")
                 native.extract_member(z,info.filename,origdm/rel,256*1024*1024)
         guest=native.extract_guest_sections(original,source,z,patches)
+    icon=work/"official-game-icon.jpg"
+    icon_provenance=game_icon.prepare(icon)
+    print("HOOKLINK2IOS_OFFICIAL_ICON_OK",json.dumps(icon_provenance),flush=True)
     changes=recovery.apply(a.engine)
     print("X3 source changes:",changes,flush=True)
     executable,buildlog,checked=native.generate_and_build(a.engine,work,patches,plist,original)
@@ -83,7 +87,7 @@ def main():
     # Do not lock the launcher: all modes remain selectable. Stop full pair scanning
     # by default, retain the original prewarm manifest and all existing graphics controls.
     # PRESETS was assigned and validated against the actual IPA above.
-    sys.argv=["hooklink2ios_perf_repack.py","--source",str(source),"--replacement-executable",str(executable),"--preset","x3-recovery","--output",str(output),"--report",str(internal)]
+    sys.argv=["hooklink2ios_perf_repack.py","--source",str(source),"--replacement-executable",str(executable),"--game-icon",str(icon),"--preset","x3-recovery","--output",str(output),"--report",str(internal)]
     repack.main()
     audit=json.loads(internal.read_text())
     audit["native_host_relinked"]["source"]="pinned original X3 host with source-level recovery patch"
@@ -98,6 +102,7 @@ def main():
                   "changes":changes,"guest_section_hashes_verified":checked,"shader_images_preserved":True,
                   "original_game_shaders_recompiled":False,"game_code_rewritten":False,
                   "native_executable_sha256":audit["native_host_relinked"]["signed_executable_sha256"]},
+                  game_icon={**icon_provenance,"packed_files":audit["game_icon"]},
                   ipa={"name":output.name,"size":output.stat().st_size,"sha256":native.sha256(output),"contents":contents})
     (a.output/"build-report.json").write_text(json.dumps(report,indent=2)+"\n")
     overlays=list(a.artifact.rglob("Bootup.Nin_Ounce_NVN2.pack.zs"))

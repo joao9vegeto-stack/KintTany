@@ -38,6 +38,7 @@ jobs:
           test "$(df -Pk "$RUNNER_TEMP" | awk 'END{print $4}')" -gt $((25*1024*1024))
           python3 -m py_compile scripts/hooklink2ios_x3_recovery.py scripts/hooklink2ios_x3_relink.py scripts/hooklink2ios_native_relink.py scripts/hooklink2ios_perf_repack.py
           python3 tests/test_hooklink2ios_repack_ranges.py
+          python3 -m py_compile scripts/hooklink2ios_game_icon.py
           if ! command -v xcodegen >/dev/null; then brew install xcodegen; fi
           xcrun --sdk iphoneos metal --version
       - name: Retrieve exact successful full X3 artifact
