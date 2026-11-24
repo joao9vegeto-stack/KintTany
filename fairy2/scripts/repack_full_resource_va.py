@@ -391,6 +391,14 @@ def make(source:Path,source_report:Path,repo:Path,out:Path):
              "note":"No crash, despeja 256 bytes de x1; inclui Hash[0x...] completo.",
              "default":"x1","options":[["x1","Registrar mensagem e hash do recurso"]],
              "level":"advanced"}])
+        # Keep Metal4, shader cache and prebuild available. The global 1894
+        # pair pass must not hold the first present for 46.3s. New key avoids
+        # replacing an existing user's preference for DM_PSO_PREBUILD.
+        data["settings"]=[r for r in data["settings"] if r.get("env")!="DM_PSO_PREPARE"]
+        data["settings"].append({"env":"DM_PSO_PREPARE","kind":"toggle","section":"Performance",
+          "label":"Preparar todos os pipelines antes de abrir",
+          "note":"Desligado: preparação em segundo plano, cache preservado; compilação sob demanda continua.",
+          "default":"0","on":"1","off":"0","level":"advanced"})
         menu.validate_settings(data)
         launcher.write_text(json.dumps(data,indent=2,ensure_ascii=False)+"\n")
         shell_code=menu.macho_text_sha(shell)

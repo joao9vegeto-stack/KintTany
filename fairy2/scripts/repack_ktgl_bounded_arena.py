@@ -19,7 +19,7 @@ import repack_ktgl_pdrk_direct_io as pdrk
 base=coherent.base
 CAP=0xc0000000
 UNITS=CAP//4
-OUT="Fairy2iOS-FairyTail2-KTGL-BoundedArena.ipa"
+OUT="Fairy2iOS-FairyTail2-KTGL-Cutscene.ipa"
 CAVE=0x2d6b100
 STRIDE=0x100
 # site, original instruction, aligned path?, existing-tail-free path?, fail
@@ -171,7 +171,10 @@ def modify(raw,stamp):
         allocation_bound_guards=guards,
         native_capacity_field="inner+0x68",native_committed_field="inner+0x60",
         original_allocator_crash_instruction_unchanged=True)
-    return bytes(out),proof
+    from ktgl_transform_hierarchy import apply as repair_hierarchy
+    fixed,hierarchy=repair_hierarchy(bytes(out))
+    proof["transform_hierarchy"]=hierarchy
+    return fixed,proof
 
 old_patch=coherent.coherent_patch
 old_verify=coherent.verify_main
@@ -185,6 +188,9 @@ def verify(exe,stamp):
                 raw[at:at+len(data)]==data,"allocator guard changed after signing")
     for at,opcode in WITNESSES.items():
         require(raw[at:at+4].hex()==opcode,"original constructor/growth code changed")
+
+    from ktgl_transform_hierarchy import verify as verify_hierarchy
+    verify_hierarchy(raw)
 
 def make(source,source_report,repo,out):
     base.memory_geometry=geometry
@@ -201,7 +207,9 @@ def make(source,source_report,repo,out):
         bounded_ktgl_allocator_candidate=True,allocator_growth_guard_count=4,
         old_device_extent=0x828ffd80,old_device_corrupt_block=0x3eda3ac90,
         new_child_bytes=CAP,bin47_alias_offset=hex(geometry()["bin47_alias_offset"]),
-        no_corrupt_pointer_repair=True,gameplay_verified=False)
+        no_corrupt_pointer_repair=True,gameplay_verified=False,
+        transform_hierarchy_repair=True,prior_boot_render_verified=True,
+        startup_prepare_background=True)
     (out/"ktgl-pdrk-direct-io-report.json").write_text(json.dumps(report,indent=2)+"\n")
     print("FAIRY2 BOUNDED KTGL ALLOCATOR",report["output_ipa_sha256"],flush=True)
     return report

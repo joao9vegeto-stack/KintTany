@@ -21,7 +21,7 @@
   "no_synthetic_stream": true,
   "no_second_workflow": true,
   "not_gameplay_verified": true,
-  "previous_crashed_run": 45314701703,
+  "previous_crashed_run": 45348667203,
   "pdrk_only_header_extension": true,
   "reference": "seedds/nxnative/dm/games/0100C2A01A730000/README.md, working iPhone",
   "previous_device_evidence": {
@@ -35,7 +35,7 @@
     "pdrk_preload_12943": "0x2fe179",
     "pdrk_preload_13660": "0x2ff648"
   },
-  "revision": 2,
+  "revision": 3,
   "bounded_arena_bytes": 3221225472,
   "allocator_growth_guards": 4,
   "new_device_evidence": {
@@ -49,5 +49,18 @@
     "native_cap_offset": "0x68",
     "native_committed_offset": "0x60",
     "disassembly_run": 45348293297
+  },
+  "cutscene_transform_repair": true,
+  "cutscene_crash": {
+    "pc": "main+0x208fa34",
+    "x25": 186,
+    "w24": "0x3f800000",
+    "native_cache": 128,
+    "frames": 1233,
+    "prebuild_wait_s": 46.3,
+    "source_audits": [
+      45355242815,
+      45355405617
+    ]
   }
 }
