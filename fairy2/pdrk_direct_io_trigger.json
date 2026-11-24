@@ -35,7 +35,7 @@
     "pdrk_preload_12943": "0x2fe179",
     "pdrk_preload_13660": "0x2ff648"
   },
-  "revision": 6,
+  "revision": 7,
   "bounded_arena_bytes": 3221225472,
   "allocator_growth_guards": 4,
   "new_device_evidence": {
@@ -82,5 +82,7 @@
     "submit_p50_ms": 1.89,
     "held_for_present_interval": 0,
     "measured_fps": 26.9
-  }
+  },
+  "failed_compile_run": 45432266585,
+  "compile_failure": "literal escaped newline at generated hle_fpslock.c:150; fixed, actual iOS translation unit preflight"
 }

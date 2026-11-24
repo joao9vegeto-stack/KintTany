@@ -348,6 +348,19 @@ def make(source:Path,source_report:Path,repo:Path,out:Path):
         (gen/"framework.xcconfig").write_text("OTHER_LDFLAGS = $(inherited) "+" ".join(flags)+"\n")
         (gen/"Assets.xcassets").mkdir()
         (gen/"Assets.xcassets/Contents.json").write_text('{"info":{"author":"xcode","version":1}}\n')
+        # Compile the actual generated translation unit against the same
+        # iPhoneOS SDK, architecture and game headers before the full build.
+        fps_source=gen/"src/host__hle_fpslock.c"
+        if fps_source.is_file() and "FAIRY2_KTGL_FPS_STATE" in fps_source.read_text():
+            sdk=subprocess.check_output(["xcrun","--sdk","iphoneos","--show-sdk-path"],
+                                        env=env,text=True).strip()
+            hook.run(["xcrun","--sdk","iphoneos","clang","-target","arm64-apple-ios26.0",
+                      "-isysroot",sdk,"-std=gnu11","-fsyntax-only",
+                      "-Werror=implicit-function-declaration","-Werror=return-type",
+                      "-I",str(host),"-I",str(head.parent),
+                      "-include",str(gen/"framework/objc_namespace.h"),str(fps_source)],
+                     cwd=ios,env=env,log_file=out/"host-build.log")
+            print("FAIRY2_FPS_HOST_SYNTAX_OK: generated iOS ARM64 source",flush=True)
         hook.run(["xcodegen","generate","-q","--spec","project-framework.yml"],cwd=ios,env=env)
         products=w/"products";objects=w/"objects";products.mkdir();objects.mkdir()
         hook.run(["xcodebuild","-project",ios/"DmIOS.xcodeproj","-target","DmShellGame",

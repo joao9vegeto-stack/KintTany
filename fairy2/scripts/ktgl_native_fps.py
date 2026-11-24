@@ -137,7 +137,7 @@ static void f2_drs_tick(uint8_t *base,uint32_t want) {
         LOG("FAIRY2_KTGL_DRS applied target=%u thresholds=%.6f,%.6f s",want,budget[0],budget[1]);
     }
 }
-"""+ "\\n// NieR 1.0.3 exposes")
+"""+ "\n// NieR 1.0.3 exposes")
     one("        if (L->ptr_off && (!rd((uint64_t)(uintptr_t)(base + L->ptr_off), &obj, sizeof obj) || !obj)) continue;","""        if (L->indirect) {
             uint32_t want=(uint32_t)target, applied=0;
             if (want!=30 && want!=60) continue;
@@ -173,6 +173,8 @@ static void f2_drs_tick(uint8_t *base,uint32_t want) {
             continue;
         }
         if (L->ptr_off && (!rd((uint64_t)(uintptr_t)(base + L->ptr_off), &obj, sizeof obj) || !obj)) continue;""")
+    require("\n// NieR 1.0.3 exposes" in s and "\\n// NieR 1.0.3 exposes" not in s,
+            "generated host has a literal escaped newline")
     path.write_text(s)
     return {"build":BUILD,"pointer_chain":[hex(GLOBAL),"0x170","0x18c"],
         "target_values":[30,60],"reference":"FPSLocker-Warehouse v4 exact BID",
