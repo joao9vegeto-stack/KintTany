@@ -3,6 +3,7 @@
 from __future__ import annotations
 import argparse, hashlib, json, os, plistlib, shutil, subprocess, tempfile, zipfile, re
 from pathlib import Path, PurePosixPath
+from decimal import Decimal, InvalidOperation, localcontext
 
 TITLE = "0400486024DEC000"
 PREFIX = "Payload/DmIOS.app/"
@@ -130,6 +131,19 @@ def patch_launcher_and_env(app, changes):
         elif row.get("kind") == "toggle":
             if value not in (str(row.get("on")), str(row.get("off"))):
                 fail("launcher toggle missing "+key+"="+value)
+        elif row.get("kind") == "range":
+            # Schema 1 describes ranges with numeric min/max/step, but the
+            # launcher stores defaults as strings. Decimal avoids float drift.
+            try:
+                v, lo, hi, step = (Decimal(str(x)) for x in (value, row["min"], row["max"], row["step"]))
+                with localcontext() as ctx:
+                    ctx.prec = 64
+                    valid = (all(x.is_finite() for x in (v, lo, hi, step))
+                             and lo <= v <= hi and step > 0
+                             and (v - lo) % step == 0)
+            except (KeyError, TypeError, ValueError, InvalidOperation):
+                valid = False
+            if not valid: fail("invalid launcher range "+key+"="+value)
         else:
             fail("unsupported launcher setting: "+key)
         row["default"] = value

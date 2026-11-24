@@ -20,6 +20,7 @@ RUN="45214405727"
 SOURCE_HEAD="c2aa86b2172ad337e811ff2c43ca695c59d55ff4"
 CHAIN="b6112b954691"
 PREFIX="Payload/DmIOS.app/"
+RECOVERY_PRESETS={"x3-recovery":{"DM_FRAME_MODE":"1","DM_FPS_TARGET":"30","DM_FRAMEGEN":"0","DM_PSO_PREBUILD":"0","DM_DYNAMIC_RESOLUTION":"1","DM_RENDER_SCALE":"0.85","DM_PRESENT_UPSCALE":"metalfx"}}
 
 def require(value,message):
     if not value:
@@ -50,7 +51,19 @@ def main():
     original=work/"original-DmIOS"
     origdm=work/"original_dm"; origdm.mkdir(exist_ok=True)
     patches=work/"original_rewritten"; patches.mkdir(exist_ok=True)
+    repack.PRESETS=RECOVERY_PRESETS
     with zipfile.ZipFile(source) as z:
+        # Validate the actual source IPA launcher before rebuilding the host.
+        # Do not change the source IPA or lock settings through env.txt.
+        with tempfile.TemporaryDirectory(prefix="x3-launcher-preflight-") as tmp:
+            app=Path(tmp)
+            dm=app/"dm"; dm.mkdir()
+            for name in ("launcher.json", "env.txt"):
+                member=PREFIX+"dm/"+name
+                if name=="launcher.json" or member in z.namelist():
+                    (dm/name).write_bytes(z.read(member))
+            settings_check=repack.patch_launcher_and_env(app,RECOVERY_PRESETS["x3-recovery"])
+            print("HOOKLINK2IOS_LAUNCHER_PREFLIGHT_OK",json.dumps(settings_check["launcher_defaults"],sort_keys=True),flush=True)
         marker,images=repack.audit(z)
         require(marker==report["ipa"]["contents"]["romfs_marker"],"source RomFS marker differs from report")
         require(all("/msl/b-"+CHAIN+".img" in name for name in images),"source contains another shader image")
@@ -69,7 +82,7 @@ def main():
     internal=a.output/"repack-report.json"
     # Do not lock the launcher: all modes remain selectable. Stop full pair scanning
     # by default, retain the original prewarm manifest and all existing graphics controls.
-    repack.PRESETS={"x3-recovery":{"DM_FRAME_MODE":"1","DM_FPS_TARGET":"30","DM_FRAMEGEN":"0","DM_PSO_PREBUILD":"0","DM_DYNAMIC_RESOLUTION":"1","DM_RENDER_SCALE":"0.85","DM_PRESENT_UPSCALE":"metalfx"}}
+    # PRESETS was assigned and validated against the actual IPA above.
     sys.argv=["hooklink2ios_perf_repack.py","--source",str(source),"--replacement-executable",str(executable),"--preset","x3-recovery","--output",str(output),"--report",str(internal)]
     repack.main()
     audit=json.loads(internal.read_text())
