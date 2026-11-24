@@ -13,33 +13,12 @@ import zipfile
 from pathlib import Path
 
 REGIONS = (
- ("new-crash-allocator",0x227bb00,0x227c900),
- ("new-crash-allocation-wrapper",0x227d780,0x227db00),
- ("shader-allocation-caller",0x61e6c0,0x61e940),
- ("shader-resource-caller",0x60bb00,0x60be20),
- ("shader-parse-caller",0x6e8a40,0x6e8d00),
- ("factory-shader",0x1dbdb00,0x1dbdf00),
- ("root-initializer",0x22959c0,0x2295b80),
- ("gpu-region-initializer",0x21b6600,0x21b6c00),
- ("root-arena-allocator",0x227d280,0x227d520),
- ("heap-region-constructor",0x227a800,0x227bb00),
-
- ("buffered-stream-full",0xc09514,0xc09728),
- ("adapter-original-forward",0xc09728,0xc09740),
- ("KTGL-resource-create",0xc10510,0xc10b90),
- ("chunk-producer-mode4",0xc10d80,0xc10ee8),
- ("direct-reader",0xc11b60,0xc11fc0),
- ("direct-resource-call",0xc11800,0xc119a0),
- ("direct-block-allocator",0xc119a0,0xc11b60),
- ("direct-failure-factory",0xc10b90,0xc10d80),
- ("mode4-codec",0xc0ef70,0xc0f0f0),
- ("G1T-header-native",0x60db9c,0x60dd10),
- ("G1T-validator",0x6120e0,0x6121dc),
- ("G1S-validator",0x6e7b60,0x6e7be8),
+ ("cutscene-crash",0x208f700,0x208fd00),
+ ("root-producers",0x225ddc0,0x225de80),
+ ("root-producer-a",0x5f1b60,0x5f1c00),
+ ("root-producer-b",0x1d70080,0x1d70140),
 )
-HOT = (0xc09514,0xc09554,0xc09594,0xc095c8,0xc09604,0xc09654,
-       0xc0969c,0xc096dc,0xc09718,0xc09728,0xc11b60,
-       0xc11f9c,0xc0ef8c,0xc0f0d4,0xc10d80)
+HOT = (0x208fa34,0x208fbb4)
 def insist(ok, message):
     if not ok: raise ValueError("[Fairy2iOS STATIC READER] "+message)
 
@@ -107,10 +86,7 @@ def audit(ipa:Path,expected_sha:str)->dict:
             ins=list(md.disasm(raw,first))
             md.skipdata=False
         insist(len(ins)==(last-first)//4,"incomplete ARM64 disassembly in "+name)
-        selected=[x for x in ins if
-          (name in ("new-crash-allocator","new-crash-allocation-wrapper","shader-allocation-caller","shader-resource-caller","shader-parse-caller","factory-shader","root-initializer","gpu-region-initializer","root-arena-allocator","heap-region-constructor","buffered-stream-full","adapter-original-forward","G1T-header-native","G1T-validator","G1S-validator","KTGL-resource-create","chunk-producer-mode4","direct-reader","direct-block-allocator","direct-resource-call","direct-failure-factory","mode4-codec"))
-          or x.mnemonic.startswith(("bl","b.","cb","tb")) or
-          x.address in HOT or x.address in range(first, min(first+0x40,last),4)]
+        selected=ins
         rows=[{"at":hex(x.address),"hex":x.bytes.hex(),
                "op":x.mnemonic+" "+x.op_str} for x in selected]
         out["regions"].append({"name":name,"start":hex(first),"end":hex(last),

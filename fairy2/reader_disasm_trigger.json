@@ -11,9 +11,9 @@
   "question": "What exact original ARM64 code implements KTGL buffered resource reader and 0-return when guest G1T is rejected? Disassemble before changing code; do not guess.",
   "no_game_build": true,
   "no_shader_build": true,
-  "revision": 6,
+  "revision": 7,
   "previous_diagnostic_run": 45093730337,
   "retrigger_reason": "Now focus source-matched main+c11928 direct archive caller, which matches on-device crash stack. This 104-instruction region was absent from earlier static slices; no IPA build.",
-  "reason": "Resolve exact allocator constructor/region capacity vs free-list extent; not another IPA",
-  "crash_site": "main+0x227be20"
+  "reason": "First successful iPhone rendering, new cutscene SIGBUS main+208fa34, x9=0xbe8000000; inspect exact address arithmetic and remaining original region constants",
+  "crash_site": "main+0x208fa34"
 }
