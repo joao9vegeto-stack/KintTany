@@ -148,17 +148,16 @@ class RepackTransferRegression(unittest.TestCase):
             if path==f"/actions/runs/{module.AUTHENTIC_RUN_ID}/artifacts":
                 return {"artifacts":[item]}
             raise AssertionError("No fallback to other IPA "+path)
-        got,matched,skipped=module.select_authentic_source_candidate_artifact(api)
-        self.assertEqual(got["id"],module.AUTHENTIC_RUN_ID)
-        self.assertEqual(matched["id"],module.AUTHENTIC_ARTIFACT_ID)
-        self.assertEqual(skipped,[])
+        with self.assertRaisesRegex(RuntimeError,"CRASH CONFIRMADO"):
+            module.select_authentic_source_candidate_artifact(api)
         self.assertIn(45100431103,module.DEVICE_CRASH_RUNS)
+        self.assertIn(45177345329,module.DEVICE_CRASH_RUNS)
         with self.assertRaisesRegex(RuntimeError,"só pode selecionar"):
             module.select_authentic_source_candidate_artifact(api,45100431103)
         with patch.object(module,"transfer_latest_successful_ipa",
-                          return_value={"run_id":45177345329}) as fn:
-            self.assertEqual(module.transfer_authentic_source_candidate()["run_id"],
-                             45177345329)
+                          side_effect=RuntimeError("CRASH CONFIRMADO")) as fn:
+            with self.assertRaisesRegex(RuntimeError,"CRASH CONFIRMADO"):
+                module.transfer_authentic_source_candidate()
             fn.assert_called_once_with(candidate_run_id=45177345329)
 
     def test_notebook_cell9_pins_repair_and_no_diagnostic_fallback(self):
@@ -183,7 +182,7 @@ class RepackTransferRegression(unittest.TestCase):
                  "".join(c["source"])]
         self.assertEqual(len(cells),1)
         src="".join(cells[0]["source"])
-        self.assertNotIn("raise RuntimeError",src)
+        self.assertIn('raise RuntimeError("NÃO EXECUTAR: run 45177345329',src)
         self.assertIn('subprocess.run(["git", "-C", str(REPO), "reset"',src)
         self.assertIn("AUTHENTIC_RUN_ID == 45177345329",src)
         self.assertIn("AUTHENTIC_ARTIFACT_ID == 14819613952",src)
@@ -193,6 +192,56 @@ class RepackTransferRegression(unittest.TestCase):
         self.assertNotIn("main(diagnostic_run_id=",src)
         self.assertIn(45100431103,module.DEVICE_CRASH_RUNS)
         self.assertTrue(callable(module.select_authentic_source_candidate_artifact))
+
+    def test_dynamic_pdrk_latest_no_stale_fallback(self):
+        latest = run(999990010,"2026-11-24T02:00:00Z",
+                     name=module.PDRK_WORKFLOW_NAME)
+        latest["run_number"]=7
+        previous=run(999990009,"2026-11-23T02:00:00Z",
+                     name=module.PDRK_WORKFLOW_NAME)
+        previous["run_number"]=6
+        item=artifact(latest["id"],name=module.PDRK_ARTIFACT_PREFIX+"7")
+        calls=[]
+        def api(path,params=None):
+            calls.append(path)
+            if path==f"/actions/workflows/{module.PDRK_WORKFLOW}/runs":
+                return {"workflow_runs":[previous,latest]}
+            if path==f"/actions/runs/{latest['id']}/artifacts":
+                return {"artifacts":[item]}
+            raise AssertionError("Unexpected stale fallback: "+path)
+        result,found,skipped=module.select_pdrk_direct_io_artifact(api)
+        self.assertEqual(result["id"],latest["id"])
+        self.assertEqual(found["id"],item["id"])
+        self.assertEqual(skipped,[])
+        latest["status"]="in_progress"
+        latest["conclusion"]=None
+        calls.clear()
+        with self.assertRaisesRegex(RuntimeError,"Não baixar uma IPA antiga"):
+            module.select_pdrk_direct_io_artifact(api)
+        self.assertEqual(len(calls),1)
+        latest["status"]="completed"
+        latest["conclusion"]="failure"
+        with self.assertRaisesRegex(RuntimeError,"Não baixar uma IPA antiga"):
+            module.select_pdrk_direct_io_artifact(api)
+        latest["conclusion"]="success"
+        item["name"]="Fairy2iOS-PDRK-DirectIO-failure-7"
+        with self.assertRaisesRegex(RuntimeError,"Artefato PDRK exato"):
+            module.select_pdrk_direct_io_artifact(api)
+
+    def test_one_cell_download_notebook_has_no_run_pin(self):
+        data=json.loads((ROOT/"colab/Fairy2iOS_Download_Latest.ipynb").read_text())
+        self.assertEqual(len(data["cells"]),1)
+        src="".join(data["cells"][0]["source"])
+        compile(src,"Fairy2iOS_Download_Latest.ipynb","exec")
+        self.assertIn("transfer_latest.transfer_pdrk_latest()",src)
+        self.assertIn('subprocess.run(["git", "-C", str(REPO), "reset"',src)
+        self.assertNotIn("AUTHENTIC_RUN_ID",src)
+        self.assertNotIn("candidate_run_id",src)
+        self.assertNotIn("45177345329",src)
+        with patch.object(module,"transfer_latest_successful_ipa",
+                          return_value={"run_id":999990010}) as fn:
+            self.assertEqual(module.transfer_pdrk_latest()["run_id"],999990010)
+            fn.assert_called_once_with(pdrk_direct_io=True)
 
 
 if __name__ == "__main__":
