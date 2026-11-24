@@ -19,7 +19,7 @@ import repack_ktgl_pdrk_direct_io as pdrk
 base=coherent.base
 CAP=0xc0000000
 UNITS=CAP//4
-OUT="Fairy2iOS-FairyTail2-KTGL-FPSPacing.ipa"
+OUT="Fairy2iOS-FairyTail2-KTGL-FPSNativeWrite.ipa"
 CAVE=0x2d6b100
 STRIDE=0x100
 # site, original instruction, aligned path?, existing-tail-free path?, fail

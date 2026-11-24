@@ -30,6 +30,15 @@ def references(raw):
                         matches.append({"signature":hex(pos),"adrp":hex(a),"add":hex(c),"global":hex(GLOBAL)})
         pos=raw.find(SIG,pos+1)
     require(matches,"published limiter signature/global not found in actual guest RX")
+    # Preserve real source instructions for follow-up rather than making
+    # guesses about which reader consumes the pointer or fallback constant.
+    from capstone import Cs,CS_ARCH_ARM64,CS_MODE_ARM
+    dis=Cs(CS_ARCH_ARM64,CS_MODE_ARM)
+    for hit in matches:
+        start=int(hit["adrp"],16)
+        end=min(len(raw),int(hit["signature"],16)+0x80)
+        hit["disassembly"]=[f"{i.address:#x}: {i.mnemonic} {i.op_str}" for i in dis.disasm(raw[start:end],start)]
+        print("FAIRY2_FPS_SOURCE",hit,flush=True)
     return matches
 
 # Exact FPSLocker v1.4.1 MASTER_WRITE; original immediates are 1/23 and 1/27.
@@ -84,66 +93,89 @@ def patch_host(repo):
     // FAIRY2: exact v1.4.1 FPSLocker target; read both levels, not a
     // fabricated frame step. Keep the original KTGL simulation and DRS.
     { "a588f7bb864aad5fb6a18236878d9216", "Fairy Tail 2 KTGL native frame limit", 0x2c0b558, 0x18c, FPS_I32, 1, 0, 0, 0x170 },""")
-    one("// NieR 1.0.3 exposes",HEADER.read_text()+"\n// NieR 1.0.3 exposes")
-    one("        if (L->flag) { uint8_t b;", """        if (L->indirect) {
-            // Root was read by the usual row logic. Resolve again before
-            // writing, reject null, misaligned, unreadable or stale objects.
-            uint64_t field = 0; uint32_t cur = 0;
-            uint32_t want = (uint32_t)target;
-            if (!f2_fps_resolve(rd, (uint64_t)(uintptr_t)(base + L->ptr_off),
-                    L->indirect, L->field, &field, &cur)) {
-                static int pending;
-                if (!pending++) LOG("FAIRY2_KTGL_FPS_PENDING: native object not ready or unexpected value");
-                continue;
-            }
-            if (want != 30 && want != 60) continue;
-            if (cur != want) {
-                uint64_t check = 0; uint32_t now = 0;
-                if (!f2_fps_resolve(rd,(uint64_t)(uintptr_t)(base + L->ptr_off),
-                     L->indirect,L->field,&check,&now) || check != field || now != cur) continue;
-                uint32_t *p = (uint32_t *)(uintptr_t)field;
-                dm_guest_write_prepare(p, sizeof *p);
-                __atomic_store_n(p, want, __ATOMIC_RELAXED);
-            }
-            uint32_t applied = 0;
-            if (!rd(field, &applied, sizeof applied) || applied != want) {
-                static int failed;
-                if (!failed++) LOG("FAIRY2_KTGL_FPS_READBACK_FAILED: expected %u, got %u", want, applied);
-                continue;
-            }
-            // The exact game patch redirects both DRS readers to this aligned W slot.
-            // Keep the original 30 FPS thresholds, use the reference 60 FPS budget.
-            float budget[2] = {want == 60 ? 1.0f/60.0f : 1.0f/23.0f,
-                               want == 60 ? 1.0f/65.0f : 1.0f/27.0f};
-            uint64_t bits=0, oldbits=0, readback=0;
-            memcpy(&bits,budget,sizeof bits);
-            uint64_t address=(uint64_t)(uintptr_t)(base+0x2c53f00);
-            if (rd(address,&oldbits,sizeof oldbits)) {
-                if (oldbits != bits) {
-                    uint64_t *d=(uint64_t *)(uintptr_t)address;
-                    dm_guest_write_prepare(d,sizeof *d);
-                    __atomic_store_n(d,bits,__ATOMIC_RELAXED);
+    # Reuse NXNative's cheat subsystem memory boundary and kernel-copy
+    # strategy for live game mappings. Never dereference or store through
+    # an unvalidated native pointer in the host.
+    one("// NieR 1.0.3 exposes",HEADER.read_text()+r"""
+extern int dm_guest_as_contains(uintptr_t a);
+static int f2_valid_span(uint64_t a,size_t n,int write) {
+    if (!a || !n || a>UINT64_MAX-n) return 0;
+    if (dm_guest_as_contains((uintptr_t)a) &&
+        dm_guest_as_contains((uintptr_t)(a+n-1))) return 1;
+    for (int i=0;i<g_nmod;i++) {
+        const module_t *m=&g_mod[i];
+        uint64_t b=(uint64_t)(uintptr_t)m->base;
+        if (!b || a<b || a-b>=m->size || n>m->size-(a-b)) continue;
+        if (!write) return 1;
+        uint64_t o=a-b, end=o+n;
+        uint64_t patch=m->patch_off>=0?(uint64_t)m->patch_off:(uint64_t)m->size;
+        uint64_t k0=m->key_page_off,k1=k0+m->key_page_size;
+        return o>=m->data_off && end<=patch &&
+            !(m->key_page_size && o<k1 && end>k0);
+    }
+    return 0;
+}
+static int f2_write_kernel(uint64_t a,const void *p,size_t n) {
+    if (!f2_valid_span(a,n,1)) return 0;
+    dm_guest_write_prepare((void *)(uintptr_t)a,n);
+    return vm_write(mach_task_self(),(vm_address_t)a,
+                    (vm_offset_t)(uintptr_t)p,(mach_msg_type_number_t)n)==KERN_SUCCESS;
+}
+static void f2_drs_tick(uint8_t *base,uint32_t want) {
+    static int last_budget,fail_logged;
+    float budget[2]={want==60?1.0f/60.0f:1.0f/23.0f,
+                     want==60?1.0f/65.0f:1.0f/27.0f};
+    uint64_t bits=0,old=0,after=0,addr=(uint64_t)(uintptr_t)(base+0x2c53f00);
+    memcpy(&bits,budget,sizeof bits);
+    if (!rd(addr,&old,8) || (old!=bits && !f2_write_kernel(addr,&bits,8)) ||
+        !rd(addr,&after,8) || after!=bits) {
+        if (!fail_logged++) LOG("FAIRY2_KTGL_DRS_READBACK_FAILED addr=%#llx",(unsigned long long)addr);
+        return;
+    }
+    if (last_budget!=(int)want) {
+        last_budget=(int)want;
+        LOG("FAIRY2_KTGL_DRS applied target=%u thresholds=%.6f,%.6f s",want,budget[0],budget[1]);
+    }
+}
+"""+ "\\n// NieR 1.0.3 exposes")
+    one("        if (L->ptr_off && (!rd((uint64_t)(uintptr_t)(base + L->ptr_off), &obj, sizeof obj) || !obj)) continue;","""        if (L->indirect) {
+            uint32_t want=(uint32_t)target, applied=0;
+            if (want!=30 && want!=60) continue;
+            // The reference has two independent writes. A delayed game
+            // object must not prevent the static DRS target from applying.
+            f2_drs_tick(base,want);
+            f2_chain q;
+            int status=f2_fps_apply(rd,f2_valid_span,f2_write_kernel,
+                    (uint64_t)(uintptr_t)(base+L->ptr_off),L->indirect,
+                    L->field,want,&q,&applied);
+            static int last_status=-1;
+            static unsigned ticks,good,changes;
+            static const char *const reasons[]={"ok","root_read","root_range",
+                "nested_read","nested_range","field_read","changed_chain",
+                "kernel_write","readback"};
+            ++ticks;
+            if (status==F2_OK) {
+                ++good; changes+=(q.value!=want);
+                if (nlog[r]<1 || last_status!=F2_OK || (q.value!=want && nlog[r]<8)) {
+                    nlog[r]++;
+                    LOG("FAIRY2_KTGL_FPS_LOCK native field %#llx: %u -> %u fps (%s), root=%#llx nested=%#llx",
+                        (unsigned long long)q.address,q.value,applied,src,
+                        (unsigned long long)q.root,(unsigned long long)q.nested);
                 }
-                if (rd(address,&readback,sizeof readback) && readback==bits) {
-                    static int last_budget;
-                    if (last_budget!=(int)want) {
-                        last_budget=(int)want;
-                        LOG("FAIRY2_KTGL_DRS applied target=%u thresholds=%.6f,%.6f s",want,budget[0],budget[1]);
-                    }
-                } else {
-                    static int bad_drs;
-                    if (!bad_drs++) LOG("FAIRY2_KTGL_DRS_READBACK_FAILED");
-                }
             }
-            if (nlog[r] < 1 || (cur != want && nlog[r] < 8)) {
-                nlog[r]++;
-                LOG("FAIRY2_KTGL_FPS_LOCK native field %#llx: %u -> %u fps (%s)", (unsigned long long)field, cur, want, src);
+            if (status!=last_status || ticks%300==0) {
+                LOG("FAIRY2_KTGL_FPS_STATE stage=%s tick=%u root=%#llx nested=%#llx field=%#llx old=%#x applied=%u target=%u good=%u changes=%u",
+                    reasons[status],ticks,(unsigned long long)q.root,
+                    (unsigned long long)q.nested,(unsigned long long)q.address,
+                    q.value,applied,want,good,changes);
+                last_status=status;
             }
             continue;
         }
-        if (L->flag) { uint8_t b;""")
+        if (L->ptr_off && (!rd((uint64_t)(uintptr_t)(base + L->ptr_off), &obj, sizeof obj) || !obj)) continue;""")
     path.write_text(s)
     return {"build":BUILD,"pointer_chain":[hex(GLOBAL),"0x170","0x18c"],
         "target_values":[30,60],"reference":"FPSLocker-Warehouse v4 exact BID",
         "host_sha256":__import__("hashlib").sha256(s.encode()).hexdigest(),
-        "guest_code_modified":True,"dynamic_resolution_modified":True,"present_interval":"display","fps_readback":True}
+        "guest_code_modified":True,"dynamic_resolution_modified":True,"present_interval":"display","fps_readback":True,
+        "prior_value_gate":False,"kernel_guest_write":True,"independent_drs":True,"stage_telemetry":True}
