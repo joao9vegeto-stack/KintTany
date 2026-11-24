@@ -35,7 +35,7 @@
     "pdrk_preload_12943": "0x2fe179",
     "pdrk_preload_13660": "0x2ff648"
   },
-  "revision": 4,
+  "revision": 5,
   "bounded_arena_bytes": 3221225472,
   "allocator_growth_guards": 4,
   "new_device_evidence": {
@@ -65,5 +65,8 @@
   },
   "native_fps_build": "a588f7bb864aad5fb6a18236878d9216",
   "stable_device_baseline": 45355764268,
-  "fps_reference": "https://github.com/masagrator/FPSLocker-Warehouse/blob/v4/SaltySD/plugins/FPSLocker/patches/0100B9801F872000/A588F7BB864AAD5F.yaml"
+  "fps_reference": "https://github.com/masagrator/FPSLocker-Warehouse/blob/v4/SaltySD/plugins/FPSLocker/patches/0100B9801F872000/A588F7BB864AAD5F.yaml",
+  "native_fps_previous_run": 45401704576,
+  "native_fps_present_interval": "display",
+  "native_drs_slot": "0x2c53f00"
 }

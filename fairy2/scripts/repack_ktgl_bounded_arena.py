@@ -19,7 +19,7 @@ import repack_ktgl_pdrk_direct_io as pdrk
 base=coherent.base
 CAP=0xc0000000
 UNITS=CAP//4
-OUT="Fairy2iOS-FairyTail2-KTGL-NativeFPS.ipa"
+OUT="Fairy2iOS-FairyTail2-KTGL-FPSPacing.ipa"
 CAVE=0x2d6b100
 STRIDE=0x100
 # site, original instruction, aligned path?, existing-tail-free path?, fail
@@ -174,8 +174,10 @@ def modify(raw,stamp):
     from ktgl_transform_hierarchy import apply as repair_hierarchy
     fixed,hierarchy=repair_hierarchy(bytes(out))
     proof["transform_hierarchy"]=hierarchy
-    from ktgl_native_fps import references
+    from ktgl_native_fps import references,drs_patch
     proof["native_fps_source_references"]=references(fixed)
+    fixed,drs=drs_patch(fixed,stamp["x0_size"],base.PATCH_OFF)
+    proof["native_drs"]=drs
     return fixed,proof
 
 old_patch=coherent.coherent_patch
@@ -193,10 +195,14 @@ def verify(exe,stamp):
 
     from ktgl_transform_hierarchy import verify as verify_hierarchy
     verify_hierarchy(raw)
+    from ktgl_native_fps import verify_drs
+    verify_drs(raw,stamp["x0_size"],base.PATCH_OFF)
 
 def make(source,source_report,repo,out):
-    from ktgl_native_fps import patch_host
+    from ktgl_native_fps import patch_host,display_profile
     fps_proof=patch_host(repo)
+    original_profile_adjust=base.profile_adjust
+    base.profile_adjust=lambda path,canonical: display_profile(path,canonical,original_profile_adjust)
     base.memory_geometry=geometry
     coherent.coherent_patch=modify
     coherent.verify_main=verify
@@ -204,6 +210,7 @@ def make(source,source_report,repo,out):
     try:
         report=pdrk.make(source,source_report,repo,out)
     finally:
+        base.profile_adjust=original_profile_adjust
         base.memory_geometry=base_geometry
         coherent.coherent_patch=old_patch
         coherent.verify_main=old_verify

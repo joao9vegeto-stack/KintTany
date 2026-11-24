@@ -44,6 +44,7 @@ jobs:
           python3 -m py_compile fairy2/scripts/ktgl_native_fps.py
           clang -std=c11 -Wall -Wextra -Werror fairy2/tests/test_ktgl_fps_chain.c -o "$RUNNER_TEMP/fairy2-fps-chain"
           "$RUNNER_TEMP/fairy2-fps-chain"
+          python3 -m unittest discover -s fairy2/tests -p test_ktgl_fps_pacing.py -v
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -132,7 +133,13 @@ jobs:
           assert report['transform_hierarchy_repair'] and report['prior_boot_render_verified']
           assert report['native_fps_engine']['pointer_chain']==['0x2c0b558','0x170','0x18c']
           assert report['coherent_ktgl_shared_capacity']['native_fps_source_references']
-          assert report['native_fps_engine']['guest_code_modified'] is False
+          assert report['native_fps_engine']['guest_code_modified'] is True
+          assert report['native_fps_engine']['dynamic_resolution_modified'] is True
+          assert report['native_fps_engine']['present_interval']=='display'
+          assert report['native_fps_engine']['fps_readback'] is True
+          assert len(report['coherent_ktgl_shared_capacity']['native_drs']['sites'])==2
+          assert report['coherent_ktgl_shared_capacity']['native_drs']['slot']=='0x2c53f00'
+          assert stamp['w_before_drs_sha256']!=stamp['w_sha256']
           assert report['native_fps_device_verified'] is False
           assert len(report['coherent_ktgl_shared_capacity']['transform_hierarchy']['sites'])==3
           assert stamp['trampoline_count']==5 and stamp['new_root']==0x140000000
@@ -165,6 +172,7 @@ jobs:
            assert env['DM_CRASH_PEEK']['default']=='x1'
            cfg=z.read(path+'profile.tsv').decode()
            assert 'mem_reserve\t0x180000000' in cfg and 'mem_alias\t0x158000000' in cfg
+           assert 'present_interval\tdisplay' in cfg
           print('SHARED KTGL CONFIG candidate verified: original G1T/G1S readers and shaders, device test required.')
           PY
       - name: Publish ONE PDRK direct-IO compatibility candidate, device validation required
@@ -172,7 +180,7 @@ jobs:
         with:
           name: Fairy2iOS-PDRK-DirectIO-Candidate-${{ github.run_number }}
           path: |
-            ${{ runner.temp }}/output/Fairy2iOS-FairyTail2-KTGL-NativeFPS.ipa
+            ${{ runner.temp }}/output/Fairy2iOS-FairyTail2-KTGL-FPSPacing.ipa
             ${{ runner.temp }}/output/ktgl-pdrk-direct-io-report.json
           if-no-files-found: error
           retention-days: 14

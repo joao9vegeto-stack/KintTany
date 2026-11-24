@@ -86,11 +86,22 @@ def patch_main(exe:Path,oldreport:dict):
     stamp=ROOT_PATCH(exe,oldreport)
     parts,raw=base.main_sections(exe)
     coherent,proof=coherent_patch(raw,stamp)
-    base.require(coherent[parts["x0"]["size"]:base.PATCH_OFF]
-                 ==raw[parts["x0"]["size"]:base.PATCH_OFF],
-                 "signed guest __DMmainW data unexpectedly altered")
+    start=parts["x0"]["size"]
+    if "native_drs" in proof:
+        from ktgl_native_fps import DRS_SLOT,DRS_SEED,verify_drs
+        verify_drs(coherent,start,base.PATCH_OFF)
+        base.require(raw[DRS_SLOT:DRS_SLOT+8]==bytes(8) and
+                     coherent[start:DRS_SLOT]==raw[start:DRS_SLOT] and
+                     coherent[DRS_SLOT:DRS_SLOT+8]==DRS_SEED and
+                     coherent[DRS_SLOT+8:base.PATCH_OFF]==raw[DRS_SLOT+8:base.PATCH_OFF],
+                     "only the reviewed eight-byte DRS slot may change in W")
+        write_sections=(("x0",0),("w",start),("x1",base.PATCH_OFF))
+    else:
+        base.require(coherent[start:base.PATCH_OFF]==raw[start:base.PATCH_OFF],
+                     "signed guest __DMmainW data unexpectedly altered")
+        write_sections=(("x0",0),("x1",base.PATCH_OFF))
     with exe.open("r+b") as f:
-        for key,off in (("x0",0),("x1",base.PATCH_OFF)):
+        for key,off in write_sections:
             item=parts[key];new=coherent[off:off+item["size"]]
             f.seek(item["offset"])
             base.require(f.read(item["size"])==item["data"],
@@ -101,6 +112,9 @@ def patch_main(exe:Path,oldreport:dict):
     stamp["after_sha256"]=hashlib.sha256(coherent).hexdigest()
     for key in ("x0","x1"):
         stamp[key+"_after_sha256"]=hashlib.sha256(p[key]["data"]).hexdigest()
+    if "native_drs" in proof:
+        stamp["w_before_drs_sha256"]=stamp["w_sha256"]
+        stamp["w_sha256"]=hashlib.sha256(p["w"]["data"]).hexdigest()
     stamp["coherent_ktgl_shared_capacity"]=proof
     return stamp
 
