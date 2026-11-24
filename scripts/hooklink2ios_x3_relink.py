@@ -69,7 +69,7 @@ def main():
     internal=a.output/"repack-report.json"
     # Do not lock the launcher: all modes remain selectable. Stop full pair scanning
     # by default, retain the original prewarm manifest and all existing graphics controls.
-    repack.PRESETS={"x3-recovery":{"DM_FRAME_MODE":"1","DM_FPS_TARGET":"30","DM_FRAMEGEN":"0","DM_PSO_PREBUILD":"0"}}
+    repack.PRESETS={"x3-recovery":{"DM_FRAME_MODE":"1","DM_FPS_TARGET":"30","DM_FRAMEGEN":"0","DM_PSO_PREBUILD":"0","DM_DYNAMIC_RESOLUTION":"1","DM_RENDER_SCALE":"0.85","DM_PRESENT_UPSCALE":"metalfx"}}
     sys.argv=["hooklink2ios_perf_repack.py","--source",str(source),"--replacement-executable",str(executable),"--preset","x3-recovery","--output",str(output),"--report",str(internal)]
     repack.main()
     audit=json.loads(internal.read_text())
