@@ -13,14 +13,16 @@ import zipfile
 from pathlib import Path
 
 REGIONS = (
- ("new-crash-allocator",0x227bc00,0x227c100),
+ ("new-crash-allocator",0x227bb00,0x227c900),
  ("new-crash-allocation-wrapper",0x227d780,0x227db00),
  ("shader-allocation-caller",0x61e6c0,0x61e940),
  ("shader-resource-caller",0x60bb00,0x60be20),
  ("shader-parse-caller",0x6e8a40,0x6e8d00),
  ("factory-shader",0x1dbdb00,0x1dbdf00),
  ("root-initializer",0x22959c0,0x2295b80),
- ("gpu-region-initializer",0x21b68c0,0x21b6c00),
+ ("gpu-region-initializer",0x21b6600,0x21b6c00),
+ ("root-arena-allocator",0x227d280,0x227d520),
+ ("heap-region-constructor",0x227a800,0x227bb00),
 
  ("buffered-stream-full",0xc09514,0xc09728),
  ("adapter-original-forward",0xc09728,0xc09740),
@@ -106,7 +108,7 @@ def audit(ipa:Path,expected_sha:str)->dict:
             md.skipdata=False
         insist(len(ins)==(last-first)//4,"incomplete ARM64 disassembly in "+name)
         selected=[x for x in ins if
-          (name in ("new-crash-allocator","new-crash-allocation-wrapper","shader-allocation-caller","shader-resource-caller","shader-parse-caller","factory-shader","root-initializer","gpu-region-initializer","buffered-stream-full","adapter-original-forward","G1T-header-native","G1T-validator","G1S-validator","KTGL-resource-create","chunk-producer-mode4","direct-reader","direct-block-allocator","direct-resource-call","direct-failure-factory","mode4-codec"))
+          (name in ("new-crash-allocator","new-crash-allocation-wrapper","shader-allocation-caller","shader-resource-caller","shader-parse-caller","factory-shader","root-initializer","gpu-region-initializer","root-arena-allocator","heap-region-constructor","buffered-stream-full","adapter-original-forward","G1T-header-native","G1T-validator","G1S-validator","KTGL-resource-create","chunk-producer-mode4","direct-reader","direct-block-allocator","direct-resource-call","direct-failure-factory","mode4-codec"))
           or x.mnemonic.startswith(("bl","b.","cb","tb")) or
           x.address in HOT or x.address in range(first, min(first+0x40,last),4)]
         rows=[{"at":hex(x.address),"hex":x.bytes.hex(),
