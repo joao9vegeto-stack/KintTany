@@ -13,7 +13,8 @@ import zipfile
 from pathlib import Path
 
 REGIONS = (
- ("cutscene-crash",0x208f700,0x208fd00),
+ ("cutscene-crash",0x208f8b0,0x2090100),
+ ("model-node-bitset",0x10d42e0,0x10d4480),
  ("root-producers",0x225ddc0,0x225de80),
  ("root-producer-a",0x5f1b60,0x5f1c00),
  ("root-producer-b",0x1d70080,0x1d70140),
@@ -91,6 +92,17 @@ def audit(ipa:Path,expected_sha:str)->dict:
                "op":x.mnemonic+" "+x.op_str} for x in selected]
         out["regions"].append({"name":name,"start":hex(first),"end":hex(last),
              "instructions":len(ins),"disasm":rows})
+    # Scan direct callsites for the exact transform walker, with context.
+    calls=[]
+    for at in range(0,len(code)-4,4):
+        w=int.from_bytes(code[at:at+4],"little")
+        if w>>26!=0x25: continue
+        n=w&0x3ffffff
+        if n&0x2000000: n-=0x4000000
+        if at+4*n != 0x208f8b0: continue
+        ins=list(md.disasm(code[max(0,at-0x60):at+0x24],max(0,at-0x60)))
+        calls.append({"name":"transform-call-"+hex(at),"start":hex(at-0x60),"end":hex(at+0x24),"instructions":len(ins),"disasm":[{"at":hex(x.address),"hex":x.bytes.hex(),"op":x.mnemonic+" "+x.op_str} for x in ins]})
+    out["regions"].extend(calls)
     for at in HOT:
         word=code[at:at+4]
         ins=list(md.disasm(word,at))
