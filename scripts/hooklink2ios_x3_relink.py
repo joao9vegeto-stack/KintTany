@@ -27,6 +27,77 @@ def require(value,message):
     if not value:
         raise RuntimeError(message)
 
+# Strict source anchors from the pinned X3 engine. Keep previous recovery and shader ABI.
+HL_INPUT_EXIT_PATCHES = [
+  [
+    "dm/ios/Sources/DmGameMenu.h",
+    "bool dm_setting_live(const char *env, const char *value);",
+    "void dm_hl_pad_swap_set(const char *value);\nvoid dm_hl_confirm_exit(void);\nbool dm_setting_live(const char *env, const char *value);"
+  ],
+  [
+    "dm/ios/Sources/DmGamepad.m",
+    "static int g_merge, g_press_to_join;",
+    "static int g_merge, g_press_to_join;\nstatic _Atomic unsigned hl_pad_swap;\n#define HL_SWAP_PAIR(m,a,b) (((m) & ~((a)|(b))) | (((m)&(a)) ? (b) : 0) | (((m)&(b)) ? (a) : 0))\n_Static_assert(HL_SWAP_PAIR(1ull,1ull,2ull)==2ull && HL_SWAP_PAIR(2ull,1ull,2ull)==1ull &&\n               HL_SWAP_PAIR(3ull,1ull,2ull)==3ull && HL_SWAP_PAIR(4ull,1ull,2ull)==4ull &&\n               HL_SWAP_PAIR(4ull,4ull,8ull)==8ull && HL_SWAP_PAIR(8ull,4ull,8ull)==4ull &&\n               HL_SWAP_PAIR(12ull,4ull,8ull)==12ull && HL_SWAP_PAIR(0ull,4ull,8ull)==0ull, \"face swap must preserve simultaneous inputs\");\nstatic uint64_t hl_remap_physical(uint64_t m) {\n    unsigned mode = atomic_load_explicit(&hl_pad_swap, memory_order_relaxed);\n    if (mode & 1) m = HL_SWAP_PAIR(m, 1ull << B_A, 1ull << B_B);\n    if (mode & 2) m = HL_SWAP_PAIR(m, 1ull << B_X, 1ull << B_Y);\n    return m;\n}"
+  ],
+  [
+    "dm/ios/Sources/DmGamepad.m",
+    "    dm_pad_set_player(p, m, axis(lx), axis(ly), axis(rx), axis(ry));",
+    "    dm_pad_set_player(p, hl_remap_physical(m), axis(lx), axis(ly), axis(rx), axis(ry));"
+  ],
+  [
+    "dm/ios/Sources/DmGamepad.m",
+    "// Returns YES on first registration, so a controller waiting to join is logged once.",
+    "void dm_hl_pad_swap_set(const char *value) {\n    unsigned mode = 0;\n    if (value && value[0] >= '0' && value[0] <= '3' && !value[1]) mode = (unsigned)(value[0] - '0');\n    unsigned previous = atomic_exchange_explicit(&hl_pad_swap, mode, memory_order_relaxed);\n    LOG(\"HookLink2iOS physical face buttons: AB=%s XY=%s\", mode & 1 ? \"swapped\" : \"original\", mode & 2 ? \"swapped\" : \"original\");\n    if (previous != mode) dispatch_async(dispatch_get_main_queue(), ^{\n        if (g_merge) return;   // merged mode retains last-moved semantics\n        for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p]) read_pad(g_held[p]);\n    });\n}\n// Returns YES on first registration, so a controller waiting to join is logged once."
+  ],
+  [
+    "dm/ios/Sources/DmGamepad.m",
+    "static void pads_start(void) {\n    const char *e = getenv(\"DM_PAD_MERGE\");",
+    "static void pads_start(void) {\n    dm_hl_pad_swap_set(getenv(\"DM_HL_PAD_SWAP\"));\n    const char *e = getenv(\"DM_PAD_MERGE\");"
+  ],
+  [
+    "dm/ios/Sources/front_ios.m",
+    "    if (!env || !g_root.game) return false;\n    if (!strcmp(env, \"DM_PICTURE_FIT\")) {",
+    "    if (!env || !g_root.game) return false;\n    if (!strcmp(env, \"DM_HL_PAD_SWAP\")) {\n        if (value) dm_hl_pad_swap_set(value);\n        return true;\n    }\n    if (!strcmp(env, \"DM_PICTURE_FIT\")) {"
+  ],
+  [
+    "dm/ios/Sources/front_ios.m",
+    "static void launcher_done(void) { [g_root startGame]; }",
+    "// Reuse the existing controlled process exit; never restart the guest in-place.\nvoid dm_hl_confirm_exit(void) {\n    dispatch_async(dispatch_get_main_queue(), ^{\n        static BOOL exiting = NO;\n        if (exiting || !g_root.game || !g_root.view.window) return;\n        UIViewController *parent = g_root;\n        while (parent.presentedViewController) parent = parent.presentedViewController;\n        if ([parent isKindOfClass:UIAlertController.class]) return;\n        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@\"Sair do jogo?\"\n            message:@\"Salve o progresso no jogo antes de sair. O aplicativo será fechado; ao abrir novamente, o launcher será exibido.\"\n            preferredStyle:UIAlertControllerStyleAlert];\n        [alert addAction:[UIAlertAction actionWithTitle:@\"Cancelar\" style:UIAlertActionStyleCancel handler:nil]];\n        [alert addAction:[UIAlertAction actionWithTitle:@\"Sair\" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {\n            (void)action;\n            if (exiting) return;\n            exiting = YES;\n            LOG(\"HookLink2iOS: user requested graceful exit\");\n            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{\n                if (!save_sync_flush(3000)) LOG(\"HookLink2iOS: cloud save sync pending; committed local save retained\");\n                dm_host_shutdown(\"HookLink2iOS Exit menu\");\n            });\n        }]];\n        [parent presentViewController:alert animated:YES completion:nil];\n    });\n}\nstatic void launcher_done(void) { [g_root startGame]; }"
+  ],
+  [
+    "dm/ios/Sources/Launcher.swift",
+    "    let model = LauncherModel(deviceAdjusted(file.settings))",
+    "    let hlMappingData = Data(#\"{\"settings\":[{\"env\":\"DM_HL_PAD_SWAP\",\"kind\":\"choice\",\"label\":\"Gamepad: mapear A/B e X/Y\",\"note\":\"Altera somente os botões físicos. Normal mantém o layout original; inverta A/B, X/Y ou ambos para adequar as letras do controle. Os controles de toque não mudam.\",\"default\":\"0\",\"section\":\"Controls\",\"options\":[[\"0\",\"Original\"],[\"1\",\"Inverter A/B\"],[\"2\",\"Inverter X/Y\"],[\"3\",\"Inverter A/B e X/Y\"]]}]}\"#.utf8)\n    var hlSettings = file.settings\n    if !hlSettings.contains(where: { $0.env == \"DM_HL_PAD_SWAP\" }),\n       let extra = try? JSONDecoder().decode(SettingsFile.self, from: hlMappingData) {\n        hlSettings.append(contentsOf: extra.settings)\n    }\n    let model = LauncherModel(deviceAdjusted(hlSettings))"
+  ],
+  [
+    "dm/ios/Sources/Launcher.swift",
+    "fputs(\"launcher: \\(file.settings.count) settings shown\\n\", stderr)",
+    "fputs(\"launcher: \\(hlSettings.count) settings shown\\n\", stderr)"
+  ],
+  [
+    "dm/ios/Sources/GameMenu.swift",
+    "    return items\n}",
+    "    items.append(UIMenu(options: .displayInline, children: [UIAction(title: \"Sair do jogo\", image: UIImage(systemName: \"rectangle.portrait.and.arrow.right\"), attributes: .destructive) { _ in dm_hl_confirm_exit() }]))\n    return items\n}"
+  ]
+]
+
+def apply_input_exit(engine):
+    edited = {}
+    counts = {}
+    for name, anchor, replacement in HL_INPUT_EXIT_PATCHES:
+        path = engine / name
+        body = edited.get(path)
+        if body is None:
+            body = path.read_text(encoding="utf-8")
+        if body.count(anchor) != 1:
+            raise RuntimeError("HookLink2iOS input/exit anchor absent or duplicated: " + name + ": " + anchor[:90])
+        edited[path] = body.replace(anchor, replacement, 1)
+        counts[name] = counts.get(name, 0) + 1
+    for path, body in edited.items():
+        path.write_text(body, encoding="utf-8")
+    return counts
+
+
 def main():
     p=argparse.ArgumentParser()
     p.add_argument("--artifact",type=Path,required=True)
@@ -80,6 +151,7 @@ def main():
     icon_provenance=game_icon.prepare(icon)
     print("HOOKLINK2IOS_OFFICIAL_ICON_OK",json.dumps(icon_provenance),flush=True)
     changes=recovery.apply(a.engine)
+    changes["input_exit"] = apply_input_exit(a.engine)
     print("X3 source changes:",changes,flush=True)
     executable,buildlog,checked=native.generate_and_build(a.engine,work,patches,plist,original)
     output=a.output/"OcarinaOfTime-HookLink2iOS-X3-Recovery.ipa"
