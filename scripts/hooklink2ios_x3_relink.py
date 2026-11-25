@@ -151,7 +151,8 @@ def main():
     icon_provenance=game_icon.prepare(icon)
     print("HOOKLINK2IOS_OFFICIAL_ICON_OK",json.dumps(icon_provenance),flush=True)
     changes=recovery.apply(a.engine)
-    changes["input_exit"] = apply_input_exit(a.engine)
+    input_exit_changes=apply_input_exit(a.engine)
+    changes.append("persistent physical AB/XY mapping and confirmed graceful exit: " + json.dumps(input_exit_changes,sort_keys=True))
     print("X3 source changes:",changes,flush=True)
     executable,buildlog,checked=native.generate_and_build(a.engine,work,patches,plist,original)
     output=a.output/"OcarinaOfTime-HookLink2iOS-X3-Recovery.ipa"
