@@ -5,3 +5,6 @@ Open [Colab](https://colab.research.google.com/github/joao9vegeto-stack/KintTany
 The notebook ingests source packages, overlays translation ZIP's Asia/USA RomFS onto the US image, verifies hashes and builds Linux workspace. Only the explicit handoff cell triggers the Mac workflow; no game data or signed source URLs are committed.
 Shared Shell provides per-button mapping (including A/B and X/Y) and native game exit. Launcher includes 30/60 and PT-BR status. No Fairy Tail KTGL, Blades or Biomutant game-specific payloads retained. External RomFS/AOC; thin IPA.
 Initial port source implementation; not tested with real game files or Xcode yet. Any unknown translation path, incompatible version or invalid archive fails closed.
+
+## Transferência da última IPA
+Abra `colab/Nier2iOS_Download_Latest.ipynb`. Uma célula, ranges de 64 MiB, SHA-256 do artefato e IPA, validação do título e tradução, upload para `nier/ipa`. Não dispara workflow.

@@ -34,6 +34,14 @@ def mod_files(z):
         raise ValueError("Expected exactly one Asia or USA Title ID / romfs subtree")
     return result,next(iter(roots))
 
+def ensure_identity(directory,title,version):
+    import romfs_image as ri
+    image=Path(directory)/"RomFS.img"
+    meta={"title":title.lower(),"version":version,"bytes":image.stat().st_size,
+          "sha256":sha256(image),"identity":ri.identity(str(image),title,version)}
+    image.with_name("RomFS.img.id").write_text(json.dumps(meta,indent=2)+"\n")
+    return meta
+
 def apply_translation(directory,archive,title,version):
     import romfs_image as ri
     directory=Path(directory); archive=Path(archive)
@@ -49,21 +57,29 @@ def apply_translation(directory,archive,title,version):
         if old.get("zip_sha256")==zip_hash and old.get("sha256")==sha256(image) and old.get("sha256")==json.loads(identity.read_text()).get("sha256"):
             return old
     if not original.exists():
+        ensure_identity(directory,title,version)
         image.replace(original)
-        if identity.exists(): shutil.copy2(identity,original_id)
+        shutil.copy2(identity,original_id)
     elif not original_id.exists():
         raise RuntimeError("Original RomFS metadata absent")
     with zipfile.ZipFile(archive) as z:
         mods,source_title=mod_files(z)
         index=ri.read_index(original)
         original_files={k:v for k,v in index.items() if not v[0]}
-        unknown=set(mods)-set(original_files)
-        if unknown: raise ValueError("Translation contains paths absent from US RomFS: "+str(sorted(unknown)[:20]))
+        merged=dict(index)
+        for path in mods:
+            if path in merged and merged[path][0]: raise ValueError("Translation replaces a directory: "+path)
+            merged[path]=(False,0,0)
+            for parent in PurePosixPath(path).parents:
+                if str(parent)==".": continue
+                name=str(parent)
+                if name in merged and not merged[name][0]: raise ValueError("Translation directory conflicts with file: "+name)
+                merged.setdefault(name,(True,0,0))
         if shutil.disk_usage(directory).free < original.stat().st_size+sum(x.file_size for x in mods.values()):
             raise RuntimeError("Insufficient space to rebuild translated RomFS")
         # Preserve directory layout, filenames and every unmodified byte.
         children={}
-        for path,(isdir,off,size) in index.items():
+        for path,(isdir,off,size) in merged.items():
             parent,_,name=path.rpartition("/")
             children.setdefault(parent,[]).append((name,path,isdir))
         entries=[[b"","",True,0,0]]
@@ -95,7 +111,7 @@ def apply_translation(directory,archive,title,version):
                 return size
             partial=Path(ri.write(entries,str(image),copy))
         new_index=ri.read_index(partial)
-        if set(new_index)!=set(index): raise ValueError("RomFS inventory changed")
+        if set(new_index)!=set(merged): raise ValueError("RomFS inventory changed")
         with partial.open("rb") as inp:
             for path,record in changed.items():
                 _,off,size=new_index[path]
@@ -107,10 +123,10 @@ def apply_translation(directory,archive,title,version):
                 if size!=record["bytes"] or h.hexdigest()!=record["sha256"]: raise ValueError("Translation verification failed")
         digest=sha256(partial)
         meta=json.loads(original_id.read_text())
-        meta.update(bytes=partial.stat().st_size,sha256=digest,title=title.lower(),version=version)
+        meta.update(bytes=partial.stat().st_size,sha256=digest,title=title.lower(),version=version,identity=ri.identity(str(partial),title,version))
         partial.replace(image)
         identity.write_text(json.dumps(meta,indent=2)+"\n")
-        report={"title_id":title,"version":version,"language":"pt-BR","source_title":source_title,"zip_sha256":zip_hash,"sha256":digest,"file_count":len(changed),"files":changed}
+        report={"title_id":title,"version":version,"language":"pt-BR","source_title":source_title,"zip_sha256":zip_hash,"sha256":digest,"identity":meta["identity"],"file_count":len(changed),"files":changed}
         report_path.write_text(json.dumps(report,indent=2)+"\n")
         # Cached shader source survey must reflect the translated image.
         for name in ("RomFS.img.sources","RomFS.img.formats"):

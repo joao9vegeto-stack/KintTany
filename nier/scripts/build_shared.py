@@ -295,7 +295,7 @@ def main() -> None:
             "DM_XCODE_DERIVED_DATA": str(work / "xcode-derived-data"),
             "DM_TEAM_ID": "0000000000", "DM_LANG": language,
             "CONTROL": str(control), "AOC": "", "DM_COPY_ROMFS": "NO",
-            "DM_PSO_GPUS": "none", "DM_SHOW_FPS": "YES",
+            "DM_PSO_GPUS": "none", "DM_SHOW_FPS": "1",
             "DM_FRAMEWORK_ONLY": str(fw_root), "IOS_PULL": "1",
         })
         if icon.is_file():
@@ -404,6 +404,10 @@ def main() -> None:
                  "/romfs.img", ".mtl4a")) or "/aoc/" in x.lower()]
             if prohibited:
                 fail(f"IPA contains prohibited game data: {prohibited[:5]}")
+        ipa_digest = hashlib.sha256()
+        with ipa.open("rb") as stream:
+            for block in iter(lambda:stream.read(8<<20),b""):
+                ipa_digest.update(block)
         report = {
             "project": "Nier2iOS", "game": display_name, "title_id": TITLE_ID,
             "package_version": prepared["package_version"], "engine_pin": ENGINE_PIN,
@@ -418,7 +422,8 @@ def main() -> None:
             },
             "linux_shader_split_stage": prep["shader_split_stage"],
             "mac_host_stages": prep["mac_host_stages"],
-            "ipa": ipa.name, "ipa_size_bytes": ipa.stat().st_size,
+            "ipa": ipa.name, "ipa_size_bytes": ipa.stat().st_size, "ipa_sha256": ipa_digest.hexdigest(),
+            "github_sha": os.getenv("GITHUB_SHA"), "run_id": os.getenv("GITHUB_RUN_ID"),
             "ios_deployment_target": "26.0",
             "frame_rate_choice": {"env": "DM_FPS_TARGET", "default": 30, "options": [30, 60],
                                   "game_engine_60fps_unlock_verified": False,

@@ -157,7 +157,7 @@ def run_preparation(args) -> dict:
             "update NSP content metadata is invalid")
     package_version = f"v{update_version}"
     require(package_version == "v131072", "Expected registered 1.0.3 update v131072")
-    from translation import apply_translation
+    from translation import apply_translation, ensure_identity
     translation_zip = Path(args.translation_zip).resolve()
     require(translation_zip.is_file(), "PT-BR translation ZIP missing")
     original_extract = module.extract
@@ -166,6 +166,8 @@ def run_preparation(args) -> dict:
         directory = original_extract(*a, **kw)
         if directory.name == package_version:
             translation_report.update(apply_translation(directory, translation_zip, TITLE_ID, package_version))
+        else:
+            ensure_identity(directory,TITLE_ID,directory.name)
         return directory
     module.extract = extract_translated
     print(f"[Nier2iOS] Package metadata validated: base {TITLE_ID} v0 + update {package_version}", flush=True)

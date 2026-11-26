@@ -518,7 +518,9 @@ def recover(args, api=None) -> dict | None:
         p = d.get("prepared", {})
         if not (d.get("project") == "Nier2iOS" and d.get("branch") == BRANCH
                 and d.get("title_id") == TITLE_ID and d.get("package_version") == p.get("package_version")
-                and bool(re.fullmatch(r"v[1-9][0-9]*", d.get("package_version", "")))
+                and d.get("package_version") == "v131072"
+                and p.get("translation", {}).get("zip_sha256") == d.get("source_files", {}).get("translation", {}).get("sha256")
+                and p.get("translation", {}).get("sha256") == d.get("game_data", {}).get("romfs", {}).get("sha256")
                 and p.get("input_package_count", 0) >= 3 and p.get("input_update_count") == 1 and p.get("input_dlc_count", 0) > 0 and p.get("translation", {}).get("file_count", 0) > 0
                  and all(re.fullmatch(r"[0-9a-f]{64}", d.get("source_files", {}).get(k, {}).get("sha256", ""))
                          for k in ("base", "update"))
