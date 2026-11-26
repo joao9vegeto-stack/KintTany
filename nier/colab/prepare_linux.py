@@ -192,6 +192,11 @@ def run_preparation(args) -> dict:
         if any(x.replace("\\", "/").endswith("dm/ios/tools/build_ipa.sh") for x in parts):
             print("[Nier2iOS] Preparação Linux concluída; compilação Xcode reservada ao Actions.")
             raise FinishedLinux()
+        if len(parts) >= 2 and parts[1].replace("\\", "/").endswith("/dm/gfx/tools/shader_split.py"):
+            wrapper = Path(__file__).resolve().with_name("fast_shader_split.py")
+            require(wrapper.is_file(), "Native shader splitter wrapper missing")
+            command = [command[0], str(wrapper), *command[1:]]
+            print("[Nier2iOS] Using native CRILAYLA accelerated full split (no skipped archives).", flush=True)
         return original_run(command, log, *extra, **kw)
     def split_record(*a, **kw):
         oodle = kw.get("oodle", a[9] if len(a) > 9 else None)

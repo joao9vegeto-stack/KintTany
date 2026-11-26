@@ -293,6 +293,7 @@ def prepare(args, api=None) -> dict:
     code = [
         checkout / "nier/port_stages.py",
         checkout / "nier/colab/prepare_linux.py",
+        checkout / "nier/colab/fast_shader_split.py",
         checkout / "nier/colab/source_archive.py",
         checkout / "nier/drive_chunks.py",
         checkout / "nier/scripts/mac_capture.py",
