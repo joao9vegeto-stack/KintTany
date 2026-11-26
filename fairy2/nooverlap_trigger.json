@@ -1,9 +1,0 @@
-{
-  "source_run": 44992666178,
-  "old_capacity": 1342177280,
-  "new_capacity": 2147483648,
-  "rebuild_shaders": false,
-  "old_overflow_bytes": 344637440,
-  "bin47_relocated_alias_offset": 3313500536,
-  "keep_mem_svc_guards": true
-}
