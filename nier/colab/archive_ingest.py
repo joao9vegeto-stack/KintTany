@@ -385,50 +385,29 @@ def download_rar(url: str, destination: Path) -> dict:
     return marker
 
 
-def sevenzip_executable() -> str:
-    for name in ("7zz", "7z"):
-        found = shutil.which(name)
-        if found:
-            return found
-    subprocess.run(["apt-get", "update", "-qq"], check=True)
-    try:
-        subprocess.run(["apt-get", "install", "-y", "-qq", "7zip"], check=True)
-    except subprocess.CalledProcessError:
-        subprocess.run(["apt-get", "install", "-y", "-qq", "p7zip-full"], check=True)
-    executable = shutil.which("7zz") or shutil.which("7z")
-    require(executable, "7-Zip is unavailable in this Linux runtime")
-    return executable
-
-
 def _rar_extraction_command(name: str, executable: str, rar: Path,
                             extraction_dir: Path) -> list[str]:
     if name == "unrar":
-        # -p- disables interactive password prompts in unattended Colab sessions.
-        return [executable, "x", "-y", "-o+", "-p-", str(rar),
-                str(extraction_dir) + "/"]
+        return [executable, "x", "-y", "-o+", "-p-", str(rar), str(extraction_dir) + "/"]
     if name == "unar":
-        return [executable, "-quiet", "-force-overwrite",
-                "-output-directory", str(extraction_dir), str(rar)]
-    return [executable, "x", "-y", f"-o{extraction_dir}", str(rar)]
+        return [executable, "-quiet", "-force-overwrite", "-output-directory", str(extraction_dir), str(rar)]
+    return [executable, "x", "-y", "-bsp1", f"-o{extraction_dir}", str(rar)]
 
 
-def _install_rar_fallback(name: str) -> str | None:
-    """Try supported Linux RAR readers only after a preinstalled reader fails."""
-    package = {"7zz": "7zip", "unrar": "unrar", "unar": "unar"}[name]
-    existing = shutil.which(name)
-    if existing:
-        return existing
-    print(f"[Nier2iOS] Checking Linux RAR fallback: {package}", flush=True)
+def _install_rar_reader(name):
+    """Bound apt time and show package-manager diagnostics, never silently loop."""
+    package = {"unrar":"unrar", "7zz":"7zip", "unar":"unar"}[name]
+    print(f"[Nier2iOS] Installing RAR reader {package} (timeout 90 s)", flush=True)
     try:
-        result = subprocess.run(
-            ["apt-get", "install", "-y", "-qq", package],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, errors="replace", check=False, timeout=240)
+        result = subprocess.run(["apt-get", "-o", "DPkg::Lock::Timeout=10",
+            "-o", "Acquire::Retries=0", "-o", "Acquire::http::Timeout=15",
+            "-o", "Acquire::https::Timeout=15", "install", "-y", "-qq", package],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, errors="replace", timeout=90, check=False)
         if result.returncode:
-            print(f"[Nier2iOS] Package {package} unavailable "
-                  f"(apt exit {result.returncode}); trying next reader.", flush=True)
+            print(f"[Nier2iOS] apt {package}: exit {result.returncode}\n{result.stdout[-4000:]}", flush=True)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        print(f"[Nier2iOS] Could not install {package}: {type(exc).__name__}", flush=True)
+        print(f"[Nier2iOS] apt {package}: {type(exc).__name__}", flush=True)
     return shutil.which(name)
 
 
@@ -443,7 +422,7 @@ def upload_checked(api, path: Path, drive_name: str) -> dict:
     while response is None:
         status, response = uploaded.next_chunk(num_retries=6)
         if status:
-            print(f"[Nier2iOS] NSP -> Drive {drive_name}: {status.progress():.1%}",
+            print(f"[Nier2iOS] File -> Drive {drive_name}: {status.progress():.1%}",
                   flush=True)
     require(int(response["size"]) == path.stat().st_size and
             response.get("md5Checksum", "").lower() == md5,
@@ -469,30 +448,94 @@ def _get_remote(children, filename):
     return item
 
 
+def _run_extractor(command, directory, label):
+    """Emit real output + disk-byte heartbeat even if decompressor stays quiet."""
+    import threading
+    from collections import deque
+    lines = deque(maxlen=35)
+    finished = threading.Event()
+    started = time.monotonic()
+    def heartbeat():
+        while not finished.wait(10):
+            size = 0
+            for path in directory.rglob("*"):
+                try:
+                    if path.is_file() and not path.is_symlink(): size += path.stat().st_size
+                except OSError:
+                    pass
+            elapsed = max(time.monotonic() - started, 1)
+            print(f"[Nier2iOS] {label}: extracted {size/2**30:.2f} GiB | {elapsed:.0f}s | {size/elapsed/2**20:.1f} MiB/s", flush=True)
+    print(f"[Nier2iOS] Starting {label}: {Path(command[0]).name} | free {shutil.disk_usage(directory).free/2**30:.1f} GiB", flush=True)
+    with subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                          stderr=subprocess.STDOUT, text=True, errors="replace", bufsize=1) as proc:
+        thread = threading.Thread(target=heartbeat, daemon=True)
+        thread.start()
+        try:
+            for line in proc.stdout:
+                line = line.strip()
+                if line:
+                    lines.append(line)
+                    print(f"[{label}] {line}", flush=True)
+            status = proc.wait()
+        except BaseException:
+            proc.terminate()
+            try: proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill(); proc.wait()
+            raise
+        finally:
+            finished.set()
+            thread.join(timeout=2)
+    return status, "\n".join(lines)
+
+
 def extract_packages(first, directory, suffix, expected=None):
-    directory = Path(directory)
-    initial = sevenzip_executable()
-    failures = []
-    for kind in ("initial", "7zz", "unrar", "unar"):
-        exe = initial if kind == "initial" else _install_rar_fallback(kind)
-        if not exe: continue
+    directory, first = Path(directory), Path(first)
+    require(first.is_file(), f"Missing RAR: {first}")
+    if first.name == "base.part1.rar":
+        for i in range(1,4):
+            part = first.with_name(f"base.part{i}.rar")
+            require(part.is_file() and part.stat().st_size > 8, f"Missing RAR volume: {part.name}")
+        print("[Nier2iOS] All three RAR volumes present; opening part1 only.", flush=True)
+    failures, attempted = [], set()
+    # Prefer native unrar when already installed; try available readers before apt.
+    candidates = [("unrar",shutil.which("unrar")),("7zz",shutil.which("7zz")),
+                  ("7z",shutil.which("7z")),("unar",shutil.which("unar"))]
+    def attempt(kind, exe):
+        if not exe or str(Path(exe).resolve()) in attempted: return None
+        attempted.add(str(Path(exe).resolve()))
         shutil.rmtree(directory, ignore_errors=True)
         directory.mkdir(parents=True)
-        command = _rar_extraction_command(Path(exe).name, exe, Path(first), directory)
-        result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True, errors="replace")
-        if result.returncode:
-            failures.append(result.stdout[-4000:])
-            continue
+        status, tail = _run_extractor(_rar_extraction_command(kind,exe,first,directory),
+                                     directory, f"{first.name}/{kind}")
+        if status:
+            failures.append(f"{kind}: exit {status}\n{tail}")
+            print(f"[Nier2iOS] RAR extractor {kind} failed (exit {status}):\n{tail}", flush=True)
+            lower = tail.lower()
+            if any(x in lower for x in ("no space left", "not enough space", "disk full",
+                      "wrong password", "password is incorrect", "missing volume",
+                      "next volume is required", "unexpected end of archive", "unexpected end of data")):
+                raise RuntimeError("RAR requires correction; all source volumes retained:\n"+tail)
+            return None
         files = sorted(p for p in directory.rglob("*") if p.is_file() and not p.is_symlink()
                        and p.suffix.lower() == suffix and p.resolve().is_relative_to(directory.resolve()))
-        require(files and (expected is None or len(files) == expected), "Unexpected extracted package count")
+        require(files and (expected is None or len(files) == expected),
+                f"Unexpected extracted package inventory: {[p.name for p in files]}")
         for path in files:
             with path.open("rb") as inp:
                 if suffix == ".xci": inp.seek(0x100)
-                require(inp.read(4) == (b"HEAD" if suffix == ".xci" else b"PFS0"), "Invalid package header")
+                require(inp.read(4) == (b"HEAD" if suffix == ".xci" else b"PFS0"),
+                        f"Invalid package header: {path.name}")
+            print(f"[Nier2iOS] Extracted {path.name}: {path.stat().st_size:,} bytes", flush=True)
         return files
-    raise RuntimeError("RAR extraction failed; source retained:\n" + "\n".join(failures))
+    for kind, exe in candidates:
+        files = attempt(kind,exe)
+        if files: return files
+    for kind in ("unrar","7zz","unar"):
+        files = attempt(kind,shutil.which(kind) or _install_rar_reader(kind))
+        if files: return files
+    raise RuntimeError("RAR extraction failed; source retained:\n"+"\n".join(failures))
+
 
 def ingest(api, parent_folder_id, base_urls, update_url, dlc_url, translation_url, root="/content/nier"):
     import zipfile
@@ -512,8 +555,11 @@ def ingest(api, parent_folder_id, base_urls, update_url, dlc_url, translation_ur
     for group, urls, suffix, expected in (("base", base_urls, ".xci", 1), ("update",[update_url],".nsp",1), ("dlc",[dlc_url],".nsp",None)):
         target = "base.xci" if group == "base" else "update.nsp"
         dlc_manifest = remote("dlc-inventory.json") if group == "dlc" else None
-        if group != "dlc" and remote(target): continue
+        if group != "dlc" and remote(target):
+            print(f"[Nier2iOS] Drive cache: {target}; skipping download/extraction", flush=True)
+            continue
         if dlc_manifest:
+            print("[Nier2iOS] Drive cache: DLC inventory", flush=True)
             import io, json
             from googleapiclient.http import MediaIoBaseDownload
             buf=io.BytesIO(); download=MediaIoBaseDownload(buf,api.files().get_media(fileId=dlc_manifest["id"]))
@@ -531,6 +577,7 @@ def ingest(api, parent_folder_id, base_urls, update_url, dlc_url, translation_ur
         extracted=extract_packages(archives[0], root/(group+"-extract"), suffix, expected)
         names=[]
         for i,path in enumerate(extracted,1):
+            print(f"[Nier2iOS] Hashing extracted {path.name} before verified Drive upload", flush=True)
             name=f"dlc-{i:02d}.nsp" if group=="dlc" else target
             store(path,name); names.append(name)
         if group=="dlc":
