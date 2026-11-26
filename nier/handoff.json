@@ -1,0 +1,162 @@
+{
+  "format": 1,
+  "project": "Nier2iOS",
+  "branch": "Nier2iOS",
+  "request_id": "aa23aeae-a60f-45fa-a7a3-9ea4f7c33757",
+  "title_id": "010056B015FE8000",
+  "package_version": "v131072",
+  "source_ref": "Nier2iOS",
+  "source_files": {
+    "base": {
+      "id": "1Q7MrccAIuAlWUu4dBiMPZIK3SqPCmJxJ",
+      "name": "base.xci",
+      "size": 12074559488,
+      "sha256": "c2c293d0f9315a565652a71949fda4a7dfcb5bccfdd4a4c932caac4f35be2922"
+    },
+    "update": {
+      "id": "192mxZtCrkhC2aK7h8lumpUyHZySD-mKl",
+      "name": "update.nsp",
+      "size": 24699157,
+      "sha256": "956f1412ff6d20eb42b5095994322dd8287ae5820d20c9f27904f1506ee9319e"
+    },
+    "dlcs": [
+      {
+        "id": "1MQ_qNSrV6mDwvhzgEstURx_WXZVnDr8U",
+        "name": "dlc-01.nsp",
+        "size": 122009,
+        "sha256": "2057548b936af3c959e0263b1a6bec55ff9383bd3a958cc858495c52405fa69e"
+      }
+    ],
+    "translation": {
+      "id": "1XqVPrrBMXYyj9V4Cjf6Fz-QOqLLtw7xl",
+      "name": "translation.zip",
+      "size": 157175527,
+      "sha256": "cc6112ce36a2fdee75a90b777cb17ddbc03ede8e33ee6553768ac4de4556c516"
+    }
+  },
+  "engine_pin": "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb",
+  "source_commit": "bde815636cc35be39b6d3a6675df005c3f049324",
+  "drive_output_folder_id": "19QVyWR262-dnKp0LLpp6XW-9VdCEFacw",
+  "drive_output_folder_url": "https://drive.google.com/drive/folders/19QVyWR262-dnKp0LLpp6XW-9VdCEFacw",
+  "work_archive": {
+    "name": "nier-work.tar.zst",
+    "id": "1hqkrPAr0yEBB5EbXmQ4jI8P_PocLmeSv",
+    "size": 30890697,
+    "sha256": "e53a8a18859ca19bf7f5c8b8d9e7195fe972c88de9daf78bab4a934d72ecef96"
+  },
+  "game_data": {
+    "folder_id": "1-nE7wDDMtAEphcyL_qTL-rQZvO_naNBg",
+    "folder_url": "https://drive.google.com/drive/folders/1-nE7wDDMtAEphcyL_qTL-rQZvO_naNBg",
+    "romfs": {
+      "name": "romfs.img",
+      "id": "1uvDjjjTDrO8vWY3t3r2oJD0XqG1TZCte",
+      "size": 12208487969,
+      "sha256": "155ec65d3d17e99f6367553296ebd7b798616393470c45d11f86f1bac7cf5ce3"
+    },
+    "shader_romfs": [],
+    "aoc": [
+      {
+        "name": "1.img",
+        "id": "16OjWSvOUxeVLennnD4BZSlEHy_sYFeQZ",
+        "size": 6371,
+        "sha256": "767a6c08809df662265152742691a6d01036ba4166f8b63eeff7a99b25dcb14e"
+      }
+    ],
+    "romfs_relative_path": "extract/v131072/RomFS.img"
+  },
+  "prepared": {
+    "format": 1,
+    "project": "Nier2iOS",
+    "branch": "Nier2iOS",
+    "title_id": "010056B015FE8000",
+    "package_version": "v131072",
+    "source_ref": "Nier2iOS",
+    "engine_pin": "b526a50b85e4cfa3142c111e1ad491d9fd11f0eb",
+    "input_package_count": 3,
+    "input_nsp_count": 2,
+    "input_xci_count": 1,
+    "input_update_count": 1,
+    "base_content_version": 0,
+    "update_content_version": 131072,
+    "input_dlc_count": 1,
+    "input_dlc_nsp_count": 1,
+    "translation": {
+      "title_id": "010056B015FE8000",
+      "version": "v131072",
+      "language": "pt-BR",
+      "source_title": "0100B8E016F76000",
+      "zip_sha256": "cc6112ce36a2fdee75a90b777cb17ddbc03ede8e33ee6553768ac4de4556c516",
+      "sha256": "155ec65d3d17e99f6367553296ebd7b798616393470c45d11f86f1bac7cf5ce3",
+      "identity": "DMROMFSID1 title=010056B015FE8000 version=v131072 build=- size=12208487969 index=f3904f5ef1ba3caa",
+      "file_count": 5,
+      "files": {
+        "data002.cpk": {
+          "bytes": 18975056,
+          "sha256": "5df2202c89f8ad4228b27cd0da46476aca5d656f166ae42be85d449b0a4ad97f"
+        },
+        "data009.cpk": {
+          "bytes": 678749144,
+          "sha256": "646ca58b933fc39d33f6f02a3cd3d9f89191b0c486754418d745e92cc81cfad1"
+        },
+        "data012.cpk": {
+          "bytes": 47452048,
+          "sha256": "15fb3c0fb085b93b1272b5b520cc6e9f9cd217eab4557c7bec3aaea546095c04"
+        },
+        "data019.cpk": {
+          "bytes": 603976,
+          "sha256": "4681cd06de3ed2f0f49be1573bddc8b6d62cbed4fc2f54fe314ce0291bad3ee3"
+        },
+        "data112.cpk": {
+          "bytes": 1821064,
+          "sha256": "5410e7c5175d6d107460b27ea76ab806e62807ca60ba000e5f4f6ddf6c8802a7"
+        }
+      }
+    },
+    "provisional": false,
+    "profile_relative_dir": "profile",
+    "graphics": "nvn",
+    "modules": [
+      "main",
+      "subsdk0",
+      "sdk"
+    ],
+    "shader_package_key": "d2f6e2669e882cb70a6e0731d51e98e48cb0a54662d5a8d074e4708d6912840f",
+    "shader_chain": "0724088d3779",
+    "shader_split_stage": "linux_complete",
+    "source_capture_flags": [],
+    "mac_host_stages": [],
+    "jit_required": false,
+    "linux_ue_decode_complete": false,
+    "shader_versions": [
+      "v131072"
+    ],
+    "romfs_relative_path": "extract/v131072/RomFS.img",
+    "romfs_id_relative_path": "extract/v131072/RomFS.img.id",
+    "aoc_images": [
+      {
+        "name": "1.img",
+        "size": 6371
+      }
+    ],
+    "aoc_title_ids": {},
+    "dlc_present": true,
+    "romfs_size": 12208487969,
+    "prepared_stages": [
+      "real_content_metadata_scan",
+      "provisional_profile_survey_if_required",
+      "base_plus_update_romfs_merge",
+      "aarch64_rewrite",
+      "offline_nvn_shader_split"
+    ],
+    "deferred_stages": [
+      "ios_metal_shader_compile",
+      "game_framework_build",
+      "shared_shell_xcode_build",
+      "adhoc_sign_and_ipa_pack"
+    ],
+    "limitations": [
+      "provisional_heap_and_region_checks_skipped_on_linux"
+    ]
+  },
+  "created_utc": "2026-11-26T03:46:53.948089+00:00"
+}
