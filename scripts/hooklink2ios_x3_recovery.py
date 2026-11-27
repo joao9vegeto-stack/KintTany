@@ -9,7 +9,7 @@ REPLACEMENTS = [
   ],
   [
     "        ArchPlan *plan = arch_plan(g_arch_dir);",
-    "        int hl_archive_write_ok = 1;\n#if TARGET_OS_IPHONE\n        if (g_arch_dir) {\n            // Only the engine's own default cache, never a user-selected archive.\n            NSString *default_dir = user ? [user.stringByDeletingLastPathComponent stringByAppendingPathComponent:@\"pso_archive\"] : nil;\n            if ((!e || !*e) && [g_arch_dir isEqualToString:default_dir]) hl_prune_archive(g_arch_dir);\n            uint64_t freeBytes = hl_archive_free(g_arch_dir);\n            hl_archive_write_ok = freeBytes >= (16ull << 30);\n            if (!hl_archive_write_ok)\n                MLOG(\"HookLink2iOS X3: pipeline archive read-only (free %.2f GiB; capture requires 16 GiB)\", freeBytes / 1073741824.0);\n        }\n#endif\n        ArchPlan *plan = arch_plan(g_arch_dir);"
+    "        int hl_archive_write_ok = 1;\n#if TARGET_OS_IPHONE\n        if (g_arch_dir) {\n            // Only the engine's own default cache, never a user-selected archive.\n            NSString *default_dir = user ? [user.stringByDeletingLastPathComponent stringByAppendingPathComponent:@\"pso_archive\"] : nil;\n            if ((!e || !*e) && [g_arch_dir isEqualToString:default_dir]) hl_prune_archive(g_arch_dir);\n            uint64_t freeBytes = hl_archive_free(g_arch_dir);\n            // Admission must leave room for the guest's file-backed memory growth.\n            NSProcessInfoThermalState heat = NSProcessInfo.processInfo.thermalState;\n            hl_archive_write_ok = freeBytes >= (24ull << 30) && heat < NSProcessInfoThermalStateSerious;\n            MLOG(\"HookLink2iOS X3 archive admission: %s (free %.2f GiB, thermal %ld; capture requires 24 GiB and thermal < 2)\", hl_archive_write_ok ? \"capture enabled\" : \"read-only\", freeBytes / 1073741824.0, (long)heat);\n        }\n#endif\n        ArchPlan *plan = arch_plan(g_arch_dir);"
   ],
   [
     "            arch_compact_pick(runf);",
@@ -101,7 +101,7 @@ REPLACEMENTS = [
   ],
   [
     "    [NSFileManager.defaultManager createDirectoryAtPath:g_arch_dir withIntermediateDirectories:YES attributes:nil error:nil];\n    uint64_t t0 = bp_now(); NSError *e = nil;\n    NSString *path =",
-    "#if TARGET_OS_IPHONE\n    if (!g_pre_out && hl_archive_free(g_arch_dir) < (16ull << 30)) {\n        atomic_store(&g_arch_cap_off, 1);\n        if (ep->compacting) g_compact_bad = 1;\n        atomic_fetch_sub(&g_arch_new, n); atomic_fetch_sub(&g_arch_new_vd, vd);\n        ser_end();\n        MLOG(\"HookLink2iOS X3 storage: archive write deferred; preserving guest disk reserve\");\n        return;\n    }\n#endif\n    [NSFileManager.defaultManager createDirectoryAtPath:g_arch_dir withIntermediateDirectories:YES attributes:nil error:nil];\n    uint64_t t0 = bp_now(); NSError *e = nil;\n    NSString *path ="
+    "#if TARGET_OS_IPHONE\n    if (!g_pre_out && (hl_archive_free(g_arch_dir) < (16ull << 30) || NSProcessInfo.processInfo.thermalState >= NSProcessInfoThermalStateSerious)) {\n        atomic_store(&g_arch_cap_off, 1);\n        if (ep->compacting) g_compact_bad = 1;\n        atomic_fetch_sub(&g_arch_new, n); atomic_fetch_sub(&g_arch_new_vd, vd);\n        ser_end();\n        MLOG(\"HookLink2iOS X3 storage: archive write deferred; preserving guest disk reserve and thermal budget\");\n        return;\n    }\n#endif\n    [NSFileManager.defaultManager createDirectoryAtPath:g_arch_dir withIntermediateDirectories:YES attributes:nil error:nil];\n    uint64_t t0 = bp_now(); NSError *e = nil;\n    NSString *path ="
   ]
 ]
 
@@ -118,4 +118,4 @@ def apply(engine):
     path.write_text(source, encoding="utf-8")
     if header.read_bytes() != original_header:
         raise RuntimeError("Shader chain header unexpectedly changed")
-    return ["low-storage PSO capture admission and compaction guard", "equivalent compute variant fallback and verified shader fast path", "per-variant exponential XPC retry cooldown", "bounded pressure-aware retired heap reuse", "host-page preread hashing and bounded outstanding advice", "experimental GPU occlusion buffer bounds and segment ordering guards", "startup pruning of generated PSO files and runtime archive write reserve"]
+    return ["low-storage PSO capture admission and compaction guard", "equivalent compute variant fallback and verified shader fast path", "per-variant exponential XPC retry cooldown", "bounded pressure-aware retired heap reuse", "host-page preread hashing and bounded outstanding advice", "experimental GPU occlusion buffer bounds and segment ordering guards", "startup pruning of generated PSO files; archive capture requires 24 GiB and cool/fair thermal state; writes stop below 16 GiB or at serious thermal state"]
