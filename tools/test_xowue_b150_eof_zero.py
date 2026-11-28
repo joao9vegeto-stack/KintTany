@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The B150 EOF-zero recovery is enabled for the log-verified terminal chunk state."""
+"""B150 EOF recovery stays bounded; B164 unwinds the parser at verified stream EOF."""
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
@@ -44,6 +44,12 @@ assert "B150_EOF_ZERO_APPLIED" in helper
 assert "applied=%u" in helper
 persist = engine[engine.index("bool shouldPersistRuntimeTrace"):engine.index("void persistRuntimeTrace")]
 assert 'event.find("B148_")' in persist and 'event.find("B149_")' in persist and 'event.find("B150_")' in persist
+assert 'event.find("B164_")' in persist
+assert "B164_STREAM_EOF_ABORT_ARMED" in engine
+assert "B164_STREAM_EOF_ABORT_DISPATCH" in engine
+assert "xowue_stream_skip_abort_outer" in patcher
+assert "goto loc_82579100;" in patcher
+assert 'action=abort_outer_parser' in engine
 
 assert 'EOF_ZERO_CALL = "if (xowue_exp_eof_zero_apply(ctx, base)) return;"' in patcher
 assert 'prologue = "PPC_FUNC_PROLOGUE();"' in patcher
@@ -56,4 +62,4 @@ for tag in ("B147_VM_RECOMMIT", "B147_VM_RELEASE", "B147_CHUNK_ENTRY",
             "B149_STREAM_EOF_POLL", "B149_STREAM_LAST_READS",
             "B149_CHUNK_ENTRY", "B149_CHUNK_IDX_OOB"):
     assert tag in engine or tag in patcher, f"missing retained diagnostic {tag}"
-print("PASS: B150 EOF-zero recovery enabled; helper remains bounded and post-prologue")
+print("PASS: B150 terminal read bounded; B164 returns the UE3 parser at verified EOF")

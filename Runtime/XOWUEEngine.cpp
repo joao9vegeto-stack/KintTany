@@ -655,6 +655,7 @@ struct XowueB163StreamEofHandoff {
     uint32_t callsite = 0u;
 };
 thread_local XowueB163StreamEofHandoff g_b163StreamEofHandoff{};
+thread_local bool g_b164StreamSkipAbortOuterPending = false;
 std::atomic<uint32_t> g_b163StreamEofArmLogs{0u};
 std::atomic<uint32_t> g_b163StreamEofExitLogs{0u};
 // Host-side latch survives the interval before xowue_boot_xex creates its session.
@@ -678,14 +679,15 @@ std::vector<std::shared_ptr<GuestThread>> snapshotAllGuestThreads() {
 }
 
 bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
-    // B148/B149/B150/B152 diagnostics and bounded GPU resolve rejections are
-    // explicitly persisted; their producers already cap the sample counts.
+    // Verified stream EOF and bounded GPU resolve evidence are explicitly
+    // persisted; these producers already cap their sample counts.
     if (event.find("B148_") != std::string::npos ||
         event.find("B149_") != std::string::npos ||
         event.find("B150_") != std::string::npos ||
         event.find("B152_") != std::string::npos ||
         event.find("B162_") != std::string::npos ||
         event.find("B163_") != std::string::npos ||
+        event.find("B164_") != std::string::npos ||
         event.find("XENOS_GPU_GUEST_RESOLVE_REJECT") != std::string::npos) return true;
     if (event.find("XOWUE_XAUDIO_") != std::string::npos)
         return g_xaudioTraceLogs.fetch_add(1u, std::memory_order_relaxed) < 96u;
@@ -5350,9 +5352,30 @@ static uint32_t xowue_stream_skip_scratch(uint8_t *base, uint32_t threadId) {
     return address != 0u && validGuestRange(address, 0x1000u) ? address : 0u;
 }
 
+// Build 164: a confirmed indexed EOF must unwind the entire UE3 parser. The
+// B163 one-byte loop is only an inner loop; returning to loc_82578574 reads a
+// new property header from synthetic zero bytes and loops forever.
+static void xowue_arm_stream_skip_abort_outer(uint32_t streamObject,
+                                              uint32_t cursor,
+                                              uint32_t logicalEnd,
+                                              uint32_t processed,
+                                              uint32_t totalBytes,
+                                              const char *source) {
+    g_b164StreamSkipAbortOuterPending = true;
+    char event[320];
+    std::snprintf(event, sizeof(event),
+        "B164_STREAM_EOF_ABORT_ARMED thread=%u stream_obj=0x%08X "
+        "outer_target=0x82579100 cursor=0x%08X logical_end=0x%08X "
+        "processed=%u total=%u source=%s action=return_from_parser",
+        g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId,
+        streamObject, cursor, logicalEnd, processed, totalBytes,
+        source ? source : "unknown");
+    recordRuntimeTrace(event);
+}
+
 // Build 162: the verified UE3 parser loop at 0x8257887C repeatedly reads one
 // byte into the same unused local. Batch only within the currently available
-// stream window, and stop the ignored-byte loop at the indexed EOF.
+// stream window, and unwind the outer parser when its indexed EOF is confirmed.
 bool xowue_prepare_stream_skip(PPCContext &ctx, uint8_t *base) {
     ctx.r4.u64 = static_cast<uint64_t>(ctx.r1.u32) + 88u;
     ctx.r29.u64 = 1u;
@@ -5396,6 +5419,9 @@ bool xowue_prepare_stream_skip(PPCContext &ctx, uint8_t *base) {
         if (handoffStillAtEof) {
             ctx.r31.u64 = totalBytes;
             ctx.r29.u64 = 0u;
+            xowue_arm_stream_skip_abort_outer(handoff.object, currentCursor,
+                                               currentLogicalEnd, processed,
+                                               totalBytes, "b163_handoff");
 
             const uint32_t exitSample =
                 g_b163StreamEofExitLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
@@ -5405,7 +5431,7 @@ bool xowue_prepare_stream_skip(PPCContext &ctx, uint8_t *base) {
                     "B163_STREAM_EOF_HANDOFF_EXIT thread=%u stream_obj=0x%08X "
                     "outer_obj=0x%08X observed_cursor=0x%08X current_cursor=0x%08X "
                     "logical_end=0x%08X processed=%u total=%u "
-                    "action=finish_ignored_payload",
+                    "action=abort_outer_parser",
                     g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId,
                     handoff.object, ctx.r22.u32, handoff.cursor, currentCursor,
                     currentLogicalEnd, processed, totalBytes);
@@ -5445,6 +5471,10 @@ bool xowue_prepare_stream_skip(PPCContext &ctx, uint8_t *base) {
     if (endValid && cursor >= logicalEnd) {
         ctx.r31.u64 = totalBytes;
         ctx.r29.u64 = 0u;
+        g_b163StreamEofHandoff.pending = false;
+        xowue_arm_stream_skip_abort_outer(object, cursor, logicalEnd,
+                                           processed, totalBytes,
+                                           "b162_indexed_eof");
         const uint32_t sample =
             g_b162StreamSkipEofLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
         if (sample <= 32u) {
@@ -5452,7 +5482,7 @@ bool xowue_prepare_stream_skip(PPCContext &ctx, uint8_t *base) {
             std::snprintf(event, sizeof(event),
                 "B162_STREAM_BYTE_LOOP_EOF thread=%u obj=0x%08X count=%u "
                 "processed=%u remaining=%u cursor=0x%08X logical_end=0x%08X "
-                "action=finish_ignored_payload",
+                "action=abort_outer_parser",
                 g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId,
                 object, totalBytes, processed, totalBytes - processed, cursor, logicalEnd);
             recordRuntimeTrace(event);
@@ -5481,6 +5511,19 @@ bool xowue_prepare_stream_skip(PPCContext &ctx, uint8_t *base) {
     else
         chunk = 1u;
     ctx.r29.u64 = chunk;
+    return true;
+}
+
+bool xowue_stream_skip_abort_outer() {
+    if (!g_b164StreamSkipAbortOuterPending)
+        return false;
+    g_b164StreamSkipAbortOuterPending = false;
+    char event[192];
+    std::snprintf(event, sizeof(event),
+        "B164_STREAM_EOF_ABORT_DISPATCH thread=%u target=0x82579100 "
+        "action=return_stream_object",
+        g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId);
+    recordRuntimeTrace(event);
     return true;
 }
 

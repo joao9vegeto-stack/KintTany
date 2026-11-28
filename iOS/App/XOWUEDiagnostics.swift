@@ -17,6 +17,7 @@ enum XOWUEDiagnostics {
     static var inputFilename: String { "input-build-\(buildNumber).txt" }
     static var guestInputFilename: String { "input-guest-build-\(buildNumber).txt" }
     static var summaryFilename: String { "resumo-b\(buildNumber).txt" }
+    static var bootReportFilename: String { "resultado-ultimo-teste-build-\(buildNumber).txt" }
     static var crashFilename: String { "crash-build-\(buildNumber).txt" }
 
     static func startup() {
@@ -101,6 +102,9 @@ enum XOWUEDiagnostics {
             ("B97_MOVIE_PPC_WORD", 12, 12),
             ("B97_MOVIE_PPC", 12, 12),
             ("B99_MEDIA_EOF_COMPLETION", 16, 16),
+            ("B162_STREAM_", 8, 12),
+            ("B163_STREAM_", 8, 12),
+            ("B164_STREAM_", 8, 12),
             ("B87_STREAM_", 12, 12),
             ("B94_STREAM_CONTEXT_WORD", 8, 8),
             ("B94_STREAM_CONTEXT", 8, 8),
@@ -194,6 +198,36 @@ enum XOWUEDiagnostics {
         return documents.appendingPathComponent(name)
     }
 
+    static func saveBootReport(_ text: String, status: String) -> URL? {
+        guard let url = fileURL(named: bootReportFilename) else { return nil }
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let report = """
+        XOWUE_RESULTADO_ULTIMO_TESTE
+        build=\(buildNumber)
+        status=\(status)
+        saved_at=\(timestamp)
+
+        \(text)
+        """
+        do {
+            try report.write(to: url, atomically: true, encoding: .utf8)
+            log("BOOT_REPORT_SAVED file=\(bootReportFilename) bytes=\(report.utf8.count)")
+            return url
+        } catch {
+            log("BOOT_REPORT_SAVE_FAILED file=\(bootReportFilename) error=\(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    static func existingBootReportURL() -> URL? {
+        guard let url = fileURL(named: bootReportFilename),
+              FileManager.default.fileExists(atPath: url.path),
+              let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? NSNumber,
+              size.intValue > 0 else { return nil }
+        return url
+    }
+
     static func existingCrashFileURL() -> URL? {
         guard let url = fileURL(named: crashFilename),
               FileManager.default.fileExists(atPath: url.path),
@@ -262,6 +296,10 @@ enum XOWUEDiagnostics {
             $0.contains("game.selected") || $0.contains("picker.") ||
             $0.contains("import.") || $0.contains("runtime.stop")
         }.suffix(12))
+        let parserEof = Array(lines.filter {
+            $0.contains("B162_STREAM_") || $0.contains("B163_STREAM_") ||
+            $0.contains("B164_STREAM_")
+        }.suffix(32))
         let streamState = Array(lines.filter { $0.contains("B86_STREAM_STATE") }.suffix(8))
         let streamAnomaly = Array(lines.filter { $0.contains("B86_STREAM_ANOMALY") }.suffix(1))
         let streamObject = Array(lines.filter { $0.contains("B86_STREAM_OBJECT_WORD") }.suffix(20))
@@ -335,7 +373,7 @@ enum XOWUEDiagnostics {
             "XOWUE_BUILD_SUMMARY build=\(buildNumber) source=\(diagnosticFilename)",
             "DIAGNOSTIC_BYTES=\(data.count)",
             "CURRENT_BUILD_EVIDENCE_BEGIN"
-        ] + boot + audioDriver + input + xamProfile + eventWaits + eventCompletions + asyncFileIo + movieFlow + setState + stallThreads + gameFps + progress + qpcCaller + xxxIntegrity + bikIntegrity + cancellation +
+        ] + boot + parserEof + audioDriver + input + xamProfile + eventWaits + eventCompletions + asyncFileIo + movieFlow + setState + stallThreads + gameFps + progress + qpcCaller + xxxIntegrity + bikIntegrity + cancellation +
             b84 + b83 + b85 + streamState + streamAnomaly + streamObject + streamTable +
             streamRecent + legacyStream + legacyWaits + media + waits + gpu +
             streamTransition + streamWait + streamWaitAnomaly + fileReads +

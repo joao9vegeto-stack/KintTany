@@ -1644,6 +1644,10 @@ private final class XOWUEGameLibrary: ObservableObject {
         switch result {
         case .success(let outcome):
             bootOutput = outcome.text
+            let reportStatus = exitRequested || outcome.code == 4
+                ? "session-ended code=\(outcome.code)"
+                : "boot-return code=\(outcome.code)"
+            _ = XOWUEDiagnostics.saveBootReport(outcome.text, status: reportStatus)
             XOWUEDiagnostics.bootFinished(code: outcome.code, text: outcome.text)
             if exitRequested || outcome.code == 4 {
                 exitRequested = false
@@ -1670,6 +1674,9 @@ private final class XOWUEGameLibrary: ObservableObject {
             }
         case .failure(let failure):
             let message = failure.message
+            bootOutput = message
+            let reportStatus = exitRequested ? "session-ended-with-error" : "boot-failure"
+            _ = XOWUEDiagnostics.saveBootReport(message, status: reportStatus)
             if exitRequested {
                 exitRequested = false
                 phase = .ready
@@ -1682,7 +1689,6 @@ private final class XOWUEGameLibrary: ObservableObject {
             phase = .failed
             status = "Não foi possível validar ou executar o XEX."
             detail = message
-            bootOutput = message
             XOWUEDiagnostics.bootFailed(message)
         }
     }
@@ -2096,6 +2102,13 @@ private struct XOWUERootView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
 
+            if let url = XOWUEDiagnostics.existingBootReportURL() {
+                ShareLink(item: url) {
+                    Label("Compartilhar resultado", systemImage: "doc.text")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundStyle(XOWUEPalette.yellowLight)
+                }
+            }
             HStack(spacing: 16) {
                 if let url = XOWUEDiagnostics.diagnosticExportURL() {
                     ShareLink(item: url) {
@@ -2119,7 +2132,7 @@ private struct XOWUERootView: View {
                     }
                 }
             }
-            Text("Logs salvos em Arquivos > No Meu iPhone > XOWUE")
+            Text("Relatório salvo na raiz: Arquivos > No Meu iPhone > XOWUE")
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                 .foregroundStyle(XOWUEPalette.muted)
         }

@@ -87,4 +87,14 @@ assert "entryRangeValid" in chunk and 'std::snprintf(entry16, sizeof(entry16), "
 assert "B148_READ_ZERO" in engine and "B148_STREAM_EOF_POLL" in engine
 assert "B148_CHUNK_IDX_OOB" in engine
 assert "B149_STREAM_EOF_POLL" in engine and "B149_CHUNK_IDX_OOB" in engine
-print("PASS: B149 boot/poll/chunk markers, all helper returns explained, B148/B149 persist allowlist, NtReadFile EOF correlation")
+diagnostics = Path("iOS/App/XOWUEDiagnostics.swift").read_text(encoding="utf-8")
+app = Path("iOS/App/XOWUEApp.swift").read_text(encoding="utf-8")
+assert "bootReportFilename" in diagnostics
+assert "saveBootReport(_ text: String, status: String)" in diagnostics
+assert "try report.write(to: url, atomically: true, encoding: .utf8)" in diagnostics
+assert "existingBootReportURL()" in diagnostics
+assert "XOWUEDiagnostics.saveBootReport(outcome.text, status: reportStatus)" in app
+assert "XOWUEDiagnostics.saveBootReport(message, status: reportStatus)" in app
+assert "XOWUEDiagnostics.existingBootReportURL()" in app
+assert "Label(\"Compartilhar resultado\", systemImage: \"doc.text\")" in app
+print("PASS: B149 stream diagnostics and persistent launcher boot report in app Documents root")

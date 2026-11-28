@@ -46,8 +46,10 @@ STREAM_SKIP_PREP_DECLARATION = (
 STREAM_SKIP_DONE_DECLARATION = (
     "void xowue_trace_stream_skip_done(PPCContext &ctx, uint8_t *base);"
 )
+STREAM_SKIP_ABORT_DECLARATION = "bool xowue_stream_skip_abort_outer();"
 STREAM_SKIP_PREP_CALL = "xowue_prepare_stream_skip(ctx, base)"
 STREAM_SKIP_DONE_CALL = "xowue_trace_stream_skip_done(ctx, base);"
+STREAM_SKIP_ABORT_CALL = "xowue_stream_skip_abort_outer()"
 CALL_SITE = re.compile(
     r"(?P<prefix>"
     r"^\s*// li r4,0\s*\n"
@@ -256,11 +258,13 @@ def _patch_stream_skip_loop(source: str) -> tuple[str, bool, bool]:
     start, end, _ = span
     body = source[start:end]
     existing = body.count(STREAM_SKIP_PREP_CALL)
-    if existing > 1 or body.count(STREAM_SKIP_DONE_CALL) > 1:
-        raise RuntimeError("duplicated B162 stream byte-loop hook; refusing to patch")
+    if (existing > 1 or body.count(STREAM_SKIP_DONE_CALL) > 1 or
+            body.count(STREAM_SKIP_ABORT_CALL) > 1):
+        raise RuntimeError("duplicated B162/B164 stream byte-loop hook; refusing to patch")
     if existing == 1:
-        if body.count(STREAM_SKIP_DONE_CALL) != 1:
-            raise RuntimeError("partial B162 stream byte-loop hook detected")
+        if (body.count(STREAM_SKIP_DONE_CALL) != 1 or
+                body.count(STREAM_SKIP_ABORT_CALL) != 1):
+            raise RuntimeError("partial B162/B164 stream byte-loop hook detected")
         patched = _ensure_declaration(
             source, f"PPC_FUNC_IMPL(__imp__{STREAM_SKIP_FUNCTION})",
             STREAM_SKIP_PREP_DECLARATION
@@ -269,11 +273,17 @@ def _patch_stream_skip_loop(source: str) -> tuple[str, bool, bool]:
             patched, f"PPC_FUNC_IMPL(__imp__{STREAM_SKIP_FUNCTION})",
             STREAM_SKIP_DONE_DECLARATION
         )
+        patched = _ensure_declaration(
+            patched, f"PPC_FUNC_IMPL(__imp__{STREAM_SKIP_FUNCTION})",
+            STREAM_SKIP_ABORT_DECLARATION
+        )
         return patched, True, False
 
     label = "loc_8257887C:"
     if body.count(label) != 1:
         raise RuntimeError("could not find unique UE3 one-byte stream loop at 0x8257887C")
+    if body.count("loc_82579100:") != 1:
+        raise RuntimeError("could not find unique UE3 stream parser return at 0x82579100")
     loop_start = body.index(label)
     loop_end_marker = "goto loc_82578574;"
     loop_end_at = body.find(loop_end_marker, loop_start)
@@ -293,7 +303,13 @@ def _patch_stream_skip_loop(source: str) -> tuple[str, bool, bool]:
 
     new_loop = "\n".join([
         "loc_8257887C:",
-        "    if (!xowue_prepare_stream_skip(ctx, base)) goto loc_82578574;",
+        "    if (!xowue_prepare_stream_skip(ctx, base)) {",
+        "        if (xowue_stream_skip_abort_outer()) {",
+        "            ctx.r3.u64 = ctx.r22.u64;",
+        "            goto loc_82579100;",
+        "        }",
+        "        goto loc_82578574;",
+        "    }",
         "    // lwz r11,0(r22)",
         "    ctx.r11.u64 = PPC_LOAD_U32(ctx.r22.u32 + 0);",
         "    // mr r5,r29",
@@ -331,12 +347,19 @@ def _patch_stream_skip_loop(source: str) -> tuple[str, bool, bool]:
         patched, f"PPC_FUNC_IMPL(__imp__{STREAM_SKIP_FUNCTION})",
         STREAM_SKIP_DONE_DECLARATION
     )
+    patched = _ensure_declaration(
+        patched, f"PPC_FUNC_IMPL(__imp__{STREAM_SKIP_FUNCTION})",
+        STREAM_SKIP_ABORT_DECLARATION
+    )
     body_span = _function_span(patched, STREAM_SKIP_FUNCTION)
     if body_span is None:
         raise RuntimeError("B162 patched function disappeared")
     patched_body = patched[body_span[0]:body_span[1]]
-    if patched_body.count(STREAM_SKIP_PREP_CALL) != 1 or patched_body.count(STREAM_SKIP_DONE_CALL) != 1:
-        raise RuntimeError("B162 stream byte-loop hook call counts are not exactly one")
+    if (patched_body.count(STREAM_SKIP_PREP_CALL) != 1 or
+            patched_body.count(STREAM_SKIP_DONE_CALL) != 1 or
+            patched_body.count(STREAM_SKIP_ABORT_CALL) != 1 or
+            patched_body.count("goto loc_82579100;") != 1):
+        raise RuntimeError("B162/B164 stream byte-loop hook call counts are not exactly one")
     return patched, True, True
 
 
@@ -388,6 +411,19 @@ PPC_FUNC_IMPL(__imp__sub_82575108) {
     // first translated chunk instruction
     ctx.r3.u64 = ctx.r3.u32;
 }
+
+PPC_FUNC_IMPL(__imp__sub_82578498) {
+loc_8257887C:
+    ctx.lr = 0x82578898;
+    PPC_CALL_INDIRECT_FUNC(ctx.ctr.u32);
+    ctx.r31.s64 = ctx.r31.s64 + 1;
+    if (ctx.cr6.lt) goto loc_8257887C;
+    goto loc_82578574;
+loc_82578574:
+    ctx.r3.u64 = ctx.r22.u64;
+loc_82579100:
+    return;
+}
 """
     patched, result = patch_source(fixture)
     assert result == {
@@ -396,7 +432,7 @@ PPC_FUNC_IMPL(__imp__sub_82575108) {
         "chunk_function": 1, "chunk_inserted": 1,
         "chunk_oob_function": 1, "chunk_oob_inserted": 1,
         "eof_zero_function": 1, "eof_zero_inserted": 1,
-        "stream_skip_function": 0, "stream_skip_inserted": 0,
+        "stream_skip_function": 1, "stream_skip_inserted": 1,
     }
     assert patched.index(MEMSET_BEGIN) < patched.index("sub_82C2A1F0(ctx, base);")
     assert patched.index("sub_82C2A1F0(ctx, base);") < patched.index(MEMSET_END)
@@ -424,7 +460,13 @@ PPC_FUNC_IMPL(__imp__sub_82575108) {
     assert patched.count(EOF_CALL) == 1 and patched.count(EOF_B149_CALL) == 1
     assert patched.count(CHUNK_OOB_GUARD) == 1 and patched.count(CHUNK_CALL) == 1
     assert patched.count(EOF_ZERO_CALL) == 1
-    print("XOWUE_B146_B147_AOT_PROBE_SELF_TEST_OK B149 eof_poll=0x82575480 chunk_entry=0x82575108 B150 eof_zero=after-prologue log_only=1 idempotent=1")
+    assert patched.count(STREAM_SKIP_PREP_CALL) == 1
+    assert patched.count(STREAM_SKIP_DONE_CALL) == 1
+    assert patched.count(STREAM_SKIP_ABORT_CALL) == 1
+    assert "if (xowue_stream_skip_abort_outer()) {" in patched
+    assert "ctx.r3.u64 = ctx.r22.u64;" in patched
+    assert "goto loc_82579100;" in patched
+    print("XOWUE_B146_B147_AOT_PROBE_SELF_TEST_OK B149 eof_poll=0x82575480 chunk_entry=0x82575108 B150 eof_zero=after-prologue B164 parser_return=0x82579100 idempotent=1")
 
 
 def main() -> int:
