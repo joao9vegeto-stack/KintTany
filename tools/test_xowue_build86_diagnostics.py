@@ -45,7 +45,8 @@ assert "Build 73 (MCLA-4iOS / rexglue-sdk pattern): Wake both guest" not in engi
 qpc_fastpaths = [line for line in engine.splitlines() if "const bool qpcFastPath =" in line]
 assert len(qpc_fastpaths) == 2 and all("0x822A0278u" not in line for line in qpc_fastpaths)
 assert "kNtStatusEndOfFile = 0xC0000011u" in engine
-assert "bytesRead == 0u && readEof" in engine
+assert "readStatus = (readBad || (readFailed && !readEof))" in engine
+assert "? kNtStatusUnsuccessful : kNtStatusSuccess;" in engine
 assert "validGuestPointer(plus90, 0x20u)" in engine
 assert "objectSource" in engine
 assert "B94_STREAM_CONTEXT" in engine
@@ -68,4 +69,4 @@ assert "finish(kXamErrorInsufficientBuffer,required);return;" in engine
 assert "context.r3.u32 == 0u ? kNtStatusSuccess : kXamNoSuchUser" not in engine
 assert "XOWUEDiagnostics.summaryFileURL()" in app
 assert "XOWUEDiagnostics.summaryFilename" in app
-print("PASS: Build 87 stream-wait tracing, bounded NT file I/O evidence, EOF status and app summary")
+print("PASS: Build 87 stream-wait tracing, bounded NT file I/O evidence, Xenia-compatible EOF success and app summary")
