@@ -355,11 +355,24 @@ def _patch_stream_skip_loop(source: str) -> tuple[str, bool, bool]:
     if body_span is None:
         raise RuntimeError("B162 patched function disappeared")
     patched_body = patched[body_span[0]:body_span[1]]
-    if (patched_body.count(STREAM_SKIP_PREP_CALL) != 1 or
-            patched_body.count(STREAM_SKIP_DONE_CALL) != 1 or
-            patched_body.count(STREAM_SKIP_ABORT_CALL) != 1 or
-            patched_body.count("goto loc_82579100;") != 1):
-        raise RuntimeError("B162/B164 stream byte-loop hook call counts are not exactly one")
+    abort_exit_path = "\n".join([
+        "    if (!xowue_prepare_stream_skip(ctx, base)) {",
+        "        if (xowue_stream_skip_abort_outer()) {",
+        "            ctx.r3.u64 = ctx.r22.u64;",
+        "            goto loc_82579100;",
+        "        }",
+        "        goto loc_82578574;",
+        "    }",
+    ])
+    counts = {
+        "prepare": patched_body.count(STREAM_SKIP_PREP_CALL),
+        "done": patched_body.count(STREAM_SKIP_DONE_CALL),
+        "abort": patched_body.count(STREAM_SKIP_ABORT_CALL),
+        "eof_abort_path": patched_body.count(abort_exit_path),
+    }
+    if (counts["prepare"] != 1 or counts["done"] != 1 or
+            counts["abort"] != 1 or counts["eof_abort_path"] != 1):
+        raise RuntimeError(f"B162/B164 stream byte-loop hook counts are invalid: {counts}")
     return patched, True, True
 
 
@@ -413,6 +426,7 @@ PPC_FUNC_IMPL(__imp__sub_82575108) {
 }
 
 PPC_FUNC_IMPL(__imp__sub_82578498) {
+    if (ctx.cr0.eq) goto loc_82579100;
 loc_8257887C:
     ctx.lr = 0x82578898;
     PPC_CALL_INDIRECT_FUNC(ctx.ctr.u32);
@@ -465,7 +479,8 @@ loc_82579100:
     assert patched.count("if (xowue_stream_skip_abort_outer()) {") == 1
     assert "if (xowue_stream_skip_abort_outer()) {" in patched
     assert "ctx.r3.u64 = ctx.r22.u64;" in patched
-    assert "goto loc_82579100;" in patched
+    assert patched.count("goto loc_82579100;") == 2
+    assert "ctx.r3.u64 = ctx.r22.u64;\\n            goto loc_82579100;" in patched
     print("XOWUE_B146_B147_AOT_PROBE_SELF_TEST_OK B149 eof_poll=0x82575480 chunk_entry=0x82575108 B150 eof_zero=after-prologue B164 parser_return=0x82579100 idempotent=1")
 
 
