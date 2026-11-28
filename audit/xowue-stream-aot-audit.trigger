@@ -1,1 +1,1 @@
-Audit-only trigger: export ppc_context.h and ppc_config.h as standalone files for targeted store instrumentation.
+Audit-only trigger: inspect current Build 153.1 stream polling, chunk helper, final range, and return contract against the observed idx=6/count=6 terminal request. Preserve source PPC bytes; diagnostic extraction only.
