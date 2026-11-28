@@ -47,6 +47,28 @@ jobs:
           tar -xzf "$RUNNER_TEMP/XOWUE-AOT-source.tar.gz" -C "$RUNNER_TEMP/generated"
           test -s "$RUNNER_TEMP/generated/ppc/ppc_recomp.64.cpp"
 
+      - name: Extract build 157.3 fatal PPC CTR callsite source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/probe_xowue_bctrl.py
+          python3 tools/probe_xowue_bctrl.py \
+            --ppc-dir "$RUNNER_TEMP/generated/ppc" \
+            --target 0x82B52E6C \
+            --report "$RUNNER_TEMP/xowue-fatal-ctr-aot-source.json"
+          test -s "$RUNNER_TEMP/xowue-fatal-ctr-aot-source.json"
+          python3 -m json.tool "$RUNNER_TEMP/xowue-fatal-ctr-aot-source.json" >/dev/null
+          cat "$RUNNER_TEMP/xowue-fatal-ctr-aot-source.json"
+
+      - name: Upload build 157.3 fatal PPC CTR source evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: XOWUE-B1573-Fatal-CTR-AOT-Source
+          path: ${{ runner.temp }}/xowue-fatal-ctr-aot-source.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
+
       - name: Extract exact native AOT function and callsite windows
         shell: bash
         run: |
