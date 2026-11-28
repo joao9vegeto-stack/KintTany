@@ -98,6 +98,7 @@ void xowue_note_scratch_reg4_write(uint32_t address, uint32_t value) {
 void pumpGuestXenosRingBuffer();
 static uint32_t loadGuestBe32(const uint8_t *base, uint32_t address);
 static void storeGuestBe32(uint8_t *base, uint32_t address, uint32_t value);
+static bool xowue_stream_logical_end(uint8_t *base, uint32_t object, uint32_t &logicalEnd);
 // Spinlock helpers are defined with the kernel runtime below, but are also
 // called by the earlier import dispatcher; declare the shared guest ABI here.
 static bool tryAcquireGuestSpinLock(uint8_t *base, uint32_t address, uint32_t owner);
@@ -646,6 +647,16 @@ std::unordered_map<uint32_t, uint32_t> g_b162StreamSkipScratchAddresses;
 std::atomic<uint32_t> g_b162StreamSkipBeginLogs{0u};
 std::atomic<uint32_t> g_b162StreamSkipEofLogs{0u};
 std::atomic<uint32_t> g_b162StreamSkipDoneLogs{0u};
+struct XowueB163StreamEofHandoff {
+    bool pending = false;
+    uint32_t object = 0u;
+    uint32_t cursor = 0u;
+    uint32_t logicalEnd = 0u;
+    uint32_t callsite = 0u;
+};
+thread_local XowueB163StreamEofHandoff g_b163StreamEofHandoff{};
+std::atomic<uint32_t> g_b163StreamEofArmLogs{0u};
+std::atomic<uint32_t> g_b163StreamEofExitLogs{0u};
 // Host-side latch survives the interval before xowue_boot_xex creates its session.
 std::atomic<bool> g_hostStopRequested{false};
 std::atomic<bool> g_runtimeSessionPoisoned{false};
@@ -674,6 +685,7 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
         event.find("B150_") != std::string::npos ||
         event.find("B152_") != std::string::npos ||
         event.find("B162_") != std::string::npos ||
+        event.find("B163_") != std::string::npos ||
         event.find("XENOS_GPU_GUEST_RESOLVE_REJECT") != std::string::npos) return true;
     if (event.find("XOWUE_XAUDIO_") != std::string::npos)
         return g_xaudioTraceLogs.fetch_add(1u, std::memory_order_relaxed) < 96u;
@@ -4932,6 +4944,36 @@ void xowue_trace_stream_eof_poll_b149(PPCContext &ctx, uint8_t *base) {
         logSkip("interval_unreadable", UINT32_MAX);
         return;
     }
+
+    // Build 163: link the actual one-byte EOF read in the UE3 parser to the
+    // following outer-loop iteration. At this callsite r22 is a wrapper;
+    // ctx.r3 is the real indexed stream object.
+    constexpr uint32_t kB163IgnoredByteReadCallsite = 0x82578898u;
+    uint32_t logicalEnd = 0u;
+    if (ctx.lr == kB163IgnoredByteReadCallsite && requested == 1u &&
+        cursor >= currentWindowEnd &&
+        xowue_stream_logical_end(base, object, logicalEnd) &&
+        cursor >= logicalEnd) {
+        g_b163StreamEofHandoff.pending = true;
+        g_b163StreamEofHandoff.object = object;
+        g_b163StreamEofHandoff.cursor = cursor;
+        g_b163StreamEofHandoff.logicalEnd = logicalEnd;
+        g_b163StreamEofHandoff.callsite = static_cast<uint32_t>(ctx.lr);
+
+        const uint32_t armSample =
+            g_b163StreamEofArmLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        if (armSample <= 8u) {
+            char handoffEvent[288];
+            std::snprintf(handoffEvent, sizeof(handoffEvent),
+                "B163_STREAM_EOF_HANDOFF_ARMED thread=%u obj=0x%08X "
+                "cursor=0x%08X logical_end=0x%08X requested=%u callsite=0x%08X",
+                g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId,
+                object, cursor, logicalEnd, requested,
+                static_cast<uint32_t>(ctx.lr));
+            recordRuntimeTrace(handoffEvent);
+        }
+    }
+
     if (windowCoversRequest) {
         logSkip("window_covers_request", UINT32_MAX);
         return;
@@ -5323,13 +5365,54 @@ bool xowue_prepare_stream_skip(PPCContext &ctx, uint8_t *base) {
         return true;
     const uint32_t totalBytes = loadGuestBe32(base, static_cast<uint32_t>(countAddress64));
     if (static_cast<int32_t>(totalBytes) <= 0) {
+        g_b163StreamEofHandoff.pending = false;
         ctx.r29.u64 = 0u;
         return false;
     }
     const uint32_t processed = ctx.r31.u32;
     if (processed >= totalBytes) {
+        g_b163StreamEofHandoff.pending = false;
         ctx.r29.u64 = 0u;
         return false;
+    }
+
+    if (g_b163StreamEofHandoff.pending) {
+        const XowueB163StreamEofHandoff handoff = g_b163StreamEofHandoff;
+        g_b163StreamEofHandoff.pending = false;
+
+        uint32_t currentLogicalEnd = 0u;
+        uint32_t currentCursor = 0xFFFFFFFFu;
+        const bool handoffObjectValid = handoff.object != 0u &&
+            validGuestRange(handoff.object, 176u);
+        if (handoffObjectValid)
+            currentCursor = loadGuestBe32(base, handoff.object + 136u);
+        const bool handoffStillAtEof =
+            handoff.callsite == 0x82578898u &&
+            handoffObjectValid &&
+            xowue_stream_logical_end(base, handoff.object, currentLogicalEnd) &&
+            currentLogicalEnd == handoff.logicalEnd &&
+            handoff.cursor >= handoff.logicalEnd &&
+            currentCursor >= currentLogicalEnd;
+        if (handoffStillAtEof) {
+            ctx.r31.u64 = totalBytes;
+            ctx.r29.u64 = 0u;
+
+            const uint32_t exitSample =
+                g_b163StreamEofExitLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
+            if (exitSample <= 8u) {
+                char handoffEvent[384];
+                std::snprintf(handoffEvent, sizeof(handoffEvent),
+                    "B163_STREAM_EOF_HANDOFF_EXIT thread=%u stream_obj=0x%08X "
+                    "outer_obj=0x%08X observed_cursor=0x%08X current_cursor=0x%08X "
+                    "logical_end=0x%08X processed=%u total=%u "
+                    "action=finish_ignored_payload",
+                    g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId,
+                    handoff.object, ctx.r22.u32, handoff.cursor, currentCursor,
+                    currentLogicalEnd, processed, totalBytes);
+                recordRuntimeTrace(handoffEvent);
+            }
+            return false;
+        }
     }
 
     const uint32_t object = ctx.r22.u32;
