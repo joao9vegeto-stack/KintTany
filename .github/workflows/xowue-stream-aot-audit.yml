@@ -69,6 +69,49 @@ jobs:
           retention-days: 30
           compression-level: 6
 
+      - name: Extract full owner function for build 157.3 fatal PPC CTR
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, os, re, sys
+          ppc_dir = Path(os.environ["RUNNER_TEMP"]) / "generated" / "ppc"
+          owner = 0x82B52D48
+          target = 0x82B52E6C
+          func = re.compile(r'PPC_FUNC_IMPL\\(__imp__(sub_[0-9A-Fa-f]{8})\\)\\s*\\{')
+          found = None
+          for path in sorted(ppc_dir.glob("ppc_recomp.*.cpp")):
+              source = path.read_text(encoding="utf-8")
+              entries = list(func.finditer(source))
+              for index, entry in enumerate(entries):
+                  if int(entry.group(1)[4:], 16) != owner:
+                      continue
+                  end = entries[index + 1].start() if index + 1 < len(entries) else len(source)
+                  body = source[entry.start():end]
+                  found = {"owner": f"0x{owner:08X}", "callsite": f"0x{target:08X}",
+                           "file": path.name, "function_source": body}
+                  break
+              if found:
+                  break
+          if not found:
+              raise SystemExit(f"Owner 0x{owner:08X} was not found in generated AOT source")
+          report = Path(os.environ["RUNNER_TEMP"]) / "xowue-fatal-ctr-function.json"
+          report.write_text(json.dumps(found, indent=2), encoding="utf-8")
+          print(f"XOWUE_FATAL_CTR_OWNER_SOURCE owner={found['owner']} file={found['file']} callsite={found['callsite']} bytes={len(found['function_source'].encode('utf-8'))}")
+          PY
+          test -s "$RUNNER_TEMP/xowue-fatal-ctr-function.json"
+          python3 -m json.tool "$RUNNER_TEMP/xowue-fatal-ctr-function.json" >/dev/null
+
+      - name: Upload full build 157.3 fatal PPC owner function
+        uses: actions/upload-artifact@v4
+        with:
+          name: XOWUE-B1573-Fatal-CTR-Owner-Function
+          path: ${{ runner.temp }}/xowue-fatal-ctr-function.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
+
       - name: Extract exact native AOT function and callsite windows
         shell: bash
         run: |
