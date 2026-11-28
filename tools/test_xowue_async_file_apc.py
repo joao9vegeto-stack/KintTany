@@ -77,8 +77,10 @@ require("GuestEventSignalOnReturn eventSignal(eventHandle, eventWaitable);" in c
         "eventSignal.signalNow();" in completion_body and
         "true);" in completion_body,
         "file completion and supplied event must both be signaled, matching Xenia SubmitRequest")
-require("context.r3.u32 = file->synchronous ? result.status : kNtStatusPending;" in read,
-        "inline-completed reads must preserve Xbox/Xenia STATUS_PENDING for asynchronous file handles while publishing the final IOSB")
+require("const bool shouldPend = mayPend && result.status == kNtStatusSuccess &&" in read and
+        "fileSizeKnown && result.offset < fileSize;" in read and
+        "context.r3.u32 = returnStatus;" in read,
+        "inline EOF reads must complete successfully; only async nonbuffered reads before EOF report STATUS_PENDING")
 require("eventWaitable->kind != GuestWaitable::Kind::Event" in read,
         "a non-null invalid event handle must be rejected instead of silently ignored")
 require(completion_end < async_read.index("queueGuestApc("),
