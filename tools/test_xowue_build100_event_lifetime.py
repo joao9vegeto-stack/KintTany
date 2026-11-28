@@ -26,10 +26,11 @@ for function in ("xowue_NtReadFile", "xowue_NtReadFileScatter", "xowue_NtWriteFi
     if function == "xowue_NtReadFile":
         assert "GuestEventSignalOnReturn signal(eventHandle, eventWaitable);" in body
         assert "GuestEventSignalOnReturn eventSignal(eventHandle, eventWaitable);" in body
-        assert "eventWaitable, hasSuppliedEvent," in body
         assert "resetGuestWaitableForIo(eventWaitable)" in body
         assert "resetGuestWaitableForIo(file->completion)" in body
-        assert "!hasSuppliedEvent" in body
+        assert "completionSignal.signalNow(result.sequence, result.offset, result.bytesRead," in body
+        assert "eventSignal.signalNow();" in body
+        assert "file->completion->manualReset = true;" in engine
         assert "GuestEventSignalOnReturn signal(context.r4.u32);" not in body
     else:
         assert "GuestEventSignalOnReturn signal(context.r4.u32);" in body, function

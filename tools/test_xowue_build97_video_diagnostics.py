@@ -73,7 +73,7 @@ required = {
     "NtReadFile accepts current-position sentinel -2": "requestedOffset != std::numeric_limits<uint64_t>::max() - 1u",
     "scatter read diagnostics retained": "B95_SCATTER_READ",
     "runtime trace cap is bounded after targeted event sampling": "kMaxRuntimeTraceFileBytes = 4 * 1024 * 1024",
-    "file object completion starts auto-reset unsignaled": "file->completion->manualReset = false;\n    file->completion->signaled = false;",
+    "file object completion starts manual-reset unsignaled": "file->completion->manualReset = true;\n    file->completion->signaled = false;",
     "file completion RAII implementation": "struct GuestFileCompletionSignalOnReturn final",
     "file completion init telemetry": "B99_FILE_COMPLETION_INIT",
     "file completion signal telemetry": "B99_FILE_COMPLETION_SIGNAL",

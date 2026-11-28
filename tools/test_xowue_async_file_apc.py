@@ -48,7 +48,6 @@ for token in (
     "completionSignal.signalNow(result.sequence, result.offset, result.bytesRead,",
     "queueGuestApc(apcThread, apcRoutine, apcContext, ioStatus, 0u, std::move(completion));",
     "completionSignal.signalNow(result.sequence, result.offset, result.bytesRead,",
-    "!hasSuppliedEvent);",
     "context.r3.u32 = kNtStatusPending;",
     "B103_ASYNC_NTREADFILE_SUBMIT",
     "B103_ASYNC_NTREADFILE_COMPLETE",
@@ -73,10 +72,11 @@ require(completion_body.index("result = performRead(true);") <
         "final IOSB and guest buffer must be published before completion signals")
 require("resetGuestWaitableForIo(eventWaitable)" in read and
         "resetGuestWaitableForIo(file->completion)" in read,
-        "each NT read must reset only its selected completion wait object")
-require("!hasSuppliedEvent" in completion_body and
-        "GuestEventSignalOnReturn eventSignal(eventHandle, eventWaitable);" in completion_body,
-        "a supplied request event must replace, not accompany, the file wait object")
+        "each NT read must reset the file completion state and supplied event")
+require("GuestEventSignalOnReturn eventSignal(eventHandle, eventWaitable);" in completion_body and
+        "eventSignal.signalNow();" in completion_body and
+        "true);" in completion_body,
+        "file completion and supplied event must both be signaled, matching Xenia SubmitRequest")
 require("context.r3.u32 = file->synchronous ? result.status : kNtStatusPending;" in read,
         "inline-completed reads must preserve Xbox/Xenia STATUS_PENDING for asynchronous file handles while publishing the final IOSB")
 require("eventWaitable->kind != GuestWaitable::Kind::Event" in read,
@@ -124,4 +124,4 @@ require("std::this_thread::yield();" in delay,
 require("alertable && guestApcCanInterruptWait()" in delay,
         "an APC queued during an alertable relative delay must interrupt the wait")
 
-print("PASS: XOWUE NtReadFile defers APC transfers, selects one reset completion object, and preserves Xbox async-handle return semantics.")
+print("PASS: XOWUE NtReadFile defers APC transfers, signals file and supplied events, and preserves Xenia async-handle return semantics.")

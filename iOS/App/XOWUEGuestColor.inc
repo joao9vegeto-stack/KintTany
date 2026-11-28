@@ -38,8 +38,8 @@ static void XDCommitGuestResolves(KKVulkanState* state) {
     const bool ok=invalidate==VK_SUCCESS &&
        xowue_xenos_commit_resolved_rgba(r->dest,r->pitch,r->height,
                                         r->info,(const uint8_t*)r->readback.mapped,size);
-    KKLog(@"XENOS_GUEST_RESOLVE_WRITEBACK addr=%08X pitch=%u height=%u status=%u vk=%d",
-          r->dest,r->pitch,r->height,ok?1u:0u,invalidate);
+    KKLog(@"XENOS_GUEST_RESOLVE_WRITEBACK addr=%08X pitch=%u height=%u info=%08X status=%u vk=%d",
+          r->dest,r->pitch,r->height,r->info,ok?1u:0u,invalidate);
     r->pending=false;
     XDDestroyBuffer(state,&r->readback);
   }
@@ -319,7 +319,7 @@ static bool XDResolveGuestColor(KKVulkanState* state,
     .dstOffsets={{dstX0,dstY0,0},{dstX1,dstY1,1}}};
   XD(CmdBlitImage)(cmd,image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
     state->swapchain_images[imageIndex],VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-    1,&region,VK_FILTER_NEAREST);
+    1,&region,VK_FILTER_LINEAR);
   VkImageMemoryBarrier toAttachment={.sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
     .srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT,
     .dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,

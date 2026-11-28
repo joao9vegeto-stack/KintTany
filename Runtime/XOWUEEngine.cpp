@@ -268,6 +268,8 @@ struct GuestFile {
     bool writable = false;
     // NT file objects are synchronous only when either FILE_SYNCHRONOUS_IO_* flag is set.
     bool synchronous = false;
+    // Xenia completes buffered reads inline; FILE_NO_INTERMEDIATE_BUFFERING clears this.
+    bool buffered = true;
     bool directory = false;
     // Xbox NtQueryDirectoryFile retains its wildcard rule between calls that
     // pass a null FileName argument.
@@ -660,11 +662,13 @@ std::vector<std::shared_ptr<GuestThread>> snapshotAllGuestThreads() {
 }
 
 bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
-    // B148/B149/B150 diagnostics are explicitly persisted. Their producers already
-    // bound samples; the generic sequence sampler must never discard them.
+    // B148/B149/B150/B152 diagnostics and bounded GPU resolve rejections are
+    // explicitly persisted; their producers already cap the sample counts.
     if (event.find("B148_") != std::string::npos ||
         event.find("B149_") != std::string::npos ||
-        event.find("B150_") != std::string::npos) return true;
+        event.find("B150_") != std::string::npos ||
+        event.find("B152_") != std::string::npos ||
+        event.find("XENOS_GPU_GUEST_RESOLVE_REJECT") != std::string::npos) return true;
     if (event.find("XOWUE_XAUDIO_") != std::string::npos)
         return g_xaudioTraceLogs.fetch_add(1u, std::memory_order_relaxed) < 96u;
     if (event.find("XOWUE_AOT_HOT_FUNCTION") != std::string::npos) {
@@ -5444,21 +5448,42 @@ static void swapXenosPixelEndian(uint8_t* pixel,uint32_t bytesPerPixel,
 extern "C" bool xowue_xenos_commit_resolved_rgba(
     uint32_t dest,uint32_t pitch,uint32_t height,uint32_t info,
     const uint8_t* rgba,size_t sourceBytes) {
+    std::array<uint32_t,6> fetch{};
+    bool latestValid = false;
+    uint32_t latestAddress = 0u, latestWidth = 0u, latestHeight = 0u;
+    const auto reject = [&](const char *reason, uint32_t x, uint32_t y,
+                            uint64_t address) {
+        static std::atomic<uint32_t> rejectLogs{0u};
+        const uint32_t sample = rejectLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        if (sample <= 32u) {
+            char event[512];
+            std::snprintf(event, sizeof(event),
+                "XENOS_GPU_GUEST_RESOLVE_REJECT sample=%u reason=%s "
+                "dest=%08X pitch=%u height=%u info=%08X info_format=%u "
+                "latest_valid=%u latest=%08X latest_size=%ux%u fetch1=%08X "
+                "x=%u y=%u address=0x%016llX",
+                sample, reason, dest, pitch, height, info, (info >> 7u) & 63u,
+                latestValid ? 1u : 0u, latestAddress, latestWidth, latestHeight,
+                fetch[1], x, y, static_cast<unsigned long long>(address));
+            recordRuntimeTrace(event);
+        }
+        return false;
+    };
     if(!rgba || pitch==0u || height==0u || pitch>2048u || height>2048u ||
        ((info>>7u)&63u)!=6u || (uint64_t(pitch)*height*4u)!=sourceBytes)
-        return false;
-    std::array<uint32_t,6> fetch{};
+        return reject("invalid_request", 0u, 0u, 0u);
     {
         std::lock_guard<std::mutex> lk(g_xenosMutex);
-        if(!g_xenosFrontend.swapFetchValid ||
-           g_xenosFrontend.latestFrontbufferAddress!=dest ||
-           g_xenosFrontend.latestWidth!=pitch ||
-           g_xenosFrontend.latestHeight!=height)
-            return false;
-        fetch=g_xenosFrontend.swapFetch;
+        latestValid = g_xenosFrontend.swapFetchValid;
+        latestAddress = g_xenosFrontend.latestFrontbufferAddress;
+        latestWidth = g_xenosFrontend.latestWidth;
+        latestHeight = g_xenosFrontend.latestHeight;
+        fetch = g_xenosFrontend.swapFetch;
     }
+    if(!latestValid || latestAddress!=dest || latestWidth!=pitch || latestHeight!=height)
+        return reject("latest_frame_mismatch", 0u, 0u, 0u);
     if((fetch[1]&63u)!=6u || (((fetch[1]>>12u)&0xFFFFFu)<<12u)!=dest)
-        return false;
+        return reject("fetch_descriptor_mismatch", 0u, 0u, 0u);
     const uint32_t actualPitch=((fetch[0]>>22u)&0x1FFu)<<5u;
     const bool tiled=(fetch[0]>>31u)!=0u;
     const uint32_t pitchPixels=(actualPitch>=pitch)?actualPitch:
@@ -5466,7 +5491,7 @@ extern "C" bool xowue_xenos_commit_resolved_rgba(
     const uint32_t alignedPitch=(pitchPixels+31u)&~31u;
     const uint32_t endian=(fetch[1]>>6u)&3u;
     const auto memory=acquireGraphicsGuestMemory();
-    if(!memory || !memory->base)return false;
+    if(!memory || !memory->base)return reject("guest_memory_unavailable",0u,0u,0u);
     // The fetch-constant swizzle controls texture sampling, not the memory
     // layout of a color render-target resolve. The Vulkan readback is already
     // RGBA8; applying the sampling swizzle here (or rejecting repeated
@@ -5478,7 +5503,8 @@ extern "C" bool xowue_xenos_commit_resolved_rgba(
         const uint64_t off=tiled?xenosTiledOffset2D(x,y,alignedPitch,2u):
             (uint64_t(y)*pitchPixels+x)*4u;
         const uint64_t addr=uint64_t(dest)+off;
-        if(addr>UINT32_MAX || !validGuestRange(uint32_t(addr),4u))return false;
+        if(addr>UINT32_MAX || !validGuestRange(uint32_t(addr),4u))
+            return reject("guest_range_invalid",x,y,addr);
     }
     uint64_t committed=0u;
     for(uint32_t y=0;y<height;++y)for(uint32_t x=0;x<pitch;++x) {
@@ -5487,7 +5513,7 @@ extern "C" bool xowue_xenos_commit_resolved_rgba(
             (uint64_t(y)*pitchPixels+x)*4u;
         const uint64_t address=uint64_t(dest)+offset;
         if(address>UINT32_MAX || !validGuestRange(uint32_t(address),4u))
-            return false;
+            return reject("guest_range_changed",x,y,address);
         const uint8_t* source=rgba+(size_t(y)*pitch+x)*4u;
         uint8_t pixel[4];
         std::memcpy(pixel,source,sizeof(pixel));
@@ -5506,7 +5532,7 @@ extern "C" bool xowue_xenos_commit_resolved_rgba(
     xowue::xenos::NotifyGuestFrameCommitted();
     if(!xowue::xenos::ShouldPresentGuestFrame()){
         xowue::xenos::NotifyGuestFrameRejected("XENOS_STALE_GUEST_FRAME: resolve_not_ready_for_present");
-        return false;
+        return reject("stale_frame_not_presentable",0u,0u,0u);
     }
     if(xowue_vulkan_backend_guest_frame_rgba) {
         xowue_vulkan_backend_guest_frame_rgba(dest,pitch,height,6u,rgba,sourceBytes);
@@ -8078,8 +8104,9 @@ static std::shared_ptr<GuestFile> lookupGuestFile(uint32_t handle) {
 static void writeGuestIoStatus(uint8_t *base, uint32_t address,
                                uint32_t status, uint32_t information) {
     if (!base || address == 0u || !validGuestRange(address, 8u)) return;
-    PPC_STORE_U32(address, status);
     PPC_STORE_U32(address + 4u, information);
+    std::atomic_thread_fence(std::memory_order_release);
+    PPC_STORE_U32(address, status);
 }
 
 static bool isStartupMoviePath(const std::string &guestPath) {
@@ -8160,6 +8187,7 @@ static uint32_t createGuestFile(uint8_t *base, const std::string &guestPath,
     auto file = std::make_shared<GuestFile>();
     file->path = path;
     file->synchronous = (options & (0x00000010u | 0x00000020u)) != 0u;
+    file->buffered = (options & 0x00000008u) == 0u;
     file->directory = std::filesystem::is_directory(path, ec);
     if (file->directory && fileOnly) return kNtStatusInvalidParameter;
     if (!file->directory) {
@@ -8187,7 +8215,7 @@ static uint32_t createGuestFile(uint8_t *base, const std::string &guestPath,
     file->completion->kind = GuestWaitable::Kind::Event;
     file->completion->handle = handle;
     file->completion->objectAddress = objectAddress;
-    file->completion->manualReset = false;
+    file->completion->manualReset = true;
     file->completion->signaled = false;
     file->completion->unconsumedSignals = 0u;
     file->completion->signalGeneration = 0u;
@@ -8208,7 +8236,7 @@ static uint32_t createGuestFile(uint8_t *base, const std::string &guestPath,
     actionOut = existedBeforeOpen ? 1u : 2u;
     if (file->path.extension() == ".bik") {
         recordRuntimeTrace("B99_FILE_COMPLETION_INIT handle=" + std::to_string(handle) +
-            " object=" + std::to_string(objectAddress) + " manual=0 signaled=0 path=" +
+            " object=" + std::to_string(objectAddress) + " manual=1 signaled=0 path=" +
             file->path.string());
     }
     (void)base;
@@ -10278,10 +10306,10 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
     }
 
     const bool hasSuppliedEvent = eventHandle != 0u;
-    // The supplied per-request event replaces the shared FileHandle wait
-    // object. Reset only the selected target, never both.
+    // Xenia resets the file object's wait state on every request and also
+    // resets a supplied per-request event when present.
+    resetGuestWaitableForIo(file->completion);
     if (hasSuppliedEvent) resetGuestWaitableForIo(eventWaitable);
-    else resetGuestWaitableForIo(file->completion);
 
     // Capture explicit offsets now. A null/current-file-pointer offset is
     // resolved against the file position when this read transfer executes.
@@ -10340,10 +10368,11 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
                         readBad = file->stream.bad();
                         readFailed = file->stream.fail();
                     }
+                    // Xenia's XFile::ReadInternal completes EOF as success
+                    // with Information=0. STATUS_END_OF_FILE changes UE3's
+                    // stream failure path and is not returned by the reference.
                     readStatus = (readBad || (readFailed && !readEof))
-                        ? kNtStatusUnsuccessful
-                        : ((length != 0u && bytesRead == 0u && readEof)
-                               ? kNtStatusEndOfFile : kNtStatusSuccess);
+                        ? kNtStatusUnsuccessful : kNtStatusSuccess;
                     file->stream.clear();
                     if (!hasExplicitOffset) {
                         file->stream.seekg(static_cast<std::streamoff>(offset + bytesRead), std::ios::beg);
@@ -10585,7 +10614,7 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
         // the final IOSB, guest buffer and event are published by APC delivery.
         writeGuestIoStatus(base, ioStatus, kNtStatusPending, 0u);
         auto completion = [performRead, file, base, ioStatus, eventHandle,
-                           eventWaitable, hasSuppliedEvent,
+                           eventWaitable,
                            b83ReadCall, handle, length, apcRoutine, apcContext]() mutable {
             GuestFileCompletionSignalOnReturn completionSignal(file);
             GuestEventSignalOnReturn eventSignal(eventHandle, eventWaitable);
@@ -10597,11 +10626,11 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
                 writeGuestIoStatus(base, ioStatus, result.status, 0u);
                 recordRuntimeTrace("B103_ASYNC_NTREADFILE_COMPLETE_EXCEPTION");
             }
-            // Publish the final IOSB and buffer before signaling exactly one
-            // wait object. A supplied event replaces the file-object event.
+            // Xenia notifies the file object on every completion and signals
+            // the optional per-request event as an additional wait target.
             completionSignal.signalNow(result.sequence, result.offset, result.bytesRead,
                                        result.status, result.eof, result.sequence != 0u,
-                                       !hasSuppliedEvent);
+                                       true);
             eventSignal.signalNow();
 
             char completeEvent[512];
@@ -10634,12 +10663,48 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
     }
     completionSignal.signalNow(result.sequence, result.offset, result.bytesRead,
                                result.status, result.eof, result.sequence != 0u,
-                               !hasSuppliedEvent);
+                               true);
     signal.signalNow();
-    // Preserve Xbox/Xenia semantics: an asynchronous file handle reports
-    // STATUS_PENDING even when this host-side fallback completed inline. The
-    // final transfer status and byte count remain available in the IOSB.
-    context.r3.u32 = file->synchronous ? result.status : kNtStatusPending;
+    // Match Xenia's CompletesAsync decision for local files: synchronous,
+    // buffered, zero-length, and at/past-EOF reads complete inline. Only a
+    // nonbuffered async read that starts before EOF reports STATUS_PENDING.
+    const bool mayPend = !file->synchronous && !file->buffered && length != 0u;
+    uint64_t fileSize = 0u;
+    bool fileSizeKnown = false;
+    if (mayPend || result.eof) {
+        std::error_code sizeError;
+        fileSize = std::filesystem::file_size(file->path, sizeError);
+        fileSizeKnown = !sizeError;
+    }
+    const bool shouldPend = mayPend && result.status == kNtStatusSuccess &&
+        fileSizeKnown && result.offset < fileSize;
+    const uint32_t returnStatus = shouldPend ? kNtStatusPending : result.status;
+    context.r3.u32 = returnStatus;
+
+    // Keep the decisive past-EOF case visible in the next device log.
+    if (result.eof) {
+        static std::atomic<uint32_t> s_b152EofReturnLogs{0u};
+        const uint32_t sample = s_b152EofReturnLogs.fetch_add(
+            1u, std::memory_order_relaxed) + 1u;
+        if (sample <= 32u) {
+            char event[1024];
+            std::snprintf(event, sizeof(event),
+                "B152_NTREADFILE_EOF sample=%u thread=%u handle=0x%08X path=%s "
+                "sync=%u buffered=%u offset=0x%016llX file_size_known=%u "
+                "file_size=%llu requested=%u bytes=%u iosb_status=0x%08X "
+                "return_status=0x%08X file_manual=%u event=0x%08X",
+                sample, static_cast<uint32_t>(g_currentGuestThreadId), handle,
+                file->path.string().c_str(), file->synchronous ? 1u : 0u,
+                file->buffered ? 1u : 0u,
+                static_cast<unsigned long long>(result.offset),
+                fileSizeKnown ? 1u : 0u,
+                static_cast<unsigned long long>(fileSize), length,
+                result.bytesRead, result.status, returnStatus,
+                file->completion && file->completion->manualReset ? 1u : 0u,
+                eventHandle);
+            recordRuntimeTrace(event);
+        }
+    }
 }
 
 void xowue_NtWriteFile(PPCContext &context, uint8_t *base) {

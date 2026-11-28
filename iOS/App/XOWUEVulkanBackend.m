@@ -1487,13 +1487,17 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
                const uint8_t *pixels=(const uint8_t*)g_xd.composited_frame.mapped;
                const size_t total=(size_t)localState.swapchain_extent.width *
                                   (size_t)localState.swapchain_extent.height;
-               size_t samples=0, nonblack=0;
+               size_t samples=0, nonblack=0, greenDominant=0;
                uint64_t checksum=14695981039346656037ull;
+               uint64_t channel0Sum=0,channel1Sum=0,channel2Sum=0;
                uint32_t sampledMinX=UINT32_MAX,sampledMinY=UINT32_MAX,sampledMaxX=0,sampledMaxY=0;
                const uint32_t stride=localState.swapchain_extent.width;
                const size_t interval=total>8192u?total/8192u:1u;
                for (size_t k=0;k<total;k+=interval) {
                   const uint8_t *c=pixels+k*4u;
+                  channel0Sum+=c[0];channel1Sum+=c[1];channel2Sum+=c[2];
+                  if ((uint32_t)c[1]>(uint32_t)c[0]+24u &&
+                      (uint32_t)c[1]>(uint32_t)c[2]+24u) ++greenDominant;
                   if (c[0] || c[1] || c[2]) {
                      ++nonblack;
                      const uint32_t x=(uint32_t)(k%stride), y=(uint32_t)(k/stride);
@@ -1506,10 +1510,13 @@ KKRenderFrame(KKVulkanState *state, CAMetalLayer *layer)
                             ((uint64_t)c[1]<<8) ^ ((uint64_t)c[2]<<16));
                   ++samples;
                }
-               KKLog(@"XENOS_COMPOSITED_GPU_READBACK sampled_nonblack=%zu samples=%zu checksum=%016llX pixels_total=%zu sampled_bbox=%u,%u..%u,%u",
+               KKLog(@"XENOS_COMPOSITED_GPU_READBACK sampled_nonblack=%zu samples=%zu checksum=%016llX pixels_total=%zu sampled_bbox=%u,%u..%u,%u c0_avg=%llu c1_avg=%llu c2_avg=%llu green_dominant=%zu",
                      nonblack,samples,(unsigned long long)checksum,total,
                      sampledMinX==UINT32_MAX?0:sampledMinX,
-                     sampledMinY==UINT32_MAX?0:sampledMinY,sampledMaxX,sampledMaxY);
+                     sampledMinY==UINT32_MAX?0:sampledMinY,sampledMaxX,sampledMaxY,
+                     (unsigned long long)(samples?channel0Sum/samples:0u),
+                     (unsigned long long)(samples?channel1Sum/samples:0u),
+                     (unsigned long long)(samples?channel2Sum/samples:0u),greenDominant);
             } else {
                KKLog(@"XENOS_COMPOSITED_GPU_READBACK_INVALIDATE_FAILED code=%d",invalidateResult);
             }
