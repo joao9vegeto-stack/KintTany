@@ -105,7 +105,8 @@ swift = Path("iOS/App/XOWUEDiagnostics.swift").read_text(encoding="utf-8")
 assert '"XOWUE_XAUDIO_"' in swift
 assert '"XOWUE_XMA_"' in swift
 assert "let audioDriver = Array(lines.filter {" in swift
-assert "+ boot + audioDriver + input + xamProfile + eventWaits" in swift
+assert "let parserEof = Array(lines.filter {" in swift
+assert "+ boot + parserEof + audioDriver + input + xamProfile + eventWaits" in swift
 print("PASS: PPC callback FPSCR initialized and XAudio/XMA lifecycle retained in compact iOS diagnostics")
 
 assert "constexpr uint32_t kNtStatusPending = 0x00000103u;" in engine
