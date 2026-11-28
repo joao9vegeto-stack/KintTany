@@ -10,6 +10,7 @@ OWNERS = (
     0x82495BF8,  # caller which asks for the stream bytes
     0x82575250,  # stream range / chunk update callback
     0x82575480,  # polling wrapper with vtable completion loop
+    0x825770B8,  # resource parser helper immediately before the terminal one-byte reads
     0x82575108,  # chunk request helper
     0x82574348,  # virtual stream-provider read submission callback (observed in Build 138)
     0x82573CB0,  # implementation behind the observed 0x82574348 wrapper
