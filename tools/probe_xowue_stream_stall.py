@@ -37,7 +37,7 @@ def main():
     ap.add_argument("--report",type=Path,required=True)
     args=ap.parse_args()
     wanted=0x82575250
-    targets=(0x82495C60,0x8257550C)
+    targets=(0x82495C60,0x8257550C,0x82578898)
     result={"purpose":"Verbatim native AOT source extraction; no PPC code is modified.",
             "function":None,"callsite_windows":[]}
     found=set()
