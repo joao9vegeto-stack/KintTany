@@ -641,6 +641,11 @@ uint32_t g_b150PastEndRequests = 0u;
 uint32_t g_b150AppliedCount = 0u;
 uint32_t g_b150AppliedLogCount = 0u;
 bool g_b150RunawayLogged = false;
+std::mutex g_b162StreamSkipMutex;
+std::unordered_map<uint32_t, uint32_t> g_b162StreamSkipScratchAddresses;
+std::atomic<uint32_t> g_b162StreamSkipBeginLogs{0u};
+std::atomic<uint32_t> g_b162StreamSkipEofLogs{0u};
+std::atomic<uint32_t> g_b162StreamSkipDoneLogs{0u};
 // Host-side latch survives the interval before xowue_boot_xex creates its session.
 std::atomic<bool> g_hostStopRequested{false};
 std::atomic<bool> g_runtimeSessionPoisoned{false};
@@ -668,6 +673,7 @@ bool shouldPersistRuntimeTrace(const std::string &event, size_t sequence) {
         event.find("B149_") != std::string::npos ||
         event.find("B150_") != std::string::npos ||
         event.find("B152_") != std::string::npos ||
+        event.find("B162_") != std::string::npos ||
         event.find("XENOS_GPU_GUEST_RESOLVE_REJECT") != std::string::npos) return true;
     if (event.find("XOWUE_XAUDIO_") != std::string::npos)
         return g_xaudioTraceLogs.fetch_add(1u, std::memory_order_relaxed) < 96u;
@@ -5256,6 +5262,165 @@ bool xowue_exp_eof_zero_apply(PPCContext &ctx, uint8_t *base) {
     return true;
 }
 
+static bool xowue_stream_logical_end(uint8_t *base, uint32_t object, uint32_t &logicalEnd) {
+    if (!base || object == 0u || !validGuestRange(object, 176u))
+        return false;
+    const uint32_t table = loadGuestBe32(base, object + 172u);
+    if (table == 0u || !validGuestRange(table, 8u))
+        return false;
+    const uint32_t data = loadGuestBe32(base, table);
+    const uint32_t count = loadGuestBe32(base, table + 4u);
+    if (data == 0u || count == 0u || count > 65536u)
+        return false;
+    const uint64_t tableBytes = static_cast<uint64_t>(count) * 16u;
+    if (!validGuestRange(data, tableBytes))
+        return false;
+
+    uint64_t maximumEnd = 0u;
+    for (uint32_t i = 0u; i < count; ++i) {
+        const uint64_t entry64 = static_cast<uint64_t>(data) + static_cast<uint64_t>(i) * 16u;
+        if (entry64 > UINT32_MAX ||
+            !validGuestRange(static_cast<uint32_t>(entry64), 16u))
+            return false;
+        const uint32_t entry = static_cast<uint32_t>(entry64);
+        const uint32_t start = loadGuestBe32(base, entry);
+        const uint32_t size = loadGuestBe32(base, entry + 4u);
+        if (size == 0u)
+            continue;
+        const uint64_t end = static_cast<uint64_t>(start) + size;
+        if (end > UINT32_MAX)
+            return false;
+        maximumEnd = std::max(maximumEnd, end);
+    }
+    if (maximumEnd == 0u)
+        return false;
+    logicalEnd = static_cast<uint32_t>(maximumEnd);
+    return true;
+}
+
+static uint32_t xowue_stream_skip_scratch(uint8_t *base, uint32_t threadId) {
+    if (!base)
+        return 0u;
+    std::lock_guard<std::mutex> lock(g_b162StreamSkipMutex);
+    uint32_t &address = g_b162StreamSkipScratchAddresses[threadId];
+    if (address == 0u)
+        address = allocateSmallGuestPoolBlock(base, 0x1000u, 0x1000u);
+    return address != 0u && validGuestRange(address, 0x1000u) ? address : 0u;
+}
+
+// Build 162: the verified UE3 parser loop at 0x8257887C repeatedly reads one
+// byte into the same unused local. Batch only within the currently available
+// stream window, and stop the ignored-byte loop at the indexed EOF.
+bool xowue_prepare_stream_skip(PPCContext &ctx, uint8_t *base) {
+    ctx.r4.u64 = static_cast<uint64_t>(ctx.r1.u32) + 88u;
+    ctx.r29.u64 = 1u;
+    if (!base)
+        return true;
+
+    const uint64_t countAddress64 = static_cast<uint64_t>(ctx.r1.u32) + 172u;
+    if (countAddress64 > UINT32_MAX ||
+        !validGuestRange(static_cast<uint32_t>(countAddress64), 4u))
+        return true;
+    const uint32_t totalBytes = loadGuestBe32(base, static_cast<uint32_t>(countAddress64));
+    if (static_cast<int32_t>(totalBytes) <= 0) {
+        ctx.r29.u64 = 0u;
+        return false;
+    }
+    const uint32_t processed = ctx.r31.u32;
+    if (processed >= totalBytes) {
+        ctx.r29.u64 = 0u;
+        return false;
+    }
+
+    const uint32_t object = ctx.r22.u32;
+    const bool objectValid = object != 0u && validGuestRange(object, 176u);
+    uint32_t cursor = 0xFFFFFFFFu;
+    uint32_t windowStart = 0xFFFFFFFFu;
+    uint32_t windowEnd = 0xFFFFFFFFu;
+    if (objectValid) {
+        cursor = loadGuestBe32(base, object + 136u);
+        windowStart = loadGuestBe32(base, object + 140u);
+        windowEnd = loadGuestBe32(base, object + 148u);
+    }
+
+    if (processed == 0u) {
+        const uint32_t sample =
+            g_b162StreamSkipBeginLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        if (sample <= 16u) {
+            char event[256];
+            std::snprintf(event, sizeof(event),
+                "B162_STREAM_BYTE_LOOP_BEGIN thread=%u obj=0x%08X count=%u "
+                "cursor=0x%08X window_start=0x%08X window_end=0x%08X",
+                g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId,
+                object, totalBytes, cursor, windowStart, windowEnd);
+            recordRuntimeTrace(event);
+        }
+    }
+
+    uint32_t logicalEnd = 0u;
+    const bool endValid = objectValid && xowue_stream_logical_end(base, object, logicalEnd);
+    if (endValid && cursor >= logicalEnd) {
+        ctx.r31.u64 = totalBytes;
+        ctx.r29.u64 = 0u;
+        const uint32_t sample =
+            g_b162StreamSkipEofLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
+        if (sample <= 32u) {
+            char event[256];
+            std::snprintf(event, sizeof(event),
+                "B162_STREAM_BYTE_LOOP_EOF thread=%u obj=0x%08X count=%u "
+                "processed=%u remaining=%u cursor=0x%08X logical_end=0x%08X "
+                "action=finish_ignored_payload",
+                g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId,
+                object, totalBytes, processed, totalBytes - processed, cursor, logicalEnd);
+            recordRuntimeTrace(event);
+        }
+        return false;
+    }
+
+    const uint32_t remaining = totalBytes - processed;
+    uint32_t chunk = std::min<uint32_t>(remaining, 0x1000u);
+    if (objectValid && cursor >= windowStart && cursor < windowEnd) {
+        chunk = std::min<uint32_t>(chunk, windowEnd - cursor);
+    } else {
+        // Ask the existing stream worker for one byte to open the next window.
+        chunk = 1u;
+    }
+    if (endValid && cursor < logicalEnd)
+        chunk = std::min<uint32_t>(chunk, logicalEnd - cursor);
+    if (chunk == 0u)
+        chunk = 1u;
+
+    const uint32_t threadId = g_currentGuestThread
+        ? g_currentGuestThread->id : g_currentGuestThreadId;
+    const uint32_t scratch = xowue_stream_skip_scratch(base, threadId);
+    if (scratch != 0u)
+        ctx.r4.u64 = scratch;
+    else
+        chunk = 1u;
+    ctx.r29.u64 = chunk;
+    return true;
+}
+
+void xowue_trace_stream_skip_done(PPCContext &ctx, uint8_t *base) {
+    const uint32_t sample =
+        g_b162StreamSkipDoneLogs.fetch_add(1u, std::memory_order_relaxed) + 1u;
+    if (sample > 16u)
+        return;
+    const uint32_t object = ctx.r22.u32;
+    const uint64_t countAddress64 = static_cast<uint64_t>(ctx.r1.u32) + 172u;
+    const uint32_t totalBytes = base && countAddress64 <= UINT32_MAX &&
+        validGuestRange(static_cast<uint32_t>(countAddress64), 4u)
+            ? loadGuestBe32(base, static_cast<uint32_t>(countAddress64)) : 0xFFFFFFFFu;
+    const uint32_t cursor = base && object != 0u && validGuestRange(object, 140u)
+        ? loadGuestBe32(base, object + 136u) : 0xFFFFFFFFu;
+    char event[192];
+    std::snprintf(event, sizeof(event),
+        "B162_STREAM_BYTE_LOOP_DONE thread=%u obj=0x%08X count=%u cursor=0x%08X",
+        g_currentGuestThread ? g_currentGuestThread->id : g_currentGuestThreadId,
+        object, totalBytes, cursor);
+    recordRuntimeTrace(event);
+}
+
 void xowue_dispatch_indirect(PPCContext &context, uint8_t *base, uint32_t target) {
     // Build 90: retain callback telemetry without replacing native PPC return values.
     if (target == 0x82DC2390u && xowue_82dc2390_observe(context, base)) return;
@@ -5905,6 +6070,13 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
             g_b150AppliedLogCount = 0u;
             g_b150RunawayLogged = false;
         }
+        {
+            std::lock_guard<std::mutex> skipLock(g_b162StreamSkipMutex);
+            g_b162StreamSkipScratchAddresses.clear();
+        }
+        g_b162StreamSkipBeginLogs.store(0u, std::memory_order_relaxed);
+        g_b162StreamSkipEofLogs.store(0u, std::memory_order_relaxed);
+        g_b162StreamSkipDoneLogs.store(0u, std::memory_order_relaxed);
         g_build66AuditEmitted.store(false,std::memory_order_relaxed);
         g_nextPhysicalAllocation = kFirstPhysicalAllocation;
         g_nextGuestHandle = 0x100u;

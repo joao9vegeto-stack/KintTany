@@ -39,6 +39,15 @@ EOF_ZERO_DECLARATION = (
     "bool xowue_exp_eof_zero_apply(PPCContext &ctx, uint8_t *base);"
 )
 EOF_ZERO_CALL = "if (xowue_exp_eof_zero_apply(ctx, base)) return;"
+STREAM_SKIP_FUNCTION = "sub_82578498"
+STREAM_SKIP_PREP_DECLARATION = (
+    "bool xowue_prepare_stream_skip(PPCContext &ctx, uint8_t *base);"
+)
+STREAM_SKIP_DONE_DECLARATION = (
+    "void xowue_trace_stream_skip_done(PPCContext &ctx, uint8_t *base);"
+)
+STREAM_SKIP_PREP_CALL = "xowue_prepare_stream_skip(ctx, base)"
+STREAM_SKIP_DONE_CALL = "xowue_trace_stream_skip_done(ctx, base);"
 CALL_SITE = re.compile(
     r"(?P<prefix>"
     r"^\s*// li r4,0\s*\n"
@@ -240,11 +249,103 @@ def _patch_eof_zero_probe(source: str) -> tuple[str, bool, bool]:
 
 
 
+def _patch_stream_skip_loop(source: str) -> tuple[str, bool, bool]:
+    span = _function_span(source, STREAM_SKIP_FUNCTION)
+    if span is None:
+        return source, False, False
+    start, end, _ = span
+    body = source[start:end]
+    existing = body.count(STREAM_SKIP_PREP_CALL)
+    if existing > 1 or body.count(STREAM_SKIP_DONE_CALL) > 1:
+        raise RuntimeError("duplicated B162 stream byte-loop hook; refusing to patch")
+    if existing == 1:
+        if body.count(STREAM_SKIP_DONE_CALL) != 1:
+            raise RuntimeError("partial B162 stream byte-loop hook detected")
+        patched = _ensure_declaration(
+            source, f"PPC_FUNC_IMPL(__imp__{STREAM_SKIP_FUNCTION})",
+            STREAM_SKIP_PREP_DECLARATION
+        )
+        patched = _ensure_declaration(
+            patched, f"PPC_FUNC_IMPL(__imp__{STREAM_SKIP_FUNCTION})",
+            STREAM_SKIP_DONE_DECLARATION
+        )
+        return patched, True, False
+
+    label = "loc_8257887C:"
+    if body.count(label) != 1:
+        raise RuntimeError("could not find unique UE3 one-byte stream loop at 0x8257887C")
+    loop_start = body.index(label)
+    loop_end_marker = "goto loc_82578574;"
+    loop_end_at = body.find(loop_end_marker, loop_start)
+    if loop_end_at < 0:
+        raise RuntimeError("could not find exit from UE3 one-byte stream loop")
+    loop_end = loop_end_at + len(loop_end_marker)
+    old_loop = body[loop_start:loop_end]
+    required = (
+        "ctx.lr = 0x82578898;",
+        "PPC_CALL_INDIRECT_FUNC(ctx.ctr.u32);",
+        "ctx.r31.s64 = ctx.r31.u64 + 1;",
+        "if (ctx.cr6.lt) goto loc_8257887C;",
+    )
+    for fragment in required:
+        if old_loop.count(fragment) != 1:
+            raise RuntimeError(f"unexpected UE3 stream-loop shape; missing/duplicated {fragment}")
+
+    new_loop = "\n".join([
+        "loc_8257887C:",
+        "    if (!xowue_prepare_stream_skip(ctx, base)) goto loc_82578574;",
+        "    // lwz r11,0(r22)",
+        "    ctx.r11.u64 = PPC_LOAD_U32(ctx.r22.u32 + 0);",
+        "    // mr r5,r29",
+        "    ctx.r5.u64 = ctx.r29.u64;",
+        "    // mr r3,r22",
+        "    ctx.r3.u64 = ctx.r22.u64;",
+        "    // lwz r10,4(r11)",
+        "    ctx.r10.u64 = PPC_LOAD_U32(ctx.r11.u32 + 4);",
+        "    // mtctr r10",
+        "    ctx.ctr.u64 = ctx.r10.u64;",
+        "    // bctrl",
+        "    ctx.lr = 0x82578898;",
+        "    PPC_CALL_INDIRECT_FUNC(ctx.ctr.u32);",
+        "    // add r31,r31,r29",
+        "    ctx.r31.u64 = ctx.r31.u32 + ctx.r29.u32;",
+        "    // lwz r9,172(r1)",
+        "    ctx.r9.u64 = PPC_LOAD_U32(ctx.r1.u32 + 172);",
+        "    // cmpw cr6,r31,r9",
+        "    ctx.cr6.compare<int32_t>(ctx.r31.s32, ctx.r9.s32, ctx.xer);",
+        "    // blt cr6,0x8257887c",
+        "    if (ctx.cr6.lt) goto loc_8257887C;",
+        "    // li r29,0",
+        "    ctx.r29.s64 = 0;",
+        "    xowue_trace_stream_skip_done(ctx, base);",
+        "    // b 0x82578574",
+        "    goto loc_82578574;",
+    ])
+    patched_body = body[:loop_start] + new_loop + body[loop_end:]
+    patched = source[:start] + patched_body + source[end:]
+    patched = _ensure_declaration(
+        patched, f"PPC_FUNC_IMPL(__imp__{STREAM_SKIP_FUNCTION})",
+        STREAM_SKIP_PREP_DECLARATION
+    )
+    patched = _ensure_declaration(
+        patched, f"PPC_FUNC_IMPL(__imp__{STREAM_SKIP_FUNCTION})",
+        STREAM_SKIP_DONE_DECLARATION
+    )
+    body_span = _function_span(patched, STREAM_SKIP_FUNCTION)
+    if body_span is None:
+        raise RuntimeError("B162 patched function disappeared")
+    patched_body = patched[body_span[0]:body_span[1]]
+    if patched_body.count(STREAM_SKIP_PREP_CALL) != 1 or patched_body.count(STREAM_SKIP_DONE_CALL) != 1:
+        raise RuntimeError("B162 stream byte-loop hook call counts are not exactly one")
+    return patched, True, True
+
+
 def patch_source(source: str) -> tuple[str, dict[str, int]]:
     patched, has_memset, inserted_memset = _patch_memset_probe(source)
     patched, has_eof, inserted_eof = _patch_eof_poll_probe(patched)
     patched, has_chunk, inserted_chunk, has_chunk_oob, inserted_chunk_oob = _patch_chunk_entry_probe(patched)
     patched, has_eof_zero, inserted_eof_zero = _patch_eof_zero_probe(patched)
+    patched, has_stream_skip, inserted_stream_skip = _patch_stream_skip_loop(patched)
     return patched, {
         "memset_function": int(has_memset),
         "memset_inserted": int(inserted_memset),
@@ -256,6 +357,8 @@ def patch_source(source: str) -> tuple[str, dict[str, int]]:
         "chunk_oob_inserted": int(inserted_chunk_oob),
         "eof_zero_function": int(has_eof_zero),
         "eof_zero_inserted": int(inserted_eof_zero),
+        "stream_skip_function": int(has_stream_skip),
+        "stream_skip_inserted": int(inserted_stream_skip),
     }
 
 
@@ -293,6 +396,7 @@ PPC_FUNC_IMPL(__imp__sub_82575108) {
         "chunk_function": 1, "chunk_inserted": 1,
         "chunk_oob_function": 1, "chunk_oob_inserted": 1,
         "eof_zero_function": 1, "eof_zero_inserted": 1,
+        "stream_skip_function": 0, "stream_skip_inserted": 0,
     }
     assert patched.index(MEMSET_BEGIN) < patched.index("sub_82C2A1F0(ctx, base);")
     assert patched.index("sub_82C2A1F0(ctx, base);") < patched.index(MEMSET_END)
@@ -315,6 +419,7 @@ PPC_FUNC_IMPL(__imp__sub_82575108) {
     assert repeated_result["chunk_inserted"] == 0
     assert repeated_result["chunk_oob_inserted"] == 0
     assert repeated_result["eof_zero_inserted"] == 0
+    assert repeated_result["stream_skip_inserted"] == 0
     assert patched.count(MEMSET_BEGIN) == 1 and patched.count(MEMSET_END) == 1
     assert patched.count(EOF_CALL) == 1 and patched.count(EOF_B149_CALL) == 1
     assert patched.count(CHUNK_OOB_GUARD) == 1 and patched.count(CHUNK_CALL) == 1
@@ -345,6 +450,7 @@ def main() -> int:
         "chunk_function": 0,
         "chunk_oob_function": 0,
         "eof_zero_function": 0,
+        "stream_skip_function": 0,
     }
     inserted = {
         "memset_inserted": 0,
@@ -352,6 +458,7 @@ def main() -> int:
         "chunk_inserted": 0,
         "chunk_oob_inserted": 0,
         "eof_zero_inserted": 0,
+        "stream_skip_inserted": 0,
     }
     patched_files = []
     for path in paths:
@@ -373,6 +480,7 @@ def main() -> int:
         "chunk_function": 1,
         "chunk_oob_function": 1,
         "eof_zero_function": 1,
+        "stream_skip_function": 1,
     }
     for key, value in expected.items():
         if found[key] != value:
@@ -384,12 +492,13 @@ def main() -> int:
         "memset_callee": "0x82C2A1F0",
         "eof_poll_guest_function": "0x82575480",
         "chunk_entry_guest_function": "0x82575108",
-        "probe": "B146 memset + B147 chunk entry + B148 EOF poll + B149 EOF history/log-only OOB + B150 guarded EOF zero window",
+        "stream_skip_guest_function": "0x82578498",
+        "probe": "B146/B147/B148/B149/B150 stream diagnostics + B162 batched UE3 byte-skip with EOF exit",
         "found": found,
         "inserted": inserted,
         "patched_files": patched_files,
     }
-    print("XOWUE_B146_B147_AOT_PROBES " + json.dumps(report, sort_keys=True))
+    print("XOWUE_B162_STREAM_BYTE_SKIP_PATCH " + json.dumps(report, sort_keys=True))
     return 0
 
 
