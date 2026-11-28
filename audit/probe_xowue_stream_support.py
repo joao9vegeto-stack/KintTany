@@ -69,7 +69,7 @@ OWNERS = (
 )
 
 # Resolve a runtime PC to the actual generated AOT function containing it.
-PC_TARGETS = (0x824E72B4, 0x82573E64)
+PC_TARGETS = (0x824E72B4, 0x82573E64, 0x82578898)
 
 def main():
     ap=argparse.ArgumentParser()
