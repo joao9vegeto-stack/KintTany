@@ -8215,7 +8215,7 @@ static uint32_t createGuestFile(uint8_t *base, const std::string &guestPath,
     file->completion->kind = GuestWaitable::Kind::Event;
     file->completion->handle = handle;
     file->completion->objectAddress = objectAddress;
-    file->completion->manualReset = false;
+    file->completion->manualReset = true;
     file->completion->signaled = false;
     file->completion->unconsumedSignals = 0u;
     file->completion->signalGeneration = 0u;

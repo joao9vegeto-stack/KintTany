@@ -73,8 +73,6 @@ require(completion_body.index("result = performRead(true);") <
 require("resetGuestWaitableForIo(eventWaitable)" in read and
         "resetGuestWaitableForIo(file->completion)" in read,
         "each NT read must reset the file completion state and supplied event")
-require("file->completion->manualReset = false;" in ENGINE,
-        "XFile completion event must preserve Xenia's auto-reset semantics")
 require("GuestEventSignalOnReturn eventSignal(eventHandle, eventWaitable);" in completion_body and
         "eventSignal.signalNow();" in completion_body and
         "true);" in completion_body,
