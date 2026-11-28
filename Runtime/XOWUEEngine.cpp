@@ -635,6 +635,9 @@ std::atomic<uint32_t> g_xaudioTraceLogs{0u};
 std::unordered_map<uint32_t, std::shared_ptr<std::recursive_timed_mutex>> g_criticalSectionLocks;
 XenosFrontendState g_xenosFrontend;
 std::atomic<bool> g_schedulerStopRequested{false};
+std::atomic<bool> g_fatalPpcDispatchSeen{false};
+std::mutex g_fatalPpcDispatchMutex;
+std::string g_fatalPpcDispatchEvent;
 std::atomic<bool> g_xowueExpEofZeroEnabled{false};
 std::mutex g_b150EofZeroMutex;
 uint32_t g_b150ZeroBufferAddress = 0u;
@@ -4117,6 +4120,13 @@ extern "C" void XOWUECrashRecorderWriteFatal(const char *message) __attribute__(
         g_lastAotGuestFunction.load(std::memory_order_relaxed),threadId,
         static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(slotFunction)));
     recordRuntimeTrace(event);
+    {
+        std::lock_guard<std::mutex> fatalLock(g_fatalPpcDispatchMutex);
+        g_fatalPpcDispatchEvent = event;
+    }
+    // Publish the fatal cause before waking the main guest thread. Otherwise
+    // its cooperative stop exception can hide this worker-thread failure.
+    g_fatalPpcDispatchSeen.store(true, std::memory_order_release);
     if (XOWUECrashRecorderWriteFatal) XOWUECrashRecorderWriteFatal(event);
     requestGuestSchedulerStop();
     throw std::runtime_error(event);
@@ -5983,6 +5993,11 @@ extern "C" void xowue_begin_session(void) {
     // A later stop request must survive all native boot initialization.
     g_hostStopRequested.store(false, std::memory_order_release);
     g_schedulerStopRequested.store(false, std::memory_order_release);
+    g_fatalPpcDispatchSeen.store(false, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> fatalLock(g_fatalPpcDispatchMutex);
+        g_fatalPpcDispatchEvent.clear();
+    }
 }
 
 extern "C" void xowue_request_stop(void) {
@@ -6395,14 +6410,41 @@ extern "C" int xowue_boot_xex(const char *path, char *output, size_t output_capa
                      installed, trace.c_str());
         return 3;
     } catch (const GuestThreadStopRequested &) {
-        // This is an intentional user exit, not an empty AOT slot or a crash.
+        // The main thread can observe the scheduler stop before the fatal
+        // worker exception reaches this catch. Preserve the original cause.
+        if (g_fatalPpcDispatchSeen.load(std::memory_order_acquire)) {
+            recordAotExecutionSummary("fatal-ppc-dispatch");
+            g_aotExecutionTelemetryActive.store(false, std::memory_order_release);
+            std::string fatalEvent;
+            {
+                std::lock_guard<std::mutex> fatalLock(g_fatalPpcDispatchMutex);
+                fatalEvent = g_fatalPpcDispatchEvent;
+            }
+            recordRuntimeTrace("XOWUE_FATAL_PPC_DISPATCH scheduler stopped; joining guest threads");
+            writeMessage(output, output_capacity,
+                         "FALHA_FATAL_PPC_DISPATCH %s",
+                         fatalEvent.empty() ? "evento fatal sem detalhe" : fatalEvent.c_str());
+            return 5;
+        }
+
+        // A code-4 result is reserved for a stop explicitly requested by the
+        // host UI. Any other scheduler stop is an unexpected runtime failure.
+        if (!g_hostStopRequested.load(std::memory_order_acquire)) {
+            recordAotExecutionSummary("unexpected-scheduler-stop");
+            g_aotExecutionTelemetryActive.store(false, std::memory_order_release);
+            recordRuntimeTrace("XOWUE_UNEXPECTED_SCHEDULER_STOP; joining guest threads");
+            writeMessage(output, output_capacity,
+                         "Falha: escalonador PPC interrompido sem solicitação de saída.");
+            return 5;
+        }
+
         recordAotExecutionSummary("user-exit");
         g_aotExecutionTelemetryActive.store(false, std::memory_order_release);
         recordRuntimeTrace("XOWUE_USER_EXIT PPC stopped; scheduler guard joining guest threads");
         // The complete trace was persisted incrementally. Do not assemble a
         // cross-subsystem snapshot after joining guest threads: it takes the
         // Xenos and GPU diagnostic mutexes and can prevent native return to UIKit.
-        writeMessage(output, output_capacity, "Sessão PPC encerrada por SAIR.");
+        writeMessage(output, output_capacity, "Sessão PPC encerrada por solicitação explícita de saída.");
         return 4;
     } catch (const GuestFirmwareReturn &request) {
         recordAotExecutionSummary("firmware-return");

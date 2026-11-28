@@ -118,13 +118,23 @@ require("xowue_request_stop()" in APP and
         "SAIR must latch native cancellation synchronously before waiting for boot completion")
 
 
-require("std::atomic<bool> g_hostStopRequested{false};" in ENGINE,
-        "host stop request must survive until the native PPC session begins")
+require("std::atomic<bool> g_hostStopRequested{false};" in ENGINE and
+        "std::atomic<bool> g_fatalPpcDispatchSeen{false};" in ENGINE,
+        "the runtime must keep explicit user-stop and fatal-dispatch causes separate")
 begin_session = ENGINE[ENGINE.index('extern "C" void xowue_begin_session(void) {'):
                       ENGINE.index('extern "C" void xowue_request_stop(void) {')]
 require("g_hostStopRequested.store(false" in begin_session and
-        "g_schedulerStopRequested.store(false" in begin_session,
-        "a new run must explicitly clear the previous session stop latch")
+        "g_schedulerStopRequested.store(false" in begin_session and
+        "g_fatalPpcDispatchSeen.store(false" in begin_session and
+        "g_fatalPpcDispatchEvent.clear()" in begin_session,
+        "a new run must clear prior stop and fatal-cause latches")
+fatal_start = ENGINE.index("static void failPpcIndirectDispatch(")
+fatal_end = ENGINE.index("static uint32_t allocateSmallGuestPoolBlock", fatal_start)
+fatal_dispatch = ENGINE[fatal_start:fatal_end]
+require("g_fatalPpcDispatchSeen.store(true" in fatal_dispatch and
+        fatal_dispatch.index("g_fatalPpcDispatchSeen.store(true") <
+        fatal_dispatch.index("requestGuestSchedulerStop()"),
+        "fatal dispatch cause must be published before waking threads")
 require("g_hostStopRequested.store(true" in request_stop and
         request_stop.index("g_hostStopRequested.store(true") <
         request_stop.index("requestGuestSchedulerStop()"),
@@ -144,9 +154,21 @@ user_exit_catch = ENGINE[exit_catch_start:exit_catch_end]
 require("runtimeTraceText()" not in user_exit_catch and
         "xowue::xenos::Diagnostics()" not in user_exit_catch,
         "the user-exit catch must not acquire the runtime/Xenos diagnostic snapshot locks after teardown")
-require('writeMessage(output, output_capacity, "Sessão PPC encerrada por SAIR.");' in user_exit_catch and
-        "return 4;" in user_exit_catch,
-        "the user-exit catch must return a compact success code directly to the Swift caller")
+require("g_fatalPpcDispatchSeen.load" in user_exit_catch and
+        "g_hostStopRequested.load" in user_exit_catch and
+        "FALHA_FATAL_PPC_DISPATCH" in user_exit_catch and
+        "XOWUE_UNEXPECTED_SCHEDULER_STOP" in user_exit_catch and
+        "Sessão PPC encerrada por solicitação explícita de saída." in user_exit_catch and
+        "return 5;" in user_exit_catch and "return 4;" in user_exit_catch,
+        "fatal, unexpected, and explicit user stops must produce distinct native outcomes")
+complete_boot_start = APP.index("private func completeBoot(")
+complete_boot_end = APP.index("\n    func runBoot()", complete_boot_start)
+complete_boot = APP[complete_boot_start:complete_boot_end]
+require("runtime-failure code=\\(outcome.code)" in complete_boot and
+        "unexpected-stop code=\\(outcome.code)" in complete_boot and
+        "if exitRequested || outcome.code == 4" not in complete_boot and
+        "if runtimeFailure" in complete_boot,
+        "the launcher must not report an unrequested fatal stop as a normal user exit")
 
 run_boot = APP[APP.index("func runBoot()"):]
 require("xowue_begin_session()" in run_boot and

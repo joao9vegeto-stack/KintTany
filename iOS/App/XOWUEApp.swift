@@ -1644,12 +1644,31 @@ private final class XOWUEGameLibrary: ObservableObject {
         switch result {
         case .success(let outcome):
             bootOutput = outcome.text
-            let reportStatus = exitRequested || outcome.code == 4
-                ? "session-ended code=\(outcome.code)"
-                : "boot-return code=\(outcome.code)"
+            let runtimeFailure = outcome.code == 5
+            let reportStatus: String
+            if runtimeFailure {
+                reportStatus = "runtime-failure code=\(outcome.code)"
+            } else if exitRequested {
+                reportStatus = "user-exit code=\(outcome.code)"
+            } else if outcome.code == 4 {
+                reportStatus = "unexpected-stop code=\(outcome.code)"
+            } else {
+                reportStatus = "boot-return code=\(outcome.code)"
+            }
             _ = XOWUEDiagnostics.saveBootReport(outcome.text, status: reportStatus)
             XOWUEDiagnostics.bootFinished(code: outcome.code, text: outcome.text)
-            if exitRequested || outcome.code == 4 {
+
+            if runtimeFailure {
+                exitRequested = false
+                phase = .failed
+                status = "O runtime PPC parou por uma falha."
+                detail = "O motivo está no relatório desta execução."
+                gameSurfacePresented = false
+                XOWUEDiagnostics.log("runtime.failure code=\(outcome.code) text=\(outcome.text)")
+                dismissGameSurface(reason: "runtime-failure")
+                return
+            }
+            if exitRequested {
                 exitRequested = false
                 phase = .ready
                 status = "Sessão do jogo encerrada."
@@ -1657,6 +1676,15 @@ private final class XOWUEGameLibrary: ObservableObject {
                 gameSurfacePresented = false
                 XOWUEDiagnostics.log("runtime.stop completed code=\(outcome.code)")
                 dismissGameSurface(reason: "native-stop-complete")
+                return
+            }
+            if outcome.code == 4 {
+                phase = .failed
+                status = "O runtime parou sem solicitação de saída."
+                detail = "A sessão PPC terminou inesperadamente; veja o relatório."
+                gameSurfacePresented = false
+                XOWUEDiagnostics.log("runtime.unexpected-stop code=\(outcome.code) text=\(outcome.text)")
+                dismissGameSurface(reason: "unexpected-native-stop")
                 return
             }
             if outcome.code == 3 {
