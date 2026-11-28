@@ -209,7 +209,9 @@ assert "requestGuestSchedulerStop();" in engine[
     engine.index('extern "C" void xowue_request_stop(void)'):
     engine.index("static void rebuildGuestPathIndex();")
 ]
-assert "if exitRequested || outcome.code == 4" in swift
+assert "if exitRequested || outcome.code == 4" not in swift
+assert 'reportStatus = "runtime-failure code=\\(outcome.code)"' in swift
+assert 'reportStatus = "unexpected-stop code=\\(outcome.code)"' in swift
 assert 'Label("SAIR", systemImage: "power")' in swift
 assert 'Label("JOGO INSTALADO"' in swift
 assert "16.0 / 9.0" in swift and "9.0 / 16.0" in swift

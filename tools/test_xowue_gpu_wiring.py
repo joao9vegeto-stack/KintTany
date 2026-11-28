@@ -170,7 +170,9 @@ print("PASS: native UIKit landscape game host, portrait library preserved")
 # dismissing the landscape host (no longer a fake 'back to library').
 assert 'navigation.exit tapped: dispatching native cancellation' in ui
 assert 'library.requestExit()' in ui
-assert 'if exitRequested || outcome.code == 4' in ui
+assert 'if exitRequested || outcome.code == 4' not in ui
+assert 'reportStatus = "runtime-failure code=\\(outcome.code)"' in ui
+assert 'reportStatus = "unexpected-stop code=\\(outcome.code)"' in ui
 assert 'gameSurfacePresented = false' in ui
 assert 'Label("SAIR", systemImage: "power")' in ui
 print("PASS: landscape host closes after cooperative native PPC shutdown")
