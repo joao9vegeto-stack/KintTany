@@ -79,7 +79,7 @@ jobs:
           ppc_dir = Path(os.environ["RUNNER_TEMP"]) / "generated" / "ppc"
           owner = 0x82B52D48
           target = 0x82B52E6C
-          func = re.compile(r'PPC_FUNC_IMPL\\(__imp__(sub_[0-9A-Fa-f]{8})\\)\\s*\\{')
+          func = re.compile(r'PPC_FUNC_IMPL\(__imp__(sub_[0-9A-Fa-f]{8})\)\s*\{')
           found = None
           for path in sorted(ppc_dir.glob("ppc_recomp.*.cpp")):
               source = path.read_text(encoding="utf-8")
