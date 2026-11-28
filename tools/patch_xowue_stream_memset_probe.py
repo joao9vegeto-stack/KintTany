@@ -284,7 +284,7 @@ def _patch_stream_skip_loop(source: str) -> tuple[str, bool, bool]:
     required = (
         "ctx.lr = 0x82578898;",
         "PPC_CALL_INDIRECT_FUNC(ctx.ctr.u32);",
-        "ctx.r31.s64 = ctx.r31.u64 + 1;",
+        "ctx.r31.s64 = ctx.r31.s64 + 1;",
         "if (ctx.cr6.lt) goto loc_8257887C;",
     )
     for fragment in required:
