@@ -462,7 +462,7 @@ loc_82579100:
     assert patched.count(EOF_ZERO_CALL) == 1
     assert patched.count(STREAM_SKIP_PREP_CALL) == 1
     assert patched.count(STREAM_SKIP_DONE_CALL) == 1
-    assert patched.count(STREAM_SKIP_ABORT_CALL) == 1
+    assert patched.count("if (xowue_stream_skip_abort_outer()) {") == 1
     assert "if (xowue_stream_skip_abort_outer()) {" in patched
     assert "ctx.r3.u64 = ctx.r22.u64;" in patched
     assert "goto loc_82579100;" in patched
