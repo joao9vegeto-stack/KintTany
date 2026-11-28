@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep the B150 EOF-zero experiment disabled until the guest EOF contract is validated."""
+"""The B150 EOF-zero recovery is enabled for the log-verified terminal chunk state."""
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
@@ -8,8 +8,8 @@ header = (root / "Runtime" / "xowue_engine.h").read_text(encoding="utf-8")
 swift = (root / "iOS" / "App" / "XOWUEApp.swift").read_text(encoding="utf-8")
 patcher = (root / "tools" / "patch_xowue_stream_memset_probe.py").read_text(encoding="utf-8")
 
-assert "runtime.XOWUE_EXP_EOF_ZERO enabled=false" in swift
-assert "xowue_set_exp_eof_zero_enabled(0)" in swift
+assert "runtime.XOWUE_EXP_EOF_ZERO enabled=true" in swift
+assert "xowue_set_exp_eof_zero_enabled(1)" in swift
 assert 'UserDefaults.standard.object(forKey: "XOWUE_EXP_EOF_ZERO") as? Bool' not in swift
 assert 'let build150Default = XOWUEBuild.number' not in swift
 assert "void xowue_set_exp_eof_zero_enabled(int enabled);" in header
@@ -56,4 +56,4 @@ for tag in ("B147_VM_RECOMMIT", "B147_VM_RELEASE", "B147_CHUNK_ENTRY",
             "B149_STREAM_EOF_POLL", "B149_STREAM_LAST_READS",
             "B149_CHUNK_ENTRY", "B149_CHUNK_IDX_OOB"):
     assert tag in engine or tag in patcher, f"missing retained diagnostic {tag}"
-print("PASS: B150 EOF-zero experiment disabled at boot; helper remains bounded and post-prologue")
+print("PASS: B150 EOF-zero recovery enabled; helper remains bounded and post-prologue")

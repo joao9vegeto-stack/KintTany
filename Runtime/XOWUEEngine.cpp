@@ -8215,7 +8215,7 @@ static uint32_t createGuestFile(uint8_t *base, const std::string &guestPath,
     file->completion->kind = GuestWaitable::Kind::Event;
     file->completion->handle = handle;
     file->completion->objectAddress = objectAddress;
-    file->completion->manualReset = true;
+    file->completion->manualReset = false;
     file->completion->signaled = false;
     file->completion->unconsumedSignals = 0u;
     file->completion->signalGeneration = 0u;
@@ -10368,11 +10368,12 @@ void xowue_NtReadFile(PPCContext &context, uint8_t *base) {
                         readBad = file->stream.bad();
                         readFailed = file->stream.fail();
                     }
-                    // Xenia's XFile::ReadInternal completes EOF as success
-                    // with Information=0. STATUS_END_OF_FILE changes UE3's
-                    // stream failure path and is not returned by the reference.
+                    // Preserve the guest-visible NT EOF result for a zero-byte
+                    // read; the stream worker uses it to distinguish terminal data.
                     readStatus = (readBad || (readFailed && !readEof))
-                        ? kNtStatusUnsuccessful : kNtStatusSuccess;
+                        ? kNtStatusUnsuccessful
+                        : ((length != 0u && bytesRead == 0u && readEof)
+                               ? kNtStatusEndOfFile : kNtStatusSuccess);
                     file->stream.clear();
                     if (!hasExplicitOffset) {
                         file->stream.seekg(static_cast<std::streamoff>(offset + bytesRead), std::ios::beg);

@@ -319,7 +319,7 @@ static bool XDResolveGuestColor(KKVulkanState* state,
     .dstOffsets={{dstX0,dstY0,0},{dstX1,dstY1,1}}};
   XD(CmdBlitImage)(cmd,image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
     state->swapchain_images[imageIndex],VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-    1,&region,VK_FILTER_LINEAR);
+    1,&region,VK_FILTER_NEAREST);
   VkImageMemoryBarrier toAttachment={.sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
     .srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT,
     .dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,

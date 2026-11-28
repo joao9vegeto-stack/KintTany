@@ -73,14 +73,18 @@ require(completion_body.index("result = performRead(true);") <
 require("resetGuestWaitableForIo(eventWaitable)" in read and
         "resetGuestWaitableForIo(file->completion)" in read,
         "each NT read must reset the file completion state and supplied event")
+require("file->completion->manualReset = false;" in ENGINE,
+        "XFile completion event must preserve Xenia's auto-reset semantics")
 require("GuestEventSignalOnReturn eventSignal(eventHandle, eventWaitable);" in completion_body and
         "eventSignal.signalNow();" in completion_body and
         "true);" in completion_body,
         "file completion and supplied event must both be signaled, matching Xenia SubmitRequest")
-require("const bool shouldPend = mayPend && result.status == kNtStatusSuccess &&" in read and
+require("((length != 0u && bytesRead == 0u && readEof)" in read and
+        "? kNtStatusEndOfFile : kNtStatusSuccess" in read and
+        "const bool shouldPend = mayPend && result.status == kNtStatusSuccess &&" in read and
         "fileSizeKnown && result.offset < fileSize;" in read and
         "context.r3.u32 = returnStatus;" in read,
-        "inline EOF reads must complete successfully; only async nonbuffered reads before EOF report STATUS_PENDING")
+        "zero-byte NT EOF stays distinct; only async nonbuffered reads before EOF report STATUS_PENDING")
 require("eventWaitable->kind != GuestWaitable::Kind::Event" in read,
         "a non-null invalid event handle must be rejected instead of silently ignored")
 require(completion_end < async_read.index("queueGuestApc("),

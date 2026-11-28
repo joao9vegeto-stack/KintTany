@@ -1704,10 +1704,10 @@ private final class XOWUEGameLibrary: ObservableObject {
         bootOutput = "O jogo está sendo iniciado."
         let executable = game.appendingPathComponent(XOWUEFileStore.executableName)
         XOWUEDiagnostics.bootStarted(path: executable.path, build: XOWUEBuild.number)
-        // The synthetic EOF-zero path bypasses the guest read routine and has not
-        // been validated against this title's stream contract. Keep normal PPC EOF handling.
-        xowue_set_exp_eof_zero_enabled(0)
-        XOWUEDiagnostics.log("runtime.XOWUE_EXP_EOF_ZERO enabled=false build=\(XOWUEBuild.number)")
+        // The B152.3 log confirms the bounded helper's exact terminal-window guard:
+        // index == count and cursor == the final indexed window end.
+        xowue_set_exp_eof_zero_enabled(1)
+        XOWUEDiagnostics.log("runtime.XOWUE_EXP_EOF_ZERO enabled=true build=\(XOWUEBuild.number)")
         xowue_begin_session()
         XOWUEDiagnostics.log("runtime.session.begin cancellation latch cleared")
 

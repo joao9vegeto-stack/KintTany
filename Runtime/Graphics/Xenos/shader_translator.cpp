@@ -75,6 +75,13 @@ float fetchLodBias(uint slot)
     return float(bitfieldExtract(int(fetchDword(slot, 4u)), 12, 10)) / 32.0;
 }
 
+// Xenos texture fetch exponent adjustment is word 3 bits 13:18;
+// word 4 bits 12:21 above is the independent LOD bias.
+int fetchTextureExpAdjust(uint slot)
+{
+    return bitfieldExtract(int(fetchDword(slot, 3u)), 13, 6);
+}
+
 uint gpuSwap(uint v, uint endian)
 {
     if (endian == 1u) return ((v << 8) & 0xFF00FF00u) | ((v >> 8) & 0x00FF00FFu);
@@ -717,7 +724,8 @@ float xmul(float a, float b)
                     break;
                 }
                 }
-                Line("vec4 tdata = " + value + ";");
+                Line(std::format("vec4 tdata = ldexp({}, ivec4(fetchTextureExpAdjust({}u)));",
+                                 value, slot));
                 StoreFetchResult(op.dest(), op.is_dest_relative(), op.dest_swizzle(), "tdata");
                 indent--;
                 Line("}");
