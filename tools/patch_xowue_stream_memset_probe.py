@@ -480,7 +480,7 @@ loc_82579100:
     assert "if (xowue_stream_skip_abort_outer()) {" in patched
     assert "ctx.r3.u64 = ctx.r22.u64;" in patched
     assert patched.count("goto loc_82579100;") == 2
-    assert "ctx.r3.u64 = ctx.r22.u64;\\n            goto loc_82579100;" in patched
+    assert "ctx.r3.u64 = ctx.r22.u64;\n            goto loc_82579100;" in patched
     print("XOWUE_B146_B147_AOT_PROBE_SELF_TEST_OK B149 eof_poll=0x82575480 chunk_entry=0x82575108 B150 eof_zero=after-prologue B164 parser_return=0x82579100 idempotent=1")
 
 
